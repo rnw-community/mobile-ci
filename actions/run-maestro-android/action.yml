@@ -1,0 +1,123 @@
+name: run-maestro-android
+description: >-
+  Boots a headless Android emulator, installs a packaged .apk, runs a Maestro
+  flow shard, and always captures final-state artifacts.
+inputs:
+  apk-path:
+    description: Path to the packaged .apk to install.
+    required: true
+  app-id:
+    description: Application ID passed to Maestro as APP_ID.
+    required: true
+  flows-dir:
+    description: Directory containing Maestro flow .yaml/.yml files.
+    required: true
+  shard-index:
+    description: Zero-based shard index this job runs.
+    required: true
+  shard-count:
+    description: Total number of shards flows are distributed across.
+    required: true
+  maestro-version:
+    description: Pinned Maestro CLI version.
+    required: false
+    default: '2.8.0'
+  api-level:
+    description: Android emulator API level.
+    required: false
+    default: '34'
+  target:
+    description: Android emulator system image target.
+    required: false
+    default: google_apis
+  arch:
+    description: Android emulator system image architecture.
+    required: false
+    default: x86_64
+  profile:
+    description: Android emulator hardware profile.
+    required: false
+    default: pixel_6
+  artifacts-dir:
+    description: Directory final-state capture (screenshot, logcat) is written to.
+    required: true
+  artifact-name:
+    description: Uploaded artifact name.
+    required: true
+  retention-days:
+    description: Uploaded artifact retention in days.
+    required: false
+    default: '7'
+runs:
+  using: composite
+  steps:
+    - name: Install Maestro
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+          maestro_bin="$HOME/.maestro/bin/maestro"
+          if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
+            curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash
+          fi
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+    - name: Boot emulator, install app, and run Maestro shard
+      uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+      with:
+          api-level: ${{ inputs.api-level }}
+          target: ${{ inputs.target }}
+          arch: ${{ inputs.arch }}
+          profile: ${{ inputs.profile }}
+          disable-animations: true
+          disable-spellchecker: true
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+              set -euo pipefail
+              set -x
+              adb wait-for-device
+              timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
+              adb install -r "${{ inputs.apk-path }}"
+              flows=()
+              while IFS= read -r flow; do
+                flows+=("$flow")
+              done < <(find "${{ inputs.flows-dir }}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+              test "${#flows[@]}" -gt 0
+              selected=()
+              for index in "${!flows[@]}"; do
+                if (( index % ${{ inputs.shard-count }} == ${{ inputs.shard-index }} )); then
+                  selected+=("${flows[$index]}")
+                fi
+              done
+              if [ "${#selected[@]}" -eq 0 ]; then
+                echo "Shard ${{ inputs.shard-index }} has no flows; nothing to run."
+                exit 0
+              fi
+              printf 'Shard ${{ inputs.shard-index }} flows:\n%s\n' "${selected[*]}"
+              maestro test -e "APP_ID=${{ inputs.app-id }}" "${selected[@]}"
+
+    - name: Capture final device state
+      if: always()
+      shell: bash
+      env:
+        OUT_DIR: ${{ inputs.artifacts-dir }}
+      run: |
+          mkdir -p "$OUT_DIR"
+          adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
+          adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
+          adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+
+    - name: Shutdown emulator
+      if: always()
+      shell: bash
+      run: adb emu kill || true
+
+    - name: Upload Maestro artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifacts-dir }}/**
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}

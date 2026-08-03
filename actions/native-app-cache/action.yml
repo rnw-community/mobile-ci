@@ -1,0 +1,61 @@
+name: native-app-cache
+description: >-
+  Restores or saves the canonical native .app/.apk shell keyed on
+  <profile>-<os>-<arch>-<toolchain>-<fingerprint>. A restore hit means the
+  native build can be skipped entirely (the "repack" cache); JS-only changes
+  never invalidate it.
+inputs:
+  mode:
+    description: '`restore` or `save`.'
+    required: true
+  path:
+    description: Directory holding the packaged native app to cache.
+    required: true
+  profile:
+    description: Cache-key segment identifying the build profile/target (e.g. bare, expo).
+    required: true
+  arch:
+    description: Cache-key segment identifying the target architecture (e.g. arm64, x86_64).
+    required: true
+  toolchain:
+    description: Cache-key segment identifying the toolchain (e.g. xcode-26.4.1-17E202, cmdline-12266719).
+    required: true
+  fingerprint:
+    description: Native fingerprint hash from the native-fingerprint action.
+    required: true
+outputs:
+  cache-hit:
+    description: '`true` when an exact-key cache entry was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: The computed cache key.
+    value: ${{ steps.key.outputs.key }}
+runs:
+  using: composite
+  steps:
+    - name: Compute native app cache key
+      id: key
+      shell: bash
+      env:
+        PROFILE: ${{ inputs.profile }}
+        ARCH: ${{ inputs.arch }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        FINGERPRINT: ${{ inputs.fingerprint }}
+      run: |
+        set -euo pipefail
+        echo "key=native-app-v1-${PROFILE}-${RUNNER_OS}-${ARCH}-${TOOLCHAIN}-${FINGERPRINT}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore native app cache
+      if: inputs.mode == 'restore'
+      id: restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ inputs.path }}
+          key: ${{ steps.key.outputs.key }}
+
+    - name: Save native app cache
+      if: inputs.mode == 'save'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ inputs.path }}
+          key: ${{ steps.key.outputs.key }}

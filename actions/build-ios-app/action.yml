@@ -1,0 +1,130 @@
+name: build-ios-app
+description: >-
+  Builds a Release, unsigned iOS Simulator .app with an embedded jsbundle via
+  xcodebuild, restoring/saving a CocoaPods cache around `pod install`.
+inputs:
+  app-dir:
+    description: App directory containing the ios/ folder.
+    required: true
+  workspace:
+    description: Xcode workspace file name (e.g. MyApp.xcworkspace).
+    required: true
+  scheme:
+    description: Xcode scheme name to build.
+    required: true
+  derived-data-dir:
+    description: DerivedData directory used for the build.
+    required: true
+  output-dir:
+    description: Directory the packaged .app is copied into as Base.app.
+    required: true
+  pods-cache-key:
+    description: Exact cache key for the CocoaPods cache.
+    required: true
+  pods-cache-restore-keys:
+    description: Newline-separated fallback prefixes for the CocoaPods cache.
+    required: false
+    default: ''
+  configuration:
+    description: xcodebuild configuration.
+    required: false
+    default: Release
+  archs:
+    description: xcodebuild ARCHS value.
+    required: false
+    default: arm64
+  excluded-archs:
+    description: xcodebuild EXCLUDED_ARCHS value.
+    required: false
+    default: x86_64
+  rct-use-prebuilt-rncore:
+    description: Sets RCT_USE_PREBUILT_RNCORE=1 for the build step when `true`.
+    required: false
+    default: 'false'
+  rct-use-rn-dep:
+    description: Sets RCT_USE_RN_DEP=1 for the build step when `true`.
+    required: false
+    default: 'false'
+  expo-use-precompiled-modules:
+    description: Sets EXPO_USE_PRECOMPILED_MODULES=1 for the build step when `true`.
+    required: false
+    default: 'false'
+outputs:
+  app-path:
+    description: Path to the packaged .app (<output-dir>/Base.app).
+    value: ${{ steps.package.outputs.app-path }}
+runs:
+  using: composite
+  steps:
+    - name: Restore CocoaPods cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ~/Library/Caches/CocoaPods
+              ~/.cocoapods
+          key: ${{ inputs.pods-cache-key }}
+          restore-keys: ${{ inputs.pods-cache-restore-keys }}
+
+    - name: Install CocoaPods dependencies
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}/ios
+      run: pod install --repo-update
+
+    - name: Save CocoaPods cache
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ~/Library/Caches/CocoaPods
+              ~/.cocoapods
+          key: ${{ inputs.pods-cache-key }}
+
+    - name: Build app (${{ inputs.configuration }})
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}/ios
+      env:
+        DERIVED_DATA_DIR: ${{ inputs.derived-data-dir }}
+        WORKSPACE: ${{ inputs.workspace }}
+        SCHEME: ${{ inputs.scheme }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        ARCHS: ${{ inputs.archs }}
+        EXCLUDED_ARCHS: ${{ inputs.excluded-archs }}
+        RCT_USE_PREBUILT_RNCORE: ${{ inputs.rct-use-prebuilt-rncore == 'true' && '1' || '' }}
+        RCT_USE_RN_DEP: ${{ inputs.rct-use-rn-dep == 'true' && '1' || '' }}
+        EXPO_USE_PRECOMPILED_MODULES: ${{ inputs.expo-use-precompiled-modules == 'true' && '1' || '' }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$DERIVED_DATA_DIR"
+        build_start=$(date +%s)
+        xcodebuild build \
+          -workspace "$WORKSPACE" \
+          -scheme "$SCHEME" \
+          -sdk iphonesimulator \
+          -configuration "$CONFIGURATION" \
+          -derivedDataPath "$DERIVED_DATA_DIR" \
+          -destination 'generic/platform=iOS Simulator' \
+          CODE_SIGNING_ALLOWED=NO \
+          ONLY_ACTIVE_ARCH=YES \
+          ARCHS="$ARCHS" \
+          EXCLUDED_ARCHS="$EXCLUDED_ARCHS"
+        build_end=$(date +%s)
+        {
+          echo "### iOS build: ${SCHEME} (cold — native build ran)"
+          echo "Duration: $((build_end - build_start))s"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Package native app
+      id: package
+      shell: bash
+      env:
+        DERIVED_DATA_DIR: ${{ inputs.derived-data-dir }}
+        SCHEME: ${{ inputs.scheme }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        app_path="$DERIVED_DATA_DIR/Build/Products/${CONFIGURATION}-iphonesimulator/${SCHEME}.app"
+        test -d "$app_path"
+        test -f "$app_path/main.jsbundle"
+        mkdir -p "$OUTPUT_DIR"
+        ditto "$app_path" "$OUTPUT_DIR/Base.app"
+        echo "app-path=$OUTPUT_DIR/Base.app" >> "$GITHUB_OUTPUT"

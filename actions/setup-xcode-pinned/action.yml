@@ -1,0 +1,42 @@
+name: setup-xcode-pinned
+description: >-
+  Selects a pre-installed Xcode toolchain by exact version and build number,
+  hard-asserting the match before any build step runs.
+inputs:
+  version:
+    description: Xcode version string as it appears in `xcodebuild -version` (e.g. 26.4.1).
+    required: true
+  build:
+    description: Xcode build number as it appears in `xcodebuild -version` (e.g. 17E202).
+    required: true
+outputs:
+  developer-dir:
+    description: Resolved DEVELOPER_DIR path for the selected Xcode installation.
+    value: ${{ steps.select.outputs.developer-dir }}
+  toolchain-key:
+    description: Cache-key segment identifying this toolchain (xcode-<version>-<build>).
+    value: ${{ steps.select.outputs.toolchain-key }}
+runs:
+  using: composite
+  steps:
+    - name: Select and assert Xcode toolchain
+      id: select
+      shell: bash
+      env:
+        XCODE_VERSION: ${{ inputs.version }}
+        XCODE_BUILD: ${{ inputs.build }}
+      run: |
+        set -euo pipefail
+        xcode_app="/Applications/Xcode_${XCODE_VERSION}.app"
+        if [ ! -d "$xcode_app" ]; then
+          echo "::error::Xcode ${XCODE_VERSION} is not installed on this runner ($xcode_app missing)."
+          exit 1
+        fi
+        developer_dir="$xcode_app/Contents/Developer"
+        echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
+        version_output=$("$developer_dir/usr/bin/xcodebuild" -version)
+        printf '%s\n' "$version_output"
+        grep -qx "Xcode ${XCODE_VERSION}" <<< "$version_output"
+        grep -qx "Build version ${XCODE_BUILD}" <<< "$version_output"
+        echo "developer-dir=$developer_dir" >> "$GITHUB_OUTPUT"
+        echo "toolchain-key=xcode-${XCODE_VERSION}-${XCODE_BUILD}" >> "$GITHUB_OUTPUT"

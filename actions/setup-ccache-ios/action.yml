@@ -1,0 +1,96 @@
+name: setup-ccache-ios
+description: >-
+  Installs and configures a bounded, compressed ccache for iOS xcodebuild
+  invocations, restoring or saving a layered cache keyed on the caller's inputs.
+inputs:
+  mode:
+    description: '`restore` or `save`.'
+    required: false
+    default: restore
+  ccache-dir:
+    description: Directory ccache uses as its cache store.
+    required: true
+  derived-data-dir:
+    description: DerivedData directory to create alongside the ccache dir.
+    required: false
+    default: ''
+  max-size:
+    description: Bounded, compressed ccache maximum size.
+    required: false
+    default: '2G'
+  key:
+    description: Exact cache key for restore/save.
+    required: true
+  restore-keys:
+    description: Newline-separated fallback prefixes for restore.
+    required: false
+    default: ''
+outputs:
+  cache-hit:
+    description: '`true` when an exact-key cache entry was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Install ccache
+      if: inputs.mode == 'restore'
+      shell: bash
+      env:
+        CCACHE_DIR_INPUT: ${{ inputs.ccache-dir }}
+        DERIVED_DATA_DIR_INPUT: ${{ inputs.derived-data-dir }}
+        MAX_SIZE: ${{ inputs.max-size }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$CCACHE_DIR_INPUT"
+        if [ -n "$DERIVED_DATA_DIR_INPUT" ]; then
+          mkdir -p "$DERIVED_DATA_DIR_INPUT"
+        fi
+        if ! command -v ccache >/dev/null; then
+          command -v brew >/dev/null || {
+            echo '::error::ccache is not installed and Homebrew is unavailable.'
+            exit 1
+          }
+          brew list ccache >/dev/null 2>&1 || brew install ccache
+        fi
+        ccache --version
+        if command -v brew >/dev/null; then
+          echo "$(brew --prefix ccache)/libexec" >> "$GITHUB_PATH"
+        fi
+        echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+        echo "CCACHE_COMPRESS=true" >> "$GITHUB_ENV"
+        echo "CCACHE_MAXSIZE=$MAX_SIZE" >> "$GITHUB_ENV"
+        echo "CCACHE_NOHASHDIR=true" >> "$GITHUB_ENV"
+        echo "CCACHE_DIR=$CCACHE_DIR_INPUT" >> "$GITHUB_ENV"
+        echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
+    - name: Restore ccache
+      if: inputs.mode == 'restore'
+      id: restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ inputs.ccache-dir }}
+          key: ${{ inputs.key }}
+          restore-keys: ${{ inputs.restore-keys }}
+
+    - name: Reset ccache statistics
+      if: inputs.mode == 'restore'
+      shell: bash
+      run: ccache --zero-stats || true
+
+    - name: Report ccache statistics
+      if: inputs.mode == 'save'
+      shell: bash
+      run: |
+          {
+            echo '### ccache stats'
+            echo '```'
+            ccache --show-stats --verbose
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+    - name: Save ccache
+      if: inputs.mode == 'save'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ inputs.ccache-dir }}
+          key: ${{ inputs.key }}

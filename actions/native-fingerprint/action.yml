@@ -1,0 +1,38 @@
+name: native-fingerprint
+description: >-
+  Computes a tokenless native-surface fingerprint with @expo/fingerprint (no
+  EAS account, no EXPO_TOKEN) for use as a native app cache key.
+inputs:
+  platform:
+    description: Target platform passed to `fingerprint:generate --platform`.
+    required: true
+  working-directory:
+    description: Directory containing the app whose native surface is fingerprinted.
+    required: false
+    default: '.'
+  fingerprint-version:
+    description: Pinned @expo/fingerprint npm version.
+    required: false
+    default: '0.20.6'
+outputs:
+  hash:
+    description: The computed native fingerprint hash.
+    value: ${{ steps.fingerprint.outputs.hash }}
+runs:
+  using: composite
+  steps:
+    - name: Generate native fingerprint
+      id: fingerprint
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        FINGERPRINT_VERSION: ${{ inputs.fingerprint-version }}
+        FINGERPRINT_PLATFORM: ${{ inputs.platform }}
+      run: |
+        set -euo pipefail
+        out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-$$.json"
+        npx --yes "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file"
+        hash=$(node -e "process.stdout.write(require('$out_file').hash)")
+        test -n "$hash"
+        echo "hash=$hash" >> "$GITHUB_OUTPUT"
+        echo "Native fingerprint ($FINGERPRINT_PLATFORM): $hash"

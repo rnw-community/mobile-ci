@@ -1,0 +1,125 @@
+name: run-maestro-ios
+description: >-
+  Boots an iOS Simulator, installs a packaged .app, runs a Maestro flow shard,
+  and always captures final-state artifacts on failure.
+inputs:
+  app-path:
+    description: Path to a packaged .app to install (directory, not archive).
+    required: true
+  app-id:
+    description: Bundle identifier passed to Maestro as APP_ID.
+    required: true
+  flows-dir:
+    description: Directory containing Maestro flow .yaml/.yml files.
+    required: true
+  shard-index:
+    description: Zero-based shard index this job runs.
+    required: true
+  shard-count:
+    description: Total number of shards flows are distributed across.
+    required: true
+  maestro-version:
+    description: Pinned Maestro CLI version.
+    required: false
+    default: '2.8.0'
+  artifacts-dir:
+    description: Directory Maestro debug output and final-state capture is written to.
+    required: true
+  artifact-name:
+    description: Uploaded artifact name.
+    required: true
+  retention-days:
+    description: Uploaded artifact retention in days.
+    required: false
+    default: '7'
+runs:
+  using: composite
+  steps:
+    - name: Configure Maestro debug output directory
+      shell: bash
+      env:
+        MAESTRO_DEBUG_OUTPUT_DIRECTORY: ${{ inputs.artifacts-dir }}
+      run: |
+          mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
+          echo "MAESTRO_DEBUG_OUTPUT_DIRECTORY=$MAESTRO_DEBUG_OUTPUT_DIRECTORY" >> "$GITHUB_ENV"
+
+    - name: Boot iOS Simulator
+      shell: bash
+      run: |
+          set -euo pipefail
+          device_line=$(xcrun simctl list devices available | grep -E '^\s+iPhone.*\(' | tail -1)
+          test -n "$device_line"
+          device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
+          test -n "$device_udid"
+          echo "Booting simulator: $device_line"
+          xcrun simctl boot "$device_udid" || true
+          xcrun simctl bootstatus "$device_udid" -b
+          echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
+
+    - name: Install app on simulator
+      shell: bash
+      env:
+        APP_PATH: ${{ inputs.app-path }}
+      run: |
+          set -euo pipefail
+          test -d "$APP_PATH"
+          xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
+
+    - name: Install Maestro
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+          maestro_bin="$HOME/.maestro/bin/maestro"
+          if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
+            curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash
+          fi
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+
+    - name: Run Maestro shard
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+      run: |
+          set -euo pipefail
+          flows=()
+          while IFS= read -r flow; do
+            flows+=("$flow")
+          done < <(find "$FLOWS_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          test "${#flows[@]}" -gt 0
+          selected=()
+          for index in "${!flows[@]}"; do
+            if (( index % SHARD_COUNT == SHARD_INDEX )); then
+              selected+=("${flows[$index]}")
+            fi
+          done
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "Shard $SHARD_INDEX has no flows; nothing to run."
+            exit 0
+          fi
+          printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
+          maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
+
+    - name: Capture final simulator state
+      if: always()
+      shell: bash
+      run: |
+          mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
+          xcrun simctl io "$SIMULATOR_UDID" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/final-screen.png" || true
+
+    - name: Shutdown simulator
+      if: always()
+      shell: bash
+      run: xcrun simctl shutdown "$SIMULATOR_UDID" || true
+
+    - name: Upload Maestro artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifacts-dir }}/**
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}

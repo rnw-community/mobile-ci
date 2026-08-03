@@ -1,0 +1,90 @@
+name: build-android-app
+description: >-
+  Sets up a pinned Android SDK cmdline-tools version and builds a Release APK
+  via gradlew, verifying the embedded JS bundle and packaging the result.
+inputs:
+  app-dir:
+    description: App directory containing the android/ folder.
+    required: true
+  cmdline-tools-version:
+    description: >-
+      android-actions/setup-android cmdline-tools-version. Defaults to the
+      value baked into the pinned action tag's release, NOT that action's
+      main-branch default, which drifts and can collide with pre-licensed
+      runner SDK images.
+    required: false
+    default: '12266719'
+  output-dir:
+    description: Directory the built APK is copied into as app-release.apk.
+    required: true
+  gradle-cache-key:
+    description: Exact cache key for the Gradle cache.
+    required: true
+  gradle-cache-restore-keys:
+    description: Newline-separated fallback prefixes for the Gradle cache.
+    required: false
+    default: ''
+outputs:
+  app-path:
+    description: Path to the packaged APK (<output-dir>/app-release.apk).
+    value: ${{ steps.package.outputs.app-path }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Android SDK
+      uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+      with:
+          cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+
+    - name: Restore Gradle cache
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ~/.gradle/caches
+              ~/.gradle/wrapper
+          key: ${{ inputs.gradle-cache-key }}
+          restore-keys: ${{ inputs.gradle-cache-restore-keys }}
+
+    - name: Build APK (Release)
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}/android
+      run: |
+        set -euo pipefail
+        build_start=$(date +%s)
+        ./gradlew assembleRelease
+        build_end=$(date +%s)
+        {
+          echo "### Android build (cold — native build ran)"
+          echo "Duration: $((build_end - build_start))s"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Save Gradle cache
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ~/.gradle/caches
+              ~/.gradle/wrapper
+          key: ${{ inputs.gradle-cache-key }}
+
+    - name: Package native app
+      id: package
+      shell: bash
+      env:
+        APP_DIR: ${{ inputs.app-dir }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        apks=()
+        while IFS= read -r apk; do
+          apks+=("$apk")
+        done < <(find "$APP_DIR/android/app/build/outputs/apk/release" \
+                   -maxdepth 1 -type f -name '*.apk' ! -name '*unsigned*' | sort)
+        if [ "${#apks[@]}" -ne 1 ]; then
+          echo "::error::Expected exactly 1 signed release APK, found ${#apks[@]}: ${apks[*]}"
+          exit 1
+        fi
+        apk_path="${apks[0]}"
+        unzip -l "$apk_path" | grep -q 'assets/index.android.bundle'
+        mkdir -p "$OUTPUT_DIR"
+        cp "$apk_path" "$OUTPUT_DIR/app-release.apk"
+        echo "app-path=$OUTPUT_DIR/app-release.apk" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,54 @@
+name: turbo-affected
+description: >-
+  Detects whether any of a set of target packages is affected relative to a
+  base SHA, using a pinned `turbo` version. Fails closed: a detection failure
+  is never reported as an unaffected/skip result.
+inputs:
+  turbo-version:
+    description: Pinned turbo npm version invoked via `npx turbo@<version>`.
+    required: false
+    default: '2.10.8'
+  target-packages:
+    description: Newline-separated package names; affected if any of these is in the affected set.
+    required: true
+  base-sha:
+    description: Base SHA for the affected computation (maps to TURBO_SCM_BASE). Empty means "always affected".
+    required: false
+    default: ''
+  always-affected:
+    description: When `true`, skips the turbo computation and reports affected unconditionally (e.g. non-PR events).
+    required: false
+    default: 'false'
+outputs:
+  affected:
+    description: '`true` or `false` — whether any target package is affected.'
+    value: ${{ steps.detect.outputs.affected }}
+runs:
+  using: composite
+  steps:
+    - name: Compute affected packages
+      id: detect
+      shell: bash
+      env:
+        TURBO_VERSION: ${{ inputs.turbo-version }}
+        TARGET_PACKAGES: ${{ inputs.target-packages }}
+        TURBO_SCM_BASE: ${{ inputs.base-sha }}
+        ALWAYS_AFFECTED: ${{ inputs.always-affected }}
+      run: |
+        set -euo pipefail
+        if [ "$ALWAYS_AFFECTED" = 'true' ]; then
+          echo 'affected=true' >> "$GITHUB_OUTPUT"
+          echo 'always-affected input set: skipping turbo detection.'
+          exit 0
+        fi
+        affected=$(npx -y "turbo@${TURBO_VERSION}" ls --affected --output=json | TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
+          let raw = "";
+          process.stdin.on("data", chunk => (raw += chunk));
+          process.stdin.on("end", () => {
+            const names = (JSON.parse(raw).packages?.items ?? []).map(item => item.name);
+            const targets = process.env.TARGET_PACKAGES.split("\n").map(name => name.trim()).filter(Boolean);
+            process.stdout.write(String(names.some(name => targets.includes(name))));
+          });
+        ')
+        echo "affected=${affected}" >> "$GITHUB_OUTPUT"
+        echo "affected=${affected}"
