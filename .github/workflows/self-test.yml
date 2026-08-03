@@ -1,0 +1,92 @@
+name: self-test
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+env:
+    ACTIONLINT_VERSION: '1.7.12'
+
+jobs:
+    actionlint:
+        name: actionlint
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Install actionlint
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd "$RUNNER_TEMP"
+                  curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+                  curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+                  sha256sum --ignore-missing -c "actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+                  tar -xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
+                  install -m 0755 actionlint /usr/local/bin/actionlint
+
+            - name: Install shellcheck
+              shell: bash
+              run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+            - name: Run actionlint
+              shell: bash
+              run: actionlint -color
+
+    dry-lint-local-refs:
+        name: Dry lint (reusable workflow -> composite action schemas)
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Install actionlint
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd "$RUNNER_TEMP"
+                  curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+                  curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+                  sha256sum --ignore-missing -c "actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+                  tar -xzf "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" actionlint
+                  install -m 0755 actionlint /usr/local/bin/actionlint
+
+            - name: Rewrite self-references to local paths and lint
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  scratch="$RUNNER_TEMP/dry-lint"
+                  mkdir -p "$scratch/.github/workflows"
+                  cp -r actions "$scratch/actions"
+                  for workflow in ios-maestro android-maestro seed-native-cache; do
+                    sed -E 's#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#' \
+                      ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
+                  done
+                  cd "$scratch" && git init -q && actionlint -color
+
+    fleet-self-test:
+        name: Fleet self-test (manual only)
+        if: github.event_name == 'workflow_dispatch'
+        runs-on: [self-hosted, macOS, ARM64]
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: setup-xcode-pinned
+              uses: ./actions/setup-xcode-pinned
+              with:
+                  version: ${{ vars.MOBILE_CI_SELFTEST_XCODE_VERSION || '26.4.1' }}
+                  build: ${{ vars.MOBILE_CI_SELFTEST_XCODE_BUILD || '17E202' }}
+
+            - name: Report toolchain resolved
+              shell: bash
+              run: echo 'setup-xcode-pinned resolved DEVELOPER_DIR successfully on the fleet.'
