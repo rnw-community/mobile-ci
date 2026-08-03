@@ -1,0 +1,308 @@
+name: seed-native-cache
+
+on:
+    workflow_call:
+        inputs:
+            ios-runner-labels:
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            android-runner-labels:
+                type: string
+                required: false
+                default: '["self-hosted","linux-tiered","linux-xl"]'
+            ios-targets:
+                description: >-
+                    JSON array of iOS build targets: {name, appDir, workspace, scheme, prebuildCommand}.
+                type: string
+                required: false
+                default: '[]'
+            android-targets:
+                description: >-
+                    JSON array of Android build targets: {name, appDir, prebuildCommand}.
+                type: string
+                required: false
+                default: '[]'
+            xcode-version:
+                type: string
+                required: false
+                default: '26.4.1'
+            xcode-build:
+                type: string
+                required: false
+                default: '17E202'
+            cmdline-tools-version:
+                type: string
+                required: false
+                default: '12266719'
+            ios-cache-profile:
+                type: string
+                required: false
+                default: ios-native-v1
+            android-cache-profile:
+                type: string
+                required: false
+                default: android-native-v1
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                type: string
+                required: false
+                default: ''
+            rct-use-prebuilt-rncore:
+                type: boolean
+                required: false
+                default: false
+            rct-use-rn-dep:
+                type: boolean
+                required: false
+                default: false
+            expo-use-precompiled-modules:
+                type: boolean
+                required: false
+                default: false
+            ccache-max-size:
+                type: string
+                required: false
+                default: 2G
+            ios-timeout-minutes:
+                type: number
+                required: false
+                default: 90
+            android-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+
+concurrency:
+    group: seed-native-cache-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    seed-ios:
+        name: Seed iOS native app (${{ matrix.target.name }})
+        if: inputs.ios-targets != '[]'
+        runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
+        timeout-minutes: ${{ inputs.ios-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.ios-targets) }}
+        env:
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              run: ${{ inputs.install-command }}
+
+            - name: setup-xcode-pinned
+              id: xcode
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              run: ${{ inputs.build-command }}
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              run: ${{ matrix.target.prebuildCommand }}
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              with:
+                  platform: ios
+                  working-directory: ${{ matrix.target.appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: restore
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              shell: bash
+              run: echo 'Canonical native app already exists for this fingerprint — nothing to seed.'
+
+            - name: setup-ccache-ios (restore)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              with:
+                  mode: restore
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  max-size: ${{ inputs.ccache-max-size }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  restore-keys: |
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
+
+            - name: build-ios-app
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/build-ios-app@main
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+                  workspace: ${{ matrix.target.workspace }}
+                  scheme: ${{ matrix.target.scheme }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  pods-cache-restore-keys: |
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-
+                  rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
+                  rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
+                  expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+
+            - name: setup-ccache-ios (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              with:
+                  mode: save
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: save
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+    seed-android:
+        name: Seed Android native app (${{ matrix.target.name }})
+        if: inputs.android-targets != '[]'
+        runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
+        timeout-minutes: ${{ inputs.android-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.android-targets) }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              run: ${{ inputs.install-command }}
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              run: ${{ inputs.build-command }}
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              run: ${{ matrix.target.prebuildCommand }}
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              with:
+                  platform: android
+                  working-directory: ${{ matrix.target.appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: restore
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  arch: x86_64
+                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              shell: bash
+              run: echo 'Canonical native app already exists for this fingerprint — nothing to seed.'
+
+            - name: build-android-app
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/build-android-app@main
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock') }}
+                  gradle-cache-restore-keys: |
+                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: save
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  arch: x86_64
+                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}

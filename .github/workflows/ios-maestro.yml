@@ -1,0 +1,342 @@
+name: ios-maestro
+
+on:
+    workflow_call:
+        inputs:
+            runner-labels:
+                description: JSON array of self-hosted runner labels for the build/test jobs.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            targets:
+                description: >-
+                    JSON array of build targets: {name, appDir, workspace, scheme, appId,
+                    prebuildCommand}. prebuildCommand may be an empty string.
+                type: string
+                required: true
+            flows-dir:
+                description: Directory (relative to repo root) containing Maestro flow files.
+                type: string
+                required: true
+            shard-count:
+                type: number
+                required: false
+                default: 2
+            xcode-version:
+                type: string
+                required: false
+                default: '26.4.1'
+            xcode-build:
+                type: string
+                required: false
+                default: '17E202'
+            cache-profile:
+                description: Cache-key prefix distinguishing this consumer/app.
+                type: string
+                required: false
+                default: ios-native-v1
+            turbo-version:
+                type: string
+                required: false
+                default: '2.10.8'
+            target-packages:
+                description: Newline-separated package names gating this pipeline on pull_request events.
+                type: string
+                required: false
+                default: ''
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            maestro-version:
+                type: string
+                required: false
+                default: '2.8.0'
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                description: Optional workspace JS build command run at repo root before the native build.
+                type: string
+                required: false
+                default: ''
+            rct-use-prebuilt-rncore:
+                type: boolean
+                required: false
+                default: false
+            rct-use-rn-dep:
+                type: boolean
+                required: false
+                default: false
+            expo-use-precompiled-modules:
+                type: boolean
+                required: false
+                default: false
+            ccache-max-size:
+                type: string
+                required: false
+                default: 2G
+            build-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+            test-timeout-minutes:
+                type: number
+                required: false
+                default: 45
+
+concurrency:
+    group: ios-maestro-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    detect:
+        name: Detect affected packages
+        runs-on: ubuntu-latest
+        outputs:
+            affected: ${{ steps.affected.outputs.affected }}
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@main
+              id: affected
+              with:
+                  turbo-version: ${{ inputs.turbo-version }}
+                  target-packages: ${{ inputs.target-packages }}
+                  base-sha: ${{ github.event.pull_request.base.sha }}
+                  always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
+
+    build:
+        name: Build (${{ matrix.target.name }})
+        needs: detect
+        if: needs.detect.outputs.affected == 'true'
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+        env:
+            APP_DIR: ${{ matrix.target.appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: yarn
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              run: ${{ inputs.install-command }}
+
+            - name: setup-xcode-pinned
+              id: xcode
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              run: ${{ inputs.build-command }}
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              run: ${{ matrix.target.prebuildCommand }}
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              with:
+                  platform: ios
+                  working-directory: ${{ matrix.target.appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: restore
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              shell: bash
+              run: |
+                  {
+                    echo "### iOS build: ${{ matrix.target.name }} (warm — native build skipped)"
+                    echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: setup-ccache-ios (restore)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              with:
+                  mode: restore
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  max-size: ${{ inputs.ccache-max-size }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  restore-keys: |
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
+
+            - name: build-ios-app
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              id: build
+              uses: rnw-community/mobile-ci/actions/build-ios-app@main
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+                  workspace: ${{ matrix.target.workspace }}
+                  scheme: ${{ matrix.target.scheme }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  pods-cache-restore-keys: |
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-
+                  rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
+                  rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
+                  expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+
+            - name: setup-ccache-ios (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              with:
+                  mode: save
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: save
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Archive app for test jobs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  test -d .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+                  mkdir -p .ci-artifacts
+                  tar -czf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-cache/ios-native-app/${{ matrix.target.name }} Base.app
+
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: ios-e2e-app-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+                  retention-days: 1
+
+    test:
+        name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
+        needs: [detect, build]
+        if: needs.detect.outputs.affected == 'true'
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.test-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+                shard-index: [0, 1]
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: setup-xcode-pinned
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+              with:
+                  name: ios-e2e-app-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
+
+            - name: Unpack app
+              shell: bash
+              run: tar -xzf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
+
+            - name: run-maestro-ios
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
+              with:
+                  app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
+                  app-id: ${{ matrix.target.appId }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  shard-index: ${{ matrix.shard-index }}
+                  shard-count: ${{ inputs.shard-count }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
+    status:
+        name: iOS Maestro E2E result
+        needs: [detect, build, test]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Report
+              shell: bash
+              run: |
+                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                    echo "Detection job did not succeed."
+                    exit 1
+                  fi
+                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                    echo "Skipped: target packages untouched."
+                    exit 0
+                  fi
+                  if [ "${{ needs.build.result }}" != "success" ]; then
+                    echo "Build job failed."
+                    exit 1
+                  fi
+                  if [ "${{ needs.test.result }}" != "success" ]; then
+                    echo "Maestro suite failed."
+                    exit 1
+                  fi
+                  echo "Maestro suite passed."

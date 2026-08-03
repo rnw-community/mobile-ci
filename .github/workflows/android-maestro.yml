@@ -1,0 +1,289 @@
+name: android-maestro
+
+on:
+    workflow_call:
+        inputs:
+            runner-labels:
+                description: JSON array of self-hosted runner labels for the build/test jobs.
+                type: string
+                required: false
+                default: '["self-hosted","linux-tiered","linux-xl"]'
+            targets:
+                description: >-
+                    JSON array of build targets: {name, appDir, appId, prebuildCommand}.
+                    prebuildCommand may be an empty string.
+                type: string
+                required: true
+            flows-dir:
+                description: Directory (relative to repo root) containing Maestro flow files.
+                type: string
+                required: true
+            shard-count:
+                type: number
+                required: false
+                default: 2
+            cmdline-tools-version:
+                description: See build-android-app README — pin explicitly, do not trust upstream defaults.
+                type: string
+                required: false
+                default: '12266719'
+            cache-profile:
+                description: Cache-key prefix distinguishing this consumer/app.
+                type: string
+                required: false
+                default: android-native-v1
+            turbo-version:
+                type: string
+                required: false
+                default: '2.10.8'
+            target-packages:
+                description: Newline-separated package names gating this pipeline on pull_request events.
+                type: string
+                required: false
+                default: ''
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            maestro-version:
+                type: string
+                required: false
+                default: '2.8.0'
+            emulator-api-level:
+                type: string
+                required: false
+                default: '34'
+            emulator-target:
+                type: string
+                required: false
+                default: google_apis
+            emulator-arch:
+                type: string
+                required: false
+                default: x86_64
+            emulator-profile:
+                type: string
+                required: false
+                default: pixel_6
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                description: Optional workspace JS build command run at repo root before the native build.
+                type: string
+                required: false
+                default: ''
+            build-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+            test-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+
+concurrency:
+    group: android-maestro-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    detect:
+        name: Detect affected packages
+        runs-on: ubuntu-latest
+        outputs:
+            affected: ${{ steps.affected.outputs.affected }}
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@main
+              id: affected
+              with:
+                  turbo-version: ${{ inputs.turbo-version }}
+                  target-packages: ${{ inputs.target-packages }}
+                  base-sha: ${{ github.event.pull_request.base.sha }}
+                  always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
+
+    build:
+        name: Build (${{ matrix.target.name }})
+        needs: detect
+        if: needs.detect.outputs.affected == 'true'
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+        env:
+            APP_DIR: ${{ matrix.target.appDir }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: yarn
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              run: ${{ inputs.install-command }}
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              run: ${{ inputs.build-command }}
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              run: ${{ matrix.target.prebuildCommand }}
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              with:
+                  platform: android
+                  working-directory: ${{ matrix.target.appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: restore
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  arch: ${{ inputs.emulator-arch }}
+                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              shell: bash
+              run: |
+                  {
+                    echo "### Android build: ${{ matrix.target.name }} (warm — native build skipped)"
+                    echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: build-android-app
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              id: build
+              uses: rnw-community/mobile-ci/actions/build-android-app@main
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock') }}
+                  gradle-cache-restore-keys: |
+                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              with:
+                  mode: save
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  arch: ${{ inputs.emulator-arch }}
+                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: android-e2e-app-${{ matrix.target.name }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  retention-days: 1
+
+    test:
+        name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
+        needs: [detect, build]
+        if: needs.detect.outputs.affected == 'true'
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.test-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+                shard-index: [0, 1]
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+              with:
+                  name: android-e2e-app-${{ matrix.target.name }}
+                  path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}
+
+            - name: run-maestro-android
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@main
+              with:
+                  apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
+                  app-id: ${{ matrix.target.appId }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  shard-index: ${{ matrix.shard-index }}
+                  shard-count: ${{ inputs.shard-count }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  api-level: ${{ inputs.emulator-api-level }}
+                  target: ${{ inputs.emulator-target }}
+                  arch: ${{ inputs.emulator-arch }}
+                  profile: ${{ inputs.emulator-profile }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
+    status:
+        name: Android Maestro E2E result
+        needs: [detect, build, test]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Report
+              shell: bash
+              run: |
+                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                    echo "Detection job did not succeed."
+                    exit 1
+                  fi
+                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                    echo "Skipped: target packages untouched."
+                    exit 0
+                  fi
+                  if [ "${{ needs.build.result }}" != "success" ]; then
+                    echo "Build job failed."
+                    exit 1
+                  fi
+                  if [ "${{ needs.test.result }}" != "success" ]; then
+                    echo "Maestro suite failed."
+                    exit 1
+                  fi
+                  echo "Maestro suite passed."
