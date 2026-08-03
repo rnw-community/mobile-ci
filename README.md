@@ -51,12 +51,19 @@ input/output table and a usage example.
 | `ios-maestro.yml`           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
 | `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → `build-android-app` → `run-maestro-android` |
 | `seed-native-cache.yml`     | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
+| `pr-closed-cleanup-reusable.yml` | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 `seed-native-cache.yml` is meant to be called from a workflow that is itself
 `workflow_dispatch`-triggered (plus optionally `push`/`schedule`) in the
 *consuming* repository. GitHub only allows dispatching a `workflow_dispatch`
 workflow once it exists on the default branch — merge your caller workflow to
 your default branch before expecting to dispatch it.
+
+`pr-closed-cleanup-reusable.yml` must be called from a workflow triggered by
+`pull_request: types: [closed]` in the consuming repository — it reads
+`github.event.pull_request.head.ref` from that event, so it cannot be
+dispatched standalone. This repo's own `pr-closed-cleanup.yml` is a one-line
+consumer of it (see below).
 
 ## Scope
 
@@ -124,6 +131,26 @@ just the simulator/emulator lifecycle actions —
 
 Whole-pipeline tier, same shape as the rnw-community example above, with
 `targets` reduced to suuudokuuu's single bare app and its own `appId`/paths.
+
+### PR-closed cleanup (rnw-community, budgie, suuudokuuu)
+
+Every consumer with a serialized self-hosted fleet adopts this the same way —
+a thin wrapper triggered by the PR's own `closed` event:
+
+```yaml
+# .github/workflows/pr-closed-cleanup.yml
+name: pr-closed-cleanup
+on:
+    pull_request:
+        types: [closed]
+permissions:
+    actions: write
+jobs:
+    cleanup:
+        permissions:
+            actions: write
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@main
+```
 
 ## Repo practices
 
