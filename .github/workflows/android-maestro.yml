@@ -282,6 +282,24 @@ jobs:
                   name: android-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}
 
+            # Both test steps below are gated on an exact 'redroid'/'avd'
+            # match; an unrecognized android-driver value would otherwise
+            # skip both silently and let this job (and the status job that
+            # gates on its result) report success having run zero Maestro
+            # flows.
+            - name: Validate android-driver
+              shell: bash
+              env:
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+              run: |
+                  case "$ANDROID_DRIVER" in
+                    redroid|avd) ;;
+                    *)
+                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid' or 'avd'."
+                      exit 1
+                      ;;
+                  esac
+
             - name: Resolve Redroid shard port
               if: inputs.android-driver == 'redroid'
               id: redroid-meta

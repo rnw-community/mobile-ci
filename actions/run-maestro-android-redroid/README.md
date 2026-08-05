@@ -17,16 +17,20 @@ container image and the host's `binder_linux` module — and runs at native
 
 A host-side prewarm step (pulled image + a `/data` volume booted once with
 animations disabled, manifest written to `prewarm-manifest-path`) makes shard
-starts fast. Its absence does not fail the shard: the action falls back to an
-in-workflow `docker pull` of `image` and a fresh data volume under
-`RUNNER_TEMP`, paying for a cold `docker pull` and Android first boot instead.
-The one thing that fallback cannot self-heal is the `binder_linux` kernel
-module itself — host-kernel provisioning, not something a job can safely
-install unattended — so a missing module fails the shard with an explicit,
-actionable error instead of a confusing `docker run` failure. All three
-Android animation scales (window/transition/animator) are forced to `0` after
-boot unconditionally, since a prewarmed volume already having them off does
-not help the cold-start fallback path.
+starts fast. Concurrent matrix cells all read the same manifest, so its
+`dataDir` is copied into a per-shard directory under `RUNNER_TEMP` rather than
+bind-mounted directly — two Redroid containers writing to the same live
+`/data` on the host would corrupt it. A missing manifest does not fail the
+shard either: the action falls back to an in-workflow `docker pull` of
+`image` and a fresh (uncopied) data volume under `RUNNER_TEMP`, paying for a
+cold `docker pull` and Android first boot instead. The one thing that
+fallback cannot self-heal is the `binder_linux` kernel module itself —
+host-kernel provisioning, not something a job can safely install unattended —
+so a missing module fails the shard with an explicit, actionable error
+instead of a confusing `docker run` failure. All three Android animation
+scales (window/transition/animator) are forced to `0` after boot
+unconditionally, since a prewarmed volume already having them off does not
+help the cold-start fallback path.
 
 `container-name` and `adb-port` have no defaults: pass values unique to this
 matrix cell (e.g. incorporating `matrix.target.name` and `matrix.shard-index`,

@@ -55,7 +55,9 @@ inputs:
       Path to a JSON manifest ({"image", "dataDir"}) written by a host-side
       Redroid prewarm step. When absent, the container falls back to an
       in-workflow docker pull of `image` and a fresh data volume under
-      RUNNER_TEMP — slower, but self-healing rather than hard-failing.
+      RUNNER_TEMP — slower, but self-healing rather than hard-failing. A
+      leading literal "$HOME" (as in the default below) is expanded against
+      the runner's actual home directory before use.
     required: false
     default: $HOME/.rnw-ci/android-emulator.json
   boot-timeout-seconds:
@@ -88,15 +90,29 @@ runs:
         REDROID_BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
       run: |
           set -euo pipefail
-          if [ -f "$REDROID_MANIFEST_PATH" ]; then
-            image=$(python3 -c "import json; print(json.load(open('$REDROID_MANIFEST_PATH'))['image'])")
-            data=$(python3 -c "import json; print(json.load(open('$REDROID_MANIFEST_PATH'))['dataDir'])")
-            echo "REDROID_PREWARM_OK image=$image dataDir=$data"
+          # Composite action env: values are set directly on the process
+          # environment, never through a shell, so a literal "$HOME" in an
+          # unresolved default (or a caller override) is not expanded by
+          # GitHub Actions. Resolve that one documented case explicitly
+          # rather than relying on the caller to pass an already-expanded path.
+          manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
+          data="$RUNNER_TEMP/redroid-data/$REDROID_CONTAINER_NAME"
+          mkdir -p "$data"
+          if [ -f "$manifest_path" ]; then
+            # Read the manifest path from the environment rather than
+            # interpolating it into the generated source, so its contents
+            # can never be interpreted as Python.
+            image=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['image'])")
+            prewarm_data=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['dataDir'])")
+            # Every concurrent matrix shard shares the one manifest-provided
+            # dataDir; bind-mounting it directly into more than one container
+            # at once corrupts it. Copy into a per-shard directory instead so
+            # concurrent shards each get an isolated, writable seed.
+            sudo cp -a "$prewarm_data/." "$data/"
+            echo "REDROID_PREWARM_OK image=$image dataDir=$prewarm_data (copied into isolated $data)"
           else
             image="$REDROID_IMAGE"
-            data="$RUNNER_TEMP/redroid-data/$REDROID_CONTAINER_NAME"
-            mkdir -p "$data"
-            echo "::warning::No Redroid prewarm manifest at $REDROID_MANIFEST_PATH; pulling $image in-workflow and cold-booting a fresh data volume for this shard instead (slower than a prewarmed host)."
+            echo "::warning::No Redroid prewarm manifest at $manifest_path; pulling $image in-workflow and cold-booting a fresh data volume for this shard instead (slower than a prewarmed host)."
             timeout 900 sudo docker pull "$image"
           fi
           sudo modprobe binder_linux devices=binder,hwbinder,vndbinder 2>&1 || true
