@@ -90,13 +90,37 @@ runs:
         REDROID_BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
       run: |
           set -euo pipefail
+          # container-name reaches sudo rm -rf below by way of $data; unlike
+          # docker (which validates --name itself), our own path construction
+          # has no built-in protection, so a value containing ".." or "/"
+          # could walk $data outside redroid-data entirely. Reject anything
+          # that is not a single safe path segment before it touches the
+          # filesystem at all.
+          case "$REDROID_CONTAINER_NAME" in
+            ''|.|..)
+              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': must be a non-empty single path segment, not '.' or '..'."
+              exit 1
+              ;;
+            *[!A-Za-z0-9_.-]*)
+              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': only [A-Za-z0-9_.-] characters are allowed."
+              exit 1
+              ;;
+          esac
           # Composite action env: values are set directly on the process
           # environment, never through a shell, so a literal "$HOME" in an
           # unresolved default (or a caller override) is not expanded by
           # GitHub Actions. Resolve that one documented case explicitly
           # rather than relying on the caller to pass an already-expanded path.
           manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
-          data="$RUNNER_TEMP/redroid-data/$REDROID_CONTAINER_NAME"
+          data_root=$(realpath -m "$RUNNER_TEMP/redroid-data")
+          data=$(realpath -m "$data_root/$REDROID_CONTAINER_NAME")
+          case "$data" in
+            "$data_root"/*) ;;
+            *)
+              echo "::error::Resolved data directory '$data' escapes '$data_root'; refusing to operate on it."
+              exit 1
+              ;;
+          esac
           # This fleet's self-hosted runners persist $RUNNER_TEMP across job
           # runs (unlike GitHub-hosted, per-job-ephemeral runners), and a
           # container-name is commonly reused run to run. Without clearing
@@ -174,8 +198,35 @@ runs:
       env:
         JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx2048m
         MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
       run: |
           set -euo pipefail
+          # An out-of-range shard-index (>= shard-count, or a typo'd
+          # negative/non-numeric value) makes the modulo selection below
+          # match nothing for every flow, so the shard would silently exit 0
+          # having run zero tests. Fail fast instead, the same way the
+          # driver-validation step above does for android-driver.
+          case "$SHARD_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_COUNT" -lt 1 ]; then
+            echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
+            exit 1
+          fi
+          case "$SHARD_INDEX" in
+            ''|*[!0-9]*)
+              echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
+            echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
+            exit 1
+          fi
           flows=()
           while IFS= read -r flow; do
             flows+=("$flow")
@@ -183,15 +234,15 @@ runs:
           test "${#flows[@]}" -gt 0
           selected=()
           for index in "${!flows[@]}"; do
-            if (( index % ${{ inputs.shard-count }} == ${{ inputs.shard-index }} )); then
+            if (( index % SHARD_COUNT == SHARD_INDEX )); then
               selected+=("${flows[$index]}")
             fi
           done
           if [ "${#selected[@]}" -eq 0 ]; then
-            echo "Shard ${{ inputs.shard-index }} has no flows; nothing to run."
+            echo "Shard $SHARD_INDEX has no flows (shard-count $SHARD_COUNT exceeds the flow count); nothing to run."
             exit 0
           fi
-          printf 'Shard ${{ inputs.shard-index }} flows:\n%s\n' "${selected[*]}"
+          printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
           maestro test -e "APP_ID=${{ inputs.app-id }}" "${selected[@]}"
 
     - name: Capture final device state
