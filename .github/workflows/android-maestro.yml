@@ -49,6 +49,18 @@ on:
                 type: string
                 required: false
                 default: '2.8.0'
+            android-driver:
+                description: >-
+                    'redroid' (default) or 'avd'. Google publishes no linux-aarch64
+                    build of the Android emulator/NDK/cmake, so 'avd' cannot boot on
+                    this workflow's default self-hosted runner-labels; 'redroid' runs
+                    Android as a privileged container over binder_linux instead and
+                    needs none of those packages. Pick 'avd' only when overriding
+                    runner-labels to a host with a working emulator (e.g. GitHub-hosted
+                    x86_64 runners, which carry KVM out of the box).
+                type: string
+                required: false
+                default: redroid
             emulator-api-level:
                 type: string
                 required: false
@@ -65,6 +77,31 @@ on:
                 type: string
                 required: false
                 default: pixel_6
+            redroid-image:
+                description: >-
+                    Redroid image tag, used on a redroid-prewarm-manifest-path miss.
+                    Verified against a 6.17 host kernel — older 13.x tags are known to
+                    never finish boot on that kernel, and 14.x images hard-lock the
+                    guest kernel version.
+                type: string
+                required: false
+                default: redroid/redroid:15.0.0_64only-latest
+            redroid-memory:
+                type: string
+                required: false
+                default: 3g
+            redroid-cpus:
+                type: string
+                required: false
+                default: '2'
+            redroid-prewarm-manifest-path:
+                type: string
+                required: false
+                default: $HOME/.rnw-ci/android-emulator.json
+            redroid-boot-timeout-seconds:
+                type: string
+                required: false
+                default: '600'
             node-version:
                 type: string
                 required: false
@@ -104,6 +141,7 @@ jobs:
         runs-on: ubuntu-latest
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
+            shard-indices: ${{ steps.shard-indices.outputs.indices }}
         steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
@@ -119,6 +157,34 @@ jobs:
                   target-packages: ${{ inputs.target-packages }}
                   base-sha: ${{ github.event.pull_request.base.sha }}
                   always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
+
+            # The test job's matrix.shard-index must exactly match
+            # inputs.shard-count: fewer indices than shard-count silently
+            # never runs the flows assigned to the missing indices (the
+            # suite still reports success), and more indices than
+            # shard-count fails run-maestro-android-redroid's own
+            # [0, shard-count) bounds check. A hard-coded matrix can only
+            # ever match one specific shard-count, so derive it here instead.
+            - name: Compute shard indices
+              id: shard-indices
+              shell: bash
+              env:
+                  SHARD_COUNT: ${{ inputs.shard-count }}
+                  TARGETS: ${{ inputs.targets }}
+              run: |
+                  set -euo pipefail
+                  if [ "$SHARD_COUNT" -lt 1 ]; then
+                    echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
+                    exit 1
+                  fi
+                  target_count=$(jq 'length' <<< "$TARGETS")
+                  total_jobs=$(( target_count * SHARD_COUNT ))
+                  if [ "$total_jobs" -gt 256 ]; then
+                    echo "::error::targets ($target_count) x shard-count ($SHARD_COUNT) = $total_jobs test jobs, exceeding GitHub Actions' 256-job matrix limit."
+                    exit 1
+                  fi
+                  indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
+                  echo "indices=$indices" >> "$GITHUB_OUTPUT"
 
     build:
         name: Build (${{ matrix.target.name }})
@@ -232,7 +298,7 @@ jobs:
             fail-fast: false
             matrix:
                 target: ${{ fromJSON(inputs.targets) }}
-                shard-index: [0, 1]
+                shard-index: ${{ fromJSON(needs.detect.outputs.shard-indices) }}
 
         steps:
             - name: Checkout repository
@@ -245,7 +311,45 @@ jobs:
                   name: android-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}
 
+            # Both test steps below are gated on an exact 'redroid'/'avd'
+            # match; an unrecognized android-driver value would otherwise
+            # skip both silently and let this job (and the status job that
+            # gates on its result) report success having run zero Maestro
+            # flows.
+            - name: Validate android-driver
+              shell: bash
+              env:
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+              run: |
+                  case "$ANDROID_DRIVER" in
+                    redroid|avd) ;;
+                    *)
+                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid' or 'avd'."
+                      exit 1
+                      ;;
+                  esac
+
+            - name: run-maestro-android-redroid
+              if: inputs.android-driver == 'redroid'
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@main
+              with:
+                  image: ${{ inputs.redroid-image }}
+                  container-name: redroid-e2e-${{ strategy.job-index }}
+                  apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
+                  app-id: ${{ matrix.target.appId }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  shard-index: ${{ matrix.shard-index }}
+                  shard-count: ${{ inputs.shard-count }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  memory: ${{ inputs.redroid-memory }}
+                  cpus: ${{ inputs.redroid-cpus }}
+                  prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
+                  boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
             - name: run-maestro-android
+              if: inputs.android-driver == 'avd'
               uses: rnw-community/mobile-ci/actions/run-maestro-android@main
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk

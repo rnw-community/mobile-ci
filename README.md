@@ -38,7 +38,8 @@ Until then, pin to `@main` — see [CONTRIBUTING.md](CONTRIBUTING.md).
 | `build-ios-app`          | Release, unsigned iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified.            |
 | `build-android-app`      | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`.       |
 | `run-maestro-ios`        | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard.               |
-| `run-maestro-android`    | Headless emulator boot/install/test/capture/shutdown for a Maestro flow shard.                  |
+| `run-maestro-android`    | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard.               |
+| `run-maestro-android-redroid` | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners; `android-maestro.yml`'s default. |
 | `turbo-affected`         | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages.               |
 
 Each action has its own `README.md` under `actions/<name>/` with the full
@@ -49,9 +50,31 @@ input/output table and a usage example.
 | Workflow                  | Composes                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------ |
 | `ios-maestro.yml`           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
-| `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → `build-android-app` → `run-maestro-android` |
+| `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → `build-android-app` → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
 | `seed-native-cache.yml`     | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
 | `pr-closed-cleanup-reusable.yml` | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+
+### Android driver: Redroid vs AVD
+
+`android-maestro.yml`'s `android-driver` input picks the Maestro-execution
+step's Android backend, `redroid` by default:
+
+- **`redroid`** (default) — Android as a privileged container over the
+  `binder_linux` kernel module (`run-maestro-android-redroid`). Needs no
+  `sdkmanager`, NDK, or emulator binary on the runner, so it is the only
+  driver that works at all on `linux-aarch64` self-hosted runners — this
+  workflow's own default `runner-labels`. Proven on `vitalyiegorov/suuudokuuu`'s
+  fleet (redroid tag `15.0.0_64only` verified against a `6.17` host kernel;
+  animation scales forced to `0` after boot) and ported into
+  `rnw-community/rnw-community`'s canary pipeline.
+- **`avd`** — a real Android emulator via
+  `reactivecircus/android-emulator-runner` (`run-maestro-android`). Only
+  viable when `runner-labels` is overridden to a host with a working
+  emulator + acceleration, e.g. GitHub-hosted `ubuntu-latest` (KVM-accelerated
+  out of the box). Google does not publish `linux-aarch64` builds of the
+  Android emulator, NDK, or `cmake`, so `avd` cannot boot on this workflow's
+  default self-hosted fleet regardless of tuning — that gap is exactly why
+  `redroid` is the default rather than an opt-in.
 
 `seed-native-cache.yml` is meant to be called from a workflow that is itself
 `workflow_dispatch`-triggered (plus optionally `push`/`schedule`) in the
