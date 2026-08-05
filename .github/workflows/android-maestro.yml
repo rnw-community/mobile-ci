@@ -49,6 +49,18 @@ on:
                 type: string
                 required: false
                 default: '2.8.0'
+            android-driver:
+                description: >-
+                    'redroid' (default) or 'avd'. Google publishes no linux-aarch64
+                    build of the Android emulator/NDK/cmake, so 'avd' cannot boot on
+                    this workflow's default self-hosted runner-labels; 'redroid' runs
+                    Android as a privileged container over binder_linux instead and
+                    needs none of those packages. Pick 'avd' only when overriding
+                    runner-labels to a host with a working emulator (e.g. GitHub-hosted
+                    x86_64 runners, which carry KVM out of the box).
+                type: string
+                required: false
+                default: redroid
             emulator-api-level:
                 type: string
                 required: false
@@ -65,6 +77,31 @@ on:
                 type: string
                 required: false
                 default: pixel_6
+            redroid-image:
+                description: >-
+                    Redroid image tag, used on a redroid-prewarm-manifest-path miss.
+                    Verified against a 6.17 host kernel — older 13.x tags are known to
+                    never finish boot on that kernel, and 14.x images hard-lock the
+                    guest kernel version.
+                type: string
+                required: false
+                default: redroid/redroid:15.0.0_64only-latest
+            redroid-memory:
+                type: string
+                required: false
+                default: 3g
+            redroid-cpus:
+                type: string
+                required: false
+                default: '2'
+            redroid-prewarm-manifest-path:
+                type: string
+                required: false
+                default: $HOME/.rnw-ci/android-emulator.json
+            redroid-boot-timeout-seconds:
+                type: string
+                required: false
+                default: '600'
             node-version:
                 type: string
                 required: false
@@ -245,7 +282,34 @@ jobs:
                   name: android-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}
 
+            - name: Resolve Redroid shard port
+              if: inputs.android-driver == 'redroid'
+              id: redroid-meta
+              shell: bash
+              run: echo "adb-port=$(( 5555 + ${{ strategy.job-index }} * 10 ))" >> "$GITHUB_OUTPUT"
+
+            - name: run-maestro-android-redroid
+              if: inputs.android-driver == 'redroid'
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@main
+              with:
+                  image: ${{ inputs.redroid-image }}
+                  container-name: redroid-e2e-${{ strategy.job-index }}
+                  adb-port: ${{ steps.redroid-meta.outputs.adb-port }}
+                  apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
+                  app-id: ${{ matrix.target.appId }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  shard-index: ${{ matrix.shard-index }}
+                  shard-count: ${{ inputs.shard-count }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  memory: ${{ inputs.redroid-memory }}
+                  cpus: ${{ inputs.redroid-cpus }}
+                  prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
+                  boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
             - name: run-maestro-android
+              if: inputs.android-driver == 'avd'
               uses: rnw-community/mobile-ci/actions/run-maestro-android@main
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
