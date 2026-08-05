@@ -16,12 +16,13 @@ inputs:
     description: >-
       Docker container name base for this shard, distinguishing it from
       sibling shards in the same run — e.g. the caller passes
-      redroid-e2e-<target-name>-<shard-index>, interpolating its own matrix.
+      redroid-e2e-<job-index>, interpolating its own strategy.job-index (see
+      android-maestro.yml and this action's README for the exact call shape).
       Never put a live expression in this description. GitHub parses input
-      descriptions as templates, and the matrix context does not exist inside
-      a composite action, so an interpolated matrix reference here makes the
-      whole manifest fail to load with "Unrecognized named-value: 'matrix'"
-      before any step runs. The action
+      descriptions as templates, and neither the matrix nor the strategy
+      context exists inside a composite action, so an interpolated reference
+      to either here makes the whole manifest fail to load with
+      "Unrecognized named-value: 'matrix'" before any step runs. The action
       automatically appends the run id/attempt before using it, so two
       concurrent workflow runs (same repo or different repos sharing a
       runner pool) never collide even if they compute the same base.
