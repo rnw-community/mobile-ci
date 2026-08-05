@@ -32,18 +32,26 @@ scales (window/transition/animator) are forced to `0` after boot
 unconditionally, since a prewarmed volume already having them off does not
 help the cold-start fallback path.
 
-`container-name` and `adb-port` have no defaults: pass values unique to this
-matrix cell (e.g. incorporating `matrix.target.name` and `matrix.shard-index`,
-or GitHub's own `strategy.job-index`) so concurrent shards on one runner never
-collide.
+`container-name` and `adb-port` have no defaults: pass values that distinguish
+this matrix cell from its siblings (e.g. incorporating `matrix.target.name`
+and `matrix.shard-index`, or GitHub's own `strategy.job-index`). They only
+need to be unique *within* the calling run — the action itself appends
+`GITHUB_RUN_ID`/`GITHUB_RUN_ATTEMPT` to the container name and probes forward
+from the candidate `adb-port` for one nothing is already listening on, so two
+concurrent workflow runs (the same repo or a different one sharing the same
+runner pool) never collide even if they compute identical candidates. Both
+the container and its data directory (`RUNNER_TEMP/redroid-data/<the
+run-scoped name>`) are removed in the `if: always()` teardown step, so this
+run-scoping doesn't leak one directory per run forever on a persistent
+self-hosted runner.
 
 ## Inputs
 
 | Name                     | Required | Default                              | Description                                                                             |
 | ------------------------- | -------- | ------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `image`                   | no       | `redroid/redroid:15.0.0_64only-latest` | Redroid image tag, used only on a prewarm-manifest miss. Verified against a 6.17 host kernel — older `13.x` tags are known to never finish boot on that kernel, and `14.x` images hard-lock the guest kernel version. |
-| `container-name`          | yes      | —                                      | Docker container name for this shard; must be unique across concurrent matrix cells.        |
-| `adb-port`                | yes      | —                                      | Host port forwarded to the container's `5555`; must be unique across concurrent matrix cells. |
+| `container-name`          | yes      | —                                      | Docker container name base, distinguishing this cell from siblings in the same run; the action appends the run id/attempt automatically. |
+| `adb-port`                | yes      | —                                      | Candidate host port forwarded to the container's `5555`; the action probes forward from it for an actually-free port. |
 | `apk-path`                | yes      | —                                      | Path to the packaged `.apk` to install.                                                     |
 | `app-id`                  | yes      | —                                      | Application ID passed to Maestro as `APP_ID`.                                               |
 | `flows-dir`               | yes      | —                                      | Directory containing Maestro flow `.yaml`/`.yml` files.                                     |

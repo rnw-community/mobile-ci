@@ -14,14 +14,20 @@ inputs:
     default: redroid/redroid:15.0.0_64only-latest
   container-name:
     description: >-
-      Docker container name for this shard. Must be unique across concurrent
-      matrix cells on the same runner — e.g. redroid-e2e-${{ matrix.target.name
-      }}-${{ matrix.shard-index }}.
+      Docker container name base for this shard, distinguishing it from
+      sibling shards in the same run — e.g. redroid-e2e-${{
+      matrix.target.name }}-${{ matrix.shard-index }}. The action
+      automatically appends the run id/attempt before using it, so two
+      concurrent workflow runs (same repo or different repos sharing a
+      runner pool) never collide even if they compute the same base.
     required: true
   adb-port:
     description: >-
-      Host port forwarded to the container's adb port 5555. Must be unique
-      across concurrent matrix cells on the same runner.
+      Candidate host port forwarded to the container's adb port 5555. Does
+      not need to be globally unique: the action probes forward from this
+      value for a port nothing is already listening on, so concurrent
+      shards or runs landing on the same candidate still each get a
+      distinct, actually-free port.
     required: true
   apk-path:
     description: Path to the packaged .apk to install.
@@ -106,6 +112,21 @@ runs:
               exit 1
               ;;
           esac
+          # A caller-supplied container-name only distinguishes shards within
+          # its own run; two concurrent workflow runs (this repo or a
+          # different one sharing the same runner pool) can compute the
+          # identical base name for the "same" cell. GITHUB_RUN_ID/ATTEMPT
+          # are always present and unique per run, so fold them in here
+          # unconditionally rather than relying on every consumer to
+          # remember to do it themselves.
+          effective_name="${REDROID_CONTAINER_NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$effective_name" in
+            *[!A-Za-z0-9_.-]*)
+              echo "::error::Invalid computed container name '$effective_name'."
+              exit 1
+              ;;
+          esac
+          echo "REDROID_EFFECTIVE_CONTAINER_NAME=$effective_name" >> "$GITHUB_ENV"
           # Composite action env: values are set directly on the process
           # environment, never through a shell, so a literal "$HOME" in an
           # unresolved default (or a caller override) is not expanded by
@@ -113,7 +134,7 @@ runs:
           # rather than relying on the caller to pass an already-expanded path.
           manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
           data_root=$(realpath -m "$RUNNER_TEMP/redroid-data")
-          data=$(realpath -m "$data_root/$REDROID_CONTAINER_NAME")
+          data=$(realpath -m "$data_root/$effective_name")
           case "$data" in
             "$data_root"/*) ;;
             *)
@@ -121,15 +142,16 @@ runs:
               exit 1
               ;;
           esac
-          # This fleet's self-hosted runners persist $RUNNER_TEMP across job
-          # runs (unlike GitHub-hosted, per-job-ephemeral runners), and a
-          # container-name is commonly reused run to run. Without clearing
-          # it first, a later run would boot from whatever apps/settings/test
-          # state the previous run's teardown (docker rm only, no data
-          # cleanup) left behind instead of the documented fresh/prewarmed
-          # volume.
+          # effective_name is run-scoped, so nothing will ever reuse this
+          # exact path — this rm -rf is defensive cleanup only (e.g. a
+          # directory left by an older, non-run-scoped version of this
+          # action), not load-bearing for correctness the way it was before
+          # run-scoping. Teardown below removes this directory again once
+          # the shard finishes, so this fleet's persistent $RUNNER_TEMP
+          # doesn't accumulate one directory per run forever.
           sudo rm -rf "$data"
           mkdir -p "$data"
+          echo "REDROID_DATA_DIR=$data" >> "$GITHUB_ENV"
           if [ -f "$manifest_path" ]; then
             # Read the manifest path from the environment rather than
             # interpolating it into the generated source, so its contents
@@ -152,12 +174,32 @@ runs:
             echo '::error::binder_linux produced none of /dev/binder, /dev/vndbinder, /dev/hwbinder on this host after modprobe. Redroid cannot run without the binder_linux kernel module; this is host-kernel provisioning a workflow run cannot self-heal safely.'
             exit 1
           fi
-          sudo docker rm -f "$REDROID_CONTAINER_NAME" >/dev/null 2>&1 || true
-          sudo docker run -d --name "$REDROID_CONTAINER_NAME" --privileged \
+          # REDROID_ADB_PORT is only a candidate: a concurrent shard or an
+          # entirely separate concurrent workflow run can compute the exact
+          # same candidate. Probe forward from it for a port nothing is
+          # already listening on (ss reflects any process's bound port, not
+          # just this action's own docker containers).
+          port="$REDROID_ADB_PORT"
+          attempts=0
+          while ss -H -tln "sport = :$port" 2>/dev/null | grep -q .; do
+            port=$((port + 1))
+            attempts=$((attempts + 1))
+            if [ "$attempts" -ge 50 ]; then
+              echo "::error::Could not find a free adb port after 50 attempts starting from $REDROID_ADB_PORT."
+              exit 1
+            fi
+          done
+          sudo docker rm -f "$effective_name" >/dev/null 2>&1 || true
+          sudo docker run -d --name "$effective_name" --privileged \
             --memory "$REDROID_MEMORY" --memory-swap "$REDROID_MEMORY" --cpus "$REDROID_CPUS" \
-            -v "$data":/data -p "$REDROID_ADB_PORT":5555 \
+            -v "$data":/data -p "$port":5555 \
             "$image" androidboot.redroid_gpu_mode=guest
-          adb connect "localhost:$REDROID_ADB_PORT"
+          # Tolerates failure: Redroid has not necessarily opened 5555 yet
+          # immediately after `docker run -d` returns, and under set -e a
+          # hard failure here would abort the whole step before the
+          # boot-completed loop below (which retries adb connect every 5s)
+          # ever runs.
+          adb connect "localhost:$port" || true
           # Exported as soon as the container is adb-reachable, not after the
           # boot-completed wait below succeeds: a timed-out boot still leaves
           # a running, adb-connected container worth capturing diagnostics
@@ -167,15 +209,15 @@ runs:
           # most for. Only a genuine bring-up failure before this line (e.g.
           # the binder_linux guard above) leaves it unset, which is still the
           # right time to skip capture: there is no reachable device at all.
-          echo "ANDROID_SERIAL=localhost:$REDROID_ADB_PORT" >> "$GITHUB_ENV"
+          echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
           deadline=$(( $(date +%s) + REDROID_BOOT_TIMEOUT_SECONDS ))
-          until [ "$(adb -s "localhost:$REDROID_ADB_PORT" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+          until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
             test "$(date +%s)" -lt "$deadline"
             sleep 5
-            adb connect "localhost:$REDROID_ADB_PORT" >/dev/null 2>&1 || true
+            adb connect "localhost:$port" >/dev/null 2>&1 || true
           done
           for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
-            adb -s "localhost:$REDROID_ADB_PORT" shell settings put global "$setting" 0
+            adb -s "localhost:$port" shell settings put global "$setting" 0
           done
 
     - name: Install Maestro
@@ -262,7 +304,15 @@ runs:
     - name: Teardown Redroid container
       if: always()
       shell: bash
-      run: sudo docker rm -f "${{ inputs.container-name }}" || true
+      run: |
+          if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
+            sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
+          else
+            sudo docker rm -f "${{ inputs.container-name }}" || true
+          fi
+          if [ -n "${REDROID_DATA_DIR:-}" ]; then
+            sudo rm -rf "$REDROID_DATA_DIR" || true
+          fi
 
     - name: Upload Maestro artifacts
       if: always()
