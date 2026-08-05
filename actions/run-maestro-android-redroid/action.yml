@@ -97,6 +97,14 @@ runs:
           # rather than relying on the caller to pass an already-expanded path.
           manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
           data="$RUNNER_TEMP/redroid-data/$REDROID_CONTAINER_NAME"
+          # This fleet's self-hosted runners persist $RUNNER_TEMP across job
+          # runs (unlike GitHub-hosted, per-job-ephemeral runners), and a
+          # container-name is commonly reused run to run. Without clearing
+          # it first, a later run would boot from whatever apps/settings/test
+          # state the previous run's teardown (docker rm only, no data
+          # cleanup) left behind instead of the documented fresh/prewarmed
+          # volume.
+          sudo rm -rf "$data"
           mkdir -p "$data"
           if [ -f "$manifest_path" ]; then
             # Read the manifest path from the environment rather than
@@ -126,6 +134,16 @@ runs:
             -v "$data":/data -p "$REDROID_ADB_PORT":5555 \
             "$image" androidboot.redroid_gpu_mode=guest
           adb connect "localhost:$REDROID_ADB_PORT"
+          # Exported as soon as the container is adb-reachable, not after the
+          # boot-completed wait below succeeds: a timed-out boot still leaves
+          # a running, adb-connected container worth capturing diagnostics
+          # from (screenshot/logcat), and "Capture final device state"
+          # already guards on this being set — leaving it unset here would
+          # just make that step skip the one failure mode diagnostics matter
+          # most for. Only a genuine bring-up failure before this line (e.g.
+          # the binder_linux guard above) leaves it unset, which is still the
+          # right time to skip capture: there is no reachable device at all.
+          echo "ANDROID_SERIAL=localhost:$REDROID_ADB_PORT" >> "$GITHUB_ENV"
           deadline=$(( $(date +%s) + REDROID_BOOT_TIMEOUT_SECONDS ))
           until [ "$(adb -s "localhost:$REDROID_ADB_PORT" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
             test "$(date +%s)" -lt "$deadline"
@@ -135,7 +153,6 @@ runs:
           for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
             adb -s "localhost:$REDROID_ADB_PORT" shell settings put global "$setting" 0
           done
-          echo "ANDROID_SERIAL=localhost:$REDROID_ADB_PORT" >> "$GITHUB_ENV"
 
     - name: Install Maestro
       shell: bash
