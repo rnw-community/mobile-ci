@@ -166,8 +166,13 @@ runs:
             timeout 900 sudo docker pull "$image"
           fi
           sudo modprobe binder_linux devices=binder,hwbinder,vndbinder 2>&1 || true
-          if [ ! -e /dev/binder ] && [ ! -e /dev/vndbinder ] && [ ! -e /dev/hwbinder ]; then
-            echo '::error::binder_linux produced none of /dev/binder, /dev/vndbinder, /dev/hwbinder on this host after modprobe. Redroid cannot run without the binder_linux kernel module; this is host-kernel provisioning a workflow run cannot self-heal safely.'
+          # Presence of the module is the only portable signal. On binderfs
+          # kernels (6.x) no /dev/binder, /dev/vndbinder or /dev/hwbinder ever
+          # appears on the host — the privileged container mounts binderfs and
+          # creates its own devices — so probing for those nodes fails on
+          # exactly the hosts Redroid works best on.
+          if [ ! -d /sys/module/binder_linux ]; then
+            echo '::error::binder_linux is not loaded on this host after modprobe. Redroid cannot run without it, and that is host-kernel provisioning a workflow run cannot self-heal safely.'
             exit 1
           fi
           # A "probe with ss, then docker run" port pick is a TOCTOU race:
