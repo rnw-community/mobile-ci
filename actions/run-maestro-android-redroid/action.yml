@@ -33,8 +33,17 @@ inputs:
     description: Application ID passed to Maestro as APP_ID.
     required: true
   flows-dir:
-    description: Directory containing Maestro flow .yaml/.yml files.
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows.
+      Subdirectories are deliberately not searched; see flows-name-pattern.
     required: true
+  flows-name-pattern:
+    description: >-
+      find -name pattern selecting runnable flows directly inside flows-dir.
+      Defaults to the widespread *.flow.yaml convention, which keeps reusable
+      subflows and capture-only flows in subdirectories out of the shard.
+    required: false
+    default: '*.flow.yaml'
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -247,6 +256,7 @@ runs:
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
         FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
@@ -276,9 +286,14 @@ runs:
             exit 1
           fi
           flows=()
+          # Only top-level *.flow.yaml files are runnable scenarios. Recursing
+          # over every *.yaml sweeps in the reusable subflows, one-time setup
+          # flows and screenshot-capture flows that conventionally live in
+          # subdirectories of the flows dir; those expect a caller to pass env
+          # or leave the app mid-journey, so running them standalone fails.
           while IFS= read -r flow; do
             flows+=("$flow")
-          done < <(find "$FLOWS_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <(find "$FLOWS_DIR" -maxdepth 1 -type f -name "$FLOWS_NAME_PATTERN" | sort)
           test "${#flows[@]}" -gt 0
           selected=()
           for index in "${!flows[@]}"; do
