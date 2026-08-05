@@ -21,14 +21,6 @@ inputs:
       concurrent workflow runs (same repo or different repos sharing a
       runner pool) never collide even if they compute the same base.
     required: true
-  adb-port:
-    description: >-
-      Candidate host port forwarded to the container's adb port 5555. Does
-      not need to be globally unique: the action probes forward from this
-      value for a port nothing is already listening on, so concurrent
-      shards or runs landing on the same candidate still each get a
-      distinct, actually-free port.
-    required: true
   apk-path:
     description: Path to the packaged .apk to install.
     required: true
@@ -89,7 +81,6 @@ runs:
       env:
         REDROID_IMAGE: ${{ inputs.image }}
         REDROID_CONTAINER_NAME: ${{ inputs.container-name }}
-        REDROID_ADB_PORT: ${{ inputs.adb-port }}
         REDROID_MEMORY: ${{ inputs.memory }}
         REDROID_CPUS: ${{ inputs.cpus }}
         REDROID_MANIFEST_PATH: ${{ inputs.prewarm-manifest-path }}
@@ -174,26 +165,27 @@ runs:
             echo '::error::binder_linux produced none of /dev/binder, /dev/vndbinder, /dev/hwbinder on this host after modprobe. Redroid cannot run without the binder_linux kernel module; this is host-kernel provisioning a workflow run cannot self-heal safely.'
             exit 1
           fi
-          # REDROID_ADB_PORT is only a candidate: a concurrent shard or an
-          # entirely separate concurrent workflow run can compute the exact
-          # same candidate. Probe forward from it for a port nothing is
-          # already listening on (ss reflects any process's bound port, not
-          # just this action's own docker containers).
-          port="$REDROID_ADB_PORT"
-          attempts=0
-          while ss -H -tln "sport = :$port" 2>/dev/null | grep -q .; do
-            port=$((port + 1))
-            attempts=$((attempts + 1))
-            if [ "$attempts" -ge 50 ]; then
-              echo "::error::Could not find a free adb port after 50 attempts starting from $REDROID_ADB_PORT."
-              exit 1
-            fi
-          done
+          # A "probe with ss, then docker run" port pick is a TOCTOU race:
+          # nothing stops a concurrent shard from binding the same
+          # observed-free port between the check and the bind. Sidestep the
+          # race entirely by never picking a port ourselves — bind the
+          # container port to loopback with an empty host port
+          # (127.0.0.1::5555) and let the kernel, via Docker, atomically
+          # assign whichever ephemeral port is actually free, then read back
+          # what it picked. This also keeps Redroid's adb port off every
+          # non-loopback interface, unreachable from anywhere but this host.
           sudo docker rm -f "$effective_name" >/dev/null 2>&1 || true
           sudo docker run -d --name "$effective_name" --privileged \
             --memory "$REDROID_MEMORY" --memory-swap "$REDROID_MEMORY" --cpus "$REDROID_CPUS" \
-            -v "$data":/data -p "$port":5555 \
+            -v "$data":/data -p 127.0.0.1::5555 \
             "$image" androidboot.redroid_gpu_mode=guest
+          port=$(sudo docker port "$effective_name" 5555/tcp | head -n1 | sed -E 's/.*:([0-9]+)$/\1/')
+          case "$port" in
+            ''|*[!0-9]*)
+              echo "::error::Could not determine the host port Docker assigned to container port 5555 on '$effective_name'."
+              exit 1
+              ;;
+          esac
           # Tolerates failure: Redroid has not necessarily opened 5555 yet
           # immediately after `docker run -d` returns, and under set -e a
           # hard failure here would abort the whole step before the
@@ -233,7 +225,9 @@ runs:
 
     - name: Install APK
       shell: bash
-      run: adb -s "$ANDROID_SERIAL" install -r "${{ inputs.apk-path }}"
+      env:
+        APK_PATH: ${{ inputs.apk-path }}
+      run: adb -s "$ANDROID_SERIAL" install -r "$APK_PATH"
 
     - name: Run Maestro shard
       shell: bash
@@ -242,6 +236,8 @@ runs:
         MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
           # An out-of-range shard-index (>= shard-count, or a typo'd
@@ -272,7 +268,7 @@ runs:
           flows=()
           while IFS= read -r flow; do
             flows+=("$flow")
-          done < <(find "${{ inputs.flows-dir }}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <(find "$FLOWS_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
           test "${#flows[@]}" -gt 0
           selected=()
           for index in "${!flows[@]}"; do
@@ -285,7 +281,7 @@ runs:
             exit 0
           fi
           printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
-          maestro test -e "APP_ID=${{ inputs.app-id }}" "${selected[@]}"
+          maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
 
     - name: Capture final device state
       if: always() && env.ANDROID_SERIAL != ''
@@ -304,11 +300,13 @@ runs:
     - name: Teardown Redroid container
       if: always()
       shell: bash
+      env:
+        CONTAINER_NAME_INPUT: ${{ inputs.container-name }}
       run: |
           if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
             sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
           else
-            sudo docker rm -f "${{ inputs.container-name }}" || true
+            sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
           fi
           if [ -n "${REDROID_DATA_DIR:-}" ]; then
             sudo rm -rf "$REDROID_DATA_DIR" || true

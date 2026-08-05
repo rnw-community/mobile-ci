@@ -300,19 +300,12 @@ jobs:
                       ;;
                   esac
 
-            - name: Resolve Redroid shard port
-              if: inputs.android-driver == 'redroid'
-              id: redroid-meta
-              shell: bash
-              run: echo "adb-port=$(( 5555 + ${{ strategy.job-index }} * 10 ))" >> "$GITHUB_OUTPUT"
-
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'
               uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@main
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e-${{ strategy.job-index }}
-                  adb-port: ${{ steps.redroid-meta.outputs.adb-port }}
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
