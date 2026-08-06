@@ -60,7 +60,8 @@ from outside the runner itself.
 | `container-name`          | yes      | —                                      | Docker container name base, distinguishing this cell from siblings in the same run; the action appends the run id/attempt automatically. |
 | `apk-path`                | yes      | —                                      | Path to the packaged `.apk` to install.                                                     |
 | `app-id`                  | yes      | —                                      | Application ID passed to Maestro as `APP_ID`.                                               |
-| `flows-dir`               | yes      | —                                      | Directory containing Maestro flow `.yaml`/`.yml` files.                                     |
+| `flows-dir`               | yes      | —                                      | Directory whose top-level files are the runnable Maestro flows. Subdirectories are deliberately not searched; see `flows-name-pattern`. |
+| `flows-name-pattern`      | no       | `*.flow.yaml`                          | `find -name` pattern selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard. |
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |
 | `pre-run-flow`            | no       | `''`                                   | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |

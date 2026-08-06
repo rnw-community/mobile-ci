@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in an action or reusable workflow does not behave as documented.
+labels: [bug]
+body:
+    - type: dropdown
+      id: component
+      attributes:
+          label: Affected action or workflow
+          description: Which action or reusable workflow is this about?
+          options:
+              - actions/build-android-app
+              - actions/build-ios-app
+              - actions/native-app-cache
+              - actions/native-fingerprint
+              - actions/repack-app
+              - actions/run-maestro-android
+              - actions/run-maestro-android-redroid
+              - actions/run-maestro-ios
+              - actions/setup-ccache-ios
+              - actions/setup-xcode-pinned
+              - actions/turbo-affected
+              - .github/workflows/ios-maestro.yml
+              - .github/workflows/android-maestro.yml
+              - .github/workflows/seed-native-cache.yml
+              - .github/workflows/native-publish.yml
+              - .github/workflows/native-dev-release.yml
+              - .github/workflows/pr-closed-cleanup-reusable.yml
+              - Other / not sure
+      validations:
+          required: true
+
+    - type: input
+      id: version
+      attributes:
+          label: Version or commit SHA pinned
+          description: The exact ref your `uses:` line pins to (e.g. `v1.2.3`, a full commit SHA, or `main`).
+          placeholder: v1.2.3
+      validations:
+          required: true
+
+    - type: input
+      id: runner
+      attributes:
+          label: Runner OS / architecture
+          description: e.g. macOS ARM64, linux-aarch64, ubuntu-latest x86_64.
+          placeholder: macOS ARM64
+      validations:
+          required: true
+
+    - type: dropdown
+      id: runner-kind
+      attributes:
+          label: Self-hosted or GitHub-hosted runner?
+          options:
+              - Self-hosted
+              - GitHub-hosted
+              - Not sure
+      validations:
+          required: true
+
+    - type: textarea
+      id: what-happened
+      attributes:
+          label: What happened
+          description: What did you expect, and what happened instead?
+      validations:
+          required: true
+
+    - type: textarea
+      id: logs
+      attributes:
+          label: Relevant logs
+          description: Paste the relevant step output/error (a link to the failed run is also fine). This will be rendered as a code block.
+          render: shell
+      validations:
+          required: false

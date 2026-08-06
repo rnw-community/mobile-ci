@@ -11,6 +11,7 @@ permissions:
 
 env:
     ACTIONLINT_VERSION: '1.7.12'
+    ZIZMOR_VERSION: '1.16.3'
 
 jobs:
     actionlint:
@@ -39,6 +40,22 @@ jobs:
             - name: Run actionlint
               shell: bash
               run: actionlint -color
+
+    zizmor:
+        name: zizmor
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Install zizmor (pinned)
+              shell: bash
+              run: pip install --user "zizmor==${ZIZMOR_VERSION}"
+
+            - name: Run zizmor
+              shell: bash
+              run: ~/.local/bin/zizmor --config .github/zizmor.yml .github/workflows actions
 
     dry-lint-local-refs:
         name: Dry lint (reusable workflow -> composite action schemas)

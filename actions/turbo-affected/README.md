@@ -34,8 +34,8 @@ base to diff against and the pipeline should simply always run.
   id: affected
   with:
       target-packages: |
-          @rnw-community/react-native-payments
-          @rnw-community/react-native-payments-example
+          @myorg/mobile-app
+          @myorg/shared-ui
       base-sha: ${{ github.event.pull_request.base.sha }}
       always-affected: ${{ github.event_name != 'pull_request' }}
 ```

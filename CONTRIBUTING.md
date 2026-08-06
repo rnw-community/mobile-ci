@@ -13,12 +13,27 @@ you need to freeze against upstream drift entirely.
 **Pre-release status:** `v1` has not been cut yet. The action catalog and
 reusable workflows here were extracted from a canary pipeline; the `v1` tag
 will be created once that source pipeline's canaries are proven green (see the
-root `readme.md` for details). Until then, consumers pin to `@main` at their
+root `README.md` for details). Until then, consumers pin to `@main` at their
 own risk — `main` can change without a deprecation window.
 
 Breaking changes to an action's inputs/outputs or a reusable workflow's inputs
 bump the major version. Additive inputs with sensible defaults, new actions,
-and bugfixes that do not change existing behavior are minor/patch.
+and bugfixes that do not change existing behavior are minor/patch. See
+[RELEASE.md](RELEASE.md) for the exact tag-and-publish procedure.
+
+## Marketplace stance
+
+This repo is a monorepo of path-referenced composite actions
+(`actions/<name>/action.yml`), not a single top-level action. GitHub
+Marketplace can only list a repository's root `action.yml` — a subdirectory
+action cannot be listed independently. `github/codeql-action` and
+`expo/expo-github-action` are structured the same way and document the same
+stance for the same reason: this repo is deliberately not Marketplace-listed.
+Consumers reference actions and reusable workflows directly via
+`uses: rnw-community/mobile-ci/actions/<name>@<ref>` /
+`uses: rnw-community/mobile-ci/.github/workflows/<name>.yml@<ref>`, the same
+way they already reference any other subdirectory action or reusable
+workflow on GitHub.
 
 ## Third-party actions
 
@@ -58,3 +73,7 @@ invoking `actionlint`.
 - No code comments in `action.yml` beyond what a reader could not get from a
   descriptive step `name:` — prefer renaming steps/inputs over explaining them.
 - Keep `run:` blocks POSIX-shell-compatible and `shellcheck`-clean.
+- Any PR that adds, removes, renames, or changes the default of an
+  `action.yml` input/output must update that action's `README.md` input/
+  output table in the same PR — a README that drifts from its `action.yml`
+  is a bug, not a follow-up.
