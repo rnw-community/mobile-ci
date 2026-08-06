@@ -41,9 +41,10 @@ on:
                 required: false
                 default: '1'
             flows-name-pattern:
+                description: Space-separated find -name globs (OR'd together).
                 type: string
                 required: false
-                default: '*.yaml'
+                default: '*.yaml *.yml'
             flows-exclude-pattern:
                 type: string
                 required: false

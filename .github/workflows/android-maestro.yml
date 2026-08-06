@@ -41,15 +41,16 @@ on:
                 default: '1'
             flows-name-pattern:
                 description: >-
-                    Forwarded to whichever android-driver action runs. run-maestro-android
-                    (avd) and run-maestro-android-redroid both accept this input, but their
-                    own standalone defaults differ (*.yaml vs *.flow.yaml respectively) —
-                    this workflow's *.yaml default matches the avd action's so existing
-                    android-driver: avd callers that never set this input keep discovering
-                    the same flows as before.
+                    Space-separated find -name globs (OR'd together), forwarded to
+                    whichever android-driver action runs. run-maestro-android (avd) and
+                    run-maestro-android-redroid both accept this input, but their own
+                    standalone defaults differ (*.yaml *.yml vs *.flow.yaml respectively)
+                    — this workflow's default matches the avd action's so existing
+                    android-driver: avd callers that never set this input keep
+                    discovering the same flows as before.
                 type: string
                 required: false
-                default: '*.yaml'
+                default: '*.yaml *.yml'
             flows-exclude-pattern:
                 type: string
                 required: false

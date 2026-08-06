@@ -20,9 +20,11 @@ inputs:
     required: false
     default: '1'
   flows-name-pattern:
-    description: find -name glob selecting runnable flows under flows-dir.
+    description: >-
+      Space-separated find -name globs (OR'd together) selecting runnable
+      flows under flows-dir.
     required: false
-    default: '*.yaml'
+    default: '*.yaml *.yml'
   flows-exclude-pattern:
     description: Optional find ! -name glob excluding matched flows by basename.
     required: false
@@ -140,7 +142,17 @@ runs:
               if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
                 find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
               fi
-              find_cmd+=(-type f -name "$FLOWS_NAME_PATTERN")
+              find_cmd+=(-type f)
+              IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
+              name_args=('(')
+              for i in "${!name_patterns[@]}"; do
+                if [ "$i" -gt 0 ]; then
+                  name_args+=(-o)
+                fi
+                name_args+=(-name "${name_patterns[$i]}")
+              done
+              name_args+=(')')
+              find_cmd+=("${name_args[@]}")
               if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
                 find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
               fi
