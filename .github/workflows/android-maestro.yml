@@ -3,21 +3,65 @@ name: android-maestro
 on:
     workflow_call:
         inputs:
-            runner-labels:
-                description: JSON array of self-hosted runner labels for the build/test jobs.
+            build-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the build job. Defaults
+                    to the Linux fleet, but Android builds cross-compiling native code
+                    (NDK/cmake) on a linux-aarch64 self-hosted fleet may need this
+                    overridden to a macOS/x86_64 pool instead — Google does not publish
+                    linux-aarch64 NDK/cmake binaries.
                 type: string
                 required: false
                 default: '["self-hosted","linux-tiered","linux-xl"]'
+            test-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the test job. Empty
+                    (default) reuses build-runner-labels.
+                type: string
+                required: false
+                default: ''
             targets:
                 description: >-
-                    JSON array of build targets: {name, appDir, appId, prebuildCommand}.
-                    prebuildCommand may be an empty string.
+                    JSON array of build targets: {name, appDir, appId, prebuildCommand,
+                    entryFile?}. prebuildCommand may be an empty string. entryFile is
+                    optional; omitted or empty falls back to repack-entry-file.
                 type: string
                 required: true
             flows-dir:
                 description: Directory (relative to repo root) containing Maestro flow files.
                 type: string
                 required: true
+            flows-max-depth:
+                description: >-
+                    find -maxdepth under flows-dir. 0 means unbounded recursion. Default
+                    1 (top-level only) keeps subflows invoked via runFlow, conventionally
+                    living in subdirectories, out of the shard.
+                type: string
+                required: false
+                default: '1'
+            flows-name-pattern:
+                description: >-
+                    Space-separated find -name globs (OR'd together), forwarded to
+                    whichever android-driver action runs. run-maestro-android (avd) and
+                    run-maestro-android-redroid both accept this input, but their own
+                    standalone defaults differ (*.yaml *.yml vs *.flow.yaml respectively)
+                    — this workflow's default matches the avd action's so existing
+                    android-driver: avd callers that never set this input keep
+                    discovering the same flows as before.
+                type: string
+                required: false
+                default: '*.yaml *.yml'
+            flows-exclude-pattern:
+                type: string
+                required: false
+                default: ''
+            shard-manifest-dir:
+                description: >-
+                    Optional directory (relative to repo root) of hand-curated
+                    shard-<index>.txt files overriding the computed index-modulo split.
+                type: string
+                required: false
+                default: ''
             shard-count:
                 type: number
                 required: false
@@ -27,6 +71,18 @@ on:
                 type: string
                 required: false
                 default: '12266719'
+            android-build-tools-version:
+                description: >-
+                    Android build-tools version providing apksigner/zipalign, needed on
+                    a native-app-cache hit to re-sign the APK after repack-js-bundle
+                    swaps in a fresh JS bundle. build-android-app's own Gradle build
+                    installs whatever build-tools its compileSdkVersion resolves to, but
+                    that only happens on a cache miss — the cache-hit path never invokes
+                    Gradle, so this is requested explicitly instead. Must match (or be
+                    compatible with) the target app's own build-tools requirement.
+                type: string
+                required: false
+                default: '35.0.0'
             cache-profile:
                 description: Cache-key prefix distinguishing this consumer/app.
                 type: string
@@ -119,6 +175,37 @@ on:
                 type: string
                 required: false
                 default: ''
+            repack-entry-file:
+                description: Metro entry file passed to repack-js-bundle on a native-app-cache hit, relative to each target's appDir.
+                type: string
+                required: false
+                default: index.js
+            repack-bundle-command:
+                description: Optional full override for repack-js-bundle's bundling command. See that action's README.
+                type: string
+                required: false
+                default: ''
+            android-keystore-path:
+                description: >-
+                    Relative to each target's appDir. Re-signing is required because
+                    repack-js-bundle rewrites assets/index.android.bundle, which
+                    invalidates the APK's existing Signature Scheme v2/v3 block. Default
+                    matches the React Native CLI template's checked-in debug keystore.
+                type: string
+                required: false
+                default: android/app/debug.keystore
+            android-key-alias:
+                type: string
+                required: false
+                default: androiddebugkey
+            android-store-password:
+                type: string
+                required: false
+                default: android
+            android-key-password:
+                type: string
+                required: false
+                default: android
             build-timeout-minutes:
                 type: number
                 required: false
@@ -190,7 +277,7 @@ jobs:
         name: Build (${{ matrix.target.name }})
         needs: detect
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -250,14 +337,41 @@ jobs:
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
+            # Needed only on a cache hit: build-android-app's own Gradle build
+            # (cache-miss path) installs whatever build-tools its
+            # compileSdkVersion resolves to, but repack-js-bundle below needs
+            # apksigner/zipalign to re-sign the APK without ever invoking
+            # Gradle, so build-tools is requested here explicitly instead.
+            - name: Set up Android SDK (for repack-js-bundle re-signing)
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+              with:
+                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
+
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
               run: |
                   {
                     echo "### Android build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    echo "Native fingerprint hit; repacking the cached shell with a fresh JS bundle."
                   } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: repack-js-bundle (cache hit)
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              uses: rnw-community/mobile-ci/actions/repack-js-bundle@main
+              with:
+                  platform: android
+                  app-dir: ${{ matrix.target.appDir }}
+                  app-path: ${{ github.workspace }}/.ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  entry-file: ${{ matrix.target.entryFile != '' && matrix.target.entryFile || inputs.repack-entry-file }}
+                  bundle-command: ${{ inputs.repack-bundle-command }}
+                  keystore-path: ${{ inputs.android-keystore-path }}
+                  key-alias: ${{ inputs.android-key-alias }}
+                  store-password: ${{ inputs.android-store-password }}
+                  key-password: ${{ inputs.android-key-password }}
+                  build-tools-version: ${{ inputs.android-build-tools-version }}
 
             - name: build-android-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
@@ -292,7 +406,7 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, build]
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.build-runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -338,6 +452,10 @@ jobs:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   maestro-version: ${{ inputs.maestro-version }}
@@ -355,6 +473,10 @@ jobs:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   maestro-version: ${{ inputs.maestro-version }}

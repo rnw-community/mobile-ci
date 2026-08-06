@@ -12,6 +12,35 @@ inputs:
   flows-dir:
     description: Directory containing Maestro flow .yaml/.yml files.
     required: true
+  flows-max-depth:
+    description: >-
+      find -maxdepth under flows-dir. Default 1 (top-level only): subflows are
+      invoked by parent flows via runFlow, not run directly, and conventionally
+      live in subdirectories. Set to 0 for unbounded recursion.
+    required: false
+    default: '1'
+  flows-name-pattern:
+    description: >-
+      Space-separated find -name globs (OR'd together) selecting runnable
+      flows under flows-dir.
+    required: false
+    default: '*.yaml *.yml'
+  flows-exclude-pattern:
+    description: Optional find ! -name glob excluding matched flows by basename.
+    required: false
+    default: ''
+  shard-manifest-dir:
+    description: >-
+      Optional directory of hand-curated shard-<index>.txt files (one
+      flows-dir-relative flow path per line) overriding the computed
+      index-modulo split so a consumer's balanced shard assignment survives.
+      Unset (default) falls back to the index-modulo split entirely. Once
+      set, every shard-index this job can run must have its own
+      shard-<index>.txt — a partial manifest fails closed rather than
+      silently mixing curated and modulo-selected flows for the shards it
+      omits.
+    required: false
+    default: ''
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -81,21 +110,97 @@ runs:
       env:
         APP_ID: ${{ inputs.app-id }}
         FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+        SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
       run: |
           set -euo pipefail
+          case "$SHARD_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_COUNT" -lt 1 ]; then
+            echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
+            exit 1
+          fi
+          case "$SHARD_INDEX" in
+            ''|*[!0-9]*)
+              echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
+            echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
+            exit 1
+          fi
+          case "$FLOWS_MAX_DEPTH" in
+            ''|*[!0-9]*)
+              echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          find_cmd=(find "$FLOWS_DIR")
+          if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+            find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+          fi
+          find_cmd+=(-type f)
+          IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
+          name_args=('(')
+          for i in "${!name_patterns[@]}"; do
+            if [ "$i" -gt 0 ]; then
+              name_args+=(-o)
+            fi
+            name_args+=(-name "${name_patterns[$i]}")
+          done
+          name_args+=(')')
+          find_cmd+=("${name_args[@]}")
+          if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
+            find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
+          fi
           flows=()
           while IFS= read -r flow; do
             flows+=("$flow")
-          done < <(find "$FLOWS_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <("${find_cmd[@]}" | sort)
           test "${#flows[@]}" -gt 0
+          printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+
           selected=()
-          for index in "${!flows[@]}"; do
-            if (( index % SHARD_COUNT == SHARD_INDEX )); then
-              selected+=("${flows[$index]}")
+          if [ -n "$SHARD_MANIFEST_DIR" ]; then
+            manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
+            if [ ! -f "$manifest_file" ]; then
+              echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
+              exit 1
             fi
-          done
+            while IFS= read -r rel || [ -n "$rel" ]; do
+              rel="${rel%$'\r'}"
+              rel="${rel#./}"
+              [ -n "$rel" ] || continue
+              flow_path="$FLOWS_DIR/$rel"
+              match=0
+              for candidate in "${flows[@]}"; do
+                if [ "$candidate" = "$flow_path" ]; then
+                  match=1
+                  break
+                fi
+              done
+              if [ "$match" -ne 1 ]; then
+                echo "::error::shard-manifest entry '$rel' (resolved '$flow_path') is not among the flows discovered under '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH, flows-name-pattern='$FLOWS_NAME_PATTERN'); refusing an entry that bypasses discovery."
+                exit 1
+              fi
+              selected+=("$flow_path")
+            done < "$manifest_file"
+          else
+            for index in "${!flows[@]}"; do
+              if (( index % SHARD_COUNT == SHARD_INDEX )); then
+                selected+=("${flows[$index]}")
+              fi
+            done
+          fi
           if [ "${#selected[@]}" -eq 0 ]; then
             echo "Shard $SHARD_INDEX has no flows; nothing to run."
             exit 0

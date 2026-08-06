@@ -16,6 +16,10 @@ self-hosted runner.
 | `app-path`           | yes      | —       | Path to a packaged `.app` directory to install.                   |
 | `app-id`             | yes      | —       | Bundle identifier passed to Maestro as `APP_ID`.                  |
 | `flows-dir`          | yes      | —       | Directory containing Maestro flow `.yaml`/`.yml` files.           |
+| `flows-max-depth`    | no       | `1`     | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
+| `flows-name-pattern` | no       | `*.yaml *.yml` | Space-separated `find -name` globs (OR'd together) selecting runnable flows. |
+| `flows-exclude-pattern` | no    | —       | Optional `find ! -name` glob excluding matched flows by basename.  |
+| `shard-manifest-dir` | no       | —       | Directory of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative path per line) overriding the index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `shard-index`        | yes      | —       | Zero-based shard index this job runs.                             |
 | `shard-count`        | yes      | —       | Total number of shards flows are distributed across.              |
 | `maestro-version`    | no       | `2.8.0` | Pinned Maestro CLI version.                                        |

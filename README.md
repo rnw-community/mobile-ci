@@ -34,6 +34,7 @@ Until then, pin to `@main` — see [CONTRIBUTING.md](CONTRIBUTING.md).
 | `setup-xcode-pinned`     | Select a pre-installed Xcode by exact version+build; hard-assert the match.                    |
 | `native-fingerprint`     | Tokenless `@expo/fingerprint` hash of an app's native surface.                                  |
 | `native-app-cache`       | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
+| `repack-js-bundle`       | Re-bundles JS and swaps it into an already-packaged app on a `native-app-cache` hit, so a JS-only change is never tested stale. |
 | `setup-ccache-ios`       | Bounded, compressed ccache install + restore/save for `xcodebuild`.                             |
 | `build-ios-app`          | Release, unsigned iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified.            |
 | `build-android-app`      | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`.       |
@@ -49,10 +50,22 @@ input/output table and a usage example.
 
 | Workflow                  | Composes                                                                          |
 | --------------------------- | ------------------------------------------------------------------------------------ |
-| `ios-maestro.yml`           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
-| `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → `build-android-app` → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
+| `ios-maestro.yml`           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → (hit: `repack-js-bundle`, miss: `setup-ccache-ios` → `build-ios-app`) → `run-maestro-ios` |
+| `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → (hit: `repack-js-bundle`, miss: `build-android-app`) → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
 | `seed-native-cache.yml`     | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
 | `pr-closed-cleanup-reusable.yml` | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+
+Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
+`build-runner-labels` + `test-runner-labels` (the second defaults to the
+first) so a consumer with a dedicated builder host separate from its Maestro
+test pool can preserve that split; a single-pool consumer sets only
+`build-runner-labels` and ignores `test-runner-labels` entirely. Flow
+discovery under both is bounded by default (`flows-max-depth: 1`, a
+`flows-name-pattern` glob, and an optional `flows-exclude-pattern`) so subflow
+and fixture directories under `flows-dir` are never swept into a shard; an
+optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
+overrides the computed index-modulo split for consumers whose shard balance
+is hand-tuned, falling back to modulo when unset.
 
 ### Android driver: Redroid vs AVD
 
