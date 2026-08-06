@@ -15,8 +15,14 @@ inputs:
   container-name:
     description: >-
       Docker container name base for this shard, distinguishing it from
-      sibling shards in the same run — e.g. redroid-e2e-${{
-      matrix.target.name }}-${{ matrix.shard-index }}. The action
+      sibling shards in the same run — e.g. the caller passes
+      redroid-e2e-<job-index>, interpolating its own strategy.job-index (see
+      android-maestro.yml and this action's README for the exact call shape).
+      Never put a live expression in this description. GitHub parses input
+      descriptions as templates, and neither the matrix nor the strategy
+      context exists inside a composite action, so an interpolated reference
+      to either here makes the whole manifest fail to load with
+      "Unrecognized named-value: 'matrix'" before any step runs. The action
       automatically appends the run id/attempt before using it, so two
       concurrent workflow runs (same repo or different repos sharing a
       runner pool) never collide even if they compute the same base.
@@ -28,8 +34,17 @@ inputs:
     description: Application ID passed to Maestro as APP_ID.
     required: true
   flows-dir:
-    description: Directory containing Maestro flow .yaml/.yml files.
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows.
+      Subdirectories are deliberately not searched; see flows-name-pattern.
     required: true
+  flows-name-pattern:
+    description: >-
+      find -name pattern selecting runnable flows directly inside flows-dir.
+      Defaults to the widespread *.flow.yaml convention, which keeps reusable
+      subflows and capture-only flows in subdirectories out of the shard.
+    required: false
+    default: '*.flow.yaml'
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -161,8 +176,13 @@ runs:
             timeout 900 sudo docker pull "$image"
           fi
           sudo modprobe binder_linux devices=binder,hwbinder,vndbinder 2>&1 || true
-          if [ ! -e /dev/binder ] && [ ! -e /dev/vndbinder ] && [ ! -e /dev/hwbinder ]; then
-            echo '::error::binder_linux produced none of /dev/binder, /dev/vndbinder, /dev/hwbinder on this host after modprobe. Redroid cannot run without the binder_linux kernel module; this is host-kernel provisioning a workflow run cannot self-heal safely.'
+          # Presence of the module is the only portable signal. On binderfs
+          # kernels (6.x) no /dev/binder, /dev/vndbinder or /dev/hwbinder ever
+          # appears on the host — the privileged container mounts binderfs and
+          # creates its own devices — so probing for those nodes fails on
+          # exactly the hosts Redroid works best on.
+          if [ ! -d /sys/module/binder_linux ]; then
+            echo '::error::binder_linux is not loaded on this host after modprobe. Redroid cannot run without it, and that is host-kernel provisioning a workflow run cannot self-heal safely.'
             exit 1
           fi
           # A "probe with ss, then docker run" port pick is a TOCTOU race:
@@ -237,6 +257,7 @@ runs:
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
         FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
@@ -266,9 +287,14 @@ runs:
             exit 1
           fi
           flows=()
+          # Only top-level *.flow.yaml files are runnable scenarios. Recursing
+          # over every *.yaml sweeps in the reusable subflows, one-time setup
+          # flows and screenshot-capture flows that conventionally live in
+          # subdirectories of the flows dir; those expect a caller to pass env
+          # or leave the app mid-journey, so running them standalone fails.
           while IFS= read -r flow; do
             flows+=("$flow")
-          done < <(find "$FLOWS_DIR" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+          done < <(find "$FLOWS_DIR" -maxdepth 1 -type f -name "$FLOWS_NAME_PATTERN" | sort)
           test "${#flows[@]}" -gt 0
           selected=()
           for index in "${!flows[@]}"; do
