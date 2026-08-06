@@ -62,6 +62,7 @@ from outside the runner itself.
 | `app-id`                  | yes      | —                                      | Application ID passed to Maestro as `APP_ID`.                                               |
 | `flows-dir`               | yes      | —                                      | Directory containing Maestro flow `.yaml`/`.yml` files.                                     |
 | `flows-max-depth`         | no       | `1`                                    | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion.                          |
+| `flows-name-pattern`      | no       | `*.flow.yaml`                          | `find -name` glob selecting runnable flows directly inside `flows-dir`.                     |
 | `flows-exclude-pattern`   | no       | —                                       | Optional `find ! -name` glob excluding matched flows by basename.                           |
 | `shard-manifest-dir`      | no       | —                                       | Directory of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative path per line) overriding the index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |

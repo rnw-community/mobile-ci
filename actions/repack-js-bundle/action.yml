@@ -79,6 +79,16 @@ runs:
         BUNDLE_COMMAND: ${{ inputs.bundle-command }}
       run: |
         set -euo pipefail
+        # app-path follows this whole catalog's convention of being relative
+        # to GITHUB_WORKSPACE (see native-app-cache/build-ios-app), but this
+        # step's own working-directory is app-dir for entry-file/Metro
+        # resolution. A workspace-relative app-path would otherwise resolve
+        # against app-dir instead once the shell's cwd changes; normalize to
+        # an absolute path first so it is correct regardless of cwd.
+        case "$APP_PATH" in
+          /*) ;;
+          *) APP_PATH="$GITHUB_WORKSPACE/$APP_PATH" ;;
+        esac
         test -d "$APP_PATH"
         if [ -n "$BUNDLE_COMMAND" ]; then
           BUNDLE_OUTPUT="$APP_PATH/main.jsbundle" ASSETS_DEST="$APP_PATH" eval "$BUNDLE_COMMAND"

@@ -22,8 +22,9 @@ on:
                 default: ''
             targets:
                 description: >-
-                    JSON array of build targets: {name, appDir, appId, prebuildCommand}.
-                    prebuildCommand may be an empty string.
+                    JSON array of build targets: {name, appDir, appId, prebuildCommand,
+                    entryFile?}. prebuildCommand may be an empty string. entryFile is
+                    optional; omitted or empty falls back to repack-entry-file.
                 type: string
                 required: true
             flows-dir:
@@ -39,9 +40,16 @@ on:
                 required: false
                 default: '1'
             flows-name-pattern:
+                description: >-
+                    Forwarded to whichever android-driver action runs. run-maestro-android
+                    (avd) and run-maestro-android-redroid both accept this input, but their
+                    own standalone defaults differ (*.yaml vs *.flow.yaml respectively) —
+                    this workflow's *.yaml default matches the avd action's so existing
+                    android-driver: avd callers that never set this input keep discovering
+                    the same flows as before.
                 type: string
                 required: false
-                default: '*.flow.yaml'
+                default: '*.yaml'
             flows-exclude-pattern:
                 type: string
                 required: false
@@ -166,6 +174,37 @@ on:
                 type: string
                 required: false
                 default: ''
+            repack-entry-file:
+                description: Metro entry file passed to repack-js-bundle on a native-app-cache hit, relative to each target's appDir.
+                type: string
+                required: false
+                default: index.js
+            repack-bundle-command:
+                description: Optional full override for repack-js-bundle's bundling command. See that action's README.
+                type: string
+                required: false
+                default: ''
+            android-keystore-path:
+                description: >-
+                    Relative to each target's appDir. Re-signing is required because
+                    repack-js-bundle rewrites assets/index.android.bundle, which
+                    invalidates the APK's existing Signature Scheme v2/v3 block. Default
+                    matches the React Native CLI template's checked-in debug keystore.
+                type: string
+                required: false
+                default: android/app/debug.keystore
+            android-key-alias:
+                type: string
+                required: false
+                default: androiddebugkey
+            android-store-password:
+                type: string
+                required: false
+                default: android
+            android-key-password:
+                type: string
+                required: false
+                default: android
             build-timeout-minutes:
                 type: number
                 required: false
@@ -325,6 +364,12 @@ jobs:
                   platform: android
                   app-dir: ${{ matrix.target.appDir }}
                   app-path: ${{ github.workspace }}/.ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  entry-file: ${{ matrix.target.entryFile != '' && matrix.target.entryFile || inputs.repack-entry-file }}
+                  bundle-command: ${{ inputs.repack-bundle-command }}
+                  keystore-path: ${{ inputs.android-keystore-path }}
+                  key-alias: ${{ inputs.android-key-alias }}
+                  store-password: ${{ inputs.android-store-password }}
+                  key-password: ${{ inputs.android-key-password }}
                   build-tools-version: ${{ inputs.android-build-tools-version }}
 
             - name: build-android-app
