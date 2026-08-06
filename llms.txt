@@ -1,0 +1,39 @@
+# mobile-ci
+
+> Composite GitHub Actions and reusable `workflow_call` workflows for
+> fleet-native React Native / Expo mobile CI — builds, Maestro e2e, and
+> store/dev-release publishing on self-hosted runners.
+
+Zero EAS-cloud dependency for CI builds: `expo prebuild` then raw
+`xcodebuild` / `gradlew` on self-hosted runners. Zero secret custody in the
+test pipelines — `EXPO_TOKEN` and store credentials only enter the two
+opt-in publish workflows. Pre-`v1`: pin to `@main` or a commit SHA.
+
+## Docs
+
+- [README.md](https://github.com/rnw-community/mobile-ci/blob/main/README.md): Project overview, action/workflow catalogs, quick start.
+- [AGENTS.md](https://github.com/rnw-community/mobile-ci/blob/main/AGENTS.md): Canonical instructions for AI agents and contributors, both working on and consuming this repo.
+- [CONTRIBUTING.md](https://github.com/rnw-community/mobile-ci/blob/main/CONTRIBUTING.md): Versioning, marketplace stance, third-party pinning, local validation.
+- [RELEASE.md](https://github.com/rnw-community/mobile-ci/blob/main/RELEASE.md): Exact tag-and-publish procedure for cutting a release.
+- [SECURITY.md](https://github.com/rnw-community/mobile-ci/blob/main/SECURITY.md): Vulnerability reporting and the self-hosted-runner threat model.
+- [docs/self-hosted-runners.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/self-hosted-runners.md): Self-hosted host provisioning: macOS Xcode pools, Linux Redroid hosts, prewarm manifest.
+- [docs/workflows/ios-maestro.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/ios-maestro.md): iOS Maestro e2e reusable workflow reference.
+- [docs/workflows/android-maestro.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/android-maestro.md): Android Maestro e2e reusable workflow reference (Redroid default).
+- [docs/workflows/seed-native-cache.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/seed-native-cache.md): Reusable workflow that proactively populates the native-app cache.
+- [docs/workflows/native-publish.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/native-publish.md): Signed store publish reusable workflow (`eas build --local` + `eas submit`).
+- [docs/workflows/native-dev-release.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/native-dev-release.md): Dev-profile build published to a GitHub Release reusable workflow.
+- [docs/workflows/pr-closed-cleanup-reusable.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/pr-closed-cleanup-reusable.md): Reusable workflow that cancels zombie runs left on a closed PR's branch.
+
+## Actions
+
+- [setup-xcode-pinned](https://github.com/rnw-community/mobile-ci/blob/main/actions/setup-xcode-pinned/README.md): Selects a pre-installed Xcode toolchain by exact version and build number, hard-asserting the match before any build step runs.
+- [native-fingerprint](https://github.com/rnw-community/mobile-ci/blob/main/actions/native-fingerprint/README.md): Computes a tokenless native-surface fingerprint with @expo/fingerprint for use as a native app cache key.
+- [native-app-cache](https://github.com/rnw-community/mobile-ci/blob/main/actions/native-app-cache/README.md): Restores or saves the canonical native .app/.apk shell keyed on profile/os/arch/toolchain/fingerprint.
+- [setup-ccache-ios](https://github.com/rnw-community/mobile-ci/blob/main/actions/setup-ccache-ios/README.md): Installs and configures a bounded, compressed ccache for iOS xcodebuild invocations.
+- [build-ios-app](https://github.com/rnw-community/mobile-ci/blob/main/actions/build-ios-app/README.md): Builds a Release, unsigned iOS Simulator .app with an embedded jsbundle via xcodebuild.
+- [build-android-app](https://github.com/rnw-community/mobile-ci/blob/main/actions/build-android-app/README.md): Sets up a pinned Android SDK cmdline-tools version and builds a Release APK via gradlew.
+- [repack-app](https://github.com/rnw-community/mobile-ci/blob/main/actions/repack-app/README.md): Injects a freshly exported JS bundle into a cached native .app/.apk shell without a full native rebuild.
+- [run-maestro-ios](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-ios/README.md): Boots an iOS Simulator, installs a packaged .app, runs a Maestro flow shard, and captures final-state artifacts.
+- [run-maestro-android](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-android/README.md): Boots a headless Android emulator, installs a packaged .apk, runs a Maestro flow shard, and captures final-state artifacts.
+- [run-maestro-android-redroid](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-android-redroid/README.md): Boots a prewarmed or cold-started Redroid Android-in-a-container instance, installs a packaged .apk, and runs a Maestro flow shard.
+- [turbo-affected](https://github.com/rnw-community/mobile-ci/blob/main/actions/turbo-affected/README.md): Fail-closed detection of whether a set of target packages is affected relative to a base SHA.
