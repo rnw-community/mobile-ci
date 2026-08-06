@@ -36,8 +36,16 @@ inputs:
   flows-dir:
     description: >-
       Directory whose top-level files are the runnable Maestro flows.
-      Subdirectories are deliberately not searched; see flows-name-pattern.
+      Subdirectories are deliberately not searched by default; see
+      flows-max-depth/flows-name-pattern.
     required: true
+  flows-max-depth:
+    description: >-
+      find -maxdepth under flows-dir. Default 1 (top-level only): subflows are
+      invoked by parent flows via runFlow, not run directly, and conventionally
+      live in subdirectories. Set to 0 for unbounded recursion.
+    required: false
+    default: '1'
   flows-name-pattern:
     description: >-
       find -name pattern selecting runnable flows directly inside flows-dir.
@@ -45,6 +53,22 @@ inputs:
       subflows and capture-only flows in subdirectories out of the shard.
     required: false
     default: '*.flow.yaml'
+  flows-exclude-pattern:
+    description: Optional find ! -name glob excluding matched flows by basename.
+    required: false
+    default: ''
+  shard-manifest-dir:
+    description: >-
+      Optional directory of hand-curated shard-<index>.txt files (one
+      flows-dir-relative flow path per line) overriding the computed
+      index-modulo split so a consumer's balanced shard assignment survives.
+      Unset (default) falls back to the index-modulo split entirely. Once
+      set, every shard-index this job can run must have its own
+      shard-<index>.txt — a partial manifest fails closed rather than
+      silently mixing curated and modulo-selected flows for the shards it
+      omits.
+    required: false
+    default: ''
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -257,7 +281,10 @@ runs:
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
         FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
         FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+        SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
@@ -286,22 +313,47 @@ runs:
             echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
             exit 1
           fi
+          # Only top-level *.flow.yaml files are runnable scenarios by
+          # default. Recursing over every *.yaml sweeps in the reusable
+          # subflows, one-time setup flows and screenshot-capture flows that
+          # conventionally live in subdirectories of the flows dir; those
+          # expect a caller to pass env or leave the app mid-journey, so
+          # running them standalone fails.
+          find_cmd=(find "$FLOWS_DIR")
+          if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+            find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+          fi
+          find_cmd+=(-type f -name "$FLOWS_NAME_PATTERN")
+          if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
+            find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
+          fi
           flows=()
-          # Only top-level *.flow.yaml files are runnable scenarios. Recursing
-          # over every *.yaml sweeps in the reusable subflows, one-time setup
-          # flows and screenshot-capture flows that conventionally live in
-          # subdirectories of the flows dir; those expect a caller to pass env
-          # or leave the app mid-journey, so running them standalone fails.
           while IFS= read -r flow; do
             flows+=("$flow")
-          done < <(find "$FLOWS_DIR" -maxdepth 1 -type f -name "$FLOWS_NAME_PATTERN" | sort)
+          done < <("${find_cmd[@]}" | sort)
           test "${#flows[@]}" -gt 0
+          printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+
           selected=()
-          for index in "${!flows[@]}"; do
-            if (( index % SHARD_COUNT == SHARD_INDEX )); then
-              selected+=("${flows[$index]}")
+          if [ -n "$SHARD_MANIFEST_DIR" ]; then
+            manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
+            if [ ! -f "$manifest_file" ]; then
+              echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
+              exit 1
             fi
-          done
+            while IFS= read -r rel; do
+              [ -n "$rel" ] || continue
+              flow_path="$FLOWS_DIR/$rel"
+              test -f "$flow_path"
+              selected+=("$flow_path")
+            done < "$manifest_file"
+          else
+            for index in "${!flows[@]}"; do
+              if (( index % SHARD_COUNT == SHARD_INDEX )); then
+                selected+=("${flows[$index]}")
+              fi
+            done
+          fi
           if [ "${#selected[@]}" -eq 0 ]; then
             echo "Shard $SHARD_INDEX has no flows (shard-count $SHARD_COUNT exceeds the flow count); nothing to run."
             exit 0

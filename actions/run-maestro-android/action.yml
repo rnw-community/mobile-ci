@@ -12,6 +12,33 @@ inputs:
   flows-dir:
     description: Directory containing Maestro flow .yaml/.yml files.
     required: true
+  flows-max-depth:
+    description: >-
+      find -maxdepth under flows-dir. Default 1 (top-level only): subflows are
+      invoked by parent flows via runFlow, not run directly, and conventionally
+      live in subdirectories. Set to 0 for unbounded recursion.
+    required: false
+    default: '1'
+  flows-name-pattern:
+    description: find -name glob selecting runnable flows under flows-dir.
+    required: false
+    default: '*.yaml'
+  flows-exclude-pattern:
+    description: Optional find ! -name glob excluding matched flows by basename.
+    required: false
+    default: ''
+  shard-manifest-dir:
+    description: >-
+      Optional directory of hand-curated shard-<index>.txt files (one
+      flows-dir-relative flow path per line) overriding the computed
+      index-modulo split so a consumer's balanced shard assignment survives.
+      Unset (default) falls back to the index-modulo split entirely. Once
+      set, every shard-index this job can run must have its own
+      shard-<index>.txt — a partial manifest fails closed rather than
+      silently mixing curated and modulo-selected flows for the shards it
+      omits.
+    required: false
+    default: ''
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -64,6 +91,16 @@ runs:
 
     - name: Boot emulator, install app, and run Maestro shard
       uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+      env:
+        APK_PATH: ${{ inputs.apk-path }}
+        APP_ID: ${{ inputs.app-id }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+        SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
       with:
           api-level: ${{ inputs.api-level }}
           target: ${{ inputs.target }}
@@ -78,24 +115,47 @@ runs:
               set -x
               adb wait-for-device
               timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
-              adb install -r "${{ inputs.apk-path }}"
+              adb install -r "$APK_PATH"
+              find_cmd=(find "$FLOWS_DIR")
+              if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+                find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+              fi
+              find_cmd+=(-type f -name "$FLOWS_NAME_PATTERN")
+              if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
+                find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
+              fi
               flows=()
               while IFS= read -r flow; do
                 flows+=("$flow")
-              done < <(find "${{ inputs.flows-dir }}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
+              done < <("${find_cmd[@]}" | sort)
               test "${#flows[@]}" -gt 0
+              printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
               selected=()
-              for index in "${!flows[@]}"; do
-                if (( index % ${{ inputs.shard-count }} == ${{ inputs.shard-index }} )); then
-                  selected+=("${flows[$index]}")
+              if [ -n "$SHARD_MANIFEST_DIR" ]; then
+                manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
+                if [ ! -f "$manifest_file" ]; then
+                  echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
+                  exit 1
                 fi
-              done
+                while IFS= read -r rel; do
+                  [ -n "$rel" ] || continue
+                  flow_path="$FLOWS_DIR/$rel"
+                  test -f "$flow_path"
+                  selected+=("$flow_path")
+                done < "$manifest_file"
+              else
+                for index in "${!flows[@]}"; do
+                  if (( index % SHARD_COUNT == SHARD_INDEX )); then
+                    selected+=("${flows[$index]}")
+                  fi
+                done
+              fi
               if [ "${#selected[@]}" -eq 0 ]; then
-                echo "Shard ${{ inputs.shard-index }} has no flows; nothing to run."
+                echo "Shard $SHARD_INDEX has no flows; nothing to run."
                 exit 0
               fi
-              printf 'Shard ${{ inputs.shard-index }} flows:\n%s\n' "${selected[*]}"
-              maestro test -e "APP_ID=${{ inputs.app-id }}" "${selected[@]}"
+              printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
+              maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
 
     - name: Capture final device state
       if: always()

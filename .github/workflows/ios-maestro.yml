@@ -3,11 +3,21 @@ name: ios-maestro
 on:
     workflow_call:
         inputs:
-            runner-labels:
-                description: JSON array of self-hosted runner labels for the build/test jobs.
+            build-runner-labels:
+                description: JSON array of self-hosted runner labels for the build job.
                 type: string
                 required: false
                 default: '["self-hosted","macOS","ARM64"]'
+            test-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the test job. Empty
+                    (default) reuses build-runner-labels, so a single-pool consumer
+                    can ignore this input entirely; set it only when builds and Maestro
+                    runs must land on different host pools (e.g. a dedicated builder
+                    host separate from the Maestro test pool).
+                type: string
+                required: false
+                default: ''
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, workspace, scheme, appId,
@@ -18,6 +28,29 @@ on:
                 description: Directory (relative to repo root) containing Maestro flow files.
                 type: string
                 required: true
+            flows-max-depth:
+                description: >-
+                    find -maxdepth under flows-dir. 0 means unbounded recursion. Default
+                    1 (top-level only) keeps subflows invoked via runFlow, conventionally
+                    living in subdirectories, out of the shard.
+                type: string
+                required: false
+                default: '1'
+            flows-name-pattern:
+                type: string
+                required: false
+                default: '*.yaml'
+            flows-exclude-pattern:
+                type: string
+                required: false
+                default: ''
+            shard-manifest-dir:
+                description: >-
+                    Optional directory (relative to repo root) of hand-curated
+                    shard-<index>.txt files overriding the computed index-modulo split.
+                type: string
+                required: false
+                default: ''
             shard-count:
                 type: number
                 required: false
@@ -127,7 +160,7 @@ jobs:
         name: Build (${{ matrix.target.name }})
         needs: detect
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -202,8 +235,16 @@ jobs:
               run: |
                   {
                     echo "### iOS build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    echo "Native fingerprint hit; repacking the cached shell with a fresh JS bundle."
                   } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: repack-js-bundle (cache hit)
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
+              uses: rnw-community/mobile-ci/actions/repack-js-bundle@main
+              with:
+                  platform: ios
+                  app-dir: ${{ matrix.target.appDir }}
+                  app-path: ${{ github.workspace }}/.ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
@@ -273,7 +314,7 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, build]
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.build-runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -308,6 +349,10 @@ jobs:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   maestro-version: ${{ inputs.maestro-version }}

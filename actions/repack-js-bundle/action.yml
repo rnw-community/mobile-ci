@@ -1,0 +1,178 @@
+name: repack-js-bundle
+description: >-
+  Re-bundles JS from the current checkout and replaces the embedded bundle
+  inside an already-packaged native app, so a native-app-cache hit never
+  installs a JS-stale shell. Never triggers native compilation.
+inputs:
+  platform:
+    description: ios or android.
+    required: true
+  app-dir:
+    description: App directory containing the ios/ or android/ folder and JS entry point.
+    required: true
+  app-path:
+    description: >-
+      Path to the packaged app to repack in place: a .app directory (iOS) or
+      a .apk file (Android).
+    required: true
+  entry-file:
+    description: Metro entry file, relative to app-dir.
+    required: false
+    default: index.js
+  bundle-command:
+    description: >-
+      Full override for the bundling command, run from app-dir with
+      BUNDLE_OUTPUT and ASSETS_DEST exported. Only needed for a non-standard
+      Metro setup; the default invokes the React Native CLI bundler directly.
+    required: false
+    default: ''
+  keystore-path:
+    description: >-
+      Android only, relative to app-dir. Re-signing is required because
+      rewriting assets/index.android.bundle invalidates the APK's existing
+      Signature Scheme v2/v3 block. Defaults to the location and identity of
+      the debug keystore the React Native CLI template checks in.
+    required: false
+    default: android/app/debug.keystore
+  key-alias:
+    description: Android only. Key alias inside keystore-path.
+    required: false
+    default: androiddebugkey
+  store-password:
+    description: Android only. Keystore password.
+    required: false
+    default: android
+  key-password:
+    description: Android only. Key password.
+    required: false
+    default: android
+  build-tools-version:
+    description: >-
+      Android build-tools version providing apksigner/zipalign. Empty (default)
+      auto-detects the highest version installed under ANDROID_HOME.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Validate platform
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+      run: |
+        set -euo pipefail
+        case "$PLATFORM" in
+          ios|android) ;;
+          *)
+            echo "::error::platform must be 'ios' or 'android', got '$PLATFORM'."
+            exit 1
+            ;;
+        esac
+
+    - name: Repack fresh JS into app bundle (iOS)
+      if: inputs.platform == 'ios'
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        ENTRY_FILE: ${{ inputs.entry-file }}
+        APP_PATH: ${{ inputs.app-path }}
+        BUNDLE_COMMAND: ${{ inputs.bundle-command }}
+      run: |
+        set -euo pipefail
+        test -d "$APP_PATH"
+        if [ -n "$BUNDLE_COMMAND" ]; then
+          BUNDLE_OUTPUT="$APP_PATH/main.jsbundle" ASSETS_DEST="$APP_PATH" eval "$BUNDLE_COMMAND"
+        else
+          npx react-native bundle \
+            --platform ios \
+            --dev false \
+            --entry-file "$ENTRY_FILE" \
+            --reset-cache \
+            --bundle-output "$APP_PATH/main.jsbundle" \
+            --assets-dest "$APP_PATH"
+        fi
+        test -f "$APP_PATH/main.jsbundle"
+        echo "Repacked fresh JS into $APP_PATH/main.jsbundle"
+
+    - name: Bundle fresh JS (Android)
+      id: bundle-android
+      if: inputs.platform == 'android'
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        ENTRY_FILE: ${{ inputs.entry-file }}
+        BUNDLE_COMMAND: ${{ inputs.bundle-command }}
+      run: |
+        set -euo pipefail
+        stage=$(mktemp -d "${RUNNER_TEMP}/repack-js-bundle.XXXXXX")
+        mkdir -p "$stage/assets" "$stage/res"
+        if [ -n "$BUNDLE_COMMAND" ]; then
+          BUNDLE_OUTPUT="$stage/assets/index.android.bundle" ASSETS_DEST="$stage/res" eval "$BUNDLE_COMMAND"
+        else
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file "$ENTRY_FILE" \
+            --reset-cache \
+            --bundle-output "$stage/assets/index.android.bundle" \
+            --assets-dest "$stage/res"
+        fi
+        test -f "$stage/assets/index.android.bundle"
+        echo "stage-dir=$stage" >> "$GITHUB_OUTPUT"
+
+    # New drawable resources aapt2-compiled into res/ + resources.arsc at
+    # native-build time are intentionally left untouched here: they cannot be
+    # merged into an already-packaged APK without a native rebuild. This
+    # covers the common JS-only change (logic/text/existing-asset references);
+    # a change introducing a brand-new image asset shifts the native
+    # fingerprint (new file under the app tree) and therefore misses the
+    # native-app-cache entirely, taking the full-rebuild path instead.
+    - name: Replace bundle and re-sign APK (Android)
+      if: inputs.platform == 'android'
+      shell: bash
+      env:
+        APK_PATH: ${{ inputs.app-path }}
+        STAGE_DIR: ${{ steps.bundle-android.outputs.stage-dir }}
+        KEYSTORE_PATH: ${{ inputs.app-dir }}/${{ inputs.keystore-path }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        STORE_PASSWORD: ${{ inputs.store-password }}
+        KEY_PASSWORD: ${{ inputs.key-password }}
+        BUILD_TOOLS_VERSION: ${{ inputs.build-tools-version }}
+      run: |
+        set -euo pipefail
+        test -f "$APK_PATH"
+        test -f "$KEYSTORE_PATH"
+        apk_abs=$(realpath "$APK_PATH")
+
+        # Rewriting a zip entry in place invalidates APK Signature Scheme
+        # v2/v3 (they cover the whole file) and leaves the old v1 JAR-signing
+        # manifest referring to an assets/index.android.bundle digest that no
+        # longer matches. Drop the whole META-INF/ signing block so apksigner
+        # below regenerates a clean, internally consistent signature from
+        # scratch rather than signing over stale manifest entries.
+        zip -q -d "$apk_abs" 'META-INF/*' >/dev/null || true
+        (cd "$STAGE_DIR" && zip -q "$apk_abs" assets/index.android.bundle)
+        unzip -l "$apk_abs" | grep -q 'assets/index.android.bundle'
+
+        if [ -n "$BUILD_TOOLS_VERSION" ]; then
+          build_tools_dir="$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION"
+        else
+          build_tools_dir=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)
+        fi
+        test -d "$build_tools_dir"
+        zipalign_bin="$build_tools_dir/zipalign"
+        apksigner_bin="$build_tools_dir/apksigner"
+        test -x "$zipalign_bin"
+        test -x "$apksigner_bin"
+
+        aligned="$STAGE_DIR/aligned.apk"
+        "$zipalign_bin" -f -p 4 "$apk_abs" "$aligned"
+        "$apksigner_bin" sign \
+          --ks "$KEYSTORE_PATH" \
+          --ks-key-alias "$KEY_ALIAS" \
+          --ks-pass "pass:$STORE_PASSWORD" \
+          --key-pass "pass:$KEY_PASSWORD" \
+          --out "$apk_abs" \
+          "$aligned"
+        "$apksigner_bin" verify "$apk_abs"
+        echo "Repacked and re-signed $APK_PATH with fresh JS"
