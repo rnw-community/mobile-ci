@@ -63,6 +63,14 @@ on:
                 type: string
                 required: false
                 default: ''
+            build-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the
+                    start of each seed job. Rejects (fails closed) any line without
+                    '=' or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
             rct-use-prebuilt-rncore:
                 type: boolean
                 required: false
@@ -114,6 +122,38 @@ jobs:
               uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
 
             - name: Setup Node
               uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -235,6 +275,38 @@ jobs:
               uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
 
             - name: Setup Node
               uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0

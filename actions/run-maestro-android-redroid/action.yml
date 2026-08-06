@@ -51,6 +51,20 @@ inputs:
   shard-count:
     description: Total number of shards flows are distributed across.
     required: true
+  pre-run-flow:
+    description: >-
+      Path to a single priming flow run once before this shard's flows,
+      excluded from sharding. Its failure fails the step immediately without
+      running the shard. Leave empty to skip priming.
+    required: false
+    default: ''
+  flow-retries:
+    description: >-
+      Non-negative retry budget per flow. Each flow gets up to
+      1 + flow-retries attempts; a flow that eventually passes counts as
+      passed. The step fails if any flow exhausts its attempts.
+    required: false
+    default: '0'
   maestro-version:
     description: Pinned Maestro CLI version.
     required: false
@@ -258,6 +272,8 @@ runs:
         SHARD_COUNT: ${{ inputs.shard-count }}
         FLOWS_DIR: ${{ inputs.flows-dir }}
         FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+        FLOW_RETRIES: ${{ inputs.flow-retries }}
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
@@ -286,6 +302,45 @@ runs:
             echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
             exit 1
           fi
+          case "$FLOW_RETRIES" in
+            ''|*[!0-9]*)
+              echo "::error::flow-retries '$FLOW_RETRIES' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          max_attempts=$((1 + FLOW_RETRIES))
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
+          fi
+
+          summary_rows=()
+
+          run_flow_with_retries() {
+            local flow="$1" label="$2" attempts=0 status=failed start end duration
+            start=$(date +%s)
+            while [ "$attempts" -lt "$max_attempts" ]; do
+              attempts=$((attempts + 1))
+              if maestro test -e "APP_ID=$APP_ID" "$flow"; then
+                status=passed
+                break
+              fi
+            done
+            end=$(date +%s)
+            duration=$((end - start))
+            summary_rows+=("| $label | ${duration}s | $status | $attempts |")
+            [ "$status" = "passed" ]
+          }
+
+          write_summary() {
+            {
+              echo "### Maestro flow timing (shard $SHARD_INDEX)"
+              echo "| Flow | Duration | Status | Attempts |"
+              echo "| --- | --- | --- | --- |"
+              printf '%s\n' "${summary_rows[@]}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
           flows=()
           # Only top-level *.flow.yaml files are runnable scenarios. Recursing
           # over every *.yaml sweeps in the reusable subflows, one-time setup
@@ -302,12 +357,33 @@ runs:
               selected+=("${flows[$index]}")
             fi
           done
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then
+              write_summary
+              echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
+              exit 1
+            fi
+          fi
+
           if [ "${#selected[@]}" -eq 0 ]; then
             echo "Shard $SHARD_INDEX has no flows (shard-count $SHARD_COUNT exceeds the flow count); nothing to run."
+            if [ "${#summary_rows[@]}" -gt 0 ]; then
+              write_summary
+            fi
             exit 0
           fi
           printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
-          maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
+
+          overall_status=0
+          for flow in "${selected[@]}"; do
+            if ! run_flow_with_retries "$flow" "$(basename "$flow")"; then
+              overall_status=1
+            fi
+          done
+
+          write_summary
+          exit "$overall_status"
 
     - name: Capture final device state
       if: always() && env.ANDROID_SERIAL != ''

@@ -63,6 +63,8 @@ from outside the runner itself.
 | `flows-dir`               | yes      | —                                      | Directory containing Maestro flow `.yaml`/`.yml` files.                                     |
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |
+| `pre-run-flow`            | no       | `''`                                   | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
+| `flow-retries`            | no       | `0`                                    | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts.        |
 | `maestro-version`         | no       | `2.8.0`                                | Pinned Maestro CLI version.                                                                  |
 | `memory`                  | no       | `3g`                                   | Container memory limit (`docker --memory` / `--memory-swap`).                               |
 | `cpus`                    | no       | `2`                                    | Container CPU limit (`docker --cpus`).                                                      |
@@ -72,6 +74,10 @@ from outside the runner itself.
 | `artifact-name`           | yes      | —                                      | Uploaded artifact name.                                                                      |
 | `retention-days`          | no       | `7`                                    | Uploaded artifact retention in days.                                                         |
 
+A per-flow timing table (flow, duration, status, attempts) is appended to
+`$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
+when `pre-run-flow` is set.
+
 ## Example
 
 ```yaml
@@ -79,8 +85,8 @@ from outside the runner itself.
   with:
       container-name: redroid-e2e-${{ strategy.job-index }}
       apk-path: .ci-artifacts/android-e2e-app-bare/app-release.apk
-      app-id: com.reactnativepaymentsexample
-      flows-dir: packages/react-native-payments-example/e2e/flows
+      app-id: com.example.app
+      flows-dir: apps/mobile/e2e/flows
       shard-index: ${{ matrix.shard-index }}
       shard-count: 2
       artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-bare-${{ matrix.shard-index }}
