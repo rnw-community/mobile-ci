@@ -138,6 +138,12 @@ runs:
               adb wait-for-device
               timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
               adb install -r "$APK_PATH"
+              case "$FLOWS_MAX_DEPTH" in
+                ''|*[!0-9]*)
+                  echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer."
+                  exit 1
+                  ;;
+              esac
               find_cmd=(find "$FLOWS_DIR")
               if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
                 find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
@@ -171,6 +177,7 @@ runs:
                 fi
                 while IFS= read -r rel || [ -n "$rel" ]; do
                   rel="${rel%$'\r'}"
+                  rel="${rel#./}"
                   [ -n "$rel" ] || continue
                   flow_path="$FLOWS_DIR/$rel"
                   match=0

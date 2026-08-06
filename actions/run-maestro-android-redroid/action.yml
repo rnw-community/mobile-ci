@@ -314,6 +314,12 @@ runs:
             echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
             exit 1
           fi
+          case "$FLOWS_MAX_DEPTH" in
+            ''|*[!0-9]*)
+              echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
           # Only top-level *.flow.yaml files are runnable scenarios by
           # default. Recursing over every *.yaml sweeps in the reusable
           # subflows, one-time setup flows and screenshot-capture flows that
@@ -354,6 +360,7 @@ runs:
             fi
             while IFS= read -r rel || [ -n "$rel" ]; do
               rel="${rel%$'\r'}"
+              rel="${rel#./}"
               [ -n "$rel" ] || continue
               flow_path="$FLOWS_DIR/$rel"
               match=0
