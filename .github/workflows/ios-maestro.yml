@@ -470,7 +470,7 @@ jobs:
                   mkdir -p .ci-artifacts
                   tar -czf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
 
-            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: ios-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
