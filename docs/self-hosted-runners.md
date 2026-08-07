@@ -13,7 +13,7 @@ this repo's own maintainer-only fleet self-test job reads.
 Each macOS runner needs one or more Xcode versions installed side by side at
 their default install location:
 
-```
+```text
 /Applications/Xcode_<version>.app
 ```
 
@@ -64,7 +64,11 @@ none of the emulator's `linux-aarch64`-unavailable dependencies.
 Host requirements:
 
 - **Docker**, with the runner's user able to run `sudo docker ...`
-  (the action's every `docker`/`modprobe` invocation is prefixed `sudo`).
+  (the action's every `docker`/`modprobe` invocation is prefixed `sudo`). Grant
+  this non-interactively (e.g. a `NOPASSWD` sudoers entry for the runner user)
+  — a workflow step has no terminal to answer a password prompt, so an
+  interactive-sudo host either hangs the step until it times out or fails it
+  outright.
 - **`binder_linux` loadable.** The action itself runs
   `sudo modprobe binder_linux devices=binder,hwbinder,vndbinder` at the start
   of every shard and treats a still-absent `/sys/module/binder_linux` after
@@ -141,6 +145,12 @@ sudo rm -rf "$data_dir"
 sudo mkdir -p "$data_dir"
 
 sudo docker rm -f redroid-prewarm >/dev/null 2>&1 || true
+
+cleanup() {
+    sudo docker rm -f redroid-prewarm >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 sudo docker run -d --name redroid-prewarm --privileged \
     --memory 3g --memory-swap 3g --cpus 2 \
     -v "$data_dir":/data -p 127.0.0.1::5555 \
@@ -148,7 +158,12 @@ sudo docker run -d --name redroid-prewarm --privileged \
 
 port=$(sudo docker port redroid-prewarm 5555/tcp | head -n1 | sed -E 's/.*:([0-9]+)$/\1/')
 adb connect "localhost:$port"
+deadline=$((SECONDS + 600))
 until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+        echo "Redroid did not boot within 600 seconds." >&2
+        exit 1
+    fi
     sleep 5
 done
 for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
@@ -156,7 +171,6 @@ for setting in window_animation_scale transition_animation_scale animator_durati
 done
 
 sudo docker stop redroid-prewarm
-sudo docker rm redroid-prewarm
 
 mkdir -p "$(dirname "$manifest_path")"
 cat > "$manifest_path" <<EOF
@@ -178,6 +192,7 @@ Description=Prewarm Redroid image and data volume for mobile-ci
 
 [Service]
 Type=oneshot
+User=<runner-user>
 ExecStart=/usr/local/bin/redroid-prewarm.sh
 
 # /etc/systemd/system/redroid-prewarm.timer
@@ -191,6 +206,14 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 ```
+
+Set `User=` to the same account the GitHub Actions runner service runs as
+(replace `<runner-user>`). Without it, systemd runs the unit as root and
+writes the manifest to `/root/.rnw-ci/android-emulator.json` — a path
+`run-maestro-android-redroid`'s default `prewarm-manifest-path`
+(`$HOME/.rnw-ci/android-emulator.json`, expanded against the runner user's own
+home directory) never resolves to, so every shard would silently fall back to
+a cold `docker pull` and first boot instead of using the prewarmed data.
 
 ```bash
 sudo systemctl enable --now redroid-prewarm.timer

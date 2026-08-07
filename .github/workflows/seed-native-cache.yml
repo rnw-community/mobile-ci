@@ -167,7 +167,9 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: setup-xcode-pinned
               id: xcode
@@ -179,13 +181,17 @@ jobs:
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
@@ -320,18 +326,24 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint

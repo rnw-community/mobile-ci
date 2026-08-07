@@ -70,11 +70,14 @@ on:
                 default: '5'
             asc-key-path:
                 description: >-
-                    Path, relative to app-dir, the optional App Store Connect API key (.p8) is
-                    written to and removed from. Only used when the ASC_API_KEY secret is set.
+                    Optional path, relative to app-dir, the App Store Connect API key (.p8) is
+                    written to and removed from. Only used when the ASC_API_KEY secret is set; set
+                    this only when eas.json requires the key at a specific app-dir-relative
+                    location, otherwise leave empty so the key is written under $RUNNER_TEMP and
+                    never enters the eas build --local archive.
                 type: string
                 required: false
-                default: ./asc-api-key.p8
+                default: ''
             build-timeout-minutes:
                 type: number
                 required: false
@@ -136,12 +139,16 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Compute deterministic build number
               shell: bash
@@ -152,15 +159,24 @@ jobs:
 
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
+              id: asc-key
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
-                  ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+                  ASC_KEY_PATH_INPUT: ${{ inputs.asc-key-path }}
               run: |
                   set -euo pipefail
-                  printf '%s' "$ASC_API_KEY" > "$ASC_KEY_PATH"
-                  chmod 600 "$ASC_KEY_PATH"
+                  if [ -n "$ASC_KEY_PATH_INPUT" ]; then
+                    key_path="$ASC_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/ios-dev-release/asc-api-key.p8"
+                    mkdir -p "$(dirname "$key_path")"
+                  fi
+                  printf '%s' "$ASC_API_KEY" > "$key_path"
+                  chmod 600 "$key_path"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: EAS build (iOS, development)
               id: build
@@ -171,27 +187,26 @@ jobs:
                   BUILD_PROFILE: ${{ inputs.build-profile }}
               run: |
                   set -euo pipefail
-                  before_listing="$RUNNER_TEMP/ios-dev-release-before.txt"
-                  find . -maxdepth 1 -type f \( -name '*.ipa' -o -name '*.tar.gz' \) > "$before_listing"
+                  output_path="$RUNNER_TEMP/ios-dev-release/app.ipa"
+                  mkdir -p "$(dirname "$output_path")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
                     --platform ios \
                     --profile "$BUILD_PROFILE" \
                     --local \
-                    --non-interactive
-                  artifact=$(find . -maxdepth 1 -type f \( -name '*.ipa' -o -name '*.tar.gz' \) | grep -vFxf "$before_listing" | head -n1)
-                  if [ -z "$artifact" ]; then
-                    echo "::error::Could not locate the EAS local build artifact (.ipa or .tar.gz) after build."
-                    exit 1
-                  fi
-                  echo "artifact-path=$(pwd)/${artifact#./}" >> "$GITHUB_OUTPUT"
+                    --non-interactive \
+                    --output "$output_path"
+                  test -f "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
             - name: Remove App Store Connect API key
               if: always()
-              working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
-                  ASC_KEY_PATH: ${{ inputs.asc-key-path }}
-              run: rm -f "$ASC_KEY_PATH"
+                  ASC_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+              run: |
+                  if [ -n "${ASC_KEY_PATH:-}" ]; then
+                    rm -f "$ASC_KEY_PATH"
+                  fi
 
             - name: Upload iOS dev build artifact
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -210,6 +225,10 @@ jobs:
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
               run: |
                   set -euo pipefail
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                    echo "Replacing existing release $TAG (job re-run)."
+                    gh release delete "$TAG" --yes --cleanup-tag
+                  fi
                   gh release create "$TAG" \
                     --draft \
                     --title "iOS dev build ${TAG}" \
@@ -222,10 +241,7 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
                   TAG: ${{ steps.release.outputs.tag }}
-              run: |
-                  set -euo pipefail
-                  release_id=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" --jq .id)
-                  gh api --method PATCH "repos/${{ github.repository }}/releases/${release_id}" -f draft=false
+              run: gh release edit "$TAG" --draft=false
 
             - name: Prune old iOS dev releases
               shell: bash
@@ -235,9 +251,15 @@ jobs:
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
               run: |
                   set -euo pipefail
-                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate | \
+                  case "$KEEP_RELEASES" in
+                    ''|*[!0-9]*|0[0-9]*)
+                      echo "::error::keep-releases '$KEEP_RELEASES' must be a non-negative integer without leading zeros."
+                      exit 1
+                      ;;
+                  esac
+                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" \
-                      '[.[] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
@@ -286,12 +308,16 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Compute deterministic build number
               shell: bash
@@ -309,19 +335,16 @@ jobs:
                   BUILD_PROFILE: ${{ inputs.build-profile }}
               run: |
                   set -euo pipefail
-                  before_listing="$RUNNER_TEMP/android-dev-release-before.txt"
-                  find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.aab' \) > "$before_listing"
+                  output_path="$RUNNER_TEMP/android-dev-release/app.aab"
+                  mkdir -p "$(dirname "$output_path")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
                     --platform android \
                     --profile "$BUILD_PROFILE" \
                     --local \
-                    --non-interactive
-                  artifact=$(find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.aab' \) | grep -vFxf "$before_listing" | head -n1)
-                  if [ -z "$artifact" ]; then
-                    echo "::error::Could not locate the EAS local build artifact (.apk or .aab) after build."
-                    exit 1
-                  fi
-                  echo "artifact-path=$(pwd)/${artifact#./}" >> "$GITHUB_OUTPUT"
+                    --non-interactive \
+                    --output "$output_path"
+                  test -f "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
             - name: Upload Android dev build artifact
               uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -340,6 +363,10 @@ jobs:
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
               run: |
                   set -euo pipefail
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                    echo "Replacing existing release $TAG (job re-run)."
+                    gh release delete "$TAG" --yes --cleanup-tag
+                  fi
                   gh release create "$TAG" \
                     --draft \
                     --title "Android dev build ${TAG}" \
@@ -352,10 +379,7 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
                   TAG: ${{ steps.release.outputs.tag }}
-              run: |
-                  set -euo pipefail
-                  release_id=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" --jq .id)
-                  gh api --method PATCH "repos/${{ github.repository }}/releases/${release_id}" -f draft=false
+              run: gh release edit "$TAG" --draft=false
 
             - name: Prune old Android dev releases
               shell: bash
@@ -365,9 +389,15 @@ jobs:
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
               run: |
                   set -euo pipefail
-                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate | \
+                  case "$KEEP_RELEASES" in
+                    ''|*[!0-9]*|0[0-9]*)
+                      echo "::error::keep-releases '$KEEP_RELEASES' must be a non-negative integer without leading zeros."
+                      exit 1
+                      ;;
+                  esac
+                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" \
-                      '[.[] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
@@ -387,15 +417,20 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  IOS_RESULT: ${{ needs.ios-dev-release.result }}
+                  ANDROID_RESULT: ${{ needs.android-dev-release.result }}
               run: |
                   set -euo pipefail
                   failed=0
 
-                  if [ "${{ inputs.enable-ios }}" = "true" ] && [ "${{ needs.ios-dev-release.result }}" != "success" ]; then
+                  if [ "$ENABLE_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
                     echo "iOS dev release failed or did not run."
                     failed=1
                   fi
-                  if [ "${{ inputs.enable-android }}" = "true" ] && [ "${{ needs.android-dev-release.result }}" != "success" ]; then
+                  if [ "$ENABLE_ANDROID" = "true" ] && [ "$ANDROID_RESULT" != "success" ]; then
                     echo "Android dev release failed or did not run."
                     failed=1
                   fi

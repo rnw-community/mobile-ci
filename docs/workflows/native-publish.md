@@ -37,7 +37,7 @@ single required check.
 | `android-post-submit-command`      | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after `eas submit` succeeds. |
 | `android-lint-gate`                | no       | `true`                                    | Require the `android-lint-gate` job (Play policy manifest check + `lintVitalRelease`) to pass before `android-publish` runs. |
 | `required-android-abi`             | no       | `arm64-v8a`                                | ABI that must be present in the built `.aab` (Google Play 64-bit requirement). Empty string disables the check. |
-| `asc-key-path`                     | no       | `./asc-api-key.p8`                         | Path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. |
+| `asc-key-path`                     | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`            | no       | `120`                                     | Publish job timeout (both platforms). |
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
 

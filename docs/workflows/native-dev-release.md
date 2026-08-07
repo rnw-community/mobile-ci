@@ -31,7 +31,7 @@ releases.
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest published releases (per platform tag) to keep; older ones are pruned. |
-| `asc-key-path`               | no       | `./asc-api-key.p8`                        | Path, relative to `app-dir`, the optional App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. |
+| `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
 
 ## Secrets

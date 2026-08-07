@@ -10,8 +10,8 @@ timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r
 adb install -r "$APK_PATH"
 
 case "$SHARD_COUNT" in
-  ''|*[!0-9]*)
-    echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer."
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer without leading zeros."
     exit 1
     ;;
 esac
@@ -20,8 +20,8 @@ if [ "$SHARD_COUNT" -lt 1 ]; then
   exit 1
 fi
 case "$SHARD_INDEX" in
-  ''|*[!0-9]*)
-    echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer."
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer without leading zeros."
     exit 1
     ;;
 esac
@@ -30,8 +30,8 @@ if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
   exit 1
 fi
 case "$FLOW_RETRIES" in
-  ''|*[!0-9]*)
-    echo "::error::flow-retries '$FLOW_RETRIES' must be a non-negative integer."
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::flow-retries '$FLOW_RETRIES' must be a non-negative integer without leading zeros."
     exit 1
     ;;
 esac
@@ -64,7 +64,7 @@ write_summary() {
     echo "### Maestro flow timing (shard $SHARD_INDEX)"
     echo "| Flow | Duration | Status | Attempts |"
     echo "| --- | --- | --- | --- |"
-    printf '%s\n' "${summary_rows[@]}"
+    printf '%s\n' "${summary_rows[@]:-}"
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
@@ -98,9 +98,7 @@ fi
 
 if [ "${#selected[@]}" -eq 0 ]; then
   echo "Shard $SHARD_INDEX has no flows; nothing to run."
-  if [ "${#summary_rows[@]}" -gt 0 ]; then
-    write_summary
-  fi
+  write_summary
   exit 0
 fi
 printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"

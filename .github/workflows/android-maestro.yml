@@ -320,18 +320,24 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
@@ -383,10 +389,13 @@ jobs:
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
               run: |
                   {
-                    echo "### Android build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    if [ "${{ inputs.repack-on-hit }}" = "true" ]; then
+                    echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
                       echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
                     else
                       echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
@@ -396,8 +405,10 @@ jobs:
             - name: Report repack fallback
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
               run: |
-                  echo "### Android build: ${{ matrix.target.name }} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+                  echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
 
             - name: build-android-app
               if: steps.build-decision.outputs.need-build == 'true'
@@ -519,20 +530,25 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  DETECT_RESULT: ${{ needs.detect.result }}
+                  DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  BUILD_RESULT: ${{ needs.build.result }}
+                  TEST_RESULT: ${{ needs.test.result }}
               run: |
-                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                  if [ "$DETECT_RESULT" != "success" ]; then
                     echo "Detection job did not succeed."
                     exit 1
                   fi
-                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                  if [ "$DETECT_AFFECTED" != "true" ]; then
                     echo "Skipped: target packages untouched."
                     exit 0
                   fi
-                  if [ "${{ needs.build.result }}" != "success" ]; then
+                  if [ "$BUILD_RESULT" != "success" ]; then
                     echo "Build job failed."
                     exit 1
                   fi
-                  if [ "${{ needs.test.result }}" != "success" ]; then
+                  if [ "$TEST_RESULT" != "success" ]; then
                     echo "Maestro suite failed."
                     exit 1
                   fi

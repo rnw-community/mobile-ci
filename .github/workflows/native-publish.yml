@@ -106,11 +106,13 @@ on:
                 default: arm64-v8a
             asc-key-path:
                 description: >-
-                    Path, relative to app-dir, the App Store Connect API key (.p8) is written to
-                    and removed from.
+                    Optional path, relative to app-dir, the App Store Connect API key (.p8) is
+                    written to and removed from — set this only when eas.json requires the key at
+                    a specific app-dir-relative location; otherwise leave empty so the key is
+                    written under $RUNNER_TEMP and never enters the eas build --local archive.
                 type: string
                 required: false
-                default: ./asc-api-key.p8
+                default: ''
             build-timeout-minutes:
                 type: number
                 required: false
@@ -179,29 +181,44 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Run iOS pre-submit command
               if: inputs.ios-pre-submit-command != ''
               working-directory: ${{ inputs.app-dir }}
               shell: bash
-              run: ${{ inputs.ios-pre-submit-command }}
+              env:
+                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
+              run: eval "$IOS_PRE_SUBMIT_COMMAND"
 
             - name: Write App Store Connect API key
+              id: asc-key
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
-                  ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+                  ASC_KEY_PATH_INPUT: ${{ inputs.asc-key-path }}
               run: |
                   set -euo pipefail
-                  printf '%s' "$ASC_API_KEY" > "$ASC_KEY_PATH"
-                  chmod 600 "$ASC_KEY_PATH"
+                  if [ -n "$ASC_KEY_PATH_INPUT" ]; then
+                    key_path="$ASC_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/ios-publish/asc-api-key.p8"
+                    mkdir -p "$(dirname "$key_path")"
+                  fi
+                  printf '%s' "$ASC_API_KEY" > "$key_path"
+                  chmod 600 "$key_path"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: EAS build (iOS)
               id: build
@@ -248,15 +265,19 @@ jobs:
               if: inputs.ios-post-submit-command != ''
               working-directory: ${{ inputs.app-dir }}
               shell: bash
-              run: ${{ inputs.ios-post-submit-command }}
+              env:
+                  IOS_POST_SUBMIT_COMMAND: ${{ inputs.ios-post-submit-command }}
+              run: eval "$IOS_POST_SUBMIT_COMMAND"
 
             - name: Remove App Store Connect API key
               if: always()
-              working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
-                  ASC_KEY_PATH: ${{ inputs.asc-key-path }}
-              run: rm -f "$ASC_KEY_PATH"
+                  ASC_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+              run: |
+                  if [ -n "${ASC_KEY_PATH:-}" ]; then
+                    rm -f "$ASC_KEY_PATH"
+                  fi
 
     android-lint-gate:
         name: Android release lint (Play policy gate)
@@ -282,12 +303,16 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate production Android project
               working-directory: ${{ inputs.app-dir }}
@@ -379,18 +404,24 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Run Android pre-submit command
               if: inputs.android-pre-submit-command != ''
               working-directory: ${{ inputs.app-dir }}
               shell: bash
-              run: ${{ inputs.android-pre-submit-command }}
+              env:
+                  ANDROID_PRE_SUBMIT_COMMAND: ${{ inputs.android-pre-submit-command }}
+              run: eval "$ANDROID_PRE_SUBMIT_COMMAND"
 
             - name: EAS build (Android)
               id: build
@@ -419,7 +450,9 @@ jobs:
                   REQUIRED_ABI: ${{ inputs.required-android-abi }}
               run: |
                   set -euo pipefail
-                  if ! unzip -l "$ARTIFACT_PATH" | grep -q "lib/${REQUIRED_ABI}/"; then
+                  listing="$RUNNER_TEMP/aab-listing.txt"
+                  unzip -l "$ARTIFACT_PATH" > "$listing"
+                  if ! grep -qF "lib/${REQUIRED_ABI}/" "$listing"; then
                     echo "::error::Required ABI '${REQUIRED_ABI}' not found in $ARTIFACT_PATH (Google Play 64-bit requirement)."
                     exit 1
                   fi
@@ -467,7 +500,9 @@ jobs:
               if: inputs.android-post-submit-command != ''
               working-directory: ${{ inputs.app-dir }}
               shell: bash
-              run: ${{ inputs.android-post-submit-command }}
+              env:
+                  ANDROID_POST_SUBMIT_COMMAND: ${{ inputs.android-post-submit-command }}
+              run: eval "$ANDROID_POST_SUBMIT_COMMAND"
 
             - name: Remove Google service account key
               if: always()
@@ -488,21 +523,28 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  LINT_GATE: ${{ inputs.android-lint-gate }}
+                  IOS_RESULT: ${{ needs.ios-publish.result }}
+                  LINT_RESULT: ${{ needs.android-lint-gate.result }}
+                  ANDROID_RESULT: ${{ needs.android-publish.result }}
               run: |
                   set -euo pipefail
                   failed=0
 
-                  if [ "${{ inputs.enable-ios }}" = "true" ] && [ "${{ needs.ios-publish.result }}" != "success" ]; then
+                  if [ "$ENABLE_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
                     echo "iOS publish failed or did not run."
                     failed=1
                   fi
 
-                  if [ "${{ inputs.enable-android }}" = "true" ]; then
-                    if [ "${{ inputs.android-lint-gate }}" = "true" ] && [ "${{ needs.android-lint-gate.result }}" != "success" ]; then
+                  if [ "$ENABLE_ANDROID" = "true" ]; then
+                    if [ "$LINT_GATE" = "true" ] && [ "$LINT_RESULT" != "success" ]; then
                       echo "Android lint gate failed."
                       failed=1
                     fi
-                    if [ "${{ needs.android-publish.result }}" != "success" ]; then
+                    if [ "$ANDROID_RESULT" != "success" ]; then
                       echo "Android publish failed or did not run."
                       failed=1
                     fi

@@ -137,13 +137,13 @@ runs:
           if [ "$PLATFORM" = "android" ] && [ -n "$KEYSTORE_PATH" ]; then
             args+=(--ks "$KEYSTORE_PATH")
             if [ -n "$KEYSTORE_PASSWORD" ]; then
-              args+=(--ks-pass "$KEYSTORE_PASSWORD")
+              args+=(--ks-pass env:KEYSTORE_PASSWORD)
             fi
             if [ -n "$KEYSTORE_KEY_ALIAS" ]; then
               args+=(--ks-key-alias "$KEYSTORE_KEY_ALIAS")
             fi
             if [ -n "$KEYSTORE_KEY_PASSWORD" ]; then
-              args+=(--ks-key-pass "$KEYSTORE_KEY_PASSWORD")
+              args+=(--ks-key-pass env:KEYSTORE_KEY_PASSWORD)
             fi
           fi
           if [ "$VERBOSE" = "true" ]; then

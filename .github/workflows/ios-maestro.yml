@@ -279,7 +279,9 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: setup-xcode-pinned
               id: xcode
@@ -291,13 +293,17 @@ jobs:
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
@@ -348,10 +354,13 @@ jobs:
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
               run: |
                   {
-                    echo "### iOS build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    if [ "${{ inputs.repack-on-hit }}" = "true" ]; then
+                    echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
                       echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
                     else
                       echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
@@ -361,8 +370,17 @@ jobs:
             - name: Report repack fallback
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
               run: |
-                  echo "### iOS build: ${{ matrix.target.name }} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+                  echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Clean stale app before native build
+              if: steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+              run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
               if: steps.build-decision.outputs.need-build == 'true'
@@ -416,11 +434,13 @@ jobs:
 
             - name: Archive app for test jobs
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
               run: |
                   set -euo pipefail
-                  test -d .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+                  test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
                   mkdir -p .ci-artifacts
-                  tar -czf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-cache/ios-native-app/${{ matrix.target.name }} Base.app
+                  tar -czf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
 
             - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
               with:
@@ -459,7 +479,9 @@ jobs:
 
             - name: Unpack app
               shell: bash
-              run: tar -xzf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
               uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
@@ -484,20 +506,25 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  DETECT_RESULT: ${{ needs.detect.result }}
+                  DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  BUILD_RESULT: ${{ needs.build.result }}
+                  TEST_RESULT: ${{ needs.test.result }}
               run: |
-                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                  if [ "$DETECT_RESULT" != "success" ]; then
                     echo "Detection job did not succeed."
                     exit 1
                   fi
-                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                  if [ "$DETECT_AFFECTED" != "true" ]; then
                     echo "Skipped: target packages untouched."
                     exit 0
                   fi
-                  if [ "${{ needs.build.result }}" != "success" ]; then
+                  if [ "$BUILD_RESULT" != "success" ]; then
                     echo "Build job failed."
                     exit 1
                   fi
-                  if [ "${{ needs.test.result }}" != "success" ]; then
+                  if [ "$TEST_RESULT" != "success" ]; then
                     echo "Maestro suite failed."
                     exit 1
                   fi

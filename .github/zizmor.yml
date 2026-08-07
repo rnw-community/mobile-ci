@@ -24,27 +24,6 @@ rules:
       - native-publish.yml
       - native-dev-release.yml
 
-  # `install-command` / `build-command` / `*-pre-submit-command` /
-  # `*-post-submit-command` / the `status` job's `needs.*.result` reporting
-  # are workflow_call inputs interpolated directly into `run:` by design —
-  # the entire point of these inputs is to let the CONSUMING repo's own
-  # workflow file supply an arbitrary shell command (mirroring
-  # expo-github-action's and docker/build-push-action's own
-  # consumer-supplied-command inputs). The value is set by whoever owns the
-  # calling workflow YAML in the consuming repo, not by untrusted PR content
-  # (GitHub Actions does not let a pull_request's body/title reach a
-  # workflow_call `with:` block unless the caller explicitly wires that up
-  # itself, which is outside this repo's control). Restructuring these into
-  # env-first indirection would not reduce the actual risk surface, only hide
-  # it from this linter.
-  template-injection:
-    ignore:
-      - ios-maestro.yml
-      - android-maestro.yml
-      - seed-native-cache.yml
-      - native-publish.yml
-      - native-dev-release.yml
-
   # Each finding here is this action's OWN script exporting its OWN
   # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a Maestro
   # install path, a ccache directory) to $GITHUB_ENV/$GITHUB_PATH — not
