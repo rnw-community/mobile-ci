@@ -366,7 +366,7 @@ jobs:
     android-publish:
         name: Android build and publish
         needs: [android-lint-gate]
-        if: inputs.enable-android && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')
+        if: "!cancelled() && inputs.enable-android && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')"
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         env:

@@ -9,8 +9,10 @@ deterministic build number (`run_number.run_attempt`), runs `eas build
 --local --profile <build-profile>` for its platform, uploads the artifact,
 creates a draft GitHub Release tagged `<tag-prefix>-<platform>-<run_number>`,
 attaches the build artifact, publishes the release, then prunes older
-published releases under that platform's tag prefix down to `keep-releases`.
-A final **status** job aggregates the enabled jobs into a single required
+published releases under that platform's tag prefix down to `keep-releases`,
+always excluding the release the current run just published (so a re-run of
+an older workflow run can never prune the release it just created). A final
+**status** job aggregates the enabled jobs into a single required
 check. Both jobs need `permissions: contents: write` to create/prune
 releases.
 
@@ -30,7 +32,7 @@ releases.
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
-| `keep-releases`              | no       | `5`                                       | Number of newest published releases (per platform tag) to keep; older ones are pruned. |
+| `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
 

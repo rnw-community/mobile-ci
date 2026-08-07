@@ -270,6 +270,7 @@ jobs:
                   REPOSITORY: ${{ github.repository }}
                   TAG_PREFIX: ${{ inputs.tag-prefix }}-ios-
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
+                  CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
                   set -euo pipefail
                   case "$KEEP_RELEASES" in
@@ -279,8 +280,8 @@ jobs:
                       ;;
                   esac
                   mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
@@ -414,6 +415,7 @@ jobs:
                   REPOSITORY: ${{ github.repository }}
                   TAG_PREFIX: ${{ inputs.tag-prefix }}-android-
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
+                  CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
                   set -euo pipefail
                   case "$KEEP_RELEASES" in
@@ -423,8 +425,8 @@ jobs:
                       ;;
                   esac
                   mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
