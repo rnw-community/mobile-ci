@@ -35,6 +35,7 @@ runs:
       uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
       with:
           cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+          packages: platform-tools
 
     - name: Restore Gradle cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

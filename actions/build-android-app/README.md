@@ -15,6 +15,14 @@ that only reproduce on cold runners. Pin the input explicitly per consumer if
 your fleet's runner image bakes a different cmdline-tools version; do not rely
 on the upstream action's own default.
 
+**Why `packages: platform-tools` is passed explicitly.** Left unset,
+`android-actions/setup-android` defaults to `tools platform-tools`, and the
+legacy `tools` SDK package has been removed from Google's repository —
+`sdkmanager` exits 1 trying to install it, failing every build. Gradle/AGP
+fetch the `build-tools`/`platforms` packages they need themselves once
+`ANDROID_HOME` and `sdkmanager` exist, so only `platform-tools` has to be
+preinstalled here.
+
 ## Inputs
 
 | Name                          | Required | Default      | Description                                             |
