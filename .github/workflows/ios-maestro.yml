@@ -19,7 +19,10 @@ on:
             test-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the test job only. Falls
-                    back to runner-labels when empty.
+                    back to runner-labels when empty. Must resolve to the same CPU
+                    architecture as the build pool: the packaged Simulator app
+                    build-ios-app produces is arm64-only (see build-ios-app's archs
+                    input), so a test pool on a different architecture cannot launch it.
                 type: string
                 required: false
                 default: ''
@@ -32,18 +35,41 @@ on:
             flows-dir:
                 description: >-
                     Directory (relative to repo root) whose top-level files are the
-                    runnable Maestro flows. Subdirectories are deliberately not
-                    searched; see flows-name-pattern.
+                    runnable Maestro flows by default. Subdirectories are not searched
+                    unless flows-max-depth is raised; see flows-max-depth/flows-name-pattern.
                 type: string
                 required: true
+            flows-max-depth:
+                description: >-
+                    find -maxdepth under flows-dir. 0 means unbounded recursion. Default
+                    1 (top-level only) keeps subflows invoked via runFlow, conventionally
+                    living in subdirectories, out of the shard.
+                type: string
+                required: false
+                default: '1'
             flows-name-pattern:
                 description: >-
-                    find -name pattern selecting runnable flows directly inside
-                    flows-dir. Keeps reusable subflows and capture-only flows in
-                    subdirectories out of the shard.
+                    Space-separated find -name globs (OR'd together) selecting runnable
+                    flows directly inside flows-dir. Keeps reusable subflows and
+                    capture-only flows in subdirectories out of the shard by default.
                 type: string
                 required: false
                 default: '*.flow.yaml'
+            flows-exclude-pattern:
+                description: Optional find ! -name glob excluding matched flows by basename.
+                type: string
+                required: false
+                default: ''
+            shard-manifest-dir:
+                description: >-
+                    Optional directory (relative to repo root) of hand-curated
+                    shard-<index>.txt files (one flows-dir-relative flow path per line)
+                    overriding the computed index-modulo split so a consumer's balanced
+                    shard assignment survives. Unset (default) falls back to the
+                    index-modulo split entirely.
+                type: string
+                required: false
+                default: ''
             pre-run-flow:
                 description: >-
                     Path to a single priming flow run once before each shard's flows,
@@ -466,6 +492,22 @@ jobs:
               with:
                   persist-credentials: false
 
+            # build-ios-app's default archs is arm64-only (excluded-archs
+            # x86_64), and this workflow does not expose an override, so the
+            # packaged Simulator app can only launch on an arm64 host. A
+            # test-runner-labels pool on a different architecture than the
+            # build pool would otherwise fail confusingly inside simctl
+            # install; fail fast with an actionable message instead.
+            - name: Assert test runner architecture matches the packaged app
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  arch=$(uname -m)
+                  if [ "$arch" != 'arm64' ]; then
+                    echo "::error::Test runner architecture is '$arch', but the packaged Simulator app is arm64-only. Set test-runner-labels to an arm64 pool."
+                    exit 1
+                  fi
+
             - name: setup-xcode-pinned
               uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
               with:
@@ -489,7 +531,10 @@ jobs:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}

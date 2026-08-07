@@ -11,24 +11,30 @@ self-hosted runner.
 
 ## Inputs
 
-| Name                | Required | Default        | Description                                                |
-| -------------------- | -------- | -------------- | ---------------------------------------------------------------- |
-| `app-path`           | yes      | —              | Path to a packaged `.app` directory to install.                   |
-| `app-id`             | yes      | —              | Bundle identifier passed to Maestro as `APP_ID`.                  |
-| `flows-dir`          | yes      | —              | Directory whose top-level files are the runnable Maestro flows. Subdirectories are deliberately not searched; see `flows-name-pattern`. |
-| `flows-name-pattern` | no       | `*.flow.yaml`  | `find -name` pattern selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard. |
-| `shard-index`        | yes      | —              | Zero-based shard index this job runs.                             |
-| `shard-count`        | yes      | —              | Total number of shards flows are distributed across.              |
-| `pre-run-flow`       | no       | `''`           | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
-| `flow-retries`       | no       | `0`            | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
-| `maestro-version`    | no       | `2.8.0`        | Pinned Maestro CLI version.                                        |
-| `artifacts-dir`      | yes      | —              | Directory Maestro debug output and final-state capture is written to. |
-| `artifact-name`      | yes      | —              | Uploaded artifact name.                                            |
-| `retention-days`     | no       | `7`            | Uploaded artifact retention in days.                               |
+| Name                    | Required | Default       | Description                                                |
+| ----------------------- | -------- | ------------- | ---------------------------------------------------------------- |
+| `app-path`              | yes      | —             | Path to a packaged `.app` directory to install.                   |
+| `app-id`                | yes      | —             | Bundle identifier passed to Maestro as `APP_ID`.                  |
+| `flows-dir`             | yes      | —             | Directory whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
+| `flows-max-depth`       | no       | `1`           | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
+| `flows-name-pattern`    | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
+| `flows-exclude-pattern` | no       | `''`          | Optional `find ! -name` glob excluding matched flows by basename.  |
+| `shard-manifest-dir`    | no       | `''`          | Directory of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative path per line) overriding the index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
+| `shard-index`           | yes      | —             | Zero-based shard index this job runs.                             |
+| `shard-count`           | yes      | —             | Total number of shards flows are distributed across.              |
+| `pre-run-flow`          | no       | `''`          | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
+| `flow-retries`          | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
+| `maestro-version`       | no       | `2.8.0`       | Pinned Maestro CLI version.                                        |
+| `artifacts-dir`         | yes      | —             | Directory Maestro debug output and final-state capture is written to. |
+| `artifact-name`         | yes      | —             | Uploaded artifact name.                                            |
+| `retention-days`        | no       | `7`           | Uploaded artifact retention in days.                               |
 
 A per-flow timing table (flow, duration, status, attempts) is appended to
 `$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
-when `pre-run-flow` is set.
+when `pre-run-flow` is set. The resolved flow list (before sharding) is
+logged to the step output before selection, so a consumer can confirm
+`flows-max-depth`/`flows-name-pattern`/`flows-exclude-pattern` resolved to
+the intended set.
 
 ## Example
 

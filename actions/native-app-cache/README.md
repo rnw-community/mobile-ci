@@ -13,11 +13,15 @@ by `if: steps.<restore-id>.outputs.cache-hit != 'true'` so a warm cache never
 re-saves the same key.
 
 A restore hit only guarantees the native surface (package.json, native
-folders, autolinking config) is unchanged — it does **not** guarantee the
-embedded JS bundle reflects the current commit's application-layer JS.
-Consumers that need JS-current warm builds should reseed on a schedule (see
-the `seed-native-cache` reusable workflow) rather than rely solely on
-fingerprint hits.
+folders, autolinking config) is unchanged — it does **not** by itself
+guarantee the embedded JS bundle reflects the current commit's
+application-layer JS. Pair every restore hit with the `repack-app` action
+(injects a freshly exported JS bundle into the cached shell before install)
+so a JS-only change is always tested against its own JS; `ios-maestro.yml` /
+`android-maestro.yml` do this when their `repack-on-hit` input is enabled.
+Consumers calling this action à la carte, or leaving `repack-on-hit` off, get
+the weaker guarantee only and should reseed on a schedule (see the
+`seed-native-cache` reusable workflow) instead.
 
 ## Inputs
 

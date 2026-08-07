@@ -60,8 +60,11 @@ from outside the runner itself.
 | `container-name`          | yes      | —                                      | Docker container name base, distinguishing this cell from siblings in the same run; the action appends the run id/attempt automatically. |
 | `apk-path`                | yes      | —                                      | Path to the packaged `.apk` to install.                                                     |
 | `app-id`                  | yes      | —                                      | Application ID passed to Maestro as `APP_ID`.                                               |
-| `flows-dir`               | yes      | —                                      | Directory whose top-level files are the runnable Maestro flows. Subdirectories are deliberately not searched; see `flows-name-pattern`. |
-| `flows-name-pattern`      | no       | `*.flow.yaml`                          | `find -name` pattern selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard. |
+| `flows-dir`               | yes      | —                                      | Directory whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
+| `flows-max-depth`         | no       | `1`                                    | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion.                          |
+| `flows-name-pattern`      | no       | `*.flow.yaml`                          | Space-separated `find -name` globs (OR'd together) selecting runnable flows, at every depth `flows-max-depth` permits. |
+| `flows-exclude-pattern`   | no       | `''`                                    | Optional `find ! -name` glob excluding matched flows by basename.                           |
+| `shard-manifest-dir`      | no       | `''`                                    | Directory of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative path per line) overriding the index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |
 | `pre-run-flow`            | no       | `''`                                   | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
@@ -77,7 +80,10 @@ from outside the runner itself.
 
 A per-flow timing table (flow, duration, status, attempts) is appended to
 `$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
-when `pre-run-flow` is set.
+when `pre-run-flow` is set. The resolved flow list (before sharding) is
+logged to the step output before selection, so a consumer can confirm
+`flows-max-depth`/`flows-name-pattern`/`flows-exclude-pattern` resolved to
+the intended set.
 
 ## Example
 

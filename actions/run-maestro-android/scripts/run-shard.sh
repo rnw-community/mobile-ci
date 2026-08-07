@@ -36,6 +36,12 @@ case "$FLOW_RETRIES" in
     ;;
 esac
 max_attempts=$((1 + FLOW_RETRIES))
+case "$FLOWS_MAX_DEPTH" in
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer without leading zeros."
+    exit 1
+    ;;
+esac
 
 if [ -n "$PRE_RUN_FLOW" ]; then
   test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
@@ -68,25 +74,71 @@ write_summary() {
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
+# Only files matching flows-name-pattern within flows-max-depth are runnable
+# scenarios. The default (max-depth 1) keeps reusable subflows and
+# capture-only flows conventionally kept in subdirectories of the flows dir
+# out of the shard; those expect a caller to pass env or leave the app
+# mid-journey, so running them standalone fails.
+find_cmd=(find "$FLOWS_DIR")
+if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+  find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+fi
+find_cmd+=(-type f)
+IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
+name_args=('(')
+for i in "${!name_patterns[@]}"; do
+  if [ "$i" -gt 0 ]; then
+    name_args+=(-o)
+  fi
+  name_args+=(-name "${name_patterns[$i]}")
+done
+name_args+=(')')
+find_cmd+=("${name_args[@]}")
+if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
+  find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
+fi
 flows=()
-# Only top-level files matching flows-name-pattern are runnable scenarios.
-# Recursing over every flow file sweeps in reusable subflows and
-# capture-only flows conventionally kept in subdirectories of the flows
-# dir; those expect a caller to pass env or leave the app mid-journey, so
-# running them standalone fails.
 while IFS= read -r flow; do
   flows+=("$flow")
-done < <(find "$FLOWS_DIR" -maxdepth 1 -type f -name "$FLOWS_NAME_PATTERN" | sort)
+done < <("${find_cmd[@]}" | sort)
 if [ "${#flows[@]}" -eq 0 ]; then
-  echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found directly inside flows-dir '$FLOWS_DIR'."
+  echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found under flows-dir '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH)."
   exit 1
 fi
+printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+
 selected=()
-for index in "${!flows[@]}"; do
-  if (( index % SHARD_COUNT == SHARD_INDEX )); then
-    selected+=("${flows[$index]}")
+if [ -n "$SHARD_MANIFEST_DIR" ]; then
+  manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
+  if [ ! -f "$manifest_file" ]; then
+    echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
+    exit 1
   fi
-done
+  while IFS= read -r rel || [ -n "$rel" ]; do
+    rel="${rel%$'\r'}"
+    rel="${rel#./}"
+    [ -n "$rel" ] || continue
+    flow_path="$FLOWS_DIR/$rel"
+    match=0
+    for candidate in "${flows[@]}"; do
+      if [ "$candidate" = "$flow_path" ]; then
+        match=1
+        break
+      fi
+    done
+    if [ "$match" -ne 1 ]; then
+      echo "::error::shard-manifest entry '$rel' (resolved '$flow_path') is not among the flows discovered under '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH, flows-name-pattern='$FLOWS_NAME_PATTERN'); refusing an entry that bypasses discovery."
+      exit 1
+    fi
+    selected+=("$flow_path")
+  done < "$manifest_file"
+else
+  for index in "${!flows[@]}"; do
+    if (( index % SHARD_COUNT == SHARD_INDEX )); then
+      selected+=("${flows[$index]}")
+    fi
+  done
+fi
 
 if [ -n "$PRE_RUN_FLOW" ]; then
   if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then

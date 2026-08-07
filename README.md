@@ -91,6 +91,18 @@ input/output table and a usage example.
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
+Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
+`build-runner-labels` + `test-runner-labels` (the second defaults to the
+first) so a consumer with a dedicated builder host separate from its Maestro
+test pool can preserve that split; a single-pool consumer sets only
+`build-runner-labels` and ignores `test-runner-labels` entirely. Flow
+discovery under both is bounded by default (`flows-max-depth: 1`, a
+`flows-name-pattern` glob, and an optional `flows-exclude-pattern`) so subflow
+and fixture directories under `flows-dir` are never swept into a shard; an
+optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
+overrides the computed index-modulo split for consumers whose shard balance
+is hand-tuned, falling back to modulo when unset.
+
 ### Android driver: Redroid vs AVD
 
 `android-maestro.yml`'s `android-driver` input picks the Maestro-execution
