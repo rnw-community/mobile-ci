@@ -19,10 +19,12 @@ on:
             test-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the test job only. Falls
-                    back to runner-labels when empty. Must resolve to the same CPU
-                    architecture as the build pool: the packaged Simulator app
-                    build-ios-app produces is arm64-only (see build-ios-app's archs
-                    input), so a test pool on a different architecture cannot launch it.
+                    back to runner-labels when empty. Must resolve to an arm64 macOS
+                    pool regardless of the build pool's architecture: the packaged
+                    Simulator app build-ios-app produces is arm64-only (see
+                    build-ios-app's archs input, which this workflow does not expose
+                    an override for), so a test pool on any other architecture cannot
+                    launch it.
                 type: string
                 required: false
                 default: ''

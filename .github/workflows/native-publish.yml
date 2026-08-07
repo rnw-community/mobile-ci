@@ -213,8 +213,8 @@ jobs:
                     key_path="$ASC_KEY_PATH_INPUT"
                   else
                     key_path="$RUNNER_TEMP/ios-publish/asc-api-key.p8"
-                    mkdir -p "$(dirname "$key_path")"
                   fi
+                  mkdir -p "$(dirname "$key_path")"
                   printf '%s' "$ASC_API_KEY" > "$key_path"
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"

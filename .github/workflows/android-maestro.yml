@@ -403,6 +403,7 @@ jobs:
             # build-tools is requested here explicitly instead.
             - name: Set up Android SDK (for repack-app validation)
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
               uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
               with:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}

@@ -40,6 +40,8 @@ releases.
 | ---------------------- | -------- | -------------- |
 | `EXPO_TOKEN`             | no*      | Expo access token, required by both dev-release jobs. |
 | `ASC_API_KEY`            | no       | Optional App Store Connect API key contents (`.p8`), used by `ios-dev-release` when the development profile needs automatic device/credential management. |
+| `ASC_KEY_ID`             | no       | App Store Connect API key ID matching `ASC_API_KEY`. Exported to the build step as `EXPO_ASC_KEY_ID`; set alongside `ASC_API_KEY`/`ASC_ISSUER_ID` so EAS can resolve the key non-interactively. |
+| `ASC_ISSUER_ID`          | no       | App Store Connect API key issuer ID matching `ASC_API_KEY`. Exported to the build step as `EXPO_ASC_ISSUER_ID`; set alongside `ASC_API_KEY`/`ASC_KEY_ID` so EAS can resolve the key non-interactively. |
 
 \* `EXPO_TOKEN` is declared optional at the `workflow_call` level, but each
 enabled dev-release job validates it is present at the start of the job and

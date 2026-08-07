@@ -238,6 +238,25 @@ runs:
           fi
           printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
 
+          # pre-run-flow is run once as a priming flow below, outside of
+          # sharding. If it also happens to be a top-level file inside
+          # flows-dir matching flows-name-pattern, discovery above finds it
+          # too, and without this filter it would be selected again by the
+          # manifest or modulo split and run a second time. Compare
+          # canonicalized paths since PRE_RUN_FLOW and the discovered flow's
+          # path string may differ in form (relative vs "./"-prefixed, etc.)
+          # while resolving to the same file.
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            pre_run_flow_resolved=$(realpath -m "$PRE_RUN_FLOW")
+            remaining_flows=()
+            for flow in "${flows[@]}"; do
+              if [ "$(realpath -m "$flow")" != "$pre_run_flow_resolved" ]; then
+                remaining_flows+=("$flow")
+              fi
+            done
+            flows=("${remaining_flows[@]}")
+          fi
+
           selected=()
           if [ -n "$SHARD_MANIFEST_DIR" ]; then
             manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"

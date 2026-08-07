@@ -61,6 +61,18 @@ driver, `android-maestro.yml`'s default) runs Android as a privileged Docker
 container over the host's `binder_linux` kernel module instead, and needs
 none of the emulator's `linux-aarch64`-unavailable dependencies.
 
+**Trust boundary: these runners are for trusted workloads only.** `sudo
+docker`, `docker run --privileged`, and `sudo modprobe` all grant
+root-equivalent access to the host and its kernel — the `NOPASSWD` sudoers
+entry below lets any workflow step run arbitrary commands as root, and a
+`--privileged` container can affect the host (and therefore every later job
+scheduled onto it) well beyond the Android emulation this action uses it
+for. Do not point this pool at workflows that run untrusted code (e.g. a
+`pull_request` trigger from forks); use dedicated or ephemeral runners for
+that case instead, and scope the sudoers entry to the exact `docker` and
+`modprobe` invocations this action needs rather than a blanket `NOPASSWD:
+ALL` where your sudo policy allows it.
+
 Host requirements:
 
 - **Docker**, with the runner's user able to run `sudo docker ...`
@@ -136,13 +148,21 @@ set -euo pipefail
 
 image="redroid/redroid:15.0.0_64only-latest"
 data_dir="/var/lib/redroid-prewarm/data"
+staging_dir="${data_dir}.staging"
+old_dir="${data_dir}.old"
 manifest_path="$HOME/.rnw-ci/android-emulator.json"
 
 sudo docker pull "$image"
 sudo modprobe binder_linux devices=binder,hwbinder,vndbinder
 
-sudo rm -rf "$data_dir"
-sudo mkdir -p "$data_dir"
+# Build the new data volume in a staging directory rather than data_dir
+# itself: a shard's cp -a reads dataDir from the manifest at any time,
+# including mid-refresh, so rm -rf'ing and re-booting data_dir in place would
+# hand a concurrent shard a partially-written or deleted tree. staging_dir is
+# swapped into place atomically (same filesystem rename) only after a clean
+# boot and shutdown below.
+sudo rm -rf "$staging_dir"
+sudo mkdir -p "$staging_dir"
 
 sudo docker rm -f redroid-prewarm >/dev/null 2>&1 || true
 
@@ -153,11 +173,16 @@ trap cleanup EXIT
 
 sudo docker run -d --name redroid-prewarm --privileged \
     --memory 3g --memory-swap 3g --cpus 2 \
-    -v "$data_dir":/data -p 127.0.0.1::5555 \
+    -v "$staging_dir":/data -p 127.0.0.1::5555 \
     "$image" androidboot.redroid_gpu_mode=guest
 
 port=$(sudo docker port redroid-prewarm 5555/tcp | head -n1 | sed -E 's/.*:([0-9]+)$/\1/')
-adb connect "localhost:$port"
+# Tolerates failure: Redroid has not necessarily opened 5555 yet immediately
+# after `docker run -d` returns, and under set -e a hard failure here would
+# abort the script before the boot-wait loop below (which retries adb
+# connect every 5s) ever runs — the same race run-maestro-android-redroid's
+# own bring-up guards against.
+adb connect "localhost:$port" || true
 deadline=$((SECONDS + 600))
 until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
     if [ "$SECONDS" -ge "$deadline" ]; then
@@ -165,12 +190,25 @@ until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null
         exit 1
     fi
     sleep 5
+    adb connect "localhost:$port" >/dev/null 2>&1 || true
 done
 for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
     adb -s "localhost:$port" shell settings put global "$setting" 0
 done
 
 sudo docker stop redroid-prewarm
+
+# Atomically replace data_dir with the freshly booted-and-shut-down
+# staging_dir. Both directories are on the same filesystem, so each mv below
+# is a single rename syscall: a concurrent shard's cp -a either sees the
+# complete old tree (via its already-open directory handle) or the complete
+# new one, never a half-written one.
+sudo rm -rf "$old_dir"
+if [ -d "$data_dir" ]; then
+    sudo mv -T "$data_dir" "$old_dir"
+fi
+sudo mv -T "$staging_dir" "$data_dir"
+sudo rm -rf "$old_dir"
 
 mkdir -p "$(dirname "$manifest_path")"
 cat > "$manifest_path" <<EOF
@@ -193,6 +231,7 @@ Description=Prewarm Redroid image and data volume for mobile-ci
 [Service]
 Type=oneshot
 User=<runner-user>
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:<path-to-android-sdk>/platform-tools
 ExecStart=/usr/local/bin/redroid-prewarm.sh
 
 # /etc/systemd/system/redroid-prewarm.timer
@@ -214,6 +253,16 @@ writes the manifest to `/root/.rnw-ci/android-emulator.json` — a path
 (`$HOME/.rnw-ci/android-emulator.json`, expanded against the runner user's own
 home directory) never resolves to, so every shard would silently fall back to
 a cold `docker pull` and first boot instead of using the prewarmed data.
+
+Replace `<path-to-android-sdk>` in `Environment=PATH=` with the runner
+user's actual Android SDK `platform-tools` directory (e.g.
+`/Users/<runner-user>/Library/Android/sdk/platform-tools` or
+`$ANDROID_HOME/platform-tools`). A system service started with `User=` gets
+`HOME` set but does not inherit the runner user's login shell `PATH`, so
+`redroid-prewarm.sh`'s unqualified `adb` calls resolve to nothing and the
+timer unit fails outright — silently falling back to a cold `docker pull`
+and first boot on every subsequent shard, exactly the outcome prewarming
+exists to avoid.
 
 ```bash
 sudo systemctl enable --now redroid-prewarm.timer

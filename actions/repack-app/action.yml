@@ -171,7 +171,7 @@ runs:
             echo "::error::Repacked APK package name '$package_name' does not match expected app-id '$APP_ID'."
             exit 1
           fi
-          unzip -l "$APP_PATH" | grep -q 'assets/index.android.bundle'
+          unzip -Z1 "$APP_PATH" | grep -Fx 'assets/index.android.bundle'
 
     - name: Validate repacked app (ios)
       if: inputs.platform == 'ios'

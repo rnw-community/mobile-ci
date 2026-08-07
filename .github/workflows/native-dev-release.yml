@@ -92,6 +92,18 @@ on:
                     Optional App Store Connect API key contents (.p8), used by ios-dev-release
                     when the development profile needs automatic device/credential management.
                 required: false
+            ASC_KEY_ID:
+                description: >-
+                    App Store Connect API key ID matching ASC_API_KEY. Required alongside
+                    ASC_API_KEY and ASC_ISSUER_ID for EAS to resolve the key non-interactively;
+                    exported to the build step as EXPO_ASC_KEY_ID.
+                required: false
+            ASC_ISSUER_ID:
+                description: >-
+                    App Store Connect API key issuer ID matching ASC_API_KEY. Required alongside
+                    ASC_API_KEY and ASC_KEY_ID for EAS to resolve the key non-interactively;
+                    exported to the build step as EXPO_ASC_ISSUER_ID.
+                required: false
 
 concurrency:
     group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
@@ -171,8 +183,8 @@ jobs:
                     key_path="$ASC_KEY_PATH_INPUT"
                   else
                     key_path="$RUNNER_TEMP/ios-dev-release/asc-api-key.p8"
-                    mkdir -p "$(dirname "$key_path")"
                   fi
+                  mkdir -p "$(dirname "$key_path")"
                   printf '%s' "$ASC_API_KEY" > "$key_path"
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
@@ -185,6 +197,9 @@ jobs:
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
                   BUILD_PROFILE: ${{ inputs.build-profile }}
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
                   output_path="$RUNNER_TEMP/ios-dev-release/app.ipa"
@@ -226,14 +241,19 @@ jobs:
               run: |
                   set -euo pipefail
                   if gh release view "$TAG" >/dev/null 2>&1; then
-                    echo "Replacing existing release $TAG (job re-run)."
-                    gh release delete "$TAG" --yes --cleanup-tag
+                    echo "Updating existing release $TAG in place (job re-run)."
+                    gh release edit "$TAG" \
+                      --draft \
+                      --title "iOS dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                  else
+                    gh release create "$TAG" \
+                      --draft \
+                      --title "iOS dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      "$ARTIFACT_PATH"
                   fi
-                  gh release create "$TAG" \
-                    --draft \
-                    --title "iOS dev build ${TAG}" \
-                    --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
-                    "$ARTIFACT_PATH"
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
             - name: Publish GitHub Release
@@ -247,6 +267,7 @@ jobs:
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
                   TAG_PREFIX: ${{ inputs.tag-prefix }}-ios-
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
               run: |
@@ -257,7 +278,7 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate --slurp | \
+                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" \
                       '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
@@ -364,14 +385,19 @@ jobs:
               run: |
                   set -euo pipefail
                   if gh release view "$TAG" >/dev/null 2>&1; then
-                    echo "Replacing existing release $TAG (job re-run)."
-                    gh release delete "$TAG" --yes --cleanup-tag
+                    echo "Updating existing release $TAG in place (job re-run)."
+                    gh release edit "$TAG" \
+                      --draft \
+                      --title "Android dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                  else
+                    gh release create "$TAG" \
+                      --draft \
+                      --title "Android dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      "$ARTIFACT_PATH"
                   fi
-                  gh release create "$TAG" \
-                    --draft \
-                    --title "Android dev build ${TAG}" \
-                    --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
-                    "$ARTIFACT_PATH"
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
             - name: Publish GitHub Release
@@ -385,6 +411,7 @@ jobs:
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
                   TAG_PREFIX: ${{ inputs.tag-prefix }}-android-
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
               run: |
@@ -395,7 +422,7 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  mapfile -t tags < <(gh api "repos/${{ github.repository }}/releases" --paginate --slurp | \
+                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" \
                       '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix))] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
