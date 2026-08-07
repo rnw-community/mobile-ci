@@ -1,0 +1,189 @@
+name: repack-app
+description: >-
+  Injects a freshly exported JS bundle into a cached native .app/.apk shell
+  in place via `npx @expo/repack-app`, then validates the result (expected
+  bundle id/package name, JS bundle presence) before handing the app back to
+  the caller. Fails closed on any repack or validation error; the caller
+  decides whether to fall back to a full native build.
+inputs:
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  app-path:
+    description: >-
+      Path to the cached native app to repack in place: a Base.app directory
+      for ios, an app-release.apk file for android.
+    required: true
+  app-id:
+    description: Expected bundle identifier (ios) or package name (android), validated after repack.
+    required: true
+  app-dir:
+    description: >-
+      App/project directory @expo/repack-app runs against (its project-root
+      argument) to export a fresh JS bundle.
+    required: false
+    default: '.'
+  repack-version:
+    description: Pinned @expo/repack-app npm version.
+    required: false
+    default: '0.7.2'
+  working-directory:
+    description: >-
+      Scratch directory @expo/repack-app uses for intermediate repack
+      artifacts. Left to the tool's own default when empty.
+    required: false
+    default: ''
+  android-build-tools-dir:
+    description: >-
+      Path to the Android SDK build-tools directory, passed to
+      @expo/repack-app as --android-build-tools-dir and reused by this
+      action's post-repack `aapt2 dump packagename` validation. Ignored for
+      ios; when empty on android, both the repack CLI and this action's
+      validation step fall back to an `aapt2` already on PATH.
+    required: false
+    default: ''
+  js-bundle-only:
+    description: >-
+      Passes --js-bundle-only, skipping native config updates and repacking
+      only the JS bundle/assets — the correct mode when the native shell
+      itself has not changed.
+    required: false
+    default: 'true'
+  embed-bundle-assets:
+    description: Passes --embed-bundle-assets.
+    required: false
+    default: 'false'
+  keystore-path:
+    description: >-
+      Path to the Android signing keystore, passed as --ks. Ignored for ios;
+      omitted (tool default) when empty.
+    required: false
+    default: ''
+  keystore-password:
+    description: Android keystore password, passed as --ks-pass. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  keystore-key-alias:
+    description: Android keystore key alias, passed as --ks-key-alias. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  keystore-key-password:
+    description: Android keystore key password, passed as --ks-key-pass. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  verbose:
+    description: Passes --verbose to @expo/repack-app.
+    required: false
+    default: 'false'
+outputs:
+  app-path:
+    description: Path to the repacked native app (same path as the app-path input; repacked in place).
+    value: ${{ steps.repack.outputs.app-path }}
+runs:
+  using: composite
+  steps:
+    - name: Validate platform
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+      run: |
+          set -euo pipefail
+          case "$PLATFORM" in
+            ios|android) ;;
+            *)
+              echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+              exit 1
+              ;;
+          esac
+
+    - name: Repack app with fresh JS
+      id: repack
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        APP_PATH: ${{ inputs.app-path }}
+        APP_DIR: ${{ inputs.app-dir }}
+        REPACK_VERSION: ${{ inputs.repack-version }}
+        REPACK_WORKING_DIR: ${{ inputs.working-directory }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+        JS_BUNDLE_ONLY: ${{ inputs.js-bundle-only }}
+        EMBED_BUNDLE_ASSETS: ${{ inputs.embed-bundle-assets }}
+        KEYSTORE_PATH: ${{ inputs.keystore-path }}
+        KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        KEYSTORE_KEY_ALIAS: ${{ inputs.keystore-key-alias }}
+        KEYSTORE_KEY_PASSWORD: ${{ inputs.keystore-key-password }}
+        VERBOSE: ${{ inputs.verbose }}
+      run: |
+          set -euo pipefail
+          if [ "$PLATFORM" = "ios" ]; then
+            test -d "$APP_PATH"
+          else
+            test -f "$APP_PATH"
+          fi
+
+          args=(-p "$PLATFORM" --source-app "$APP_PATH" --output "$APP_PATH")
+          if [ -n "$REPACK_WORKING_DIR" ]; then
+            args+=(--working-directory "$REPACK_WORKING_DIR")
+          fi
+          if [ "$PLATFORM" = "android" ] && [ -n "$ANDROID_BUILD_TOOLS_DIR" ]; then
+            args+=(--android-build-tools-dir "$ANDROID_BUILD_TOOLS_DIR")
+          fi
+          if [ "$JS_BUNDLE_ONLY" = "true" ]; then
+            args+=(--js-bundle-only)
+          fi
+          if [ "$EMBED_BUNDLE_ASSETS" = "true" ]; then
+            args+=(--embed-bundle-assets)
+          fi
+          if [ "$PLATFORM" = "android" ] && [ -n "$KEYSTORE_PATH" ]; then
+            args+=(--ks "$KEYSTORE_PATH")
+            if [ -n "$KEYSTORE_PASSWORD" ]; then
+              args+=(--ks-pass env:KEYSTORE_PASSWORD)
+            fi
+            if [ -n "$KEYSTORE_KEY_ALIAS" ]; then
+              args+=(--ks-key-alias "$KEYSTORE_KEY_ALIAS")
+            fi
+            if [ -n "$KEYSTORE_KEY_PASSWORD" ]; then
+              args+=(--ks-key-pass env:KEYSTORE_KEY_PASSWORD)
+            fi
+          fi
+          if [ "$VERBOSE" = "true" ]; then
+            args+=(--verbose)
+          fi
+
+          npx --yes "@expo/repack-app@${REPACK_VERSION}" "${args[@]}" "$APP_DIR"
+          echo "app-path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Validate repacked app (android)
+      if: inputs.platform == 'android'
+      shell: bash
+      env:
+        APP_PATH: ${{ inputs.app-path }}
+        APP_ID: ${{ inputs.app-id }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+      run: |
+          set -euo pipefail
+          aapt2_bin=aapt2
+          if [ -n "$ANDROID_BUILD_TOOLS_DIR" ]; then
+            aapt2_bin="$ANDROID_BUILD_TOOLS_DIR/aapt2"
+          fi
+          package_name=$("$aapt2_bin" dump packagename "$APP_PATH")
+          if [ "$package_name" != "$APP_ID" ]; then
+            echo "::error::Repacked APK package name '$package_name' does not match expected app-id '$APP_ID'."
+            exit 1
+          fi
+          unzip -Z1 "$APP_PATH" | grep -Fx 'assets/index.android.bundle'
+
+    - name: Validate repacked app (ios)
+      if: inputs.platform == 'ios'
+      shell: bash
+      env:
+        APP_PATH: ${{ inputs.app-path }}
+        APP_ID: ${{ inputs.app-id }}
+      run: |
+          set -euo pipefail
+          test -f "$APP_PATH/main.jsbundle"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")
+          if [ "$bundle_id" != "$APP_ID" ]; then
+            echo "::error::Repacked app bundle id '$bundle_id' does not match expected app-id '$APP_ID'."
+            exit 1
+          fi

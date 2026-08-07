@@ -10,7 +10,10 @@ inputs:
     description: Application ID passed to Maestro as APP_ID.
     required: true
   flows-dir:
-    description: Directory containing Maestro flow .yaml/.yml files.
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows by
+      default. Subdirectories are not searched unless flows-max-depth is
+      raised; see flows-max-depth/flows-name-pattern.
     required: true
   flows-max-depth:
     description: >-
@@ -22,9 +25,11 @@ inputs:
   flows-name-pattern:
     description: >-
       Space-separated find -name globs (OR'd together) selecting runnable
-      flows under flows-dir.
+      flows under flows-dir. Defaults to the widespread *.flow.yaml
+      convention, which keeps reusable subflows and capture-only flows in
+      subdirectories out of the shard.
     required: false
-    default: '*.yaml *.yml'
+    default: '*.flow.yaml'
   flows-exclude-pattern:
     description: Optional find ! -name glob excluding matched flows by basename.
     required: false
@@ -47,6 +52,20 @@ inputs:
   shard-count:
     description: Total number of shards flows are distributed across.
     required: true
+  pre-run-flow:
+    description: >-
+      Path to a single priming flow run once before this shard's flows,
+      excluded from sharding. Its failure fails the step immediately without
+      running the shard. Leave empty to skip priming.
+    required: false
+    default: ''
+  flow-retries:
+    description: >-
+      Non-negative retry budget per flow. Each flow gets up to
+      1 + flow-retries attempts; a flow that eventually passes counts as
+      passed. The step fails if any flow exhausts its attempts.
+    required: false
+    default: '0'
   maestro-version:
     description: Pinned Maestro CLI version.
     required: false
@@ -94,15 +113,17 @@ runs:
     - name: Boot emulator, install app, and run Maestro shard
       uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
       env:
-        APK_PATH: ${{ inputs.apk-path }}
-        APP_ID: ${{ inputs.app-id }}
-        FLOWS_DIR: ${{ inputs.flows-dir }}
-        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
-        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
-        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
-        SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
-        SHARD_INDEX: ${{ inputs.shard-index }}
-        SHARD_COUNT: ${{ inputs.shard-count }}
+          APK_PATH: ${{ inputs.apk-path }}
+          APP_ID: ${{ inputs.app-id }}
+          FLOWS_DIR: ${{ inputs.flows-dir }}
+          FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+          FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+          FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+          SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+          SHARD_INDEX: ${{ inputs.shard-index }}
+          SHARD_COUNT: ${{ inputs.shard-count }}
+          PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+          FLOW_RETRIES: ${{ inputs.flow-retries }}
       with:
           api-level: ${{ inputs.api-level }}
           target: ${{ inputs.target }}
@@ -112,100 +133,7 @@ runs:
           disable-spellchecker: true
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-              set -euo pipefail
-              set -x
-              case "$SHARD_COUNT" in
-                ''|*[!0-9]*)
-                  echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer."
-                  exit 1
-                  ;;
-              esac
-              if [ "$SHARD_COUNT" -lt 1 ]; then
-                echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
-                exit 1
-              fi
-              case "$SHARD_INDEX" in
-                ''|*[!0-9]*)
-                  echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer."
-                  exit 1
-                  ;;
-              esac
-              if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
-                echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
-                exit 1
-              fi
-              adb wait-for-device
-              timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
-              adb install -r "$APK_PATH"
-              case "$FLOWS_MAX_DEPTH" in
-                ''|*[!0-9]*)
-                  echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer."
-                  exit 1
-                  ;;
-              esac
-              find_cmd=(find "$FLOWS_DIR")
-              if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
-                find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
-              fi
-              find_cmd+=(-type f)
-              IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
-              name_args=('(')
-              for i in "${!name_patterns[@]}"; do
-                if [ "$i" -gt 0 ]; then
-                  name_args+=(-o)
-                fi
-                name_args+=(-name "${name_patterns[$i]}")
-              done
-              name_args+=(')')
-              find_cmd+=("${name_args[@]}")
-              if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
-                find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
-              fi
-              flows=()
-              while IFS= read -r flow; do
-                flows+=("$flow")
-              done < <("${find_cmd[@]}" | sort)
-              test "${#flows[@]}" -gt 0
-              printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
-              selected=()
-              if [ -n "$SHARD_MANIFEST_DIR" ]; then
-                manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
-                if [ ! -f "$manifest_file" ]; then
-                  echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
-                  exit 1
-                fi
-                while IFS= read -r rel || [ -n "$rel" ]; do
-                  rel="${rel%$'\r'}"
-                  rel="${rel#./}"
-                  [ -n "$rel" ] || continue
-                  flow_path="$FLOWS_DIR/$rel"
-                  match=0
-                  for candidate in "${flows[@]}"; do
-                    if [ "$candidate" = "$flow_path" ]; then
-                      match=1
-                      break
-                    fi
-                  done
-                  if [ "$match" -ne 1 ]; then
-                    echo "::error::shard-manifest entry '$rel' (resolved '$flow_path') is not among the flows discovered under '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH, flows-name-pattern='$FLOWS_NAME_PATTERN'); refusing an entry that bypasses discovery."
-                    exit 1
-                  fi
-                  selected+=("$flow_path")
-                done < "$manifest_file"
-              else
-                for index in "${!flows[@]}"; do
-                  if (( index % SHARD_COUNT == SHARD_INDEX )); then
-                    selected+=("${flows[$index]}")
-                  fi
-                done
-              fi
-              if [ "${#selected[@]}" -eq 0 ]; then
-                echo "Shard $SHARD_INDEX has no flows; nothing to run."
-                exit 0
-              fi
-              printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
-              maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
+          script: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
     - name: Capture final device state
       if: always()

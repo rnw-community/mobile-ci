@@ -1,0 +1,44 @@
+# zizmor audit configuration.
+#
+# Every ignore below is scoped to a specific rule + file, not a blanket
+# suppression, and documents why the finding does not apply here. Re-run
+# `uvx zizmor --config .github/zizmor.yml .github/workflows actions` after
+# touching any of these files to confirm the remaining finding set is still
+# limited to what is listed here.
+
+rules:
+  # These reusable workflows call this repo's OWN composite actions via the
+  # full `rnw-community/mobile-ci/actions/<name>@main` form (a relative
+  # `./actions/<name>` reference only resolves against the caller's checkout,
+  # not this repo — see CONTRIBUTING.md#self-references). Pre-v1, self
+  # -references intentionally float on `@main`/`@v1` rather than a pinned
+  # SHA, the same "consistency over compatibility" tradeoff documented in the
+  # design spec (docs/superpowers/specs/2026-08-06-mobile-ci-sota-consolidation-design.md).
+  # Third-party `uses:` elsewhere in these files ARE SHA-pinned and are not
+  # affected by this ignore.
+  unpinned-uses:
+    ignore:
+      - ios-maestro.yml
+      - android-maestro.yml
+      - seed-native-cache.yml
+      - native-publish.yml
+      - native-dev-release.yml
+
+  # Each finding here is this action's OWN script exporting its OWN
+  # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a Maestro
+  # install path, a ccache directory) to $GITHUB_ENV/$GITHUB_PATH — not
+  # attacker-controlled content. This is the same idiom
+  # actions/setup-node and actions/setup-java use internally; zizmor itself
+  # marks every one of these "audit confidence: Low".
+  #
+  # zizmor's local-path ignore matching is by file basename, not full
+  # relative path — every composite action in this monorepo is named
+  # action.yml, so this entry is necessarily repo-wide rather than scoped to
+  # the five action.yml files that currently trigger it (run-maestro-ios,
+  # run-maestro-android, run-maestro-android-redroid, setup-ccache-ios,
+  # setup-xcode-pinned). Re-run the command above after adding a new
+  # composite action to confirm it does not silently pick up a genuine
+  # github-env finding under this same ignore.
+  github-env:
+    ignore:
+      - action.yml

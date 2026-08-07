@@ -37,7 +37,7 @@ on the upstream action's own default.
 - uses: rnw-community/mobile-ci/actions/build-android-app@v1
   id: build
   with:
-      app-dir: packages/react-native-payments-example/apps/bare
+      app-dir: apps/mobile
       output-dir: .ci-cache/android-native-app/bare
       gradle-cache-key: gradle-bare-${{ runner.os }}-${{ hashFiles('yarn.lock') }}
 ```

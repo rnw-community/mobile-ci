@@ -10,7 +10,10 @@ inputs:
     description: Bundle identifier passed to Maestro as APP_ID.
     required: true
   flows-dir:
-    description: Directory containing Maestro flow .yaml/.yml files.
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows by
+      default. Subdirectories are not searched unless flows-max-depth is
+      raised; see flows-max-depth/flows-name-pattern.
     required: true
   flows-max-depth:
     description: >-
@@ -22,9 +25,11 @@ inputs:
   flows-name-pattern:
     description: >-
       Space-separated find -name globs (OR'd together) selecting runnable
-      flows under flows-dir.
+      flows under flows-dir. Defaults to the widespread *.flow.yaml
+      convention, which keeps reusable subflows and capture-only flows in
+      subdirectories out of the shard.
     required: false
-    default: '*.yaml *.yml'
+    default: '*.flow.yaml'
   flows-exclude-pattern:
     description: Optional find ! -name glob excluding matched flows by basename.
     required: false
@@ -47,6 +52,20 @@ inputs:
   shard-count:
     description: Total number of shards flows are distributed across.
     required: true
+  pre-run-flow:
+    description: >-
+      Path to a single priming flow run once before this shard's flows,
+      excluded from sharding. Its failure fails the step immediately without
+      running the shard. Leave empty to skip priming.
+    required: false
+    default: ''
+  flow-retries:
+    description: >-
+      Non-negative retry budget per flow. Each flow gets up to
+      1 + flow-retries attempts; a flow that eventually passes counts as
+      passed. The step fails if any flow exhausts its attempts.
+    required: false
+    default: '0'
   maestro-version:
     description: Pinned Maestro CLI version.
     required: false
@@ -116,11 +135,13 @@ runs:
         SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
+        PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+        FLOW_RETRIES: ${{ inputs.flow-retries }}
       run: |
           set -euo pipefail
           case "$SHARD_COUNT" in
-            ''|*[!0-9]*)
-              echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer."
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer without leading zeros."
               exit 1
               ;;
           esac
@@ -129,8 +150,8 @@ runs:
             exit 1
           fi
           case "$SHARD_INDEX" in
-            ''|*[!0-9]*)
-              echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer."
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer without leading zeros."
               exit 1
               ;;
           esac
@@ -138,12 +159,57 @@ runs:
             echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
             exit 1
           fi
-          case "$FLOWS_MAX_DEPTH" in
-            ''|*[!0-9]*)
-              echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer."
+          case "$FLOW_RETRIES" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::flow-retries '$FLOW_RETRIES' must be a non-negative integer without leading zeros."
               exit 1
               ;;
           esac
+          max_attempts=$((1 + FLOW_RETRIES))
+          case "$FLOWS_MAX_DEPTH" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
+          fi
+
+          summary_rows=()
+
+          run_flow_with_retries() {
+            local flow="$1" label="$2" attempts=0 status=failed start end duration
+            start=$(date +%s)
+            while [ "$attempts" -lt "$max_attempts" ]; do
+              attempts=$((attempts + 1))
+              if maestro test -e "APP_ID=$APP_ID" "$flow"; then
+                status=passed
+                break
+              fi
+            done
+            end=$(date +%s)
+            duration=$((end - start))
+            summary_rows+=("| $label | ${duration}s | $status | $attempts |")
+            [ "$status" = "passed" ]
+          }
+
+          write_summary() {
+            {
+              echo "### Maestro flow timing (shard $SHARD_INDEX)"
+              echo "| Flow | Duration | Status | Attempts |"
+              echo "| --- | --- | --- | --- |"
+              printf '%s\n' "${summary_rows[@]:-}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Only files matching flows-name-pattern within flows-max-depth are
+          # runnable scenarios. The default (max-depth 1) keeps reusable
+          # subflows and capture-only flows conventionally kept in
+          # subdirectories of the flows dir out of the shard; those expect a
+          # caller to pass env or leave the app mid-journey, so running them
+          # standalone fails.
           find_cmd=(find "$FLOWS_DIR")
           if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
             find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
@@ -166,8 +232,30 @@ runs:
           while IFS= read -r flow; do
             flows+=("$flow")
           done < <("${find_cmd[@]}" | sort)
-          test "${#flows[@]}" -gt 0
+          if [ "${#flows[@]}" -eq 0 ]; then
+            echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found under flows-dir '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH)."
+            exit 1
+          fi
           printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+
+          # pre-run-flow is run once as a priming flow below, outside of
+          # sharding. If it also happens to be a top-level file inside
+          # flows-dir matching flows-name-pattern, discovery above finds it
+          # too, and without this filter it would be selected again by the
+          # manifest or modulo split and run a second time. Compare with -ef
+          # (same-inode test) since PRE_RUN_FLOW and the discovered flow's
+          # path string may differ in form (relative vs "./"-prefixed, etc.)
+          # while resolving to the same file; -ef is POSIX-available in
+          # bash's test on both macOS and Linux, unlike GNU-only realpath -m.
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            remaining_flows=()
+            for flow in "${flows[@]}"; do
+              if [ ! "$flow" -ef "$PRE_RUN_FLOW" ]; then
+                remaining_flows+=("$flow")
+              fi
+            done
+            flows=("${remaining_flows[@]}")
+          fi
 
           selected=()
           if [ -n "$SHARD_MANIFEST_DIR" ]; then
@@ -201,12 +289,31 @@ runs:
               fi
             done
           fi
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then
+              write_summary
+              echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
+              exit 1
+            fi
+          fi
+
           if [ "${#selected[@]}" -eq 0 ]; then
             echo "Shard $SHARD_INDEX has no flows; nothing to run."
+            write_summary
             exit 0
           fi
           printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
-          maestro test -e "APP_ID=$APP_ID" "${selected[@]}"
+
+          overall_status=0
+          for flow in "${selected[@]}"; do
+            if ! run_flow_with_retries "$flow" "$(basename "$flow")"; then
+              overall_status=1
+            fi
+          done
+
+          write_summary
+          exit "$overall_status"
 
     - name: Capture final simulator state
       if: always()

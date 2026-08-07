@@ -49,9 +49,9 @@ action so `DEVELOPER_DIR` and the ccache toolchain are already in place.
 - uses: rnw-community/mobile-ci/actions/build-ios-app@v1
   id: build
   with:
-      app-dir: packages/react-native-payments-example/apps/bare
-      workspace: ReactNativePaymentsExample.xcworkspace
-      scheme: ReactNativePaymentsExample
+      app-dir: apps/mobile
+      workspace: MyApp.xcworkspace
+      scheme: MyApp
       derived-data-dir: ${{ github.workspace }}/.ci-cache/DerivedData/bare
       output-dir: .ci-cache/ios-native-app/bare
       pods-cache-key: pods-bare-${{ runner.os }}-xcode-26.4.1-${{ hashFiles('yarn.lock') }}

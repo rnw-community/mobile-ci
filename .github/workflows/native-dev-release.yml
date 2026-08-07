@@ -1,0 +1,470 @@
+name: native-dev-release
+
+on:
+    workflow_call:
+        inputs:
+            enable-ios:
+                description: Run the ios-dev-release job.
+                type: boolean
+                required: false
+                default: true
+            enable-android:
+                description: Run the android-dev-release job.
+                type: boolean
+                required: false
+                default: false
+            ios-runner-labels:
+                description: JSON array of self-hosted runner labels for the iOS dev-release job.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            android-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the Android dev-release job.
+                    Defaults to macOS because Google's Android NDK build tooling used by EAS
+                    local builds is x86_64-only on Linux.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            app-dir:
+                description: App directory containing app.json/eas.json.
+                type: string
+                required: true
+            node-version:
+                type: string
+                required: false
+                default: '22'
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                description: Optional workspace JS build command run at repo root before the dev build.
+                type: string
+                required: false
+                default: ''
+            eas-cli-version:
+                type: string
+                required: false
+                default: '20.5.1'
+            build-profile:
+                description: EAS build profile (eas.json build.<profile>) used for both platforms.
+                type: string
+                required: false
+                default: development
+            tag-prefix:
+                description: >-
+                    Release tag prefix. Tags are created as <tag-prefix>-ios-<run_number> and
+                    <tag-prefix>-android-<run_number>.
+                type: string
+                required: false
+                default: dev
+            keep-releases:
+                description: Number of newest published releases (per platform tag) to keep; older ones are pruned.
+                type: string
+                required: false
+                default: '5'
+            asc-key-path:
+                description: >-
+                    Optional path, relative to app-dir, the App Store Connect API key (.p8) is
+                    written to and removed from. Only used when the ASC_API_KEY secret is set; set
+                    this only when eas.json requires the key at a specific app-dir-relative
+                    location, otherwise leave empty so the key is written under $RUNNER_TEMP and
+                    never enters the eas build --local archive.
+                type: string
+                required: false
+                default: ''
+            build-timeout-minutes:
+                type: number
+                required: false
+                default: 120
+
+        secrets:
+            EXPO_TOKEN:
+                description: Expo access token, required by both dev-release jobs.
+                required: false
+            ASC_API_KEY:
+                description: >-
+                    Optional App Store Connect API key contents (.p8), used by ios-dev-release
+                    when the development profile needs automatic device/credential management.
+                required: false
+            ASC_KEY_ID:
+                description: >-
+                    App Store Connect API key ID matching ASC_API_KEY. Required alongside
+                    ASC_API_KEY and ASC_ISSUER_ID for EAS to resolve the key non-interactively;
+                    exported to the build step as EXPO_ASC_KEY_ID.
+                required: false
+            ASC_ISSUER_ID:
+                description: >-
+                    App Store Connect API key issuer ID matching ASC_API_KEY. Required alongside
+                    ASC_API_KEY and ASC_KEY_ID for EAS to resolve the key non-interactively;
+                    exported to the build step as EXPO_ASC_ISSUER_ID.
+                required: false
+
+concurrency:
+    group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    ios-dev-release:
+        name: iOS development build and release
+        if: inputs.enable-ios
+        runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        permissions:
+            contents: write
+        env:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
+
+        steps:
+            - name: Validate required secrets
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -z "${EXPO_TOKEN:-}" ]; then
+                    echo "::error::ios-dev-release requires the EXPO_TOKEN secret. Pass it via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    exit 1
+                  fi
+
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Compute deterministic build number
+              shell: bash
+              env:
+                  RUN_NUMBER: ${{ github.run_number }}
+                  RUN_ATTEMPT: ${{ github.run_attempt }}
+              run: echo "DEVELOPMENT_BUILD_NUMBER=${RUN_NUMBER}.${RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+            - name: Write App Store Connect API key
+              if: env.HAS_ASC_KEY == 'true'
+              id: asc-key
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_KEY_PATH_INPUT: ${{ inputs.asc-key-path }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$ASC_KEY_PATH_INPUT" ]; then
+                    key_path="$ASC_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/ios-dev-release/asc-api-key.p8"
+                  fi
+                  mkdir -p "$(dirname "$key_path")"
+                  printf '%s' "$ASC_API_KEY" > "$key_path"
+                  chmod 600 "$key_path"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: EAS build (iOS, development)
+              id: build
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+              run: |
+                  set -euo pipefail
+                  output_path="$RUNNER_TEMP/ios-dev-release/app.ipa"
+                  mkdir -p "$(dirname "$output_path")"
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform ios \
+                    --profile "$BUILD_PROFILE" \
+                    --local \
+                    --non-interactive \
+                    --output "$output_path"
+                  test -f "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
+
+            - name: Remove App Store Connect API key
+              if: always()
+              shell: bash
+              env:
+                  ASC_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+              run: |
+                  if [ -n "${ASC_KEY_PATH:-}" ]; then
+                    rm -f "$ASC_KEY_PATH"
+                  fi
+
+            - name: Upload iOS dev build artifact
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: ios-dev-build
+                  path: ${{ steps.build.outputs.artifact-path }}
+                  retention-days: 30
+
+            - name: Create GitHub Release (draft)
+              id: release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ inputs.tag-prefix }}-ios-${{ github.run_number }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+              run: |
+                  set -euo pipefail
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                    echo "Updating existing release $TAG in place (job re-run)."
+                    gh release edit "$TAG" \
+                      --draft \
+                      --title "iOS dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                  else
+                    gh release create "$TAG" \
+                      --draft \
+                      --title "iOS dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      "$ARTIFACT_PATH"
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+            - name: Publish GitHub Release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ steps.release.outputs.tag }}
+              run: gh release edit "$TAG" --draft=false
+
+            - name: Prune old iOS dev releases
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  TAG_PREFIX: ${{ inputs.tag-prefix }}-ios-
+                  KEEP_RELEASES: ${{ inputs.keep-releases }}
+                  CURRENT_TAG: ${{ steps.release.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  case "$KEEP_RELEASES" in
+                    ''|*[!0-9]*|0[0-9]*)
+                      echo "::error::keep-releases '$KEEP_RELEASES' must be a non-negative integer without leading zeros."
+                      exit 1
+                      ;;
+                  esac
+                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
+                  total=${#tags[@]}
+                  if [ "$total" -le "$KEEP_RELEASES" ]; then
+                    echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
+                    exit 0
+                  fi
+                  for ((i = KEEP_RELEASES; i < total; i++)); do
+                    tag="${tags[$i]}"
+                    echo "Pruning release $tag"
+                    gh release delete "$tag" --yes --cleanup-tag
+                  done
+
+    android-dev-release:
+        name: Android development build and release
+        if: inputs.enable-android
+        runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        permissions:
+            contents: write
+        env:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+        steps:
+            - name: Validate required secrets
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  if [ -z "${EXPO_TOKEN:-}" ]; then
+                    echo "::error::android-dev-release requires the EXPO_TOKEN secret. Pass it via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    exit 1
+                  fi
+
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Compute deterministic build number
+              shell: bash
+              env:
+                  RUN_NUMBER: ${{ github.run_number }}
+                  RUN_ATTEMPT: ${{ github.run_attempt }}
+              run: echo "DEVELOPMENT_BUILD_NUMBER=${RUN_NUMBER}.${RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+            - name: EAS build (Android, development)
+              id: build
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+              run: |
+                  set -euo pipefail
+                  output_path="$RUNNER_TEMP/android-dev-release/app.aab"
+                  mkdir -p "$(dirname "$output_path")"
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform android \
+                    --profile "$BUILD_PROFILE" \
+                    --local \
+                    --non-interactive \
+                    --output "$output_path"
+                  test -f "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
+
+            - name: Upload Android dev build artifact
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: android-dev-build
+                  path: ${{ steps.build.outputs.artifact-path }}
+                  retention-days: 30
+
+            - name: Create GitHub Release (draft)
+              id: release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ inputs.tag-prefix }}-android-${{ github.run_number }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+              run: |
+                  set -euo pipefail
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                    echo "Updating existing release $TAG in place (job re-run)."
+                    gh release edit "$TAG" \
+                      --draft \
+                      --title "Android dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                  else
+                    gh release create "$TAG" \
+                      --draft \
+                      --title "Android dev build ${TAG}" \
+                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      "$ARTIFACT_PATH"
+                  fi
+                  echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+            - name: Publish GitHub Release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ steps.release.outputs.tag }}
+              run: gh release edit "$TAG" --draft=false
+
+            - name: Prune old Android dev releases
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  TAG_PREFIX: ${{ inputs.tag-prefix }}-android-
+                  KEEP_RELEASES: ${{ inputs.keep-releases }}
+                  CURRENT_TAG: ${{ steps.release.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  case "$KEEP_RELEASES" in
+                    ''|*[!0-9]*|0[0-9]*)
+                      echo "::error::keep-releases '$KEEP_RELEASES' must be a non-negative integer without leading zeros."
+                      exit 1
+                      ;;
+                  esac
+                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
+                  total=${#tags[@]}
+                  if [ "$total" -le "$KEEP_RELEASES" ]; then
+                    echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
+                    exit 0
+                  fi
+                  for ((i = KEEP_RELEASES; i < total; i++)); do
+                    tag="${tags[$i]}"
+                    echo "Pruning release $tag"
+                    gh release delete "$tag" --yes --cleanup-tag
+                  done
+
+    status:
+        name: Native dev release result
+        needs: [ios-dev-release, android-dev-release]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Report
+              shell: bash
+              env:
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  IOS_RESULT: ${{ needs.ios-dev-release.result }}
+                  ANDROID_RESULT: ${{ needs.android-dev-release.result }}
+              run: |
+                  set -euo pipefail
+                  failed=0
+
+                  if [ "$ENABLE_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
+                    echo "iOS dev release failed or did not run."
+                    failed=1
+                  fi
+                  if [ "$ENABLE_ANDROID" = "true" ] && [ "$ANDROID_RESULT" != "success" ]; then
+                    echo "Android dev release failed or did not run."
+                    failed=1
+                  fi
+
+                  if [ "$failed" -ne 0 ]; then
+                    exit 1
+                  fi
+                  echo "Native dev release completed successfully for enabled platforms."

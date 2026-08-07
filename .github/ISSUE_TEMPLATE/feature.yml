@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a new action, workflow, or input for the mobile-ci catalog.
+labels: [enhancement]
+body:
+    - type: textarea
+      id: problem
+      attributes:
+          label: Problem
+          description: What are you trying to do that this catalog does not support today?
+      validations:
+          required: true
+
+    - type: textarea
+      id: proposal
+      attributes:
+          label: Proposed solution
+          description: A new action/workflow, a new input, or a change to existing behavior. Note whether it would be a breaking change (see CONTRIBUTING.md#versioning).
+      validations:
+          required: true
+
+    - type: textarea
+      id: alternatives
+      attributes:
+          label: Alternatives considered
+          description: Any workaround you are using today, or other approaches you ruled out.
+      validations:
+          required: false

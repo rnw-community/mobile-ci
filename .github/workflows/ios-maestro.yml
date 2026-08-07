@@ -3,33 +3,42 @@ name: ios-maestro
 on:
     workflow_call:
         inputs:
-            build-runner-labels:
-                description: JSON array of self-hosted runner labels for the build job.
+            runner-labels:
+                description: JSON array of self-hosted runner labels for the build/test jobs.
                 type: string
                 required: false
                 default: '["self-hosted","macOS","ARM64"]'
+            build-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the build job only. Falls
+                    back to runner-labels when empty; set this and test-runner-labels
+                    together to split build/test across separate runner pools.
+                type: string
+                required: false
+                default: ''
             test-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the test job. Empty
-                    (default) reuses build-runner-labels, so a single-pool consumer
-                    can ignore this input entirely; set it only when builds and Maestro
-                    runs must land on different host pools (e.g. a dedicated builder
-                    host separate from the Maestro test pool). Must resolve to the same
-                    CPU architecture as build-runner-labels: the packaged Simulator app
-                    build-ios-app produces is arm64-only (see build-ios-app's archs
-                    input), so a test pool on a different architecture cannot launch it.
+                    JSON array of self-hosted runner labels for the test job only. Falls
+                    back to runner-labels when empty. Must resolve to an arm64 macOS
+                    pool regardless of the build pool's architecture: the packaged
+                    Simulator app build-ios-app produces is arm64-only (see
+                    build-ios-app's archs input, which this workflow does not expose
+                    an override for), so a test pool on any other architecture cannot
+                    launch it.
                 type: string
                 required: false
                 default: ''
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, workspace, scheme, appId,
-                    prebuildCommand, entryFile?}. prebuildCommand may be an empty string.
-                    entryFile is optional; omitted or empty falls back to repack-entry-file.
+                    prebuildCommand}. prebuildCommand may be an empty string.
                 type: string
                 required: true
             flows-dir:
-                description: Directory (relative to repo root) containing Maestro flow files.
+                description: >-
+                    Directory (relative to repo root) whose top-level files are the
+                    runnable Maestro flows by default. Subdirectories are not searched
+                    unless flows-max-depth is raised; see flows-max-depth/flows-name-pattern.
                 type: string
                 required: true
             flows-max-depth:
@@ -41,21 +50,42 @@ on:
                 required: false
                 default: '1'
             flows-name-pattern:
-                description: Space-separated find -name globs (OR'd together).
+                description: >-
+                    Space-separated find -name globs (OR'd together) selecting runnable
+                    flows directly inside flows-dir. Keeps reusable subflows and
+                    capture-only flows in subdirectories out of the shard by default.
                 type: string
                 required: false
-                default: '*.yaml *.yml'
+                default: '*.flow.yaml'
             flows-exclude-pattern:
+                description: Optional find ! -name glob excluding matched flows by basename.
                 type: string
                 required: false
                 default: ''
             shard-manifest-dir:
                 description: >-
                     Optional directory (relative to repo root) of hand-curated
-                    shard-<index>.txt files overriding the computed index-modulo split.
+                    shard-<index>.txt files (one flows-dir-relative flow path per line)
+                    overriding the computed index-modulo split so a consumer's balanced
+                    shard assignment survives. Unset (default) falls back to the
+                    index-modulo split entirely.
                 type: string
                 required: false
                 default: ''
+            pre-run-flow:
+                description: >-
+                    Path to a single priming flow run once before each shard's flows,
+                    excluded from sharding. Its failure fails that shard immediately.
+                type: string
+                required: false
+                default: ''
+            flow-retries:
+                description: >-
+                    Non-negative retry budget per flow; each flow gets up to
+                    1 + flow-retries attempts.
+                type: string
+                required: false
+                default: '0'
             shard-count:
                 type: number
                 required: false
@@ -107,16 +137,6 @@ on:
                 type: string
                 required: false
                 default: ''
-            repack-entry-file:
-                description: Metro entry file passed to repack-js-bundle on a native-app-cache hit, relative to each target's appDir.
-                type: string
-                required: false
-                default: index.js
-            repack-bundle-command:
-                description: Optional full override for repack-js-bundle's bundling command. See that action's README.
-                type: string
-                required: false
-                default: ''
             rct-use-prebuilt-rncore:
                 type: boolean
                 required: false
@@ -133,6 +153,27 @@ on:
                 type: string
                 required: false
                 default: 2G
+            build-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the
+                    start of the build job. Rejects (fails closed) any line without
+                    '=' or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
+            repack-on-hit:
+                description: >-
+                    On a native-app-cache hit, run repack-app to inject a freshly
+                    exported JS bundle into the cached shell instead of reusing it
+                    unchanged. Falls back to a full native build if the repack fails.
+                type: boolean
+                required: false
+                default: false
+            repack-app-version:
+                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                type: string
+                required: false
+                default: '0.7.2'
             build-timeout-minutes:
                 type: number
                 required: false
@@ -173,9 +214,12 @@ jobs:
                   always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
 
             # The test job's matrix.shard-index must exactly match
-            # inputs.shard-count: a hard-coded matrix can only ever match one
-            # specific shard-count, so derive it here instead (mirrors
-            # android-maestro.yml's identical step).
+            # inputs.shard-count: fewer indices than shard-count silently
+            # never runs the flows assigned to the missing indices (the
+            # suite still reports success), and more indices than
+            # shard-count fails run-maestro-ios's own [0, shard-count)
+            # bounds check. A hard-coded matrix can only ever match one
+            # specific shard-count, so derive it here instead.
             - name: Compute shard indices
               id: shard-indices
               shell: bash
@@ -201,7 +245,7 @@ jobs:
         name: Build (${{ matrix.target.name }})
         needs: detect
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.build-runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -218,6 +262,38 @@ jobs:
               with:
                   persist-credentials: false
 
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
             - name: Setup Node
               uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
               with:
@@ -231,7 +307,9 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: setup-xcode-pinned
               id: xcode
@@ -243,13 +321,17 @@ jobs:
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
@@ -270,27 +352,66 @@ jobs:
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              shell: bash
-              run: |
-                  {
-                    echo "### iOS build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    echo "Native fingerprint hit; repacking the cached shell with a fresh JS bundle."
-                  } >> "$GITHUB_STEP_SUMMARY"
-
-            - name: repack-js-bundle (cache hit)
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              uses: rnw-community/mobile-ci/actions/repack-js-bundle@main
+            - name: Repack fresh JS into cached native app
+              id: repack
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/repack-app@main
               with:
                   platform: ios
+                  app-path: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+                  app-id: ${{ matrix.target.appId }}
                   app-dir: ${{ matrix.target.appDir }}
-                  app-path: ${{ github.workspace }}/.ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
-                  entry-file: ${{ matrix.target.entryFile != '' && matrix.target.entryFile || inputs.repack-entry-file }}
-                  bundle-command: ${{ inputs.repack-bundle-command }}
+                  repack-version: ${{ inputs.repack-app-version }}
+
+            - name: Determine whether a native build is needed
+              id: build-decision
+              shell: bash
+              env:
+                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
+              run: |
+                  set -euo pipefail
+                  need_build=true
+                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
+                    need_build=false
+                  fi
+                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+              run: |
+                  {
+                    echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
+                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
+                    else
+                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Report repack fallback
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: |
+                  echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Clean stale app before native build
+              if: steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+              run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.build-decision.outputs.need-build == 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
               with:
                   mode: restore
@@ -303,7 +424,7 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.build-decision.outputs.need-build == 'true'
               id: build
               uses: rnw-community/mobile-ci/actions/build-ios-app@main
               with:
@@ -321,7 +442,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.build-decision.outputs.need-build == 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
               with:
                   mode: save
@@ -341,11 +462,13 @@ jobs:
 
             - name: Archive app for test jobs
               shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
               run: |
                   set -euo pipefail
-                  test -d .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
+                  test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
                   mkdir -p .ci-artifacts
-                  tar -czf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-cache/ios-native-app/${{ matrix.target.name }} Base.app
+                  tar -czf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
 
             - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
               with:
@@ -357,7 +480,7 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, build]
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.build-runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -374,9 +497,9 @@ jobs:
             # build-ios-app's default archs is arm64-only (excluded-archs
             # x86_64), and this workflow does not expose an override, so the
             # packaged Simulator app can only launch on an arm64 host. A
-            # test-runner-labels pool on a different architecture than
-            # build-runner-labels would otherwise fail confusingly inside
-            # simctl install; fail fast with an actionable message instead.
+            # test-runner-labels pool on a different architecture than the
+            # build pool would otherwise fail confusingly inside simctl
+            # install; fail fast with an actionable message instead.
             - name: Assert test runner architecture matches the packaged app
               shell: bash
               run: |
@@ -400,7 +523,9 @@ jobs:
 
             - name: Unpack app
               shell: bash
-              run: tar -xzf .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/ios-e2e-app-${{ matrix.target.name }}.tar.gz -C .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
               uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
@@ -414,6 +539,8 @@ jobs:
                   shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
+                  pre-run-flow: ${{ inputs.pre-run-flow }}
+                  flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
@@ -426,20 +553,25 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  DETECT_RESULT: ${{ needs.detect.result }}
+                  DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  BUILD_RESULT: ${{ needs.build.result }}
+                  TEST_RESULT: ${{ needs.test.result }}
               run: |
-                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                  if [ "$DETECT_RESULT" != "success" ]; then
                     echo "Detection job did not succeed."
                     exit 1
                   fi
-                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                  if [ "$DETECT_AFFECTED" != "true" ]; then
                     echo "Skipped: target packages untouched."
                     exit 0
                   fi
-                  if [ "${{ needs.build.result }}" != "success" ]; then
+                  if [ "$BUILD_RESULT" != "success" ]; then
                     echo "Build job failed."
                     exit 1
                   fi
-                  if [ "${{ needs.test.result }}" != "success" ]; then
+                  if [ "$TEST_RESULT" != "success" ]; then
                     echo "Maestro suite failed."
                     exit 1
                   fi

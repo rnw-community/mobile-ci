@@ -1,20 +1,53 @@
+[![self-test](https://github.com/rnw-community/mobile-ci/actions/workflows/self-test.yml/badge.svg)](https://github.com/rnw-community/mobile-ci/actions/workflows/self-test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 # mobile-ci
 
 Reusable composite actions and `workflow_call` workflows for fleet-native
 React Native / Expo mobile CI: fingerprinted native-app caches, Maestro e2e,
 and simulator/emulator lifecycle management on self-hosted runners.
 
-**Zero EAS.** Every pipeline here builds fleet-native — `expo prebuild` then
-raw `xcodebuild` / `gradlew` on self-hosted runners, no EAS cloud builds, no
-`eas-cli`, no `EXPO_TOKEN` anywhere. Native fingerprinting uses the standalone
-[`@expo/fingerprint`](https://www.npmjs.com/package/@expo/fingerprint) package
-tokenlessly. (Store publishing is out of scope for this catalog; see
-[Scope](#scope) below.)
+**Zero EAS-cloud dependency for CI builds.** Every test pipeline here builds
+fleet-native — `expo prebuild` then raw `xcodebuild` / `gradlew` on
+self-hosted runners, no EAS cloud builds, no `eas-cli`. Native fingerprinting
+uses the standalone [`@expo/fingerprint`](https://www.npmjs.com/package/@expo/fingerprint)
+package tokenlessly.
 
-**Pre-release: the `v1` tag is pending pipeline proof.** This catalog was
-extracted from `rnw-community/rnw-community`'s canary-optimized e2e pipeline.
-`v1` will be cut once that source pipeline's canaries are green on the fleet.
-Until then, pin to `@main` — see [CONTRIBUTING.md](CONTRIBUTING.md).
+**Zero secret custody in the test pipelines.** `ios-maestro.yml`,
+`android-maestro.yml`, and `seed-native-cache.yml` need no secrets at all —
+no `EXPO_TOKEN`, no signing credentials, nothing. Secrets only enter the
+picture in the two opt-in publish workflows (`native-publish.yml`,
+`native-dev-release.yml`), scoped to exactly the jobs that submit to a store
+or cut a dev release, and only for the platforms you enable.
+
+**Pre-release: the `v1` tag is pending pipeline proof.** Pin to `@main` until
+then — see [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning plan and
+[RELEASE.md](RELEASE.md) for how `v1` gets cut.
+
+## Quick start
+
+Minimal iOS Maestro e2e pipeline for a single app:
+
+```yaml
+# .github/workflows/ios-maestro.yml
+name: iOS Maestro E2E
+on:
+    workflow_dispatch:
+    pull_request:
+    push:
+        branches: [main]
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@main
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
+```
+
+See [docs/workflows/ios-maestro.md](docs/workflows/ios-maestro.md) for the
+full input reference, and the same doc's siblings under
+[docs/workflows/](docs/workflows/) for `android-maestro.yml` and the rest.
 
 ## Pick your tier
 
@@ -23,37 +56,40 @@ Until then, pin to `@main` — see [CONTRIBUTING.md](CONTRIBUTING.md).
   want to adopt one piece at a time (e.g. just the simulator lifecycle, or
   just the native-app cache).
 - **Whole pipeline** — consume `ios-maestro.yml` / `android-maestro.yml` /
-  `seed-native-cache.yml` via `workflow_call` and collapse your own workflow
-  to a thin `uses:` wrapper with inputs. Use this for a new pipeline or when
-  migrating a pipeline that already matches this shape closely.
+  `seed-native-cache.yml` / `native-publish.yml` / `native-dev-release.yml`
+  via `workflow_call` and collapse your own workflow to a thin `uses:`
+  wrapper with inputs. Use this for a new pipeline or when migrating a
+  pipeline that already matches this shape closely.
 
 ## Action catalog
 
-| Action                  | Purpose                                                                                     |
-| ------------------------ | --------------------------------------------------------------------------------------------- |
-| `setup-xcode-pinned`     | Select a pre-installed Xcode by exact version+build; hard-assert the match.                    |
-| `native-fingerprint`     | Tokenless `@expo/fingerprint` hash of an app's native surface.                                  |
-| `native-app-cache`       | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
-| `repack-js-bundle`       | Re-bundles JS and swaps it into an already-packaged app on a `native-app-cache` hit, so a JS-only change is never tested stale. |
-| `setup-ccache-ios`       | Bounded, compressed ccache install + restore/save for `xcodebuild`.                             |
-| `build-ios-app`          | Release, unsigned iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified.            |
-| `build-android-app`      | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`.       |
-| `run-maestro-ios`        | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard.               |
-| `run-maestro-android`    | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard.               |
-| `run-maestro-android-redroid` | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners; `android-maestro.yml`'s default. |
-| `turbo-affected`         | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages.               |
+| Action                         | Purpose                                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------------------------- |
+| [`setup-xcode-pinned`](actions/setup-xcode-pinned/README.md)     | Select a pre-installed Xcode by exact version+build; hard-assert the match. |
+| [`native-fingerprint`](actions/native-fingerprint/README.md)     | Tokenless `@expo/fingerprint` hash of an app's native surface. |
+| [`native-app-cache`](actions/native-app-cache/README.md)         | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
+| [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
+| [`build-ios-app`](actions/build-ios-app/README.md)               | Release, unsigned iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified. |
+| [`build-android-app`](actions/build-android-app/README.md)       | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`. |
+| [`repack-app`](actions/repack-app/README.md)                     | Inject a freshly exported JS bundle into a cached native shell without a full native rebuild. |
+| [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
+| [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
+| [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners; `android-maestro.yml`'s default. |
+| [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 
 Each action has its own `README.md` under `actions/<name>/` with the full
 input/output table and a usage example.
 
-## Reusable workflows
+## Reusable workflow catalog
 
-| Workflow                  | Composes                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------ |
-| `ios-maestro.yml`           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → (hit: `repack-js-bundle`, miss: `setup-ccache-ios` → `build-ios-app`) → `run-maestro-ios` |
-| `android-maestro.yml`       | `turbo-affected` → `native-fingerprint` → `native-app-cache` → (hit: `repack-js-bundle`, miss: `build-android-app`) → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
-| `seed-native-cache.yml`     | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
-| `pr-closed-cleanup-reusable.yml` | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+| Workflow                          | Composes                                                                          |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-ios` \| cache miss: `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
+| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) \| cache miss: `build-android-app` → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
+| [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
+| [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
+| [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
+| [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
 `build-runner-labels` + `test-runner-labels` (the second defaults to the
@@ -76,10 +112,9 @@ step's Android backend, `redroid` by default:
   `binder_linux` kernel module (`run-maestro-android-redroid`). Needs no
   `sdkmanager`, NDK, or emulator binary on the runner, so it is the only
   driver that works at all on `linux-aarch64` self-hosted runners — this
-  workflow's own default `runner-labels`. Proven on `vitalyiegorov/suuudokuuu`'s
-  fleet (redroid tag `15.0.0_64only` verified against a `6.17` host kernel;
-  animation scales forced to `0` after boot) and ported into
-  `rnw-community/rnw-community`'s canary pipeline.
+  workflow's own default `runner-labels`. See
+  [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for how to
+  provision a Redroid host.
 - **`avd`** — a real Android emulator via
   `reactivecircus/android-emulator-runner` (`run-maestro-android`). Only
   viable when `runner-labels` is overridden to a host with a working
@@ -88,6 +123,12 @@ step's Android backend, `redroid` by default:
   Android emulator, NDK, or `cmake`, so `avd` cannot boot on this workflow's
   default self-hosted fleet regardless of tuning — that gap is exactly why
   `redroid` is the default rather than an opt-in.
+
+`ios-maestro.yml` / `android-maestro.yml` also support splitting build and
+test onto separate runner pools via `build-runner-labels` /
+`test-runner-labels` (each falls back to `runner-labels` when left empty) —
+useful when your build hosts and Maestro-execution hosts are provisioned
+differently (see [docs/self-hosted-runners.md](docs/self-hosted-runners.md)).
 
 `seed-native-cache.yml` is meant to be called from a workflow that is itself
 `workflow_dispatch`-triggered (plus optionally `push`/`schedule`) in the
@@ -99,79 +140,7 @@ your default branch before expecting to dispatch it.
 `pull_request: types: [closed]` in the consuming repository — it reads
 `github.event.pull_request.head.ref` from that event, so it cannot be
 dispatched standalone. This repo's own `pr-closed-cleanup.yml` is a one-line
-consumer of it (see below).
-
-## Scope
-
-In scope for `v1`: the e2e pipelines above — unsigned simulator/emulator
-builds, tokenless fingerprinting, Maestro. Out of scope for `v1`: store
-publishing. A future `native-publish` reusable workflow (extracted from
-budgie's `native-publish.yml`: `eas build --local` for fleet-compute signed
-builds + `eas submit` for store upload, with `EXPO_TOKEN` scoped to that
-workflow only) is planned for `v1.1` — it is the one sanctioned place EAS
-remains in this stack, because EAS there only manages signing-credential
-custody, not build compute.
-
-## Consumer examples
-
-### rnw-community/rnw-community (react-native-payments-example)
-
-```yaml
-# .github/workflows/ios-maestro.yml
-name: iOS Maestro E2E
-on:
-    workflow_dispatch:
-    pull_request:
-    push:
-        branches: [master]
-    schedule:
-        - cron: '17 3 * * *'
-concurrency:
-    group: ios-maestro-${{ github.ref }}
-    cancel-in-progress: true
-jobs:
-    e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@main
-        with:
-            targets: >-
-                [{"name":"bare","appDir":"packages/react-native-payments-example/apps/bare","workspace":"ReactNativePaymentsExample.xcworkspace","scheme":"ReactNativePaymentsExample","appId":"org.reactjs.native.example.ReactNativePaymentsExample","prebuildCommand":""},
-                 {"name":"expo","appDir":"packages/react-native-payments-example/apps/expo","workspace":"reactnativepaymentsexpoexample.xcworkspace","scheme":"reactnativepaymentsexpoexample","appId":"com.reactnativepaymentsexpoexample","prebuildCommand":"yarn prebuild:expo"}]
-            flows-dir: packages/react-native-payments-example/e2e/flows
-            target-packages: |
-                @rnw-community/react-native-payments
-                @rnw-community/react-native-payments-example
-            build-command: yarn build --filter=@rnw-community/react-native-payments
-            rct-use-prebuilt-rncore: true
-            rct-use-rn-dep: true
-            expo-use-precompiled-modules: true
-```
-
-### budgie-at/budgie
-
-À la carte tier: budgie keeps its existing EAS-based build steps and adopts
-just the simulator/emulator lifecycle actions —
-
-```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
-  with:
-      app-path: build/output/Budgie.app
-      app-id: at.budgie.app
-      flows-dir: e2e/flows
-      shard-index: '0'
-      shard-count: '1'
-      artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios
-      artifact-name: maestro-ios-shard-0
-```
-
-### vitalyiegorov/suuudokuuu
-
-Whole-pipeline tier, same shape as the rnw-community example above, with
-`targets` reduced to suuudokuuu's single bare app and its own `appId`/paths.
-
-### PR-closed cleanup (rnw-community, budgie, suuudokuuu)
-
-Every consumer with a serialized self-hosted fleet adopts this the same way —
-a thin wrapper triggered by the PR's own `closed` event:
+consumer of it:
 
 ```yaml
 # .github/workflows/pr-closed-cleanup.yml
@@ -188,11 +157,49 @@ jobs:
         uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@main
 ```
 
+## Scope
+
+In scope: the e2e pipelines (`ios-maestro.yml` / `android-maestro.yml` /
+`seed-native-cache.yml`) — unsigned simulator/emulator builds, tokenless
+fingerprinting, Maestro; and store publishing (`native-publish.yml`:
+`eas build --local` for fleet-compute signed builds + `eas submit` for store
+upload) and development-build distribution (`native-dev-release.yml`:
+`eas build --local` + pruned GitHub Releases). `EXPO_TOKEN` and store
+credentials are scoped to exactly those two publish workflows — every other
+pipeline in this catalog runs with no secrets at all. EAS there only manages
+signing-credential custody, not build compute; the actual `.ipa`/`.aab` still
+builds on your own runner.
+
+## Self-hosted runners
+
+Every action and reusable workflow here assumes a self-hosted fleet with
+Xcode already installed (iOS) and `binder_linux` loaded (Redroid Android).
+See [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for host
+provisioning: macOS Xcode pools, Linux `linux-aarch64` Redroid hosts, the
+Redroid prewarm manifest format, and the repo variables this repo's own
+maintainer-only fleet self-test job reads.
+
 ## Repo practices
 
-- Semver + sliding `v1` tag once cut (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+- Semver + sliding `v1` tag once cut (see [CONTRIBUTING.md](CONTRIBUTING.md)
+  and [RELEASE.md](RELEASE.md)).
 - Every third-party action pinned by full commit SHA with a `# vX.Y.Z` comment.
-- `actionlint` + `shellcheck` run in CI (`self-test.yml`) on every push and PR;
-  a fleet self-test job exists but is `workflow_dispatch`-only since the
-  self-hosted runners are shared with the consuming repos.
+- `actionlint`, `shellcheck`, and `zizmor` run in CI (`self-test.yml`) on
+  every push and PR; a fleet self-test job exists but is
+  `workflow_dispatch`-only since the self-hosted runners are shared with the
+  consuming repos.
 - MIT licensed.
+
+**Versioning note:** this repo is pre-`v1`. Examples throughout this README
+and the per-action/per-workflow docs use `@v1` for readability, but that tag
+does not exist yet — pin to a specific commit SHA (or `@main` at your own
+risk) until [RELEASE.md](RELEASE.md)'s checklist cuts it.
+
+## Used in the wild
+
+Real-world adopters — worth reading as usage examples, not as this repo's
+own documentation:
+
+- [vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu) — iOS + Android Redroid Maestro pipelines.
+- [budgie-at/budgie](https://github.com/budgie-at/budgie) — iOS Maestro + native cache, à la carte tier.
+- [rnw-community/rnw-community](https://github.com/rnw-community/rnw-community) — monorepo canary pipeline this catalog was extracted from.

@@ -1,0 +1,556 @@
+name: native-publish
+
+on:
+    workflow_call:
+        inputs:
+            enable-ios:
+                description: Run the ios-publish job.
+                type: boolean
+                required: false
+                default: true
+            enable-android:
+                description: Run the android-lint-gate/android-publish jobs.
+                type: boolean
+                required: false
+                default: false
+            ios-runner-labels:
+                description: JSON array of self-hosted runner labels for the iOS publish job.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            android-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the Android publish job.
+                    Defaults to macOS because Google's Android NDK build tooling used by EAS
+                    local builds is x86_64-only on Linux.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            lint-runner-labels:
+                description: JSON array of hosted runner labels for the android-lint-gate job.
+                type: string
+                required: false
+                default: '["ubuntu-latest"]'
+            app-dir:
+                description: App directory containing app.json/eas.json (and android/ios once prebuilt).
+                type: string
+                required: true
+            node-version:
+                type: string
+                required: false
+                default: '22'
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                description: Optional workspace JS build command run at repo root before publishing.
+                type: string
+                required: false
+                default: ''
+            eas-cli-version:
+                type: string
+                required: false
+                default: '20.5.1'
+            build-profile:
+                description: EAS build profile (eas.json build.<profile>) used for both platforms.
+                type: string
+                required: false
+                default: production
+            submit-profile:
+                description: EAS submit profile (eas.json submit.<profile>) used for both platforms.
+                type: string
+                required: false
+                default: production
+            ios-pre-submit-command:
+                description: >-
+                    Optional consumer-owned command (e.g. a fastlane lane) run in app-dir before
+                    the iOS build, with the job's env (including EXPO_TOKEN).
+                type: string
+                required: false
+                default: ''
+            ios-post-submit-command:
+                description: >-
+                    Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in
+                    app-dir after `eas submit` succeeds.
+                type: string
+                required: false
+                default: ''
+            android-pre-submit-command:
+                description: Optional consumer-owned command run in app-dir before the Android build.
+                type: string
+                required: false
+                default: ''
+            android-post-submit-command:
+                description: Optional consumer-owned command run in app-dir after `eas submit` succeeds.
+                type: string
+                required: false
+                default: ''
+            android-lint-gate:
+                description: >-
+                    Require the android-lint-gate job (Play policy manifest check + lintVitalRelease)
+                    to pass before android-publish runs.
+                type: boolean
+                required: false
+                default: true
+            required-android-abi:
+                description: >-
+                    ABI that must be present in the built .aab (Google Play 64-bit requirement).
+                    Empty string disables the check.
+                type: string
+                required: false
+                default: arm64-v8a
+            asc-key-path:
+                description: >-
+                    Optional path, relative to app-dir, the App Store Connect API key (.p8) is
+                    written to and removed from — set this only when eas.json requires the key at
+                    a specific app-dir-relative location; otherwise leave empty so the key is
+                    written under $RUNNER_TEMP and never enters the eas build --local archive.
+                type: string
+                required: false
+                default: ''
+            build-timeout-minutes:
+                type: number
+                required: false
+                default: 120
+            lint-timeout-minutes:
+                type: number
+                required: false
+                default: 30
+
+        secrets:
+            EXPO_TOKEN:
+                description: Expo access token, required by ios-publish and android-publish.
+                required: false
+            ASC_API_KEY:
+                description: App Store Connect API key contents (.p8), required by ios-publish.
+                required: false
+            GOOGLE_SERVICE_ACCOUNT_JSON:
+                description: Google Play service account key JSON contents, required by android-publish.
+                required: false
+
+concurrency:
+    group: native-publish-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    ios-publish:
+        name: iOS build and publish
+        if: inputs.enable-ios
+        runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        env:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+        steps:
+            - name: Validate required secrets
+              shell: bash
+              env:
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+              run: |
+                  set -euo pipefail
+                  missing=()
+                  [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
+                  [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
+                  if [ "${#missing[@]}" -gt 0 ]; then
+                    echo "::error::ios-publish requires secrets: ${missing[*]}. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    exit 1
+                  fi
+
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Run iOS pre-submit command
+              if: inputs.ios-pre-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
+              run: eval "$IOS_PRE_SUBMIT_COMMAND"
+
+            - name: Write App Store Connect API key
+              id: asc-key
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_KEY_PATH_INPUT: ${{ inputs.asc-key-path }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$ASC_KEY_PATH_INPUT" ]; then
+                    key_path="$ASC_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/ios-publish/asc-api-key.p8"
+                  fi
+                  mkdir -p "$(dirname "$key_path")"
+                  printf '%s' "$ASC_API_KEY" > "$key_path"
+                  chmod 600 "$key_path"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: EAS build (iOS)
+              id: build
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+              run: |
+                  set -euo pipefail
+                  output_path="$RUNNER_TEMP/ios-publish/app.ipa"
+                  mkdir -p "$(dirname "$output_path")"
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform ios \
+                    --profile "$BUILD_PROFILE" \
+                    --local \
+                    --non-interactive \
+                    --output "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
+
+            - name: Upload iOS build artifact
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: ios-publish-build
+                  path: ${{ steps.build.outputs.artifact-path }}
+                  retention-days: 14
+
+            - name: EAS submit (iOS)
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  SUBMIT_PROFILE: ${{ inputs.submit-profile }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+              run: |
+                  set -euo pipefail
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
+                    --platform ios \
+                    --profile "$SUBMIT_PROFILE" \
+                    --non-interactive \
+                    --path "$ARTIFACT_PATH"
+
+            - name: Run iOS post-submit command
+              if: inputs.ios-post-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  IOS_POST_SUBMIT_COMMAND: ${{ inputs.ios-post-submit-command }}
+              run: eval "$IOS_POST_SUBMIT_COMMAND"
+
+            - name: Remove App Store Connect API key
+              if: always()
+              shell: bash
+              env:
+                  ASC_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+              run: |
+                  if [ -n "${ASC_KEY_PATH:-}" ]; then
+                    rm -f "$ASC_KEY_PATH"
+                  fi
+
+    android-lint-gate:
+        name: Android release lint (Play policy gate)
+        if: inputs.enable-android && inputs.android-lint-gate
+        runs-on: ${{ fromJSON(inputs.lint-runner-labels) }}
+        timeout-minutes: ${{ inputs.lint-timeout-minutes }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate production Android project
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_BUILD_PROFILE: ${{ inputs.build-profile }}
+              run: npx --yes expo prebuild --platform android --no-install --clean
+
+            - name: Run gradlew :app:lintVitalRelease
+              working-directory: ${{ inputs.app-dir }}/android
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  ./gradlew :app:lintVitalRelease
+
+            - name: Verify restricted permissions are absent (Google Play policy)
+              working-directory: ${{ inputs.app-dir }}/android
+              shell: bash
+              env:
+                  # Documented, greppable list of Android permissions restricted by Google
+                  # Play policy for apps without an approved declaration/use case.
+                  RESTRICTED_PERMISSIONS: |
+                      android.permission.READ_MEDIA_IMAGES
+                      android.permission.READ_MEDIA_VIDEO
+                      android.permission.MANAGE_EXTERNAL_STORAGE
+              run: |
+                  set -euo pipefail
+                  manifests=()
+                  while IFS= read -r -d '' manifest; do
+                    manifests+=("$manifest")
+                  done < <(find app/build/intermediates -type f -name 'AndroidManifest.xml' -path '*release*' -print0)
+                  if [ "${#manifests[@]}" -eq 0 ]; then
+                    echo "::error::No merged release AndroidManifest.xml found under app/build/intermediates; cannot verify restricted permissions."
+                    exit 1
+                  fi
+                  found=0
+                  while IFS= read -r permission; do
+                    [ -z "$permission" ] && continue
+                    for manifest in "${manifests[@]}"; do
+                      if grep -q "$permission" "$manifest"; then
+                        echo "::error::Restricted permission '$permission' found in $manifest (Google Play policy)."
+                        found=1
+                      fi
+                    done
+                  done <<< "$RESTRICTED_PERMISSIONS"
+                  if [ "$found" -ne 0 ]; then
+                    exit 1
+                  fi
+                  echo "No restricted permissions found in the merged manifest(s)."
+
+    android-publish:
+        name: Android build and publish
+        needs: [android-lint-gate]
+        if: "!cancelled() && inputs.enable-android && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')"
+        runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        env:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+        steps:
+            - name: Validate required secrets
+              shell: bash
+              env:
+                  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+              run: |
+                  set -euo pipefail
+                  missing=()
+                  [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
+                  [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ] && missing+=(GOOGLE_SERVICE_ACCOUNT_JSON)
+                  if [ "${#missing[@]}" -gt 0 ]; then
+                    echo "::error::android-publish requires secrets: ${missing[*]}. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    exit 1
+                  fi
+
+            - name: Checkout repository
+              uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Run Android pre-submit command
+              if: inputs.android-pre-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ANDROID_PRE_SUBMIT_COMMAND: ${{ inputs.android-pre-submit-command }}
+              run: eval "$ANDROID_PRE_SUBMIT_COMMAND"
+
+            - name: EAS build (Android)
+              id: build
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+              run: |
+                  set -euo pipefail
+                  output_path="$RUNNER_TEMP/android-publish/app.aab"
+                  mkdir -p "$(dirname "$output_path")"
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform android \
+                    --profile "$BUILD_PROFILE" \
+                    --local \
+                    --non-interactive \
+                    --output "$output_path"
+                  echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
+
+            - name: Verify required Android ABI present
+              if: inputs.required-android-abi != ''
+              shell: bash
+              env:
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  REQUIRED_ABI: ${{ inputs.required-android-abi }}
+              run: |
+                  set -euo pipefail
+                  listing="$RUNNER_TEMP/aab-listing.txt"
+                  unzip -l "$ARTIFACT_PATH" > "$listing"
+                  if ! grep -qF "lib/${REQUIRED_ABI}/" "$listing"; then
+                    echo "::error::Required ABI '${REQUIRED_ABI}' not found in $ARTIFACT_PATH (Google Play 64-bit requirement)."
+                    exit 1
+                  fi
+                  echo "ABI '${REQUIRED_ABI}' present."
+
+            - name: Upload Android build artifact
+              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              with:
+                  name: android-publish-build
+                  path: ${{ steps.build.outputs.artifact-path }}
+                  retention-days: 14
+
+            - name: Write Google service account key
+              id: google-key
+              shell: bash
+              env:
+                  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+              run: |
+                  set -euo pipefail
+                  key_path="$RUNNER_TEMP/android-publish/google-service-account.json"
+                  mkdir -p "$(dirname "$key_path")"
+                  printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > "$key_path"
+                  chmod 600 "$key_path"
+                  echo "key-path=$key_path" >> "$GITHUB_OUTPUT"
+
+            - name: EAS submit (Android)
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  SUBMIT_PROFILE: ${{ inputs.submit-profile }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  # Exposed for eas.json submit profiles / fastlane hooks that read a service
+                  # account key from disk; the exact eas.json wiring is consumer-owned.
+                  GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.google-key.outputs.key-path }}
+              run: |
+                  set -euo pipefail
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
+                    --platform android \
+                    --profile "$SUBMIT_PROFILE" \
+                    --non-interactive \
+                    --path "$ARTIFACT_PATH"
+
+            - name: Run Android post-submit command
+              if: inputs.android-post-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ANDROID_POST_SUBMIT_COMMAND: ${{ inputs.android-post-submit-command }}
+              run: eval "$ANDROID_POST_SUBMIT_COMMAND"
+
+            - name: Remove Google service account key
+              if: always()
+              shell: bash
+              env:
+                  KEY_PATH: ${{ steps.google-key.outputs.key-path }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "${KEY_PATH:-}" ]; then
+                    rm -f "$KEY_PATH"
+                  fi
+
+    status:
+        name: Native publish result
+        needs: [ios-publish, android-lint-gate, android-publish]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Report
+              shell: bash
+              env:
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  LINT_GATE: ${{ inputs.android-lint-gate }}
+                  IOS_RESULT: ${{ needs.ios-publish.result }}
+                  LINT_RESULT: ${{ needs.android-lint-gate.result }}
+                  ANDROID_RESULT: ${{ needs.android-publish.result }}
+              run: |
+                  set -euo pipefail
+                  failed=0
+
+                  if [ "$ENABLE_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
+                    echo "iOS publish failed or did not run."
+                    failed=1
+                  fi
+
+                  if [ "$ENABLE_ANDROID" = "true" ]; then
+                    if [ "$LINT_GATE" = "true" ] && [ "$LINT_RESULT" != "success" ]; then
+                      echo "Android lint gate failed."
+                      failed=1
+                    fi
+                    if [ "$ANDROID_RESULT" != "success" ]; then
+                      echo "Android publish failed or did not run."
+                      failed=1
+                    fi
+                  fi
+
+                  if [ "$failed" -ne 0 ]; then
+                    exit 1
+                  fi
+                  echo "Native publish completed successfully for enabled platforms."
