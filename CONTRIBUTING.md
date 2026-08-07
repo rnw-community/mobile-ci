@@ -63,7 +63,10 @@ in the same commit that cuts the `v1` tag.
 
 ```bash
 brew install actionlint shellcheck
+pip install --user zizmor
 actionlint -color
+shellcheck <changed .sh files / run: blocks extracted as needed>
+zizmor --config .github/zizmor.yml .github/workflows actions
 ```
 
 `actionlint` walks `.github/workflows/**` and, for any step using a local
@@ -72,7 +75,10 @@ relative path, schema-checks the referenced `actions/*/action.yml` too. The
 reusable workflows' self-references to relative paths in a scratch copy so
 their composite-action schemas are checked in CI as well — reproduce that
 locally by running the same `sed` substitution described in that job before
-invoking `actionlint`.
+invoking `actionlint`. `zizmor` is CI's static-analysis gate for the
+workflows and actions themselves (see the `zizmor` job in `self-test.yml`
+for the pinned version); run it with the same `--config` flag CI uses so
+findings match.
 
 ## Adding or changing an action
 

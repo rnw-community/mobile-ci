@@ -2,7 +2,8 @@
 
 `workflow_call` reusable workflow: iOS Maestro e2e on self-hosted runners.
 
-Four jobs: **detect** (turbo-affected gate, hosted `ubuntu-latest`) →
+Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
+`ubuntu-latest`) →
 **build** (one job per `targets` entry — Xcode select, native fingerprint,
 native-app-cache restore, optional repack-on-hit, ccache, `xcodebuild`,
 artifact upload) → **test** (one job per `targets` × `shard-count` — download

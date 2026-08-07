@@ -77,7 +77,10 @@ flows=()
 while IFS= read -r flow; do
   flows+=("$flow")
 done < <(find "$FLOWS_DIR" -maxdepth 1 -type f -name "$FLOWS_NAME_PATTERN" | sort)
-test "${#flows[@]}" -gt 0
+if [ "${#flows[@]}" -eq 0 ]; then
+  echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found directly inside flows-dir '$FLOWS_DIR'."
+  exit 1
+fi
 selected=()
 for index in "${!flows[@]}"; do
   if (( index % SHARD_COUNT == SHARD_INDEX )); then
