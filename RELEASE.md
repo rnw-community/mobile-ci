@@ -67,14 +67,31 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    ```
 
 7. **Verify release self-consistency**: the tagged commit's own
-   `.github/workflows/*.yml` self-references must point at that same tag —
-   a release is not reproducible if its own self-references still say the
-   previous version:
+   self-reference-bearing workflows (`ios-maestro.yml`, `android-maestro.yml`,
+   `seed-native-cache.yml` — `native-publish.yml` and `native-dev-release.yml`
+   have no self-references) must point at that same tag. Fail closed: any
+   reference whose tag or trailing comment does not match the release is a
+   broken release, not a warning.
 
    ```bash
-   gh api repos/rnw-community/mobile-ci/contents/.github/workflows/ios-maestro.yml?ref=v1.2.3 \
-     --jq '.content' | base64 -d | grep 'rnw-community/mobile-ci/actions'
-   # every match must end in @v1.2.3
+   tag=v1.2.3
+   check_status=0
+   for workflow in ios-maestro android-maestro seed-native-cache; do
+     content="$(gh api "repos/rnw-community/mobile-ci/contents/.github/workflows/${workflow}.yml?ref=${tag}" \
+       --jq '.content' | base64 -d)"
+     if ! printf '%s\n' "$content" | grep -q 'rnw-community/mobile-ci/actions/'; then
+       echo "::error::${workflow}.yml: no self-references found at ${tag}"
+       check_status=1
+       continue
+     fi
+     if printf '%s\n' "$content" \
+       | grep 'rnw-community/mobile-ci/actions/' \
+       | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag}( # ${tag})?\$"; then
+       echo "::error::${workflow}.yml has a self-reference not pinned to ${tag}"
+       check_status=1
+     fi
+   done
+   exit "$check_status"
    ```
 
 8. **Smoke-check one consumer pipeline** against the new tag before calling
@@ -91,7 +108,7 @@ inputs bump the major version (and get called out first in the generated
 notes' relevant PR titles/labels). Additive inputs with sensible defaults,
 new actions, and bugfixes that do not change existing behavior are
 minor/patch. See [CONTRIBUTING.md](CONTRIBUTING.md#versioning) for the full
-versioning policy, including the pre-`v1` caveat.
+versioning policy.
 
 ## Self-references
 

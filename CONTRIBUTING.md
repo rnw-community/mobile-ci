@@ -18,11 +18,11 @@ convention `actions/checkout`, `actions/setup-node`, and most of the official
 GitHub Actions follow. Pin to an exact `vX.Y.Z` tag instead of `v1` only if
 you need to freeze against upstream drift entirely.
 
-**Pre-release status:** `v1` has not been cut yet. The action catalog and
-reusable workflows here were extracted from a canary pipeline; the `v1` tag
-will be created once that source pipeline's canaries are proven green (see the
-root `README.md` for details). Until then, consumers pin to `@main` at their
-own risk — `main` can change without a deprecation window.
+**Release status:** `v1` has been cut; `v1.0.0` through the latest `v1.x.y`
+are available (see [RELEASE.md](RELEASE.md) for the full procedure).
+Consumers pin to `@v1` for the latest compatible release or to an exact
+`@vX.Y.Z` tag to freeze the dependency entirely; pinning to `@main` still
+works but is no longer necessary and gets no deprecation window.
 
 Breaking changes to an action's inputs/outputs or a reusable workflow's inputs
 bump the major version. Additive inputs with sensible defaults, new actions,
