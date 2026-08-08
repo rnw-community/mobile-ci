@@ -82,6 +82,17 @@ on:
                 type: number
                 required: false
                 default: 120
+            publish-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs of non-secret env appended to
+                    $GITHUB_ENV at the start of ios-dev-release and android-dev-release,
+                    before eas build. Rejects (fails closed) any line without '=' or
+                    whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$. For secret
+                    values use the EAS_EXTRA_ENV secret instead — inputs are not masked
+                    in logs.
+                type: string
+                required: false
+                default: ''
 
         secrets:
             EXPO_TOKEN:
@@ -104,6 +115,14 @@ on:
                     ASC_API_KEY and ASC_KEY_ID for EAS to resolve the key non-interactively;
                     exported to the build step as EXPO_ASC_ISSUER_ID.
                 required: false
+            EAS_EXTRA_ENV:
+                description: >-
+                    Newline-separated KEY=VALUE pairs of secret env appended to
+                    $GITHUB_ENV at the start of ios-dev-release and android-dev-release,
+                    with each value masked in logs before being written. Use this for
+                    secrets eas build needs on the environment, e.g.
+                    EXPO_APPLE_APP_SPECIFIC_PASSWORD.
+                required: false
 
 concurrency:
     group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
@@ -123,6 +142,7 @@ jobs:
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
             - name: Validate required secrets
@@ -138,6 +158,74 @@ jobs:
               uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply publish-env
+              if: inputs.publish-env != ''
+              shell: bash
+              env:
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::publish-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$PUBLISH_ENV"
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              shell: bash
+              env:
+                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    value="${line#*=}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    if [ -n "$value" ]; then
+                      echo "::add-mask::$value"
+                    fi
+                    echo "$name=$value" >> "$GITHUB_ENV"
+                  done <<< "$EAS_EXTRA_ENV"
 
             - name: Setup Node
               uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -302,6 +390,7 @@ jobs:
             contents: write
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
             - name: Validate required secrets
@@ -317,6 +406,74 @@ jobs:
               uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply publish-env
+              if: inputs.publish-env != ''
+              shell: bash
+              env:
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::publish-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$PUBLISH_ENV"
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              shell: bash
+              env:
+                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    value="${line#*=}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    if [ -n "$value" ]; then
+                      echo "::add-mask::$value"
+                    fi
+                    echo "$name=$value" >> "$GITHUB_ENV"
+                  done <<< "$EAS_EXTRA_ENV"
 
             - name: Setup Node
               uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
