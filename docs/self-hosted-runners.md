@@ -321,6 +321,46 @@ Options for a consumer app that depends on GMS at runtime:
 3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
    or runtime flag that stubs `isReadyToPay()`-style calls under
    Maestro/CI), so the flow under test never depends on GMS being present.
+4. **Dismiss the "won't run without Google Play services" dialog at every
+   entry point that invokes a GMS-dependent operation, not only the ones
+   a flow's own steps tap into.** A hang is not the only symptom: one
+   consumer's own logcat showed, verbatim and reproducibly across every
+   shard, `GoogleApiAvailability: Google Play services is invalid.
+   Cannot recover.` — `ConnectionResult.SERVICE_INVALID`. Per Google's
+   docs `SERVICE_INVALID` textbook-describes an *installed* package
+   failing its own authenticity check, which is not literally what a
+   stock Redroid image (no Play Services package at all) sounds like it
+   should hit — `SERVICE_MISSING` looks like the closer fit on paper.
+   Empirically, on this fleet's Redroid image it is `SERVICE_INVALID`
+   every time (the log line is reproducible, not a one-off); the
+   evidence takes precedence over that assumption, and either way the
+   code is a generic Play Services availability signal, not a statement
+   that any specific GMS API (Wallet/Payments included) is unsupported.
+   On this Redroid image every GMS-dependent operation hits this same
+   code once invoked.
+   `Wallet.getPaymentsClient()` itself only builds a `PaymentsClient`
+   object and is harmless on its own; it was the readiness call chained
+   right after it (that consumer's own `isReadyToPay()` probe) whose
+   connection failure Play Services' bundled fallback UI surfaced as a
+   blocking system dialog, instead of the hang option 3 above is written
+   around — a client built in one place can invoke the actual
+   GMS-dependent operation later or elsewhere, so place the dismissal
+   after that invocation, not around wherever the client happens to be
+   constructed. Their flows guarded the one entry point a flow step
+   drove directly (a button tap that shows the payment sheet, and
+   invokes `loadPaymentData` right behind it) with a
+   `tapOn: {text: "OK", optional: true}` right after the triggering step,
+   but missed that `isReadyToPay()` also fires from the app's own
+   effect-driven mount logic, with no flow step to hang a dismissal off.
+   Every flow shared a `launchApp` subflow, so the dialog occluded the
+   app's own elements from the very first assertion of every flow, not
+   just the ones that reach the guarded button. The fix was the same
+   optional dismissal placed right after `launchApp` in the shared
+   subflow, since that is where the mount-time probe's invocation
+   effectively lands — the lesson is to audit *every* code path that
+   invokes a GMS-dependent operation (including ones triggered by app
+   lifecycle, not user action) rather than stopping at the first one a
+   flow happens to exercise.
 
 ## Maintainer note: fleet self-test repo variables
 
