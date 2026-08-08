@@ -51,6 +51,21 @@ with:
     test-runner-labels: '["self-hosted","macos-maestro"]'
 ```
 
+**Pre-existing Homebrew-managed `maestro`.** The `Install Maestro` step in
+`run-maestro-ios`, `run-maestro-android-redroid`, and `run-maestro-android`
+prefers a `maestro` already on `PATH` when it exactly matches the pinned
+`maestro-version`, and otherwise installs the pinned version to
+`~/.maestro/bin` and puts that ahead of `PATH` for the rest of the job. The
+official `get.maestro.mobile.dev` installer itself refuses to run at all if
+it detects an existing Homebrew-managed `maestro`
+(`Your maestro installation is already managed by a homebrew`), which
+otherwise hard-fails every run on that host. If a host was ever provisioned
+with `brew install maestro`, either `brew uninstall maestro` on it once, or
+rely on this action's `PATH` override picking up the pinned `~/.maestro/bin`
+copy ahead of Homebrew's — do not `brew upgrade maestro` to "fix" a pinned
+version mismatch, since the two installs will then compete for `PATH` on
+every run.
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,

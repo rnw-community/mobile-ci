@@ -1,10 +1,28 @@
 # build-android-app
 
 Sets up the Android SDK via `android-actions/setup-android`, builds a Release
-APK with `./gradlew assembleRelease`, verifies the embedded
-`assets/index.android.bundle`, and packages the single signed release APK as
-`<output-dir>/app-release.apk`. Restores/saves a Gradle cache around the
-build.
+APK with `./gradlew --no-daemon <gradle-task>` (default task
+`assembleRelease`), verifies the embedded `assets/index.android.bundle`, and
+packages the single signed release APK as `<output-dir>/app-release.apk`.
+Restores/saves a Gradle cache around the build.
+
+**Why `--no-daemon` is unconditional.** A Gradle daemon that outlives the
+step gains a CI job nothing — there is no second invocation in the same job
+to amortize warm-up against — but a daemon that crashes mid-build can be
+orphaned holding the log pipe open, hanging the step silently until
+`build-timeout-minutes` cancels the whole job. `--no-daemon` runs Gradle
+in-process so a crash surfaces immediately as a failed step instead.
+
+**Why `gradle-task` defaults to unscoped `assembleRelease`, and when to
+change it.** The unscoped task also builds and lint-checks every module
+transitively. On some dependency trees that has been observed to blow
+through the JVM's Metaspace (`OutOfMemoryError: Metaspace` from
+`expo-updates`' ksp step and `expo-modules-core`'s
+`lintVitalAnalyzeRelease`). Pass a module-scoped task, e.g.
+`:app:assembleRelease`, to build only the app module — the APK still lands
+under `app/build/outputs/apk/release`, same as the unscoped task — and use
+`gradle-args` (e.g. `-x lint -x lintVitalAnalyzeRelease`) to skip lint tasks
+that trip the same OOM independently of scoping.
 
 **Why `cmdline-tools-version` defaults to `12266719`.** This is the version
 baked into the `android-actions/setup-android@v3` tag release actually pinned
@@ -32,6 +50,8 @@ preinstalled here.
 | `output-dir`                   | yes      | —            | Directory the built APK is copied into as `app-release.apk`.   |
 | `gradle-cache-key`             | yes      | —            | Exact cache key for the Gradle cache.                           |
 | `gradle-cache-restore-keys`    | no       | `''`         | Newline-separated fallback prefixes.                            |
+| `gradle-task`                  | no       | `assembleRelease` | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module. |
+| `gradle-args`                  | no       | `''`         | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease`. Not shell-quoted. |
 
 ## Outputs
 
