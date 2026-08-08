@@ -75,6 +75,7 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
 
    ```bash
    tag=v1.2.3
+   tag_re=$(printf '%s' "$tag" | sed 's/[.[\*^$]/\\&/g')
    check_status=0
    for workflow in ios-maestro android-maestro seed-native-cache; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/.github/workflows/${workflow}.yml?ref=${tag}" \
@@ -86,13 +87,18 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
      fi
      if printf '%s\n' "$content" \
        | grep 'rnw-community/mobile-ci/actions/' \
-       | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag}( # ${tag})?\$"; then
+       | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag_re}( # ${tag_re})?\$"; then
        echo "::error::${workflow}.yml has a self-reference not pinned to ${tag}"
        check_status=1
      fi
    done
    exit "$check_status"
    ```
+
+   `$tag_re` escapes regex metacharacters in the tag (dots in `v1.2.3`
+   would otherwise match any character, letting a typo like `v1x2x3` pass
+   as if it matched `v1.2.3`) — do not interpolate `$tag` directly into
+   the `grep -vE` pattern.
 
 8. **Smoke-check one consumer pipeline** against the new tag before calling
    the release done — re-point a real consumer's workflow (or a scratch
