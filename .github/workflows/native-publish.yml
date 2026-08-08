@@ -258,7 +258,7 @@ jobs:
                   done <<< "$EAS_EXTRA_ENV"
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
@@ -380,7 +380,7 @@ jobs:
                   persist-credentials: false
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
@@ -550,7 +550,7 @@ jobs:
                   done <<< "$EAS_EXTRA_ENV"
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
