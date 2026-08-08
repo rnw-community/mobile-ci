@@ -128,9 +128,12 @@ auto-discovered or run standalone by the sharding logic.
   `pr-closed-cleanup-reusable.yml` need **no secrets at all** — no
   `EXPO_TOKEN`, no signing credentials.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):
-  `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android).
+  `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android),
+  `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`/`eas
+  submit`, e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`).
 - `native-dev-release.yml` (opt-in secrets): `EXPO_TOKEN` (required by both
-  enabled dev-release jobs), `ASC_API_KEY` (optional, iOS only).
+  enabled dev-release jobs), `ASC_API_KEY` (optional, iOS only),
+  `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`).
 
 See each workflow's `docs/workflows/<name>.md#secrets` for which job
 requires which secret and how the job fails fast when one is missing.

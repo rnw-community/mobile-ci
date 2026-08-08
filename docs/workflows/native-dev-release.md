@@ -35,6 +35,7 @@ releases.
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
+| `publish-env`                | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-dev-release` and `android-dev-release`, before `eas build`. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
 
 ## Secrets
 
@@ -44,6 +45,7 @@ releases.
 | `ASC_API_KEY`            | no       | Optional App Store Connect API key contents (`.p8`), used by `ios-dev-release` when the development profile needs automatic device/credential management. |
 | `ASC_KEY_ID`             | no       | App Store Connect API key ID matching `ASC_API_KEY`. Exported to the build step as `EXPO_ASC_KEY_ID`; set alongside `ASC_API_KEY`/`ASC_ISSUER_ID` so EAS can resolve the key non-interactively. |
 | `ASC_ISSUER_ID`          | no       | App Store Connect API key issuer ID matching `ASC_API_KEY`. Exported to the build step as `EXPO_ASC_ISSUER_ID`; set alongside `ASC_API_KEY`/`ASC_KEY_ID` so EAS can resolve the key non-interactively. |
+| `EAS_EXTRA_ENV`          | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-dev-release` and `android-dev-release`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build` needs on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
 
 \* `EXPO_TOKEN` is declared optional at the `workflow_call` level, but each
 enabled dev-release job validates it is present at the start of the job and
@@ -73,4 +75,28 @@ jobs:
             app-dir: apps/mobile
             enable-ios: true
         secrets: inherit
+```
+
+To thread a secret into the eas build environment (e.g. an Apple
+app-specific password), pass it through `EAS_EXTRA_ENV` rather than a plain
+input:
+
+```yaml
+# .github/workflows/native-dev-release.yml
+name: Native dev release
+on:
+    workflow_dispatch:
+    push:
+        branches: [main]
+permissions:
+    contents: write
+jobs:
+    dev-release:
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@main
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
