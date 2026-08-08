@@ -38,8 +38,10 @@ inputs:
   gradle-args:
     description: >-
       Extra arguments appended after gradle-task, e.g. '-x lint -x
-      lintVitalAnalyzeRelease'. Split on whitespace only — not shell-quoted,
-      so an argument containing a space cannot be expressed here.
+      lintVitalAnalyzeRelease'. Split on any whitespace — spaces, tabs, and
+      newlines (a YAML block-scalar value works) are all treated as
+      separators — not shell-quoted, so an argument containing a space
+      cannot be expressed as a single token.
     required: false
     default: ''
 outputs:
@@ -74,7 +76,9 @@ runs:
         set -euo pipefail
         gradle_args=()
         if [ -n "$GRADLE_ARGS" ]; then
-          IFS=' ' read -r -a gradle_args <<< "$GRADLE_ARGS"
+          normalized_gradle_args="${GRADLE_ARGS//$'\n'/ }"
+          normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
+          read -r -a gradle_args <<< "$normalized_gradle_args"
         fi
         build_start=$(date +%s)
         ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}

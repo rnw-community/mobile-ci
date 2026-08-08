@@ -367,13 +367,17 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
+                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                    exit 1
+                  fi
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue
                     tags+=("$tag")
-                  done < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
+                  done <<< "$release_tags"
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."
@@ -585,13 +589,17 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
+                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
+                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                    exit 1
+                  fi
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue
                     tags+=("$tag")
-                  done < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
+                  done <<< "$release_tags"
                   total=${#tags[@]}
                   if [ "$total" -le "$KEEP_RELEASES" ]; then
                     echo "Nothing to prune ($total published release(s), keeping $KEEP_RELEASES)."

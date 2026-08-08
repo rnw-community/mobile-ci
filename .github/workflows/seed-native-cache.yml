@@ -369,7 +369,7 @@ jobs:
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -398,7 +398,7 @@ jobs:
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
