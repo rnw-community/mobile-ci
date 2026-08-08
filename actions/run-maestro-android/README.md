@@ -14,6 +14,8 @@ That script lives in its own file rather than inline in `script:` because
 `reactivecircus/android-emulator-runner` runs each newline of its `script`
 input as an *independent* shell invocation — a multi-line for/while/if
 written directly in `script:` would not see state from the line before it.
+`run-shard.sh` derives `ANDROID_SERIAL` from `adb devices` right after boot
+and exports it for `pre-test-command`'s use.
 
 ## Inputs
 
@@ -29,6 +31,8 @@ written directly in `script:` would not see state from the line before it.
 | `shard-index`        | yes      | —             | Zero-based shard index this job runs.                                |
 | `shard-count`        | yes      | —             | Total number of shards flows are distributed across.                 |
 | `pre-run-flow`       | no       | `''`          | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
+| `pre-test-command`   | no       | `''`          | Consumer-owned shell command run once after the app is installed on the emulator and before any flow (including `pre-run-flow`) executes. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails the step immediately. |
+| `maestro-env`        | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `flow-retries`       | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `maestro-version`    | no       | `2.8.0`       | Pinned Maestro CLI version.                                          |
 | `api-level`          | no       | `34`          | Android emulator API level.                                          |

@@ -83,6 +83,24 @@ inputs:
       running the shard. Leave empty to skip priming.
     required: false
     default: ''
+  pre-test-command:
+    description: >-
+      Optional consumer-owned shell command run once after the app is
+      installed on the container and before any flow (including
+      pre-run-flow) executes, e.g. seeding a fixture into the app's data
+      container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+      environment. Its failure fails the step immediately. Leave empty to
+      skip.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+      and shard flows alike). Rejects (fails closed) any line without '=' or
+      whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -288,6 +306,15 @@ runs:
         APK_PATH: ${{ inputs.apk-path }}
       run: adb -s "$ANDROID_SERIAL" install -r "$APK_PATH"
 
+    - name: Run pre-test command
+      if: inputs.pre-test-command != ''
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        APK_PATH: ${{ inputs.apk-path }}
+        PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+      run: eval "$PRE_TEST_COMMAND"
+
     - name: Run Maestro shard
       shell: bash
       env:
@@ -301,6 +328,7 @@ runs:
         FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
         SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
         PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+        MAESTRO_ENV: ${{ inputs.maestro-env }}
         FLOW_RETRIES: ${{ inputs.flow-retries }}
         APP_ID: ${{ inputs.app-id }}
       run: |
@@ -348,6 +376,34 @@ runs:
             test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
           fi
 
+          maestro_env_args=()
+          if [ -n "$MAESTRO_ENV" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                *=*) ;;
+                *)
+                  echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+                  exit 1
+                  ;;
+              esac
+              name="${line%%=*}"
+              case "$name" in
+                ''|[!A-Za-z_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              case "$name" in
+                *[!A-Za-z0-9_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              maestro_env_args+=(-e "$line")
+            done <<< "$MAESTRO_ENV"
+          fi
+
           summary_rows=()
 
           run_flow_with_retries() {
@@ -355,7 +411,7 @@ runs:
             start=$(date +%s)
             while [ "$attempts" -lt "$max_attempts" ]; do
               attempts=$((attempts + 1))
-              if maestro test -e "APP_ID=$APP_ID" "$flow"; then
+              if maestro test -e "APP_ID=$APP_ID" "${maestro_env_args[@]}" "$flow"; then
                 status=passed
                 break
               fi

@@ -59,6 +59,24 @@ inputs:
       running the shard. Leave empty to skip priming.
     required: false
     default: ''
+  pre-test-command:
+    description: >-
+      Optional consumer-owned shell command run once after the app is
+      installed on the emulator and before any flow (including
+      pre-run-flow) executes, e.g. seeding a fixture into the app's data
+      container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+      environment. Its failure fails the step immediately. Leave empty to
+      skip.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+      and shard flows alike). Rejects (fails closed) any line without '=' or
+      whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -123,6 +141,8 @@ runs:
           SHARD_INDEX: ${{ inputs.shard-index }}
           SHARD_COUNT: ${{ inputs.shard-count }}
           PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+          PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+          MAESTRO_ENV: ${{ inputs.maestro-env }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
       with:
           api-level: ${{ inputs.api-level }}
