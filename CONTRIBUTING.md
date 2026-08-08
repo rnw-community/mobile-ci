@@ -56,8 +56,22 @@ The reusable workflows under `.github/workflows/` invoke this repo's own
 composite actions via the full `rnw-community/mobile-ci/actions/<name>@<ref>`
 form (a relative `./actions/<name>` reference only resolves against whatever
 is checked out in the *caller's* job, not this repo, so it cannot be used
-here). These self-references currently point at `@main`; update them to `@v1`
-in the same commit that cuts the `v1` tag.
+here).
+
+The pre-`v1` policy of floating these self-references on `@main` is over:
+now that `v1.x` releases exist, a consumer pinning a reusable workflow to a
+tag or commit SHA expects that pin to freeze the *entire* call graph,
+including the actions the workflow calls internally. Self-references
+therefore pin to the exact `vX.Y.Z` tag of the current release (e.g.
+`rnw-community/mobile-ci/actions/build-ios-app@v1.3.1 # v1.3.1`), and are
+bumped to the new tag as part of the release PR for every release — see
+[RELEASE.md](RELEASE.md#self-references) for the exact procedure. Unlike
+third-party `uses:`, self-references pin to a tag rather than a commit SHA:
+the tag is created from the very commit the self-reference update is part
+of, so pinning to a SHA would be chicken-and-egg (the SHA is not known until
+after the commit exists), and RELEASE.md forbids ever moving a release tag
+once cut — making the tag effectively as immutable as a SHA for this
+in-repo, single-release-procedure use.
 
 ## Validating changes locally
 

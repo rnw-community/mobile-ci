@@ -9,19 +9,37 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
 
 ## Checklist
 
-1. **Verify `self-test` is green** on the commit you intend to tag —
+1. **Update internal self-references to the new tag**, as part of the normal
+   PR for the release (not a separate step after merge): bump every
+   `rnw-community/mobile-ci/actions/<name>@<previous-tag>` self-reference in
+   `.github/workflows/*.yml` to `@vX.Y.Z` — the tag you are about to cut —
+   with a trailing `# vX.Y.Z` comment. For example, releasing `v1.3.1` after
+   `v1.3.0`:
+
+   ```bash
+   for f in .github/workflows/ios-maestro.yml .github/workflows/android-maestro.yml .github/workflows/seed-native-cache.yml; do
+     perl -pi -e 's{(rnw-community/mobile-ci/actions/[a-z0-9-]+)\@v1\.3\.0(?:\s*#\s*v1\.3\.0)?}{$1\@v1.3.1 # v1.3.1}' "$f"
+   done
+   ```
+
+   Get this merged to `main` via the normal PR/review/CI flow (see
+   [Self-references](#self-references) below for why the tag can be named in
+   advance). Do not tag a commit whose self-references still point at the
+   previous release.
+
+2. **Verify `self-test` is green** on the commit you intend to tag —
    `actionlint`, `zizmor`, and `dry-lint-local-refs` all passing on `main` at
    that exact SHA. Do not tag a commit whose `self-test` run you have not
    personally checked.
 
-2. **Tag the exact release**, from that verified commit:
+3. **Tag the exact release**, from that verified commit:
 
    ```bash
    git tag -a v1.2.3 -m v1.2.3
    git push origin v1.2.3
    ```
 
-3. **Create the GitHub Release with generated notes**:
+4. **Create the GitHub Release with generated notes**:
 
    ```bash
    gh release create v1.2.3 --generate-notes --title v1.2.3
@@ -31,7 +49,7 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    mis-categorized PRs, not to add a hand-written summary (see the no-
    `CHANGELOG.md` decision above — the generated notes are the record).
 
-4. **Move the floating major tag** (`v1`) to point at the same commit as the
+5. **Move the floating major tag** (`v1`) to point at the same commit as the
    new exact tag — force-move, the same convention `actions/checkout`,
    `actions/setup-node`, and most official GitHub Actions follow:
 
@@ -40,7 +58,7 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    git push -f origin v1
    ```
 
-5. **Verify both refs peel to the same commit**:
+6. **Verify both refs peel to the same commit**:
 
    ```bash
    git rev-parse v1.2.3^{commit}
@@ -48,7 +66,18 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    # both must print the identical SHA
    ```
 
-6. **Smoke-check one consumer pipeline** against the new tag before calling
+7. **Verify release self-consistency**: the tagged commit's own
+   `.github/workflows/*.yml` self-references must point at that same tag —
+   a release is not reproducible if its own self-references still say the
+   previous version:
+
+   ```bash
+   gh api repos/rnw-community/mobile-ci/contents/.github/workflows/ios-maestro.yml?ref=v1.2.3 \
+     --jq '.content' | base64 -d | grep 'rnw-community/mobile-ci/actions'
+   # every match must end in @v1.2.3
+   ```
+
+8. **Smoke-check one consumer pipeline** against the new tag before calling
    the release done — re-point a real consumer's workflow (or a scratch
    branch of one) at `@v1` (or the exact `@v1.2.3`) and confirm its next run
    is green. A green `self-test` on this repo proves the schemas are
@@ -66,10 +95,18 @@ versioning policy, including the pre-`v1` caveat.
 
 ## Self-references
 
-Before cutting the *first* `v1` tag, update every
-`rnw-community/mobile-ci/actions/<name>@main` /
-`rnw-community/mobile-ci/.github/workflows/<name>.yml@main` self-reference in
-this repo's own `.github/workflows/*.yml` to `@v1`, in the same commit that
-gets tagged — see [CONTRIBUTING.md#self-references](CONTRIBUTING.md#self-references).
-For every release after that, self-references stay on `@v1`; only the
-floating tag itself moves (step 4 above).
+Every release, self-references in this repo's own `.github/workflows/*.yml`
+must point at the exact `vX.Y.Z` tag being cut, not at `@main` and not at the
+previous release's tag — see step 1 of the checklist above and
+[CONTRIBUTING.md#self-references](CONTRIBUTING.md#self-references). This is
+the "tag name known in advance" pattern: the release tag does not exist yet
+when the self-reference update is committed, but the tag name is fixed by
+this procedure, and `git tag` on this repo's own commit is created from that
+same commit immediately after. `self-test`'s `dry-lint-local-refs` job
+rewrites these self-references to relative paths before schema-checking
+them, so a not-yet-existent tag never has to actually resolve during CI on
+the release PR.
+
+The floating major tag (`v1`) is a separate, deliberately mutable pointer
+used only by *consumers* who choose to float — it is force-moved in step 5
+above and is never what the self-references in this repo point at.

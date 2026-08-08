@@ -8,12 +8,17 @@
 
 rules:
   # These reusable workflows call this repo's OWN composite actions via the
-  # full `rnw-community/mobile-ci/actions/<name>@main` form (a relative
+  # full `rnw-community/mobile-ci/actions/<name>@vX.Y.Z` form (a relative
   # `./actions/<name>` reference only resolves against the caller's checkout,
-  # not this repo — see CONTRIBUTING.md#self-references). Pre-v1, self
-  # -references intentionally float on `@main`/`@v1` rather than a pinned
-  # SHA, the same "consistency over compatibility" tradeoff documented in the
-  # design spec (docs/superpowers/specs/2026-08-06-mobile-ci-sota-consolidation-design.md).
+  # not this repo — see CONTRIBUTING.md#self-references). Self-references
+  # intentionally pin to the current release tag (e.g. `@v1.3.1`) rather than
+  # a commit SHA: the tag is created from the very commit the self-reference
+  # update is part of, so SHA-pinning would be chicken-and-egg, and
+  # RELEASE.md forbids ever moving a release tag once cut, making the tag
+  # effectively as immutable as a SHA for this in-repo, single-release-
+  # procedure use. zizmor's `unpinned-uses` rule still flags a tag ref as
+  # unpinned (it only accepts a full commit SHA), hence this ignore. See
+  # RELEASE.md#self-references for the update-on-every-release procedure.
   # Third-party `uses:` elsewhere in these files ARE SHA-pinned and are not
   # affected by this ignore.
   unpinned-uses:
