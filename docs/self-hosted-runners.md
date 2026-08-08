@@ -283,6 +283,45 @@ exists to avoid.
 sudo systemctl enable --now redroid-prewarm.timer
 ```
 
+### Google Play Services (GMS)
+
+Stock `redroid` images are plain AOSP — no Google Play Services, no Play
+Store, no Play Integrity. Any app that calls a GMS API at runtime (Google
+Wallet/Pay's `isReadyToPay()`, Maps, Firebase Cloud Messaging, Play
+Integrity attestation, Google Sign-In, and similar) will hang or fail on
+Redroid even though the container boots, `adb` connects, and the APK
+installs cleanly — the container-level plumbing this doc covers is not the
+problem. This was discovered against a real consumer app: every Maestro
+flow timed out at launch, blocked on the app's own
+`Wallet.getPaymentsClient().isReadyToPay()` probe, which never resolves
+without GMS present in the image.
+
+Options for a consumer app that depends on GMS at runtime:
+
+1. **Provision a GMS-enabled Redroid image.** Layer `gapps`/`microG` into
+   the image and reference the resulting tag via `android-maestro.yml`'s
+   `redroid-image` input. If a
+   [prewarm manifest](#the-redroid-prewarm-manifest) is configured, note
+   that `redroid-image` is only consulted on a manifest *miss* — on a hit,
+   the container boots from the manifest's own `image` field and its
+   already-initialized `dataDir` (a `/data` volume, not the system image
+   itself), so a manifest hit silently ignores a `redroid-image` change.
+   Point the manifest's `image` at your GMS-enabled tag and rebuild
+   `dataDir` from it (re-run [the prewarm script](#producing-the-manifest-on-the-host)
+   against the new image), or disable prewarming
+   (`redroid-prewarm-manifest-path: ''`, or remove the manifest file) if
+   you would rather not rebuild it and are fine paying the cold-boot cost.
+2. **Switch to `android-driver: avd` with a `google_apis` system image**
+   (`emulator-target: google_apis` is already the default for the `avd`
+   driver), on a runner architecture Google actually ships an emulator for
+   — x86_64 Linux or macOS `arm64`. This is not an option on this repo's
+   default `linux-aarch64` self-hosted pool: Google publishes no
+   `linux-aarch64` build of the Android emulator (see above), so `avd`
+   cannot boot there regardless of system image.
+3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
+   or runtime flag that stubs `isReadyToPay()`-style calls under
+   Maestro/CI), so the flow under test never depends on GMS being present.
+
 ## Maintainer note: fleet self-test repo variables
 
 `self-test.yml`'s `fleet-self-test` job (`workflow_dispatch`-only, since the
