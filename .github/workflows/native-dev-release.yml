@@ -367,7 +367,11 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                  tags=()
+                  while IFS= read -r tag; do
+                    [ -n "$tag" ] || continue
+                    tags+=("$tag")
+                  done < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
                       '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}
@@ -581,7 +585,11 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  mapfile -t tags < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
+                  tags=()
+                  while IFS= read -r tag; do
+                    [ -n "$tag" ] || continue
+                    tags+=("$tag")
+                  done < <(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
                     jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
                       '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')
                   total=${#tags[@]}

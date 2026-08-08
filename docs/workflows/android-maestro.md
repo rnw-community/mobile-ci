@@ -6,7 +6,8 @@ runners, defaulting to the Redroid driver.
 Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
 `ubuntu-latest`) → **build** (one job per `targets` entry — native
 fingerprint, native-app-cache restore, optional repack-on-hit, `gradlew
-assembleRelease`, artifact upload) → **test** (one job per `targets` ×
+--no-daemon <gradle-task>` (default `assembleRelease`), artifact upload) →
+**test** (one job per `targets` ×
 `shard-count` — download the built `.apk`, boot Redroid or an AVD emulator
 per `android-driver`, run a Maestro flow shard) → **status** (aggregates
 detect/build/test into a single required check). `build` and `test` default
@@ -32,6 +33,8 @@ run on `ubuntu-latest`.
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `shard-count`                   | no       | `2`                                                | Number of test shards per target. |
 | `cmdline-tools-version`         | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults (see `build-android-app` README). |
+| `gradle-task`                   | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
+| `gradle-args`                   | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
 | `cache-profile`                  | no       | `android-native-v1`                                | Cache-key prefix distinguishing this consumer/app. |
 | `turbo-version`                 | no       | `2.10.8`                                           | Pinned turbo npm version used by the detect job. |
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |

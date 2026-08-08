@@ -35,6 +35,16 @@ on:
                 type: string
                 required: false
                 default: '12266719'
+            gradle-task:
+                description: See build-android-app README — gradlew task to build, e.g. :app:assembleRelease to scope to one module.
+                type: string
+                required: false
+                default: assembleRelease
+            gradle-args:
+                description: See build-android-app README — extra whitespace-split arguments appended after gradle-task.
+                type: string
+                required: false
+                default: ''
             ios-cache-profile:
                 type: string
                 required: false
@@ -375,6 +385,8 @@ jobs:
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  gradle-task: ${{ inputs.gradle-task }}
+                  gradle-args: ${{ inputs.gradle-args }}
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock') }}
                   gradle-cache-restore-keys: |

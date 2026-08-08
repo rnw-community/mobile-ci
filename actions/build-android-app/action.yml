@@ -24,6 +24,24 @@ inputs:
     description: Newline-separated fallback prefixes for the Gradle cache.
     required: false
     default: ''
+  gradle-task:
+    description: >-
+      gradlew task to build. Defaults to the unscoped assembleRelease, which
+      builds and lint-checks every module transitively; pass a module-scoped
+      task, e.g. :app:assembleRelease, to build only the app module and avoid
+      OutOfMemoryErrors from transitively building unrelated modules (seen in
+      practice from expo-updates ksp and expo-modules-core
+      lintVitalAnalyzeRelease). A module-scoped assembleRelease still lands
+      the APK under app/build/outputs/apk/release, same as the unscoped task.
+    required: false
+    default: assembleRelease
+  gradle-args:
+    description: >-
+      Extra arguments appended after gradle-task, e.g. '-x lint -x
+      lintVitalAnalyzeRelease'. Split on whitespace only — not shell-quoted,
+      so an argument containing a space cannot be expressed here.
+    required: false
+    default: ''
 outputs:
   app-path:
     description: Path to the packaged APK (<output-dir>/app-release.apk).
@@ -49,10 +67,17 @@ runs:
     - name: Build APK (Release)
       shell: bash
       working-directory: ${{ inputs.app-dir }}/android
+      env:
+        GRADLE_TASK: ${{ inputs.gradle-task }}
+        GRADLE_ARGS: ${{ inputs.gradle-args }}
       run: |
         set -euo pipefail
+        gradle_args=()
+        if [ -n "$GRADLE_ARGS" ]; then
+          IFS=' ' read -r -a gradle_args <<< "$GRADLE_ARGS"
+        fi
         build_start=$(date +%s)
-        ./gradlew assembleRelease
+        ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
         build_end=$(date +%s)
         {
           echo "### Android build (cold — native build ran)"
@@ -81,7 +106,7 @@ runs:
         done < <(find "$APP_DIR/android/app/build/outputs/apk/release" \
                    -maxdepth 1 -type f -name '*.apk' ! -name '*unsigned*' | sort)
         if [ "${#apks[@]}" -ne 1 ]; then
-          echo "::error::Expected exactly 1 signed release APK, found ${#apks[@]}: ${apks[*]}"
+          echo "::error::Expected exactly 1 signed release APK, found ${#apks[@]}: ${apks[*]:-<none>}"
           exit 1
         fi
         apk_path="${apks[0]}"

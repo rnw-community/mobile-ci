@@ -88,7 +88,7 @@ run_flow_with_retries() {
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
-    if maestro test -e "APP_ID=$APP_ID" "${maestro_env_args[@]}" "$flow"; then
+    if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
       status=passed
       break
     fi
@@ -157,7 +157,7 @@ if [ -n "$PRE_RUN_FLOW" ]; then
       remaining_flows+=("$flow")
     fi
   done
-  flows=("${remaining_flows[@]}")
+  flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
 fi
 
 selected=()
@@ -173,7 +173,7 @@ if [ -n "$SHARD_MANIFEST_DIR" ]; then
     [ -n "$rel" ] || continue
     flow_path="$FLOWS_DIR/$rel"
     match=0
-    for candidate in "${flows[@]}"; do
+    for candidate in ${flows[@]+"${flows[@]}"}; do
       if [ "$candidate" = "$flow_path" ]; then
         match=1
         break
