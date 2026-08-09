@@ -6,7 +6,8 @@ runners, defaulting to the Redroid driver.
 Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
 `ubuntu-latest`) → **build** (one job per `targets` entry — native
 fingerprint, native-app-cache restore, optional repack-on-hit, `gradlew
-assembleRelease`, artifact upload) → **test** (one job per `targets` ×
+--no-daemon <gradle-task>` (default `assembleRelease`), artifact upload) →
+**test** (one job per `targets` ×
 `shard-count` — download the built `.apk`, boot Redroid or an AVD emulator
 per `android-driver`, run a Maestro flow shard) → **status** (aggregates
 detect/build/test into a single required check). `build` and `test` default
@@ -27,15 +28,19 @@ run on `ubuntu-latest`.
 | `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` glob excluding matched flows by basename. |
 | `shard-manifest-dir`            | no       | `''`                                                | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `pre-run-flow`                  | no       | `''`                                               | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
+| `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
+| `maestro-env`                   | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. Passed to both `android-driver` options. |
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `shard-count`                   | no       | `2`                                                | Number of test shards per target. |
 | `cmdline-tools-version`         | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults (see `build-android-app` README). |
+| `gradle-task`                   | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
+| `gradle-args`                   | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
 | `cache-profile`                  | no       | `android-native-v1`                                | Cache-key prefix distinguishing this consumer/app. |
 | `turbo-version`                 | no       | `2.10.8`                                           | Pinned turbo npm version used by the detect job. |
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
-| `android-driver`                | no       | `redroid`                                          | `redroid` (default) or `avd`. Google publishes no `linux-aarch64` build of the Android emulator/NDK/cmake, so `avd` cannot boot on this workflow's default self-hosted `runner-labels`; `redroid` runs Android as a privileged container over `binder_linux` instead and needs none of those packages. Pick `avd` only when overriding `runner-labels` to a host with a working emulator (e.g. GitHub-hosted x86_64 runners, which carry KVM out of the box). |
+| `android-driver`                | no       | `redroid`                                          | `redroid` (default) or `avd`. Google publishes no `linux-aarch64` build of the Android emulator/NDK/cmake, so `avd` cannot boot on this workflow's default self-hosted `runner-labels`; `redroid` runs Android as a privileged container over `binder_linux` instead and needs none of those packages. Pick `avd` only when overriding `runner-labels` to a host with a working emulator (e.g. GitHub-hosted x86_64 runners, which carry KVM out of the box). Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only) — also used as the native-app-cache `arch` key segment for both drivers. |

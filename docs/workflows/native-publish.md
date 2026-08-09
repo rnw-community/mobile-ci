@@ -40,6 +40,7 @@ single required check.
 | `asc-key-path`                     | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`            | no       | `120`                                     | Publish job timeout (both platforms). |
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
+| `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish` and `android-publish`, before `eas build`/`eas submit` and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
 
 ## Secrets
 
@@ -48,12 +49,14 @@ single required check.
 | `EXPO_TOKEN`                        | no*      | Expo access token, required by `ios-publish` and `android-publish`. |
 | `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish`. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. |
+| `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-publish` and `android-publish`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build`/`eas submit` or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
 
-\* All three are declared optional at the `workflow_call` level (so a caller
-that only enables one platform need not declare the other's secrets), but
-each enabled publish job validates its own required secrets at the start of
-the job and fails fast with a clear error if any are missing. Pass them via
-`secrets: inherit` or an explicit `secrets:` block in the caller workflow.
+\* `EXPO_TOKEN`, `ASC_API_KEY`, and `GOOGLE_SERVICE_ACCOUNT_JSON` are declared
+optional at the `workflow_call` level (so a caller that only enables one
+platform need not declare the other's secrets), but each enabled publish job
+validates its own required secrets at the start of the job and fails fast
+with a clear error if any are missing. Pass them via `secrets: inherit` or an
+explicit `secrets:` block in the caller workflow.
 
 ## Permissions
 
@@ -76,4 +79,25 @@ jobs:
             enable-ios: true
             enable-android: true
         secrets: inherit
+```
+
+To thread a secret into the eas build/submit environment (e.g. an Apple
+app-specific password), pass it through `EAS_EXTRA_ENV` rather than a plain
+input:
+
+```yaml
+# .github/workflows/native-publish.yml
+name: Native publish
+on:
+    workflow_dispatch:
+jobs:
+    publish:
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@main
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```

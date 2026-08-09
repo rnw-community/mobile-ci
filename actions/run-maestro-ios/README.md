@@ -23,6 +23,8 @@ self-hosted runner.
 | `shard-index`           | yes      | —             | Zero-based shard index this job runs.                             |
 | `shard-count`           | yes      | —             | Total number of shards flows are distributed across.              |
 | `pre-run-flow`          | no       | `''`          | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
+| `pre-test-command`      | no       | `''`          | Consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails the step immediately. |
+| `maestro-env`           | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `flow-retries`          | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `maestro-version`       | no       | `2.8.0`       | Pinned Maestro CLI version.                                        |
 | `artifacts-dir`         | yes      | —             | Directory Maestro debug output and final-state capture is written to. |

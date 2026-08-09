@@ -7,7 +7,13 @@ set -euo pipefail
 
 adb wait-for-device
 timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
+ANDROID_SERIAL=$(adb devices | awk '$2 == "device" { print $1; exit }')
+export ANDROID_SERIAL
 adb install -r "$APK_PATH"
+
+if [ -n "${PRE_TEST_COMMAND:-}" ]; then
+  eval "$PRE_TEST_COMMAND"
+fi
 
 case "$SHARD_COUNT" in
   ''|*[!0-9]*|0[0-9]*)
@@ -47,6 +53,34 @@ if [ -n "$PRE_RUN_FLOW" ]; then
   test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
 fi
 
+maestro_env_args=()
+if [ -n "${MAESTRO_ENV:-}" ]; then
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    case "$line" in
+      *=*) ;;
+      *)
+        echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+        exit 1
+        ;;
+    esac
+    name="${line%%=*}"
+    case "$name" in
+      ''|[!A-Za-z_]*)
+        echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+        exit 1
+        ;;
+    esac
+    case "$name" in
+      *[!A-Za-z0-9_]*)
+        echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+        exit 1
+        ;;
+    esac
+    maestro_env_args+=(-e "$line")
+  done <<< "$MAESTRO_ENV"
+fi
+
 summary_rows=()
 
 run_flow_with_retries() {
@@ -54,7 +88,7 @@ run_flow_with_retries() {
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
-    if maestro test -e "APP_ID=$APP_ID" "$flow"; then
+    if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
       status=passed
       break
     fi
@@ -123,7 +157,7 @@ if [ -n "$PRE_RUN_FLOW" ]; then
       remaining_flows+=("$flow")
     fi
   done
-  flows=("${remaining_flows[@]}")
+  flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
 fi
 
 selected=()
@@ -139,7 +173,7 @@ if [ -n "$SHARD_MANIFEST_DIR" ]; then
     [ -n "$rel" ] || continue
     flow_path="$FLOWS_DIR/$rel"
     match=0
-    for candidate in "${flows[@]}"; do
+    for candidate in ${flows[@]+"${flows[@]}"}; do
       if [ "$candidate" = "$flow_path" ]; then
         match=1
         break

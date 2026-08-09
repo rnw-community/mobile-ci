@@ -79,6 +79,25 @@ on:
                 type: string
                 required: false
                 default: ''
+            pre-test-command:
+                description: >-
+                    Optional consumer-owned shell command run once after the app is
+                    installed on the simulator and before any flow (including
+                    pre-run-flow) executes, e.g. seeding a fixture into the app's data
+                    container. Runs with SIMULATOR_UDID, APP_ID, and APP_PATH in its
+                    environment. Its failure fails that shard immediately.
+                type: string
+                required: false
+                default: ''
+            maestro-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs, each passed as an additional
+                    -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+                    and shard flows alike). Rejects (fails closed) any line without '='
+                    or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
             flow-retries:
                 description: >-
                     Non-negative retry budget per flow; each flow gets up to
@@ -202,10 +221,10 @@ jobs:
               with:
                   fetch-depth: 0
                   persist-credentials: false
-            - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@main
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v1.3.1 # v1.3.1
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -295,7 +314,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
                   cache: yarn
@@ -313,7 +332,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.3.1 # v1.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -335,7 +354,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
               with:
                   platform: ios
                   working-directory: ${{ matrix.target.appDir }}
@@ -343,7 +362,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -356,7 +375,7 @@ jobs:
               id: repack
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@main
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.3.1 # v1.3.1
               with:
                   platform: ios
                   app-path: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
@@ -412,7 +431,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -426,7 +445,7 @@ jobs:
             - name: build-ios-app
               if: steps.build-decision.outputs.need-build == 'true'
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@main
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.3.1 # v1.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -443,7 +462,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -451,7 +470,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -511,12 +530,12 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.3.1 # v1.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
-            - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   name: ios-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
@@ -528,7 +547,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v1.3.1 # v1.3.1
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -540,6 +559,8 @@ jobs:
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
+                  pre-test-command: ${{ inputs.pre-test-command }}
+                  maestro-env: ${{ inputs.maestro-env }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}

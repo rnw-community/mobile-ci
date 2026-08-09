@@ -1,9 +1,9 @@
 # build-ios-app
 
-Builds a Release, unsigned iOS Simulator `.app` via `xcodebuild`, verifies the
-embedded `main.jsbundle` is present, and packages the result into
-`<output-dir>/Base.app`. Restores/saves a CocoaPods cache around
-`pod install --repo-update`.
+Builds a Release, ad-hoc-signed (entitlements preserved) iOS Simulator `.app`
+via `xcodebuild`, verifies the embedded `main.jsbundle` is present, and
+packages the result into `<output-dir>/Base.app`. Restores/saves a CocoaPods
+cache around `pod install --repo-update`.
 
 **Why Release, never a dev-CLI launcher.** `expo run:ios` (and equivalent
 dev-client launchers) expect an attached Metro/dev server and crash headless
@@ -12,9 +12,14 @@ build time, so the resulting `.app` runs standalone on a simulator with no
 Metro process attached — the only build shape that survives a headless
 runner.
 
-**Why `CODE_SIGNING_ALLOWED=NO`.** Simulator builds never need a signing
-identity; forcing it off avoids provisioning-profile lookups that have no
-business running on CI at all.
+**Why ad-hoc signing instead of `CODE_SIGNING_ALLOWED=NO`.** Simulator builds
+never need a real signing identity, but skipping codesign entirely also skips
+embedding entitlements — any consumer app using an entitlement-gated API
+(Keychain/SecureStore, App Groups) then crashes at boot even on Simulator.
+`CODE_SIGN_IDENTITY=- AD_HOC_CODE_SIGNING_ALLOWED=YES
+PROVISIONING_PROFILE_SPECIFIER=` signs the build ad hoc — no certificate or
+provisioning profile lookup required — while still embedding the project's
+entitlements.
 
 Run `setup-xcode-pinned` and (optionally) `setup-ccache-ios` before this
 action so `DEVELOPER_DIR` and the ccache toolchain are already in place.

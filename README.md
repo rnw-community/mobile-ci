@@ -69,7 +69,7 @@ full input reference, and the same doc's siblings under
 | [`native-fingerprint`](actions/native-fingerprint/README.md)     | Tokenless `@expo/fingerprint` hash of an app's native surface. |
 | [`native-app-cache`](actions/native-app-cache/README.md)         | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
 | [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
-| [`build-ios-app`](actions/build-ios-app/README.md)               | Release, unsigned iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified. |
+| [`build-ios-app`](actions/build-ios-app/README.md)               | Release, ad-hoc-signed (entitlements preserved) iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified. |
 | [`build-android-app`](actions/build-android-app/README.md)       | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`. |
 | [`repack-app`](actions/repack-app/README.md)                     | Inject a freshly exported JS bundle into a cached native shell without a full native rebuild. |
 | [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
@@ -160,7 +160,8 @@ jobs:
 ## Scope
 
 In scope: the e2e pipelines (`ios-maestro.yml` / `android-maestro.yml` /
-`seed-native-cache.yml`) — unsigned simulator/emulator builds, tokenless
+`seed-native-cache.yml`) — ad-hoc-signed (entitlements preserved) iOS
+simulator / unsigned Android emulator builds, tokenless
 fingerprinting, Maestro; and store publishing (`native-publish.yml`:
 `eas build --local` for fleet-compute signed builds + `eas submit` for store
 upload) and development-build distribution (`native-dev-release.yml`:
