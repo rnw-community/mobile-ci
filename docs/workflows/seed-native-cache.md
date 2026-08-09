@@ -8,8 +8,9 @@ Two independent jobs, each only runs when its target list is non-empty:
 **seed-ios** (one job per `ios-targets` entry — Xcode select, native
 fingerprint, native-app-cache restore, ccache, `xcodebuild` on a cache miss)
 and **seed-android** (one job per `android-targets` entry — native
-fingerprint, native-app-cache restore, `gradlew assembleRelease` on a cache
-miss). This is the build half of the two Maestro pipelines with no
+fingerprint, native-app-cache restore, `gradlew --no-daemon <gradle-task>`
+(default `assembleRelease`) on a cache miss). This is the build half of the
+two Maestro pipelines with no
 detect/test jobs; it does not repack and does not run Maestro. Meant to be
 called from a workflow that is itself `workflow_dispatch`-triggered (plus
 optionally `push`/`schedule`) in the consuming repository.
@@ -25,6 +26,8 @@ optionally `push`/`schedule`) in the consuming repository.
 | `xcode-version`                   | no       | `26.4.1`                                           | Xcode version string, e.g. `26.4.1`. |
 | `xcode-build`                     | no       | `17E202`                                           | Xcode build number, e.g. `17E202`. |
 | `cmdline-tools-version`           | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults. |
+| `gradle-task`                     | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
+| `gradle-args`                     | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
 | `ios-cache-profile`               | no       | `ios-native-v1`                                    | Cache-key prefix for the iOS native-app cache. |
 | `android-cache-profile`           | no       | `android-native-v1`                                | Cache-key prefix for the Android native-app cache. |
 | `expo-fingerprint-version`        | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |

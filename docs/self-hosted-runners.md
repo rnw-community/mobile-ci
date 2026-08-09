@@ -51,6 +51,21 @@ with:
     test-runner-labels: '["self-hosted","macos-maestro"]'
 ```
 
+**Pre-existing Homebrew-managed `maestro`.** The `Install Maestro` step in
+`run-maestro-ios`, `run-maestro-android-redroid`, and `run-maestro-android`
+prefers a `maestro` already on `PATH` when it exactly matches the pinned
+`maestro-version`, and otherwise installs the pinned version to
+`~/.maestro/bin` and puts that ahead of `PATH` for the rest of the job. The
+official `get.maestro.mobile.dev` installer itself refuses to run at all if
+it detects an existing Homebrew-managed `maestro`
+(`Your maestro installation is already managed by a homebrew`), which
+otherwise hard-fails every run on that host. If a host was ever provisioned
+with `brew install maestro`, either `brew uninstall maestro` on it once, or
+rely on this action's `PATH` override picking up the pinned `~/.maestro/bin`
+copy ahead of Homebrew's — do not `brew upgrade maestro` to "fix" a pinned
+version mismatch, since the two installs will then compete for `PATH` on
+every run.
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,
@@ -267,6 +282,85 @@ exists to avoid.
 ```bash
 sudo systemctl enable --now redroid-prewarm.timer
 ```
+
+### Google Play Services (GMS)
+
+Stock `redroid` images are plain AOSP — no Google Play Services, no Play
+Store, no Play Integrity. Any app that calls a GMS API at runtime (Google
+Wallet/Pay's `isReadyToPay()`, Maps, Firebase Cloud Messaging, Play
+Integrity attestation, Google Sign-In, and similar) will hang or fail on
+Redroid even though the container boots, `adb` connects, and the APK
+installs cleanly — the container-level plumbing this doc covers is not the
+problem. This was discovered against a real consumer app: every Maestro
+flow timed out at launch, blocked on the app's own
+`Wallet.getPaymentsClient().isReadyToPay()` probe, which never resolves
+without GMS present in the image.
+
+Options for a consumer app that depends on GMS at runtime:
+
+1. **Provision a GMS-enabled Redroid image.** Layer `gapps`/`microG` into
+   the image and reference the resulting tag via `android-maestro.yml`'s
+   `redroid-image` input. If a
+   [prewarm manifest](#the-redroid-prewarm-manifest) is configured, note
+   that `redroid-image` is only consulted on a manifest *miss* — on a hit,
+   the container boots from the manifest's own `image` field and its
+   already-initialized `dataDir` (a `/data` volume, not the system image
+   itself), so a manifest hit silently ignores a `redroid-image` change.
+   Point the manifest's `image` at your GMS-enabled tag and rebuild
+   `dataDir` from it (re-run [the prewarm script](#producing-the-manifest-on-the-host)
+   against the new image), or disable prewarming
+   (`redroid-prewarm-manifest-path: ''`, or remove the manifest file) if
+   you would rather not rebuild it and are fine paying the cold-boot cost.
+2. **Switch to `android-driver: avd` with a `google_apis` system image**
+   (`emulator-target: google_apis` is already the default for the `avd`
+   driver), on a runner architecture Google actually ships an emulator for
+   — x86_64 Linux or macOS `arm64`. This is not an option on this repo's
+   default `linux-aarch64` self-hosted pool: Google publishes no
+   `linux-aarch64` build of the Android emulator (see above), so `avd`
+   cannot boot there regardless of system image.
+3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
+   or runtime flag that stubs `isReadyToPay()`-style calls under
+   Maestro/CI), so the flow under test never depends on GMS being present.
+4. **Dismiss the "won't run without Google Play services" dialog at every
+   entry point that invokes a GMS-dependent operation, not only the ones
+   a flow's own steps tap into.** A hang is not the only symptom: one
+   consumer's own logcat showed, verbatim and reproducibly across every
+   shard, `GoogleApiAvailability: Google Play services is invalid.
+   Cannot recover.` — `ConnectionResult.SERVICE_INVALID`. Per Google's
+   docs `SERVICE_INVALID` textbook-describes an *installed* package
+   failing its own authenticity check, which is not literally what a
+   stock Redroid image (no Play Services package at all) sounds like it
+   should hit — `SERVICE_MISSING` looks like the closer fit on paper.
+   Empirically, on this fleet's Redroid image it is `SERVICE_INVALID`
+   every time (the log line is reproducible, not a one-off); the
+   evidence takes precedence over that assumption, and either way the
+   code is a generic Play Services availability signal, not a statement
+   that any specific GMS API (Wallet/Payments included) is unsupported.
+   On this Redroid image every GMS-dependent operation hits this same
+   code once invoked.
+   `Wallet.getPaymentsClient()` itself only builds a `PaymentsClient`
+   object and is harmless on its own; it was the readiness call chained
+   right after it (that consumer's own `isReadyToPay()` probe) whose
+   connection failure Play Services' bundled fallback UI surfaced as a
+   blocking system dialog, instead of the hang option 3 above is written
+   around — a client built in one place can invoke the actual
+   GMS-dependent operation later or elsewhere, so place the dismissal
+   after that invocation, not around wherever the client happens to be
+   constructed. Their flows guarded the one entry point a flow step
+   drove directly (a button tap that shows the payment sheet, and
+   invokes `loadPaymentData` right behind it) with a
+   `tapOn: {text: "OK", optional: true}` right after the triggering step,
+   but missed that `isReadyToPay()` also fires from the app's own
+   effect-driven mount logic, with no flow step to hang a dismissal off.
+   Every flow shared a `launchApp` subflow, so the dialog occluded the
+   app's own elements from the very first assertion of every flow, not
+   just the ones that reach the guarded button. The fix was the same
+   optional dismissal placed right after `launchApp` in the shared
+   subflow, since that is where the mount-time probe's invocation
+   effectively lands — the lesson is to audit *every* code path that
+   invokes a GMS-dependent operation (including ones triggered by app
+   lifecycle, not user action) rather than stopping at the first one a
+   flow happens to exercise.
 
 ## Maintainer note: fleet self-test repo variables
 

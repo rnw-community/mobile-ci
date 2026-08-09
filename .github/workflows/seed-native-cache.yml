@@ -35,6 +35,16 @@ on:
                 type: string
                 required: false
                 default: '12266719'
+            gradle-task:
+                description: See build-android-app README — gradlew task to build, e.g. :app:assembleRelease to scope to one module.
+                type: string
+                required: false
+                default: assembleRelease
+            gradle-args:
+                description: See build-android-app README — extra whitespace-split arguments appended after gradle-task.
+                type: string
+                required: false
+                default: ''
             ios-cache-profile:
                 type: string
                 required: false
@@ -156,7 +166,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
@@ -173,7 +183,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@main
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.3.1 # v1.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -195,7 +205,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
               with:
                   platform: ios
                   working-directory: ${{ matrix.target.appDir }}
@@ -203,7 +213,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -219,7 +229,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -232,7 +242,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@main
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.3.1 # v1.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -249,7 +259,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@main
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -257,7 +267,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -315,7 +325,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
@@ -347,7 +357,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
               with:
                   platform: android
                   working-directory: ${{ matrix.target.appDir }}
@@ -355,11 +365,11 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -371,10 +381,12 @@ jobs:
 
             - name: build-android-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@main
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.3.1 # v1.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  gradle-task: ${{ inputs.gradle-task }}
+                  gradle-args: ${{ inputs.gradle-args }}
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock') }}
                   gradle-cache-restore-keys: |
@@ -382,11 +394,11 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}

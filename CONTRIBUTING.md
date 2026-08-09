@@ -18,11 +18,11 @@ convention `actions/checkout`, `actions/setup-node`, and most of the official
 GitHub Actions follow. Pin to an exact `vX.Y.Z` tag instead of `v1` only if
 you need to freeze against upstream drift entirely.
 
-**Pre-release status:** `v1` has not been cut yet. The action catalog and
-reusable workflows here were extracted from a canary pipeline; the `v1` tag
-will be created once that source pipeline's canaries are proven green (see the
-root `README.md` for details). Until then, consumers pin to `@main` at their
-own risk — `main` can change without a deprecation window.
+**Release status:** `v1` has been cut; `v1.0.0` through the latest `v1.x.y`
+are available (see [RELEASE.md](RELEASE.md) for the full procedure).
+Consumers pin to `@v1` for the latest compatible release or to an exact
+`@vX.Y.Z` tag to freeze the dependency entirely; pinning to `@main` still
+works but is no longer necessary and gets no deprecation window.
 
 Breaking changes to an action's inputs/outputs or a reusable workflow's inputs
 bump the major version. Additive inputs with sensible defaults, new actions,
@@ -56,8 +56,22 @@ The reusable workflows under `.github/workflows/` invoke this repo's own
 composite actions via the full `rnw-community/mobile-ci/actions/<name>@<ref>`
 form (a relative `./actions/<name>` reference only resolves against whatever
 is checked out in the *caller's* job, not this repo, so it cannot be used
-here). These self-references currently point at `@main`; update them to `@v1`
-in the same commit that cuts the `v1` tag.
+here).
+
+The pre-`v1` policy of floating these self-references on `@main` is over:
+now that `v1.x` releases exist, a consumer pinning a reusable workflow to a
+tag or commit SHA expects that pin to freeze the *entire* call graph,
+including the actions the workflow calls internally. Self-references
+therefore pin to the exact `vX.Y.Z` tag of the current release (e.g.
+`rnw-community/mobile-ci/actions/build-ios-app@v1.3.1 # v1.3.1`), and are
+bumped to the new tag as part of the release PR for every release — see
+[RELEASE.md](RELEASE.md#self-references) for the exact procedure. Unlike
+third-party `uses:`, self-references pin to a tag rather than a commit SHA:
+the tag is created from the very commit the self-reference update is part
+of, so pinning to a SHA would be chicken-and-egg (the SHA is not known until
+after the commit exists), and RELEASE.md forbids ever moving a release tag
+once cut — making the tag effectively as immutable as a SHA for this
+in-repo, single-release-procedure use.
 
 ## Validating changes locally
 

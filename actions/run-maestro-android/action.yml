@@ -59,6 +59,24 @@ inputs:
       running the shard. Leave empty to skip priming.
     required: false
     default: ''
+  pre-test-command:
+    description: >-
+      Optional consumer-owned shell command run once after the app is
+      installed on the emulator and before any flow (including
+      pre-run-flow) executes, e.g. seeding a fixture into the app's data
+      container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+      environment. Its failure fails the step immediately. Leave empty to
+      skip.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+      and shard flows alike). Rejects (fails closed) any line without '=' or
+      whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -104,11 +122,32 @@ runs:
       env:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
+          set -euo pipefail
           maestro_bin="$HOME/.maestro/bin/maestro"
-          if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
-            curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash
+          existing_bin="$(command -v maestro || true)"
+          existing_version=''
+          if [ -n "$existing_bin" ]; then
+            existing_version="$("$existing_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
           fi
-          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
+            echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
+          else
+            if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
+              if ! curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash; then
+                echo "::error::Maestro installer failed to install pinned version $MAESTRO_VERSION${existing_bin:+ (a pre-existing maestro at '$existing_bin' may be Homebrew-managed and conflicting)}. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+                exit 1
+              fi
+            fi
+            echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.maestro/bin:$PATH"
+            resolved_bin="$(command -v maestro)"
+            resolved_version="$("$resolved_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+            if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+              echo "::error::maestro on PATH resolves to '$resolved_bin' (version '$resolved_version'), not the pinned $MAESTRO_VERSION at '$maestro_bin' — a conflicting maestro installation (e.g. Homebrew-managed) is shadowing the pinned copy earlier in PATH. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+              exit 1
+            fi
+            echo "Installed and using maestro $MAESTRO_VERSION at $resolved_bin"
+          fi
 
     - name: Boot emulator, install app, and run Maestro shard
       uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
@@ -123,6 +162,8 @@ runs:
           SHARD_INDEX: ${{ inputs.shard-index }}
           SHARD_COUNT: ${{ inputs.shard-count }}
           PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+          PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+          MAESTRO_ENV: ${{ inputs.maestro-env }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
       with:
           api-level: ${{ inputs.api-level }}
