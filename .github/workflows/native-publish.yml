@@ -328,7 +328,7 @@ jobs:
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
             - name: Upload iOS build artifact
-              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: ios-publish-build
                   path: ${{ steps.build.outputs.artifact-path }}
@@ -616,7 +616,7 @@ jobs:
                   echo "ABI '${REQUIRED_ABI}' present."
 
             - name: Upload Android build artifact
-              uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: android-publish-build
                   path: ${{ steps.build.outputs.artifact-path }}
