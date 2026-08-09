@@ -132,6 +132,7 @@ runs:
           device_name_of() {
             printf '%s\n' "$1" \
               | sed -E 's/^[[:space:]]+//' \
+              | sed -E 's/[[:space:]]+$//' \
               | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
           }
           if [ -n "$SIMULATOR_DEVICE" ]; then
