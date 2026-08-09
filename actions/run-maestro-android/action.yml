@@ -85,7 +85,13 @@ inputs:
     required: false
     default: '0'
   maestro-version:
-    description: Pinned Maestro CLI version.
+    description: >-
+      Pinned Maestro CLI version. Installed by downloading the matching
+      cli-<version> release directly from
+      https://github.com/mobile-dev-inc/Maestro/releases to
+      $HOME/.maestro-pinned/<version>, immune to a pre-existing
+      Homebrew-managed maestro on the host. An existing maestro already on
+      PATH is reused only when its version exactly matches.
     required: false
     default: '2.8.0'
   api-level:
@@ -123,7 +129,6 @@ runs:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
           set -euo pipefail
-          maestro_bin="$HOME/.maestro/bin/maestro"
           existing_bin="$(command -v maestro || true)"
           existing_version=''
           if [ -n "$existing_bin" ]; then
@@ -131,23 +136,60 @@ runs:
           fi
           if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
             echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
-          else
-            if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
-              if ! curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash; then
-                echo "::error::Maestro installer failed to install pinned version $MAESTRO_VERSION${existing_bin:+ (a pre-existing maestro at '$existing_bin' may be Homebrew-managed and conflicting)}. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
-                exit 1
-              fi
-            fi
-            echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
-            export PATH="$HOME/.maestro/bin:$PATH"
-            resolved_bin="$(command -v maestro)"
-            resolved_version="$("$resolved_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
-            if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
-              echo "::error::maestro on PATH resolves to '$resolved_bin' (version '$resolved_version'), not the pinned $MAESTRO_VERSION at '$maestro_bin' — a conflicting maestro installation (e.g. Homebrew-managed) is shadowing the pinned copy earlier in PATH. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+            exit 0
+          fi
+          command -v unzip >/dev/null 2>&1 || { echo "::error::'unzip' is required to install the pinned Maestro release but is not on PATH."; exit 1; }
+          pinned_dir="$HOME/.maestro-pinned/$MAESTRO_VERSION"
+          pinned_bin="$pinned_dir/maestro/bin/maestro"
+          pinned_version=''
+          if [ -x "$pinned_bin" ]; then
+            pinned_version="$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          fi
+          if [ "$pinned_version" != "$MAESTRO_VERSION" ]; then
+            download_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+            checksum_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/checksums_sha256.txt"
+            scratch_dir="$(mktemp -d)"
+            trap 'rm -rf "$scratch_dir"' EXIT
+            zip_path="$scratch_dir/maestro.zip"
+            http_status="$(curl -fsSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$zip_path" "$download_url" || echo "000")"
+            if [ "$http_status" != "200" ]; then
+              echo "::error::Download of maestro-version '$MAESTRO_VERSION' from '$download_url' failed (HTTP $http_status). Confirm a 'cli-$MAESTRO_VERSION' release publishing a maestro.zip asset exists at https://github.com/mobile-dev-inc/Maestro/releases."
               exit 1
             fi
-            echo "Installed and using maestro $MAESTRO_VERSION at $resolved_bin"
+            if curl -fsSL --retry 3 --retry-connrefused -o "$scratch_dir/checksums_sha256.txt" "$checksum_url" 2>/dev/null; then
+              expected_sha="$(awk '$2 == "maestro.zip" { print $1 }' "$scratch_dir/checksums_sha256.txt")"
+              if [ -z "$expected_sha" ]; then
+                echo "::error::checksums_sha256.txt for cli-$MAESTRO_VERSION has no maestro.zip entry; refusing to install an unverifiable download."
+                exit 1
+              fi
+              if command -v sha256sum >/dev/null 2>&1; then
+                actual_sha="$(sha256sum "$zip_path" | awk '{print $1}')"
+              else
+                actual_sha="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+              fi
+              if [ "$actual_sha" != "$expected_sha" ]; then
+                echo "::error::maestro.zip checksum mismatch for cli-$MAESTRO_VERSION: expected $expected_sha, got $actual_sha."
+                exit 1
+              fi
+            else
+              echo "::warning::mobile-dev-inc/Maestro cli-$MAESTRO_VERSION did not publish checksums_sha256.txt; proceeding on the TLS-verified download from the official GitHub release only."
+            fi
+            rm -rf "$pinned_dir"
+            mkdir -p "$pinned_dir"
+            unzip -q "$zip_path" -d "$pinned_dir"
           fi
+          chmod +x "$pinned_bin" 2>/dev/null || true
+          if [ ! -x "$pinned_bin" ]; then
+            echo "::error::Expected a maestro binary at '$pinned_bin' after extracting cli-$MAESTRO_VERSION's maestro.zip; the release archive layout may have changed."
+            exit 1
+          fi
+          resolved_version="$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+            echo "::error::maestro at '$pinned_bin' reports version '$resolved_version', not the pinned $MAESTRO_VERSION."
+            exit 1
+          fi
+          echo "$pinned_dir/maestro/bin" >> "$GITHUB_PATH"
+          echo "Installed and using maestro $MAESTRO_VERSION at $pinned_bin"
 
     - name: Boot emulator, install app, and run Maestro shard
       id: run-shard

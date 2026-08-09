@@ -63,20 +63,23 @@ make sure every host in the pool has that exact device provisioned — a
 pinned name that only exists on some hosts turns an intermittent heuristic
 mismatch into a hard, host-dependent failure instead.
 
-**Pre-existing Homebrew-managed `maestro`.** The `Install Maestro` step in
-`run-maestro-ios`, `run-maestro-android-redroid`, and `run-maestro-android`
-prefers a `maestro` already on `PATH` when it exactly matches the pinned
-`maestro-version`, and otherwise installs the pinned version to
-`~/.maestro/bin` and puts that ahead of `PATH` for the rest of the job. The
-official `get.maestro.mobile.dev` installer itself refuses to run at all if
-it detects an existing Homebrew-managed `maestro`
-(`Your maestro installation is already managed by a homebrew`), which
-otherwise hard-fails every run on that host. If a host was ever provisioned
-with `brew install maestro`, either `brew uninstall maestro` on it once, or
-rely on this action's `PATH` override picking up the pinned `~/.maestro/bin`
-copy ahead of Homebrew's — do not `brew upgrade maestro` to "fix" a pinned
-version mismatch, since the two installs will then compete for `PATH` on
-every run.
+**Pre-existing Homebrew-managed `maestro`: no host action needed.** The
+`Install Maestro` step in `run-maestro-ios`, `run-maestro-android-redroid`,
+and `run-maestro-android` prefers a `maestro` already on `PATH` when it
+exactly matches the pinned `maestro-version`, and otherwise downloads that
+exact `cli-<version>` release directly from
+`https://github.com/mobile-dev-inc/Maestro/releases` (verifying its
+published `checksums_sha256.txt` when present) and extracts it to
+`$HOME/.maestro-pinned/<version>`, which it puts ahead of `PATH` for the
+rest of the job. This sidesteps `~/.maestro` entirely, so it never invokes
+(and is never refused by) the official `get.maestro.mobile.dev` bootstrap
+script, which itself refuses to run at all if it detects an existing
+Homebrew-managed `maestro` (`Your maestro installation is already managed by
+a homebrew`). A Homebrew-installed `maestro` on a host is therefore
+harmless: the action either reuses it (exact version match) or ignores it in
+favor of its own pinned copy — no `brew uninstall`/`brew upgrade` is
+required, and a host is free to keep whatever Homebrew-managed `maestro` it
+already has.
 
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
