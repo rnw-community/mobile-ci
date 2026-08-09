@@ -1,13 +1,30 @@
 # run-maestro-ios
 
-Boots an available iOS Simulator, waits for `simctl bootstatus -b` before
-installing (installing before the simulator finishes booting is a reliable
-source of flaky first-run failures), installs the packaged `.app`, runs a
-Maestro flow shard, and — regardless of pass/fail — captures a final
-screenshot and uploads it plus `MAESTRO_DEBUG_OUTPUT_DIRECTORY` contents as an
-artifact. The simulator is always shut down at the end (`if: always()`), so a
-failed shard never leaves a booted simulator behind on a persistent
-self-hosted runner.
+Boots an available iOS Simulator — the last-available iPhone-family device by
+default, or the exact device named by `simulator-device` — waits for `simctl
+bootstatus -b` before installing (installing before the simulator finishes
+booting is a reliable source of flaky first-run failures), installs the
+packaged `.app`, runs a Maestro flow shard, and — regardless of pass/fail —
+captures a final screenshot and uploads it plus `MAESTRO_DEBUG_OUTPUT_DIRECTORY`
+contents as an artifact. When any flow in the shard failed, the artifact also
+gets a `maestro-debug/` subdirectory: a copy of Maestro's own per-run debug
+output (UI hierarchy dumps and per-flow screenshots normally left behind only
+in `~/.maestro/tests/<timestamp>` on the runner) for every `maestro test`
+invocation from this shard, capped at 200MB combined — a `::warning::` is
+emitted and the copy skipped if the shard's debug output exceeds that. The
+simulator is always shut down at the end (`if: always()`), so a failed shard
+never leaves a booted simulator behind on a persistent self-hosted runner.
+
+**Pinning `simulator-device`.** Leaving it empty keeps booting the last
+available iPhone-family device by `xcrun simctl list devices available`
+order — convenient, but that order (and therefore which physical device
+shape/OS a flow runs against) silently changes whenever the runner pool's
+provisioned device set changes, which can make a flow that only fails on one
+specific device look like a flaky, unrelated regression. Pin an exact device
+name (e.g. `iPhone 17 Pro`) once your flows are sensitive to device-specific
+rendering, and provision that same device identically across every host in
+the pool — see
+[docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#macos-pools-ios).
 
 ## Inputs
 
@@ -27,6 +44,7 @@ self-hosted runner.
 | `maestro-env`           | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `flow-retries`          | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `maestro-version`       | no       | `2.8.0`       | Pinned Maestro CLI version.                                        |
+| `simulator-device`      | no       | `''`          | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched with no fuzzy matching. Fails closed, listing available devices, on no exact match. Empty keeps the last-available-iPhone heuristic (emits a `::notice::` naming its choice). |
 | `artifacts-dir`         | yes      | —             | Directory Maestro debug output and final-state capture is written to. |
 | `artifact-name`         | yes      | —             | Uploaded artifact name.                                            |
 | `retention-days`        | no       | `7`           | Uploaded artifact retention in days.                               |

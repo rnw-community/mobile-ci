@@ -5,7 +5,13 @@ kernel module) instead of an AVD emulator, waits for `sys.boot_completed`
 before installing, installs the packaged `.apk`, runs a Maestro flow shard,
 and — regardless of pass/fail — captures a final screenshot plus full, crash,
 and app-filtered logcat and a foreground-activity dump, uploaded as an
-artifact. The container is always removed at the end (`if: always()`).
+artifact. When any flow in the shard failed, the artifact also gets a
+`maestro-debug/` subdirectory: a copy of Maestro's own per-run debug output
+(UI hierarchy dumps and per-flow screenshots normally left behind only in
+`~/.maestro/tests/<timestamp>` on the runner) for every `maestro test`
+invocation from this shard, capped at 200MB combined — a `::warning::` is
+emitted and the copy skipped if the shard's debug output exceeds that. The
+container is always removed at the end (`if: always()`).
 
 Use this instead of `run-maestro-android` on hosts where the AVD emulator
 cannot run at all — Google publishes no `linux-aarch64` build of the Android

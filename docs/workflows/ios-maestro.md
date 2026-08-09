@@ -37,6 +37,7 @@ on `ubuntu-latest`.
 | `target-packages`             | no       | `''`                                       | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`             | no       | `2.8.0`                                    | Pinned Maestro CLI version. |
+| `simulator-device`            | no       | `''`                                       | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched against `xcrun simctl list devices available` with no fuzzy matching — fails closed, listing available devices, on no exact match. Empty keeps the previous last-available heuristic (emits a `::notice::` naming its choice and recommending pinning). |
 | `node-version`                | no       | `22.x`                                     | Node version for `actions/setup-node`. |
 | `install-command`             | no       | `yarn install --immutable`                 | JS dependency install command. |
 | `enable-corepack`             | no       | `true`                                     | Run `corepack enable` before install. |

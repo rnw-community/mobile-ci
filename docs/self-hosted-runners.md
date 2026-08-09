@@ -51,6 +51,18 @@ with:
     test-runner-labels: '["self-hosted","macos-maestro"]'
 ```
 
+**Pin `simulator-device` once the pool has more than one host.** Left empty,
+`run-maestro-ios`/`ios-maestro.yml`'s `simulator-device` boots the last
+available iPhone-family device by `xcrun simctl list devices available`
+order — an order that depends on exactly which simulator runtimes and
+devices are provisioned on that specific host, so it can silently boot a
+different device than the last run, or a different device than a sibling
+host in the same pool, with no diff anywhere. Pin an exact device name (e.g.
+`iPhone 17 Pro`) once a flow's rendering is sensitive to device shape, and
+make sure every host in the pool has that exact device provisioned — a
+pinned name that only exists on some hosts turns an intermittent heuristic
+mismatch into a hard, host-dependent failure instead.
+
 **Pre-existing Homebrew-managed `maestro`.** The `Install Maestro` step in
 `run-maestro-ios`, `run-maestro-android-redroid`, and `run-maestro-android`
 prefers a `maestro` already on `PATH` when it exactly matches the pinned

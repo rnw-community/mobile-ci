@@ -5,6 +5,11 @@
 # environment variables set on that step, inherited through to here.
 set -euo pipefail
 
+mkdir -p "$HOME/.maestro/tests"
+maestro_debug_marker="$RUNNER_TEMP/maestro-debug-marker-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+touch "$maestro_debug_marker"
+echo "MAESTRO_DEBUG_MARKER=$maestro_debug_marker" >> "$GITHUB_ENV"
+
 adb wait-for-device
 timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
 ANDROID_SERIAL=$(adb devices | awk '$2 == "device" { print $1; exit }')

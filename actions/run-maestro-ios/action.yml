@@ -88,6 +88,19 @@ inputs:
     description: Pinned Maestro CLI version.
     required: false
     default: '2.8.0'
+  simulator-device:
+    description: >-
+      Exact simulator device name to boot, e.g. 'iPhone 17 Pro', matched
+      against `xcrun simctl list devices available` with no fuzzy matching —
+      fails closed, listing the available devices, when no exact match
+      exists. Leave empty (default) to keep the previous behavior of
+      booting the last available iPhone-family device by list order, a
+      heuristic that silently changes which device a flow runs against
+      whenever the runner pool's provisioned device set changes. Pinning
+      requires the device set to be provisioned identically across every
+      host in the pool.
+    required: false
+    default: ''
   artifacts-dir:
     description: Directory Maestro debug output and final-state capture is written to.
     required: true
@@ -111,10 +124,36 @@ runs:
 
     - name: Boot iOS Simulator
       shell: bash
+      env:
+        SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
       run: |
           set -euo pipefail
-          device_line=$(xcrun simctl list devices available | grep -E '^\s+iPhone.*\(' | tail -1)
-          test -n "$device_line"
+          available_devices=$(xcrun simctl list devices available)
+          device_name_of() {
+            printf '%s\n' "$1" \
+              | sed -E 's/^[[:space:]]+//' \
+              | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
+          }
+          if [ -n "$SIMULATOR_DEVICE" ]; then
+            device_line=''
+            while IFS= read -r line; do
+              udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)
+              [ -n "$udid" ] || continue
+              if [ "$(device_name_of "$line")" = "$SIMULATOR_DEVICE" ]; then
+                device_line="$line"
+                break
+              fi
+            done <<< "$available_devices"
+            if [ -z "$device_line" ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
+              echo "$available_devices"
+              exit 1
+            fi
+          else
+            device_line=$(grep -E '^\s+iPhone.*\(' <<< "$available_devices" | tail -1)
+            test -n "$device_line"
+            echo "::notice::No simulator-device pinned; booted '$(device_name_of "$device_line")' via the last-available heuristic. Pin simulator-device to stop this choice from silently changing when the runner pool's device set changes."
+          fi
           device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
           test -n "$device_udid"
           echo "Booting simulator: $device_line"
@@ -173,6 +212,7 @@ runs:
           fi
 
     - name: Run Maestro shard
+      id: run-shard
       shell: bash
       env:
         APP_ID: ${{ inputs.app-id }}
@@ -188,6 +228,10 @@ runs:
         MAESTRO_ENV: ${{ inputs.maestro-env }}
       run: |
           set -euo pipefail
+          mkdir -p "$HOME/.maestro/tests"
+          maestro_debug_marker="$RUNNER_TEMP/maestro-debug-marker-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          touch "$maestro_debug_marker"
+          echo "MAESTRO_DEBUG_MARKER=$maestro_debug_marker" >> "$GITHUB_ENV"
           case "$SHARD_COUNT" in
             ''|*[!0-9]*|0[0-9]*)
               echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer without leading zeros."
@@ -395,9 +439,27 @@ runs:
     - name: Capture final simulator state
       if: always()
       shell: bash
+      env:
+        SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
           xcrun simctl io "$SIMULATOR_UDID" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/final-screen.png" || true
+          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_MARKER:-}" ] && [ -d "$HOME/.maestro/tests" ]; then
+            failed_dirs=()
+            while IFS= read -r dir; do
+              failed_dirs+=("$dir")
+            done < <(find "$HOME/.maestro/tests" -mindepth 1 -maxdepth 1 -type d -newer "$MAESTRO_DEBUG_MARKER")
+            if [ "${#failed_dirs[@]}" -gt 0 ]; then
+              debug_size_kb=$(du -sck "${failed_dirs[@]}" 2>/dev/null | tail -1 | awk '{print $1}')
+              max_debug_kb=$((200 * 1024))
+              if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
+                echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
+              else
+                mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/maestro-debug"
+                cp -R "${failed_dirs[@]}" "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/maestro-debug/"
+              fi
+            fi
+          fi
 
     - name: Shutdown simulator
       if: always()

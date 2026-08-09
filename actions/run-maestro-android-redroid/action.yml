@@ -337,6 +337,7 @@ runs:
       run: eval "$PRE_TEST_COMMAND"
 
     - name: Run Maestro shard
+      id: run-shard
       shell: bash
       env:
         JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx2048m
@@ -354,6 +355,10 @@ runs:
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
+          mkdir -p "$HOME/.maestro/tests"
+          maestro_debug_marker="$RUNNER_TEMP/maestro-debug-marker-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          touch "$maestro_debug_marker"
+          echo "MAESTRO_DEBUG_MARKER=$maestro_debug_marker" >> "$GITHUB_ENV"
           # An out-of-range shard-index (>= shard-count, or a typo'd
           # negative/non-numeric value) makes the modulo selection below
           # match nothing for every flow, so the shard would silently exit 0
@@ -568,6 +573,7 @@ runs:
       shell: bash
       env:
         OUT_DIR: ${{ inputs.artifacts-dir }}
+        SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$OUT_DIR"
           timeout 30 adb -s "$ANDROID_SERIAL" exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
@@ -576,6 +582,22 @@ runs:
           timeout 30 adb -s "$ANDROID_SERIAL" logcat -d ReactNative:V ReactNativeJS:V AndroidRuntime:E NativeModule:V '*:E' \
             > "$OUT_DIR/logcat-app.txt" 2>&1 || true
           timeout 30 adb -s "$ANDROID_SERIAL" shell dumpsys activity top > "$OUT_DIR/activity-top.txt" 2>&1 || true
+          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_MARKER:-}" ] && [ -d "$HOME/.maestro/tests" ]; then
+            failed_dirs=()
+            while IFS= read -r dir; do
+              failed_dirs+=("$dir")
+            done < <(find "$HOME/.maestro/tests" -mindepth 1 -maxdepth 1 -type d -newer "$MAESTRO_DEBUG_MARKER")
+            if [ "${#failed_dirs[@]}" -gt 0 ]; then
+              debug_size_kb=$(du -sck "${failed_dirs[@]}" 2>/dev/null | tail -1 | awk '{print $1}')
+              max_debug_kb=$((200 * 1024))
+              if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
+                echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
+              else
+                mkdir -p "$OUT_DIR/maestro-debug"
+                cp -R "${failed_dirs[@]}" "$OUT_DIR/maestro-debug/"
+              fi
+            fi
+          fi
 
     - name: Teardown Redroid container
       if: always()
