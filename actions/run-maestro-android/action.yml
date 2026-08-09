@@ -188,21 +188,18 @@ runs:
           adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
           adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
           adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
-          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_MARKER:-}" ] && [ -d "$HOME/.maestro/tests" ]; then
-            failed_dirs=()
-            while IFS= read -r dir; do
-              failed_dirs+=("$dir")
-            done < <(find "$HOME/.maestro/tests" -mindepth 1 -maxdepth 1 -type d -newer "$MAESTRO_DEBUG_MARKER")
-            if [ "${#failed_dirs[@]}" -gt 0 ]; then
-              debug_size_kb=$(du -sck "${failed_dirs[@]}" 2>/dev/null | tail -1 | awk '{print $1}')
-              max_debug_kb=$((200 * 1024))
-              if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
-                echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
-              else
-                mkdir -p "$OUT_DIR/maestro-debug"
-                cp -R "${failed_dirs[@]}" "$OUT_DIR/maestro-debug/"
-              fi
+          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
+            debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
+            max_debug_kb=$((200 * 1024))
+            if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
+              echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
+            else
+              mkdir -p "$OUT_DIR/maestro-debug"
+              cp -R "$MAESTRO_DEBUG_SCRATCH_DIR/." "$OUT_DIR/maestro-debug/"
             fi
+          fi
+          if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
+            rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
           fi
 
     - name: Shutdown emulator

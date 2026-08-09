@@ -355,10 +355,18 @@ runs:
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
-          mkdir -p "$HOME/.maestro/tests"
-          maestro_debug_marker="$RUNNER_TEMP/maestro-debug-marker-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          touch "$maestro_debug_marker"
-          echo "MAESTRO_DEBUG_MARKER=$maestro_debug_marker" >> "$GITHUB_ENV"
+          # A shard-private scratch directory passed to every `maestro test`
+          # invocation's --debug-output below, rather than relying on
+          # Maestro's shared, unscoped ~/.maestro/tests default: two shards
+          # (this repo's own concurrent matrix cells, or a different
+          # workflow entirely) can share one self-hosted runner's $HOME, and
+          # a directory selected by "created since a timestamp marker" can't
+          # tell this shard's debug output apart from a sibling's landing in
+          # the same window. A path derived from shard-index/run-id/attempt
+          # can never collide with another shard's.
+          maestro_debug_scratch_dir="$RUNNER_TEMP/maestro-debug-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$maestro_debug_scratch_dir"
+          echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
           # An out-of-range shard-index (>= shard-count, or a typo'd
           # negative/non-numeric value) makes the modulo selection below
           # match nothing for every flow, so the shard would silently exit 0
@@ -437,7 +445,7 @@ runs:
             start=$(date +%s)
             while [ "$attempts" -lt "$max_attempts" ]; do
               attempts=$((attempts + 1))
-              if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
+              if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
                 status=passed
                 break
               fi
@@ -582,21 +590,18 @@ runs:
           timeout 30 adb -s "$ANDROID_SERIAL" logcat -d ReactNative:V ReactNativeJS:V AndroidRuntime:E NativeModule:V '*:E' \
             > "$OUT_DIR/logcat-app.txt" 2>&1 || true
           timeout 30 adb -s "$ANDROID_SERIAL" shell dumpsys activity top > "$OUT_DIR/activity-top.txt" 2>&1 || true
-          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_MARKER:-}" ] && [ -d "$HOME/.maestro/tests" ]; then
-            failed_dirs=()
-            while IFS= read -r dir; do
-              failed_dirs+=("$dir")
-            done < <(find "$HOME/.maestro/tests" -mindepth 1 -maxdepth 1 -type d -newer "$MAESTRO_DEBUG_MARKER")
-            if [ "${#failed_dirs[@]}" -gt 0 ]; then
-              debug_size_kb=$(du -sck "${failed_dirs[@]}" 2>/dev/null | tail -1 | awk '{print $1}')
-              max_debug_kb=$((200 * 1024))
-              if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
-                echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
-              else
-                mkdir -p "$OUT_DIR/maestro-debug"
-                cp -R "${failed_dirs[@]}" "$OUT_DIR/maestro-debug/"
-              fi
+          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
+            debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
+            max_debug_kb=$((200 * 1024))
+            if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
+              echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
+            else
+              mkdir -p "$OUT_DIR/maestro-debug"
+              cp -R "$MAESTRO_DEBUG_SCRATCH_DIR/." "$OUT_DIR/maestro-debug/"
             fi
+          fi
+          if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
+            rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
           fi
 
     - name: Teardown Redroid container

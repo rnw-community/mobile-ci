@@ -6,14 +6,17 @@ bootstatus -b` before installing (installing before the simulator finishes
 booting is a reliable source of flaky first-run failures), installs the
 packaged `.app`, runs a Maestro flow shard, and — regardless of pass/fail —
 captures a final screenshot and uploads it plus `MAESTRO_DEBUG_OUTPUT_DIRECTORY`
-contents as an artifact. When any flow in the shard failed, the artifact also
-gets a `maestro-debug/` subdirectory: a copy of Maestro's own per-run debug
-output (UI hierarchy dumps and per-flow screenshots normally left behind only
-in `~/.maestro/tests/<timestamp>` on the runner) for every `maestro test`
-invocation from this shard, capped at 200MB combined — a `::warning::` is
-emitted and the copy skipped if the shard's debug output exceeds that. The
-simulator is always shut down at the end (`if: always()`), so a failed shard
-never leaves a booted simulator behind on a persistent self-hosted runner.
+contents as an artifact. Every `maestro test` invocation in the shard is
+pointed (`--debug-output`) at a scratch directory private to this shard run
+— rather than Maestro's shared, unscoped `~/.maestro/tests/<timestamp>`
+default, which a concurrent shard on the same persistent self-hosted runner
+could otherwise also be writing into. When any flow in the shard failed,
+that scratch directory (UI hierarchy dumps and per-flow screenshots) is
+copied into the artifact under a `maestro-debug/` subdirectory, capped at
+200MB combined — a `::warning::` is emitted and the copy skipped if the
+shard's debug output exceeds that. The simulator is always shut down at the
+end (`if: always()`), so a failed shard never leaves a booted simulator
+behind on a persistent self-hosted runner.
 
 **Pinning `simulator-device`.** Leaving it empty keeps booting the last
 available iPhone-family device by `xcrun simctl list devices available`
