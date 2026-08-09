@@ -337,6 +337,7 @@ runs:
       run: eval "$PRE_TEST_COMMAND"
 
     - name: Run Maestro shard
+      id: run-shard
       shell: bash
       env:
         JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx2048m
@@ -354,6 +355,18 @@ runs:
         APP_ID: ${{ inputs.app-id }}
       run: |
           set -euo pipefail
+          # A shard-private scratch directory passed to every `maestro test`
+          # invocation's --debug-output below, rather than relying on
+          # Maestro's shared, unscoped ~/.maestro/tests default: two shards
+          # (this repo's own concurrent matrix cells, or a different
+          # workflow entirely) can share one self-hosted runner's $HOME, and
+          # a directory selected by "created since a timestamp marker" can't
+          # tell this shard's debug output apart from a sibling's landing in
+          # the same window. A path derived from shard-index/run-id/attempt
+          # can never collide with another shard's.
+          maestro_debug_scratch_dir="$RUNNER_TEMP/maestro-debug-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$maestro_debug_scratch_dir"
+          echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
           # An out-of-range shard-index (>= shard-count, or a typo'd
           # negative/non-numeric value) makes the modulo selection below
           # match nothing for every flow, so the shard would silently exit 0
@@ -432,7 +445,7 @@ runs:
             start=$(date +%s)
             while [ "$attempts" -lt "$max_attempts" ]; do
               attempts=$((attempts + 1))
-              if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
+              if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
                 status=passed
                 break
               fi
@@ -568,6 +581,7 @@ runs:
       shell: bash
       env:
         OUT_DIR: ${{ inputs.artifacts-dir }}
+        SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$OUT_DIR"
           timeout 30 adb -s "$ANDROID_SERIAL" exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
@@ -576,6 +590,19 @@ runs:
           timeout 30 adb -s "$ANDROID_SERIAL" logcat -d ReactNative:V ReactNativeJS:V AndroidRuntime:E NativeModule:V '*:E' \
             > "$OUT_DIR/logcat-app.txt" 2>&1 || true
           timeout 30 adb -s "$ANDROID_SERIAL" shell dumpsys activity top > "$OUT_DIR/activity-top.txt" 2>&1 || true
+          if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
+            debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
+            max_debug_kb=$((200 * 1024))
+            if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
+              echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
+            else
+              mkdir -p "$OUT_DIR/maestro-debug"
+              cp -R "$MAESTRO_DEBUG_SCRATCH_DIR/." "$OUT_DIR/maestro-debug/"
+            fi
+          fi
+          if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
+            rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
+          fi
 
     - name: Teardown Redroid container
       if: always()

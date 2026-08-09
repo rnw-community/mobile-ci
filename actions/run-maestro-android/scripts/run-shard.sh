@@ -5,6 +5,18 @@
 # environment variables set on that step, inherited through to here.
 set -euo pipefail
 
+# A shard-private scratch directory passed to every `maestro test`
+# invocation's --debug-output below, rather than relying on Maestro's
+# shared, unscoped ~/.maestro/tests default: two shards (this repo's own
+# concurrent matrix cells, or a different workflow entirely) can share one
+# self-hosted runner's $HOME, and a directory selected by "created since a
+# timestamp marker" can't tell this shard's debug output apart from a
+# sibling's landing in the same window. A path derived from
+# shard-index/run-id/attempt can never collide with another shard's.
+maestro_debug_scratch_dir="$RUNNER_TEMP/maestro-debug-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+mkdir -p "$maestro_debug_scratch_dir"
+echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
+
 adb wait-for-device
 timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
 ANDROID_SERIAL=$(adb devices | awk '$2 == "device" { print $1; exit }')
@@ -88,7 +100,7 @@ run_flow_with_retries() {
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
-    if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
+    if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
       status=passed
       break
     fi

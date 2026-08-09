@@ -183,7 +183,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.4.0 # v1.4.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -205,7 +205,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.4.0 # v1.4.0
               with:
                   platform: ios
                   working-directory: ${{ matrix.target.appDir }}
@@ -213,7 +213,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -229,7 +229,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.4.0 # v1.4.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -242,7 +242,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.4.0 # v1.4.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -259,7 +259,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.4.0 # v1.4.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -267,7 +267,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -357,7 +357,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.4.0 # v1.4.0
               with:
                   platform: android
                   working-directory: ${{ matrix.target.appDir }}
@@ -365,7 +365,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -381,7 +381,7 @@ jobs:
 
             - name: build-android-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.4.0 # v1.4.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -394,7 +394,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}

@@ -4,8 +4,16 @@ Boots a **headless** Android emulator (`-no-window -no-audio -gpu
 swiftshader_indirect`, no boot animation, no snapshot save), waits for
 `sys.boot_completed` before installing, installs the packaged `.apk`, runs a
 Maestro flow shard, and — regardless of pass/fail — captures a final
-screenshot plus full and crash logcat, uploaded as an artifact. The emulator
-is always killed at the end (`if: always()`).
+screenshot plus full and crash logcat, uploaded as an artifact. Every
+`maestro test` invocation in the shard is pointed (`--debug-output`) at a
+scratch directory private to this shard run — rather than Maestro's shared,
+unscoped `~/.maestro/tests/<timestamp>` default, which a concurrent shard on
+the same persistent self-hosted runner could otherwise also be writing into.
+When any flow in the shard failed, that scratch directory (UI hierarchy
+dumps and per-flow screenshots) is copied into the artifact under a
+`maestro-debug/` subdirectory, capped at 200MB combined — a `::warning::` is
+emitted and the copy skipped if the shard's debug output exceeds that. The
+emulator is always killed at the end (`if: always()`).
 
 Uses `reactivecircus/android-emulator-runner`, which owns the emulator
 boot/kill lifecycle; this action supplies the headless flags and a bundled
