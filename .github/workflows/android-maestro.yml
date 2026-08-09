@@ -289,7 +289,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v1.4.0 # v1.4.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v1.4.1 # v1.4.1
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -410,7 +410,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.4.1 # v1.4.1
               with:
                   platform: android
                   working-directory: ${{ matrix.target.appDir }}
@@ -418,7 +418,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.1 # v1.4.1
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -444,7 +444,7 @@ jobs:
               id: repack
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.4.1 # v1.4.1
               with:
                   platform: android
                   app-path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
@@ -495,7 +495,7 @@ jobs:
             - name: build-android-app
               if: steps.build-decision.outputs.need-build == 'true'
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.4.1 # v1.4.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -508,7 +508,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.1 # v1.4.1
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -566,7 +566,7 @@ jobs:
 
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v1.4.1 # v1.4.1
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e-${{ strategy.job-index }}
@@ -593,7 +593,7 @@ jobs:
 
             - name: run-maestro-android
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v1.4.0 # v1.4.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v1.4.1 # v1.4.1
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
