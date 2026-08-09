@@ -1,7 +1,8 @@
 name: build-ios-app
 description: >-
-  Builds a Release, unsigned iOS Simulator .app with an embedded jsbundle via
-  xcodebuild, restoring/saving a CocoaPods cache around `pod install`.
+  Builds a Release, ad-hoc-signed (entitlements preserved) iOS Simulator .app
+  with an embedded jsbundle via xcodebuild, restoring/saving a CocoaPods
+  cache around `pod install`.
 inputs:
   app-dir:
     description: App directory containing the ios/ folder.
@@ -102,7 +103,9 @@ runs:
           -configuration "$CONFIGURATION" \
           -derivedDataPath "$DERIVED_DATA_DIR" \
           -destination 'generic/platform=iOS Simulator' \
-          CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGN_IDENTITY=- \
+          AD_HOC_CODE_SIGNING_ALLOWED=YES \
+          PROVISIONING_PROFILE_SPECIFIER= \
           ONLY_ACTIVE_ARCH=YES \
           ARCHS="$ARCHS" \
           EXCLUDED_ARCHS="$EXCLUDED_ARCHS"

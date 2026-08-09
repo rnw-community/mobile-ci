@@ -11,6 +11,7 @@ permissions:
 
 env:
     ACTIONLINT_VERSION: '1.7.12'
+    ZIZMOR_VERSION: '1.16.3'
 
 jobs:
     actionlint:
@@ -40,6 +41,22 @@ jobs:
               shell: bash
               run: actionlint -color
 
+    zizmor:
+        name: zizmor
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Install zizmor (pinned)
+              shell: bash
+              run: pip install --user "zizmor==${ZIZMOR_VERSION}"
+
+            - name: Run zizmor
+              shell: bash
+              run: ~/.local/bin/zizmor --config .github/zizmor.yml .github/workflows actions
+
     dry-lint-local-refs:
         name: Dry lint (reusable workflow -> composite action schemas)
         runs-on: ubuntu-latest
@@ -66,7 +83,7 @@ jobs:
                   scratch="$RUNNER_TEMP/dry-lint"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache; do
+                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release; do
                     sed -E 's#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#' \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done

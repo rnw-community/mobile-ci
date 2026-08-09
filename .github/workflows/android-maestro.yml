@@ -8,6 +8,24 @@ on:
                 type: string
                 required: false
                 default: '["self-hosted","linux-tiered","linux-xl"]'
+            build-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the build job only. Falls
+                    back to runner-labels when empty; set this and test-runner-labels
+                    together to split build/test across separate runner pools. Android
+                    builds cross-compiling native code (NDK/cmake) on a linux-aarch64
+                    self-hosted fleet may need this overridden to a macOS/x86_64 pool
+                    instead — Google does not publish linux-aarch64 NDK/cmake binaries.
+                type: string
+                required: false
+                default: ''
+            test-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the test job only. Falls
+                    back to runner-labels when empty.
+                type: string
+                required: false
+                default: ''
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, appId, prebuildCommand}.
@@ -15,9 +33,78 @@ on:
                 type: string
                 required: true
             flows-dir:
-                description: Directory (relative to repo root) containing Maestro flow files.
+                description: >-
+                    Directory (relative to repo root) whose top-level files are the
+                    runnable Maestro flows by default. Subdirectories are not searched
+                    unless flows-max-depth is raised; see flows-max-depth/flows-name-pattern.
                 type: string
                 required: true
+            flows-max-depth:
+                description: >-
+                    find -maxdepth under flows-dir. 0 means unbounded recursion. Default
+                    1 (top-level only) keeps subflows invoked via runFlow, conventionally
+                    living in subdirectories, out of the shard.
+                type: string
+                required: false
+                default: '1'
+            flows-name-pattern:
+                description: >-
+                    Space-separated find -name globs (OR'd together) selecting runnable
+                    flows directly inside flows-dir. Keeps reusable subflows and
+                    capture-only flows in subdirectories out of the shard by default.
+                type: string
+                required: false
+                default: '*.flow.yaml'
+            flows-exclude-pattern:
+                description: Optional find ! -name glob excluding matched flows by basename.
+                type: string
+                required: false
+                default: ''
+            shard-manifest-dir:
+                description: >-
+                    Optional directory (relative to repo root) of hand-curated
+                    shard-<index>.txt files (one flows-dir-relative flow path per line)
+                    overriding the computed index-modulo split so a consumer's balanced
+                    shard assignment survives. Unset (default) falls back to the
+                    index-modulo split entirely.
+                type: string
+                required: false
+                default: ''
+            pre-run-flow:
+                description: >-
+                    Path to a single priming flow run once before each shard's flows,
+                    excluded from sharding. Its failure fails that shard immediately.
+                type: string
+                required: false
+                default: ''
+            pre-test-command:
+                description: >-
+                    Optional consumer-owned shell command run once after the app is
+                    installed on the device/container and before any flow (including
+                    pre-run-flow) executes, e.g. seeding a fixture into the app's data
+                    container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+                    environment. Its failure fails that shard immediately. Passed to
+                    both android-driver options.
+                type: string
+                required: false
+                default: ''
+            maestro-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs, each passed as an additional
+                    -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+                    and shard flows alike). Rejects (fails closed) any line without '='
+                    or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$. Passed to both
+                    android-driver options.
+                type: string
+                required: false
+                default: ''
+            flow-retries:
+                description: >-
+                    Non-negative retry budget per flow; each flow gets up to
+                    1 + flow-retries attempts.
+                type: string
+                required: false
+                default: '0'
             shard-count:
                 type: number
                 required: false
@@ -27,6 +114,16 @@ on:
                 type: string
                 required: false
                 default: '12266719'
+            gradle-task:
+                description: See build-android-app README — gradlew task to build, e.g. :app:assembleRelease to scope to one module.
+                type: string
+                required: false
+                default: assembleRelease
+            gradle-args:
+                description: See build-android-app README — extra whitespace-split arguments appended after gradle-task.
+                type: string
+                required: false
+                default: ''
             cache-profile:
                 description: Cache-key prefix distinguishing this consumer/app.
                 type: string
@@ -49,6 +146,18 @@ on:
                 type: string
                 required: false
                 default: '2.8.0'
+            android-driver:
+                description: >-
+                    'redroid' (default) or 'avd'. Google publishes no linux-aarch64
+                    build of the Android emulator/NDK/cmake, so 'avd' cannot boot on
+                    this workflow's default self-hosted runner-labels; 'redroid' runs
+                    Android as a privileged container over binder_linux instead and
+                    needs none of those packages. Pick 'avd' only when overriding
+                    runner-labels to a host with a working emulator (e.g. GitHub-hosted
+                    x86_64 runners, which carry KVM out of the box).
+                type: string
+                required: false
+                default: redroid
             emulator-api-level:
                 type: string
                 required: false
@@ -65,6 +174,31 @@ on:
                 type: string
                 required: false
                 default: pixel_6
+            redroid-image:
+                description: >-
+                    Redroid image tag, used on a redroid-prewarm-manifest-path miss.
+                    Verified against a 6.17 host kernel — older 13.x tags are known to
+                    never finish boot on that kernel, and 14.x images hard-lock the
+                    guest kernel version.
+                type: string
+                required: false
+                default: redroid/redroid:15.0.0_64only-latest
+            redroid-memory:
+                type: string
+                required: false
+                default: 3g
+            redroid-cpus:
+                type: string
+                required: false
+                default: '2'
+            redroid-prewarm-manifest-path:
+                type: string
+                required: false
+                default: $HOME/.rnw-ci/android-emulator.json
+            redroid-boot-timeout-seconds:
+                type: string
+                required: false
+                default: '600'
             node-version:
                 type: string
                 required: false
@@ -82,6 +216,48 @@ on:
                 type: string
                 required: false
                 default: ''
+            build-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the
+                    start of the build job. Rejects (fails closed) any line without
+                    '=' or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
+            repack-on-hit:
+                description: >-
+                    On a native-app-cache hit, run repack-app to inject a freshly
+                    exported JS bundle into the cached shell instead of reusing it
+                    unchanged. Falls back to a full native build if the repack fails.
+                type: boolean
+                required: false
+                default: false
+            repack-app-version:
+                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                type: string
+                required: false
+                default: '0.7.2'
+            android-build-tools-dir:
+                description: >-
+                    Path to the Android SDK build-tools directory, used by repack-app
+                    (its --android-build-tools-dir and aapt2 validation) when
+                    repack-on-hit is true. Leave empty to rely on an aapt2 already on
+                    PATH (see android-build-tools-version, which populates PATH via
+                    setup-android on a cache hit when repack-on-hit is true).
+                type: string
+                required: false
+                default: ''
+            android-build-tools-version:
+                description: >-
+                    Android build-tools version installed via android-actions/setup-android
+                    on a native-app-cache hit, used only when repack-on-hit is true.
+                    build-android-app's own Gradle build (cache-miss path) installs
+                    whatever build-tools its compileSdkVersion resolves to, but that
+                    path never runs on a cache hit, so repack-app's aapt2 validation
+                    needs build-tools requested explicitly instead.
+                type: string
+                required: false
+                default: '35.0.0'
             build-timeout-minutes:
                 type: number
                 required: false
@@ -104,15 +280,16 @@ jobs:
         runs-on: ubuntu-latest
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
+            shard-indices: ${{ steps.shard-indices.outputs.indices }}
         steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
               with:
                   fetch-depth: 0
                   persist-credentials: false
-            - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@main
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v1.3.1 # v1.3.1
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -120,11 +297,39 @@ jobs:
                   base-sha: ${{ github.event.pull_request.base.sha }}
                   always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
 
+            # The test job's matrix.shard-index must exactly match
+            # inputs.shard-count: fewer indices than shard-count silently
+            # never runs the flows assigned to the missing indices (the
+            # suite still reports success), and more indices than
+            # shard-count fails run-maestro-android-redroid's own
+            # [0, shard-count) bounds check. A hard-coded matrix can only
+            # ever match one specific shard-count, so derive it here instead.
+            - name: Compute shard indices
+              id: shard-indices
+              shell: bash
+              env:
+                  SHARD_COUNT: ${{ inputs.shard-count }}
+                  TARGETS: ${{ inputs.targets }}
+              run: |
+                  set -euo pipefail
+                  if [ "$SHARD_COUNT" -lt 1 ]; then
+                    echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
+                    exit 1
+                  fi
+                  target_count=$(jq 'length' <<< "$TARGETS")
+                  total_jobs=$(( target_count * SHARD_COUNT ))
+                  if [ "$total_jobs" -gt 256 ]; then
+                    echo "::error::targets ($target_count) x shard-count ($SHARD_COUNT) = $total_jobs test jobs, exceeding GitHub Actions' 256-job matrix limit."
+                    exit 1
+                  fi
+                  indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
+                  echo "indices=$indices" >> "$GITHUB_OUTPUT"
+
     build:
         name: Build (${{ matrix.target.name }})
         needs: detect
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         strategy:
             fail-fast: false
@@ -139,8 +344,40 @@ jobs:
               with:
                   persist-credentials: false
 
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
             - name: Setup Node
-              uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
                   cache: yarn
@@ -152,22 +389,28 @@ jobs:
 
             - name: Install dependencies
               shell: bash
-              run: ${{ inputs.install-command }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
-              run: ${{ inputs.build-command }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
               shell: bash
-              run: ${{ matrix.target.prebuildCommand }}
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@main
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.3.1 # v1.3.1
               with:
                   platform: android
                   working-directory: ${{ matrix.target.appDir }}
@@ -175,31 +418,89 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: ${{ inputs.emulator-arch }}
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
+            # Needed only when repack-on-hit is true: build-android-app's own
+            # Gradle build (cache-miss path) installs whatever build-tools its
+            # compileSdkVersion resolves to, but repack-app's aapt2 validation
+            # below needs apksigner/aapt2 without ever invoking Gradle, so
+            # build-tools is requested here explicitly instead.
+            - name: Set up Android SDK (for repack-app validation)
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+              with:
+                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
+
+            - name: Repack fresh JS into cached native app
+              id: repack
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.3.1 # v1.3.1
+              with:
+                  platform: android
+                  app-path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  app-id: ${{ matrix.target.appId }}
+                  app-dir: ${{ matrix.target.appDir }}
+                  repack-version: ${{ inputs.repack-app-version }}
+                  android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+
+            - name: Determine whether a native build is needed
+              id: build-decision
               shell: bash
+              env:
+                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
+              run: |
+                  set -euo pipefail
+                  need_build=true
+                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
+                    need_build=false
+                  fi
+                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
               run: |
                   {
-                    echo "### Android build: ${{ matrix.target.name }} (warm — native build skipped)"
-                    echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
+                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
+                    else
+                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    fi
                   } >> "$GITHUB_STEP_SUMMARY"
 
+            - name: Report repack fallback
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: |
+                  echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+
             - name: build-android-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.build-decision.outputs.need-build == 'true'
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@main
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.3.1 # v1.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  gradle-task: ${{ inputs.gradle-task }}
+                  gradle-args: ${{ inputs.gradle-args }}
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock') }}
                   gradle-cache-restore-keys: |
@@ -207,11 +508,11 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@main
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.3.1 # v1.3.1
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
+                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: ${{ inputs.emulator-arch }}
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -226,13 +527,13 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, build]
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
                 target: ${{ fromJSON(inputs.targets) }}
-                shard-index: [0, 1]
+                shard-index: ${{ fromJSON(needs.detect.outputs.shard-indices) }}
 
         steps:
             - name: Checkout repository
@@ -245,14 +546,68 @@ jobs:
                   name: android-e2e-app-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}
 
+            # Both test steps below are gated on an exact 'redroid'/'avd'
+            # match; an unrecognized android-driver value would otherwise
+            # skip both silently and let this job (and the status job that
+            # gates on its result) report success having run zero Maestro
+            # flows.
+            - name: Validate android-driver
+              shell: bash
+              env:
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+              run: |
+                  case "$ANDROID_DRIVER" in
+                    redroid|avd) ;;
+                    *)
+                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid' or 'avd'."
+                      exit 1
+                      ;;
+                  esac
+
+            - name: run-maestro-android-redroid
+              if: inputs.android-driver == 'redroid'
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v1.3.1 # v1.3.1
+              with:
+                  image: ${{ inputs.redroid-image }}
+                  container-name: redroid-e2e-${{ strategy.job-index }}
+                  apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
+                  app-id: ${{ matrix.target.appId }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
+                  shard-index: ${{ matrix.shard-index }}
+                  shard-count: ${{ inputs.shard-count }}
+                  pre-run-flow: ${{ inputs.pre-run-flow }}
+                  pre-test-command: ${{ inputs.pre-test-command }}
+                  maestro-env: ${{ inputs.maestro-env }}
+                  flow-retries: ${{ inputs.flow-retries }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  memory: ${{ inputs.redroid-memory }}
+                  cpus: ${{ inputs.redroid-cpus }}
+                  prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
+                  boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
             - name: run-maestro-android
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@main
+              if: inputs.android-driver == 'avd'
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v1.3.1 # v1.3.1
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
                   flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
+                  pre-run-flow: ${{ inputs.pre-run-flow }}
+                  pre-test-command: ${{ inputs.pre-test-command }}
+                  maestro-env: ${{ inputs.maestro-env }}
+                  flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   api-level: ${{ inputs.emulator-api-level }}
                   target: ${{ inputs.emulator-target }}
@@ -269,20 +624,25 @@ jobs:
         steps:
             - name: Report
               shell: bash
+              env:
+                  DETECT_RESULT: ${{ needs.detect.result }}
+                  DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  BUILD_RESULT: ${{ needs.build.result }}
+                  TEST_RESULT: ${{ needs.test.result }}
               run: |
-                  if [ "${{ needs.detect.result }}" != "success" ]; then
+                  if [ "$DETECT_RESULT" != "success" ]; then
                     echo "Detection job did not succeed."
                     exit 1
                   fi
-                  if [ "${{ needs.detect.outputs.affected }}" != "true" ]; then
+                  if [ "$DETECT_AFFECTED" != "true" ]; then
                     echo "Skipped: target packages untouched."
                     exit 0
                   fi
-                  if [ "${{ needs.build.result }}" != "success" ]; then
+                  if [ "$BUILD_RESULT" != "success" ]; then
                     echo "Build job failed."
                     exit 1
                   fi
-                  if [ "${{ needs.test.result }}" != "success" ]; then
+                  if [ "$TEST_RESULT" != "success" ]; then
                     echo "Maestro suite failed."
                     exit 1
                   fi

@@ -1,0 +1,602 @@
+name: run-maestro-android-redroid
+description: >-
+  Boots a prewarmed or cold-started Redroid (Android-in-a-privileged-container)
+  instance over the binder_linux kernel module, installs a packaged .apk, runs
+  a Maestro flow shard, and always captures final-state artifacts.
+inputs:
+  image:
+    description: >-
+      Redroid image tag, used only when no prewarm manifest is found at
+      prewarm-manifest-path. 15.0.0_64only is verified to boot on a 6.17 host
+      kernel; older 13.x tags are known to never finish boot and 14.x images
+      hard-lock the guest kernel version on some hosts.
+    required: false
+    default: redroid/redroid:15.0.0_64only-latest
+  container-name:
+    description: >-
+      Docker container name base for this shard, distinguishing it from
+      sibling shards in the same run — e.g. the caller passes
+      redroid-e2e-<job-index>, interpolating its own strategy.job-index (see
+      android-maestro.yml and this action's README for the exact call shape).
+      Never put a live expression in this description. GitHub parses input
+      descriptions as templates, and neither the matrix nor the strategy
+      context exists inside a composite action, so an interpolated reference
+      to either here makes the whole manifest fail to load with
+      "Unrecognized named-value: 'matrix'" before any step runs. The action
+      automatically appends the run id/attempt before using it, so two
+      concurrent workflow runs (same repo or different repos sharing a
+      runner pool) never collide even if they compute the same base.
+    required: true
+  apk-path:
+    description: Path to the packaged .apk to install.
+    required: true
+  app-id:
+    description: Application ID passed to Maestro as APP_ID.
+    required: true
+  flows-dir:
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows.
+      Subdirectories are deliberately not searched by default; see
+      flows-max-depth/flows-name-pattern.
+    required: true
+  flows-max-depth:
+    description: >-
+      find -maxdepth under flows-dir. Default 1 (top-level only): subflows are
+      invoked by parent flows via runFlow, not run directly, and conventionally
+      live in subdirectories. Set to 0 for unbounded recursion.
+    required: false
+    default: '1'
+  flows-name-pattern:
+    description: >-
+      Space-separated find -name globs (OR'd together) selecting runnable
+      flows directly inside flows-dir. Defaults to the widespread *.flow.yaml
+      convention, which keeps reusable subflows and capture-only flows in
+      subdirectories out of the shard.
+    required: false
+    default: '*.flow.yaml'
+  flows-exclude-pattern:
+    description: Optional find ! -name glob excluding matched flows by basename.
+    required: false
+    default: ''
+  shard-manifest-dir:
+    description: >-
+      Optional directory of hand-curated shard-<index>.txt files (one
+      flows-dir-relative flow path per line) overriding the computed
+      index-modulo split so a consumer's balanced shard assignment survives.
+      Unset (default) falls back to the index-modulo split entirely. Once
+      set, every shard-index this job can run must have its own
+      shard-<index>.txt — a partial manifest fails closed rather than
+      silently mixing curated and modulo-selected flows for the shards it
+      omits.
+    required: false
+    default: ''
+  shard-index:
+    description: Zero-based shard index this job runs.
+    required: true
+  shard-count:
+    description: Total number of shards flows are distributed across.
+    required: true
+  pre-run-flow:
+    description: >-
+      Path to a single priming flow run once before this shard's flows,
+      excluded from sharding. Its failure fails the step immediately without
+      running the shard. Leave empty to skip priming.
+    required: false
+    default: ''
+  pre-test-command:
+    description: >-
+      Optional consumer-owned shell command run once after the app is
+      installed on the container and before any flow (including
+      pre-run-flow) executes, e.g. seeding a fixture into the app's data
+      container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+      environment. Its failure fails the step immediately. Leave empty to
+      skip.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+      and shard flows alike). Rejects (fails closed) any line without '=' or
+      whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  flow-retries:
+    description: >-
+      Non-negative retry budget per flow. Each flow gets up to
+      1 + flow-retries attempts; a flow that eventually passes counts as
+      passed. The step fails if any flow exhausts its attempts.
+    required: false
+    default: '0'
+  maestro-version:
+    description: Pinned Maestro CLI version.
+    required: false
+    default: '2.8.0'
+  memory:
+    description: Container memory limit (docker --memory / --memory-swap).
+    required: false
+    default: 3g
+  cpus:
+    description: Container CPU limit (docker --cpus).
+    required: false
+    default: '2'
+  prewarm-manifest-path:
+    description: >-
+      Path to a JSON manifest ({"image", "dataDir"}) written by a host-side
+      Redroid prewarm step. When absent, the container falls back to an
+      in-workflow docker pull of `image` and a fresh data volume under
+      RUNNER_TEMP — slower, but self-healing rather than hard-failing. A
+      leading literal "$HOME" (as in the default below) is expanded against
+      the runner's actual home directory before use.
+    required: false
+    default: $HOME/.rnw-ci/android-emulator.json
+  boot-timeout-seconds:
+    description: Seconds to wait for sys.boot_completed before failing the shard.
+    required: false
+    default: '600'
+  artifacts-dir:
+    description: Directory final-state capture (screenshot, logcat) is written to.
+    required: true
+  artifact-name:
+    description: Uploaded artifact name.
+    required: true
+  retention-days:
+    description: Uploaded artifact retention in days.
+    required: false
+    default: '7'
+runs:
+  using: composite
+  steps:
+    - name: Start Redroid container
+      id: redroid
+      shell: bash
+      env:
+        REDROID_IMAGE: ${{ inputs.image }}
+        REDROID_CONTAINER_NAME: ${{ inputs.container-name }}
+        REDROID_MEMORY: ${{ inputs.memory }}
+        REDROID_CPUS: ${{ inputs.cpus }}
+        REDROID_MANIFEST_PATH: ${{ inputs.prewarm-manifest-path }}
+        REDROID_BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+          set -euo pipefail
+          # container-name reaches sudo rm -rf below by way of $data; unlike
+          # docker (which validates --name itself), our own path construction
+          # has no built-in protection, so a value containing ".." or "/"
+          # could walk $data outside redroid-data entirely. Reject anything
+          # that is not a single safe path segment before it touches the
+          # filesystem at all.
+          case "$REDROID_CONTAINER_NAME" in
+            ''|.|..)
+              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': must be a non-empty single path segment, not '.' or '..'."
+              exit 1
+              ;;
+            *[!A-Za-z0-9_.-]*)
+              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': only [A-Za-z0-9_.-] characters are allowed."
+              exit 1
+              ;;
+          esac
+          # A caller-supplied container-name only distinguishes shards within
+          # its own run; two concurrent workflow runs (this repo or a
+          # different one sharing the same runner pool) can compute the
+          # identical base name for the "same" cell. GITHUB_RUN_ID/ATTEMPT
+          # are always present and unique per run, so fold them in here
+          # unconditionally rather than relying on every consumer to
+          # remember to do it themselves.
+          effective_name="${REDROID_CONTAINER_NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          case "$effective_name" in
+            *[!A-Za-z0-9_.-]*)
+              echo "::error::Invalid computed container name '$effective_name'."
+              exit 1
+              ;;
+          esac
+          echo "REDROID_EFFECTIVE_CONTAINER_NAME=$effective_name" >> "$GITHUB_ENV"
+          # Composite action env: values are set directly on the process
+          # environment, never through a shell, so a literal "$HOME" in an
+          # unresolved default (or a caller override) is not expanded by
+          # GitHub Actions. Resolve that one documented case explicitly
+          # rather than relying on the caller to pass an already-expanded path.
+          manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
+          data_root=$(realpath -m "$RUNNER_TEMP/redroid-data")
+          data=$(realpath -m "$data_root/$effective_name")
+          case "$data" in
+            "$data_root"/*) ;;
+            *)
+              echo "::error::Resolved data directory '$data' escapes '$data_root'; refusing to operate on it."
+              exit 1
+              ;;
+          esac
+          # effective_name is run-scoped, so nothing will ever reuse this
+          # exact path — this rm -rf is defensive cleanup only (e.g. a
+          # directory left by an older, non-run-scoped version of this
+          # action), not load-bearing for correctness the way it was before
+          # run-scoping. Teardown below removes this directory again once
+          # the shard finishes, so this fleet's persistent $RUNNER_TEMP
+          # doesn't accumulate one directory per run forever.
+          sudo rm -rf "$data"
+          mkdir -p "$data"
+          echo "REDROID_DATA_DIR=$data" >> "$GITHUB_ENV"
+          if [ -f "$manifest_path" ]; then
+            # Read the manifest path from the environment rather than
+            # interpolating it into the generated source, so its contents
+            # can never be interpreted as Python.
+            image=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['image'])")
+            prewarm_data=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['dataDir'])")
+            # Every concurrent matrix shard shares the one manifest-provided
+            # dataDir; bind-mounting it directly into more than one container
+            # at once corrupts it. Copy into a per-shard directory instead so
+            # concurrent shards each get an isolated, writable seed.
+            sudo cp -a "$prewarm_data/." "$data/"
+            echo "REDROID_PREWARM_OK image=$image dataDir=$prewarm_data (copied into isolated $data)"
+          else
+            image="$REDROID_IMAGE"
+            echo "::warning::No Redroid prewarm manifest at $manifest_path; pulling $image in-workflow and cold-booting a fresh data volume for this shard instead (slower than a prewarmed host)."
+            timeout 900 sudo docker pull "$image"
+          fi
+          sudo modprobe binder_linux devices=binder,hwbinder,vndbinder 2>&1 || true
+          # Presence of the module is the only portable signal. On binderfs
+          # kernels (6.x) no /dev/binder, /dev/vndbinder or /dev/hwbinder ever
+          # appears on the host — the privileged container mounts binderfs and
+          # creates its own devices — so probing for those nodes fails on
+          # exactly the hosts Redroid works best on.
+          if [ ! -d /sys/module/binder_linux ]; then
+            echo '::error::binder_linux is not loaded on this host after modprobe. Redroid cannot run without it, and that is host-kernel provisioning a workflow run cannot self-heal safely.'
+            exit 1
+          fi
+          # A "probe with ss, then docker run" port pick is a TOCTOU race:
+          # nothing stops a concurrent shard from binding the same
+          # observed-free port between the check and the bind. Sidestep the
+          # race entirely by never picking a port ourselves — bind the
+          # container port to loopback with an empty host port
+          # (127.0.0.1::5555) and let the kernel, via Docker, atomically
+          # assign whichever ephemeral port is actually free, then read back
+          # what it picked. This also keeps Redroid's adb port off every
+          # non-loopback interface, unreachable from anywhere but this host.
+          sudo docker rm -f "$effective_name" >/dev/null 2>&1 || true
+          sudo docker run -d --name "$effective_name" --privileged \
+            --memory "$REDROID_MEMORY" --memory-swap "$REDROID_MEMORY" --cpus "$REDROID_CPUS" \
+            -v "$data":/data -p 127.0.0.1::5555 \
+            "$image" androidboot.redroid_gpu_mode=guest
+          port=$(sudo docker port "$effective_name" 5555/tcp | head -n1 | sed -E 's/.*:([0-9]+)$/\1/')
+          case "$port" in
+            ''|*[!0-9]*)
+              echo "::error::Could not determine the host port Docker assigned to container port 5555 on '$effective_name'."
+              exit 1
+              ;;
+          esac
+          # Tolerates failure: Redroid has not necessarily opened 5555 yet
+          # immediately after `docker run -d` returns, and under set -e a
+          # hard failure here would abort the whole step before the
+          # boot-completed loop below (which retries adb connect every 5s)
+          # ever runs.
+          adb connect "localhost:$port" || true
+          # Exported as soon as the container is adb-reachable, not after the
+          # boot-completed wait below succeeds: a timed-out boot still leaves
+          # a running, adb-connected container worth capturing diagnostics
+          # from (screenshot/logcat), and "Capture final device state"
+          # already guards on this being set — leaving it unset here would
+          # just make that step skip the one failure mode diagnostics matter
+          # most for. Only a genuine bring-up failure before this line (e.g.
+          # the binder_linux guard above) leaves it unset, which is still the
+          # right time to skip capture: there is no reachable device at all.
+          echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
+          deadline=$(( $(date +%s) + REDROID_BOOT_TIMEOUT_SECONDS ))
+          until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            test "$(date +%s)" -lt "$deadline"
+            sleep 5
+            adb connect "localhost:$port" >/dev/null 2>&1 || true
+          done
+          for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
+            adb -s "localhost:$port" shell settings put global "$setting" 0
+          done
+
+    - name: Install Maestro
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+          set -euo pipefail
+          maestro_bin="$HOME/.maestro/bin/maestro"
+          existing_bin="$(command -v maestro || true)"
+          existing_version=''
+          if [ -n "$existing_bin" ]; then
+            existing_version="$("$existing_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          fi
+          if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
+            echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
+          else
+            if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
+              if ! curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash; then
+                echo "::error::Maestro installer failed to install pinned version $MAESTRO_VERSION${existing_bin:+ (a pre-existing maestro at '$existing_bin' may be Homebrew-managed and conflicting)}. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+                exit 1
+              fi
+            fi
+            echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.maestro/bin:$PATH"
+            resolved_bin="$(command -v maestro)"
+            resolved_version="$("$resolved_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+            if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+              echo "::error::maestro on PATH resolves to '$resolved_bin' (version '$resolved_version'), not the pinned $MAESTRO_VERSION at '$maestro_bin' — a conflicting maestro installation (e.g. Homebrew-managed) is shadowing the pinned copy earlier in PATH. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+              exit 1
+            fi
+            echo "Installed and using maestro $MAESTRO_VERSION at $resolved_bin"
+          fi
+
+    - name: Install APK
+      shell: bash
+      env:
+        APK_PATH: ${{ inputs.apk-path }}
+      run: adb -s "$ANDROID_SERIAL" install -r "$APK_PATH"
+
+    - name: Run pre-test command
+      if: inputs.pre-test-command != ''
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        APK_PATH: ${{ inputs.apk-path }}
+        PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+      run: eval "$PRE_TEST_COMMAND"
+
+    - name: Run Maestro shard
+      shell: bash
+      env:
+        JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx2048m
+        MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+        SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+        PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+        MAESTRO_ENV: ${{ inputs.maestro-env }}
+        FLOW_RETRIES: ${{ inputs.flow-retries }}
+        APP_ID: ${{ inputs.app-id }}
+      run: |
+          set -euo pipefail
+          # An out-of-range shard-index (>= shard-count, or a typo'd
+          # negative/non-numeric value) makes the modulo selection below
+          # match nothing for every flow, so the shard would silently exit 0
+          # having run zero tests. Fail fast instead, the same way the
+          # driver-validation step above does for android-driver.
+          case "$SHARD_COUNT" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::shard-count '$SHARD_COUNT' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_COUNT" -lt 1 ]; then
+            echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
+            exit 1
+          fi
+          case "$SHARD_INDEX" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::shard-index '$SHARD_INDEX' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+          if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
+            echo "::error::shard-index $SHARD_INDEX is out of range [0, $SHARD_COUNT)."
+            exit 1
+          fi
+          case "$FLOW_RETRIES" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::flow-retries '$FLOW_RETRIES' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+          max_attempts=$((1 + FLOW_RETRIES))
+          case "$FLOWS_MAX_DEPTH" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
+          fi
+
+          maestro_env_args=()
+          if [ -n "$MAESTRO_ENV" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                *=*) ;;
+                *)
+                  echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+                  exit 1
+                  ;;
+              esac
+              name="${line%%=*}"
+              case "$name" in
+                ''|[!A-Za-z_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              case "$name" in
+                *[!A-Za-z0-9_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              maestro_env_args+=(-e "$line")
+            done <<< "$MAESTRO_ENV"
+          fi
+
+          summary_rows=()
+
+          run_flow_with_retries() {
+            local flow="$1" label="$2" attempts=0 status=failed start end duration
+            start=$(date +%s)
+            while [ "$attempts" -lt "$max_attempts" ]; do
+              attempts=$((attempts + 1))
+              if maestro test -e "APP_ID=$APP_ID" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
+                status=passed
+                break
+              fi
+            done
+            end=$(date +%s)
+            duration=$((end - start))
+            summary_rows+=("| $label | ${duration}s | $status | $attempts |")
+            [ "$status" = "passed" ]
+          }
+
+          write_summary() {
+            {
+              echo "### Maestro flow timing (shard $SHARD_INDEX)"
+              echo "| Flow | Duration | Status | Attempts |"
+              echo "| --- | --- | --- | --- |"
+              printf '%s\n' "${summary_rows[@]:-}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Only files matching flows-name-pattern within flows-max-depth are
+          # runnable scenarios by default. The default (max-depth 1) keeps
+          # reusable subflows, one-time setup flows and screenshot-capture
+          # flows that conventionally live in subdirectories of the flows dir
+          # out of the shard; those expect a caller to pass env or leave the
+          # app mid-journey, so running them standalone fails.
+          find_cmd=(find "$FLOWS_DIR")
+          if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+            find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+          fi
+          find_cmd+=(-type f)
+          IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
+          name_args=('(')
+          for i in "${!name_patterns[@]}"; do
+            if [ "$i" -gt 0 ]; then
+              name_args+=(-o)
+            fi
+            name_args+=(-name "${name_patterns[$i]}")
+          done
+          name_args+=(')')
+          find_cmd+=("${name_args[@]}")
+          if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
+            find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
+          fi
+          flows=()
+          while IFS= read -r flow; do
+            flows+=("$flow")
+          done < <("${find_cmd[@]}" | sort)
+          if [ "${#flows[@]}" -eq 0 ]; then
+            echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found under flows-dir '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH)."
+            exit 1
+          fi
+          printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+
+          # pre-run-flow is run once as a priming flow below, outside of
+          # sharding. If it also happens to be a top-level file inside
+          # flows-dir matching flows-name-pattern, discovery above finds it
+          # too, and without this filter it would be selected again by the
+          # manifest or modulo split and run a second time. Compare with -ef
+          # (same-inode test) since PRE_RUN_FLOW and the discovered flow's
+          # path string may differ in form (relative vs "./"-prefixed, etc.)
+          # while resolving to the same file; -ef is POSIX-available in
+          # bash's test on both macOS and Linux, unlike GNU-only realpath -m.
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            remaining_flows=()
+            for flow in "${flows[@]}"; do
+              if [ ! "$flow" -ef "$PRE_RUN_FLOW" ]; then
+                remaining_flows+=("$flow")
+              fi
+            done
+            flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
+          fi
+
+          selected=()
+          if [ -n "$SHARD_MANIFEST_DIR" ]; then
+            manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
+            if [ ! -f "$manifest_file" ]; then
+              echo "::error::shard-manifest-dir '$SHARD_MANIFEST_DIR' is set but '$manifest_file' is missing for shard-index $SHARD_INDEX."
+              exit 1
+            fi
+            while IFS= read -r rel || [ -n "$rel" ]; do
+              rel="${rel%$'\r'}"
+              rel="${rel#./}"
+              [ -n "$rel" ] || continue
+              flow_path="$FLOWS_DIR/$rel"
+              match=0
+              for candidate in ${flows[@]+"${flows[@]}"}; do
+                if [ "$candidate" = "$flow_path" ]; then
+                  match=1
+                  break
+                fi
+              done
+              if [ "$match" -ne 1 ]; then
+                echo "::error::shard-manifest entry '$rel' (resolved '$flow_path') is not among the flows discovered under '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH, flows-name-pattern='$FLOWS_NAME_PATTERN'); refusing an entry that bypasses discovery."
+                exit 1
+              fi
+              selected+=("$flow_path")
+            done < "$manifest_file"
+          else
+            for index in "${!flows[@]}"; do
+              if (( index % SHARD_COUNT == SHARD_INDEX )); then
+                selected+=("${flows[$index]}")
+              fi
+            done
+          fi
+
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then
+              write_summary
+              echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
+              exit 1
+            fi
+          fi
+
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "Shard $SHARD_INDEX has no flows (shard-count $SHARD_COUNT exceeds the flow count); nothing to run."
+            write_summary
+            exit 0
+          fi
+          printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
+
+          overall_status=0
+          for flow in "${selected[@]}"; do
+            if ! run_flow_with_retries "$flow" "$(basename "$flow")"; then
+              overall_status=1
+            fi
+          done
+
+          write_summary
+          exit "$overall_status"
+
+    - name: Capture final device state
+      if: always() && env.ANDROID_SERIAL != ''
+      shell: bash
+      env:
+        OUT_DIR: ${{ inputs.artifacts-dir }}
+      run: |
+          mkdir -p "$OUT_DIR"
+          timeout 30 adb -s "$ANDROID_SERIAL" exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
+          timeout 30 adb -s "$ANDROID_SERIAL" logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
+          timeout 30 adb -s "$ANDROID_SERIAL" logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+          timeout 30 adb -s "$ANDROID_SERIAL" logcat -d ReactNative:V ReactNativeJS:V AndroidRuntime:E NativeModule:V '*:E' \
+            > "$OUT_DIR/logcat-app.txt" 2>&1 || true
+          timeout 30 adb -s "$ANDROID_SERIAL" shell dumpsys activity top > "$OUT_DIR/activity-top.txt" 2>&1 || true
+
+    - name: Teardown Redroid container
+      if: always()
+      shell: bash
+      env:
+        CONTAINER_NAME_INPUT: ${{ inputs.container-name }}
+      run: |
+          if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
+            sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
+          else
+            sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
+          fi
+          if [ -n "${REDROID_DATA_DIR:-}" ]; then
+            sudo rm -rf "$REDROID_DATA_DIR" || true
+          fi
+
+    - name: Upload Maestro artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifacts-dir }}/**
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}

@@ -10,14 +10,80 @@ inputs:
     description: Application ID passed to Maestro as APP_ID.
     required: true
   flows-dir:
-    description: Directory containing Maestro flow .yaml/.yml files.
+    description: >-
+      Directory whose top-level files are the runnable Maestro flows by
+      default. Subdirectories are not searched unless flows-max-depth is
+      raised; see flows-max-depth/flows-name-pattern.
     required: true
+  flows-max-depth:
+    description: >-
+      find -maxdepth under flows-dir. Default 1 (top-level only): subflows are
+      invoked by parent flows via runFlow, not run directly, and conventionally
+      live in subdirectories. Set to 0 for unbounded recursion.
+    required: false
+    default: '1'
+  flows-name-pattern:
+    description: >-
+      Space-separated find -name globs (OR'd together) selecting runnable
+      flows under flows-dir. Defaults to the widespread *.flow.yaml
+      convention, which keeps reusable subflows and capture-only flows in
+      subdirectories out of the shard.
+    required: false
+    default: '*.flow.yaml'
+  flows-exclude-pattern:
+    description: Optional find ! -name glob excluding matched flows by basename.
+    required: false
+    default: ''
+  shard-manifest-dir:
+    description: >-
+      Optional directory of hand-curated shard-<index>.txt files (one
+      flows-dir-relative flow path per line) overriding the computed
+      index-modulo split so a consumer's balanced shard assignment survives.
+      Unset (default) falls back to the index-modulo split entirely. Once
+      set, every shard-index this job can run must have its own
+      shard-<index>.txt — a partial manifest fails closed rather than
+      silently mixing curated and modulo-selected flows for the shards it
+      omits.
+    required: false
+    default: ''
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
   shard-count:
     description: Total number of shards flows are distributed across.
     required: true
+  pre-run-flow:
+    description: >-
+      Path to a single priming flow run once before this shard's flows,
+      excluded from sharding. Its failure fails the step immediately without
+      running the shard. Leave empty to skip priming.
+    required: false
+    default: ''
+  pre-test-command:
+    description: >-
+      Optional consumer-owned shell command run once after the app is
+      installed on the emulator and before any flow (including
+      pre-run-flow) executes, e.g. seeding a fixture into the app's data
+      container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
+      environment. Its failure fails the step immediately. Leave empty to
+      skip.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
+      and shard flows alike). Rejects (fails closed) any line without '=' or
+      whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  flow-retries:
+    description: >-
+      Non-negative retry budget per flow. Each flow gets up to
+      1 + flow-retries attempts; a flow that eventually passes counts as
+      passed. The step fails if any flow exhausts its attempts.
+    required: false
+    default: '0'
   maestro-version:
     description: Pinned Maestro CLI version.
     required: false
@@ -56,14 +122,49 @@ runs:
       env:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
+          set -euo pipefail
           maestro_bin="$HOME/.maestro/bin/maestro"
-          if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
-            curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash
+          existing_bin="$(command -v maestro || true)"
+          existing_version=''
+          if [ -n "$existing_bin" ]; then
+            existing_version="$("$existing_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
           fi
-          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
+            echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
+          else
+            if [ ! -x "$maestro_bin" ] || [ "$("$maestro_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$MAESTRO_VERSION" ]; then
+              if ! curl -fsSL https://get.maestro.mobile.dev | env MAESTRO_VERSION="$MAESTRO_VERSION" bash; then
+                echo "::error::Maestro installer failed to install pinned version $MAESTRO_VERSION${existing_bin:+ (a pre-existing maestro at '$existing_bin' may be Homebrew-managed and conflicting)}. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+                exit 1
+              fi
+            fi
+            echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.maestro/bin:$PATH"
+            resolved_bin="$(command -v maestro)"
+            resolved_version="$("$resolved_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+            if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+              echo "::error::maestro on PATH resolves to '$resolved_bin' (version '$resolved_version'), not the pinned $MAESTRO_VERSION at '$maestro_bin' — a conflicting maestro installation (e.g. Homebrew-managed) is shadowing the pinned copy earlier in PATH. See docs/self-hosted-runners.md for how to resolve a pre-existing Homebrew-managed maestro on a self-hosted host."
+              exit 1
+            fi
+            echo "Installed and using maestro $MAESTRO_VERSION at $resolved_bin"
+          fi
 
     - name: Boot emulator, install app, and run Maestro shard
       uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+      env:
+          APK_PATH: ${{ inputs.apk-path }}
+          APP_ID: ${{ inputs.app-id }}
+          FLOWS_DIR: ${{ inputs.flows-dir }}
+          FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+          FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+          FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+          SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+          SHARD_INDEX: ${{ inputs.shard-index }}
+          SHARD_COUNT: ${{ inputs.shard-count }}
+          PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+          PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+          MAESTRO_ENV: ${{ inputs.maestro-env }}
+          FLOW_RETRIES: ${{ inputs.flow-retries }}
       with:
           api-level: ${{ inputs.api-level }}
           target: ${{ inputs.target }}
@@ -73,29 +174,7 @@ runs:
           disable-spellchecker: true
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: |
-              set -euo pipefail
-              set -x
-              adb wait-for-device
-              timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
-              adb install -r "${{ inputs.apk-path }}"
-              flows=()
-              while IFS= read -r flow; do
-                flows+=("$flow")
-              done < <(find "${{ inputs.flows-dir }}" -type f \( -name '*.yaml' -o -name '*.yml' \) | sort)
-              test "${#flows[@]}" -gt 0
-              selected=()
-              for index in "${!flows[@]}"; do
-                if (( index % ${{ inputs.shard-count }} == ${{ inputs.shard-index }} )); then
-                  selected+=("${flows[$index]}")
-                fi
-              done
-              if [ "${#selected[@]}" -eq 0 ]; then
-                echo "Shard ${{ inputs.shard-index }} has no flows; nothing to run."
-                exit 0
-              fi
-              printf 'Shard ${{ inputs.shard-index }} flows:\n%s\n' "${selected[*]}"
-              maestro test -e "APP_ID=${{ inputs.app-id }}" "${selected[@]}"
+          script: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
     - name: Capture final device state
       if: always()
