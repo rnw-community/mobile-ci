@@ -380,6 +380,21 @@ runs:
             printf '%s' "$name"
           }
 
+          # Two scene files that share a derived name after the numeric
+          # prefix is stripped (e.g. 01.home.flow.yaml and 02.home.flow.yaml)
+          # would otherwise silently overwrite each other's output at the
+          # same final_path below - resolve every scene name up front and
+          # fail closed on a collision instead of losing a screenshot.
+          scene_names=()
+          for scene_file in "${scenes[@]}"; do
+            scene_names+=("$(scene_name_of "$scene_file")")
+          done
+          duplicate_scene_names=$(printf '%s\n' "${scene_names[@]}" | sort | uniq -d)
+          if [ -n "$duplicate_scene_names" ]; then
+            echo "::error::Multiple scene files derive the same scene name, which would overwrite each other's output: $(printf '%s' "$duplicate_scene_names" | tr '\n' ' ')"
+            exit 1
+          fi
+
           locales_list=$(printf '%s' "$LOCALES" | tr ',' ' ')
           appearances_list=$(printf '%s' "$APPEARANCES" | tr ',' ' ')
           IFS=' ' read -r -a locales_arr <<< "$locales_list"
@@ -392,6 +407,18 @@ runs:
             echo "::error::appearances resolved to an empty list."
             exit 1
           fi
+          # locale becomes a raw output path segment below
+          # (raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png) - reject
+          # anything that could traverse out of that layout (e.g. a locale
+          # containing '/' or '..') instead of writing wherever it resolves to.
+          for locale in "${locales_arr[@]}"; do
+            case "$locale" in
+              *[!A-Za-z0-9_-]*|'')
+                echo "::error::locale '$locale' must be a non-empty path-safe segment matching ^[A-Za-z0-9_-]+\$."
+                exit 1
+                ;;
+            esac
+          done
 
           summary_rows=()
           overall_status=0

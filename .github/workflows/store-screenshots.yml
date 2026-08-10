@@ -280,13 +280,23 @@ jobs:
                   invalid=$(jq -c '
                       [.[] | select(
                           (.device | type != "string" or length == 0) or
-                          (.locales | type != "array" or length == 0) or
-                          (.appearances | type != "array" or length == 0) or
+                          (.locales | type != "array" or length == 0 or any(.[]; type != "string" or length == 0)) or
+                          (.appearances | type != "array" or length == 0 or any(.[]; . != "light" and . != "dark")) or
                           ((.orientation // "portrait") as $o | ($o != "portrait" and $o != "landscape"))
                       )]
                   ' <<< "$CAPTURE_MANIFEST")
                   if [ "$invalid" != '[]' ]; then
-                    echo "::error::capture-manifest has invalid entries (each needs a non-empty 'device' string, non-empty 'locales'/'appearances' arrays, and orientation 'portrait'/'landscape' if set): $invalid"
+                    echo "::error::capture-manifest has invalid entries (each needs a non-empty 'device' string, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', and orientation 'portrait'/'landscape' if set): $invalid"
+                    exit 1
+                  fi
+                  # Two entries for the same device slugify to the same
+                  # raw-screenshots-<device-slug> artifact name, and
+                  # upload-artifact requires unique names within a run - the
+                  # second capture job's upload would fail rather than the
+                  # two devices' screenshots merging.
+                  duplicate_devices=$(jq -r '[.[] | .device] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_MANIFEST")
+                  if [ -n "$duplicate_devices" ]; then
+                    echo "::error::capture-manifest has duplicate device entries ($duplicate_devices); each device must be unique because the raw-screenshots-<device-slug> artifact name is derived from it."
                     exit 1
                   fi
                   echo "entry-count=$entry_count" >> "$GITHUB_OUTPUT"
