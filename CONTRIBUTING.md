@@ -7,6 +7,8 @@ humans alike working on this repo — read it before making changes. It
 includes the rule that every bot comment on a PR (CI bots, review bots,
 Dependabot, code scanners) must be addressed: fixed if valid, replied to
 with an explanation if not; never left unanswered or silently ignored.
+Vital/critical/high-severity findings must be fixed in the same PR, not
+merely replied to, unless the reply proves the finding factually wrong.
 
 ## Versioning
 

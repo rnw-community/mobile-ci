@@ -80,7 +80,13 @@ running `actionlint` if you touched a reusable workflow's inputs.
 **ALWAYS address every bot comment on a PR (CI bots, review bots,
 Dependabot, code scanners). If a bot comment is valid — fix it. If it is not
 valid — reply to that comment explaining why it does not apply; never leave
-a bot comment unanswered and never silently ignore one.**
+a bot comment unanswered and never silently ignore one. Findings a review
+bot marks vital/critical/high severity (e.g. Macroscope "High"/"Critical",
+CodeRabbit "Critical"/"Major" correctness/security categories) MUST be fixed
+in the same PR, never merely replied to or deferred, unless the finding is
+factually wrong — in which case the reply must cite concrete evidence
+(file/line, command output, or spec reference) proving why. Lower-severity
+and style findings may be fixed or answered with reasoning.**
 
 ### Versioning
 
