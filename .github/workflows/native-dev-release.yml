@@ -257,6 +257,14 @@ jobs:
                   RUN_ATTEMPT: ${{ github.run_attempt }}
               run: echo "DEVELOPMENT_BUILD_NUMBER=${RUN_NUMBER}.${RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
+            - name: Compute release tag
+              id: tag
+              shell: bash
+              env:
+                  TAG_PREFIX: ${{ inputs.tag-prefix }}
+                  RUN_NUMBER: ${{ github.run_number }}
+              run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
               id: asc-key
@@ -318,13 +326,58 @@ jobs:
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
+            - name: Compute build metadata
+              id: meta
+              shell: bash
+              working-directory: ${{ inputs.app-dir }}
+              env:
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  PLATFORM: ios
+                  BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  COMMIT_SHA: ${{ github.sha }}
+                  BRANCH_NAME: ${{ github.ref_name }}
+                  WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                  TAG_NAME: ${{ steps.tag.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  asset_name="$(basename "$ARTIFACT_PATH")"
+                  artifact_dir="$(dirname "$ARTIFACT_PATH")"
+                  sums_path="$artifact_dir/SHA256SUMS"
+                  meta_path="$artifact_dir/build-meta.json"
+                  (cd "$artifact_dir" && shasum -a 256 "$asset_name") > "$sums_path"
+                  sha256="$(awk '{print $1}' "$sums_path")"
+                  version=""
+                  if [ -f app.json ]; then
+                    version="$(jq -r '.expo.version // empty' app.json)"
+                  fi
+                  built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  jq -n \
+                    --arg platform "$PLATFORM" \
+                    --arg version "$version" \
+                    --arg buildNumber "$BUILD_NUMBER" \
+                    --arg commitSha "$COMMIT_SHA" \
+                    --arg branch "$BRANCH_NAME" \
+                    --arg builtAt "$built_at" \
+                    --arg workflowUrl "$WORKFLOW_URL" \
+                    --arg tagName "$TAG_NAME" \
+                    --arg assetName "$asset_name" \
+                    --arg sha256 "$sha256" \
+                    '{platform: $platform}
+                     + (if $version == "" then {} else {version: $version} end)
+                     + {buildNumber: $buildNumber, commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
+                    > "$meta_path"
+                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
+                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+
             - name: Create GitHub Release (draft)
               id: release
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
-                  TAG: ${{ inputs.tag-prefix }}-ios-${{ github.run_number }}
+                  TAG: ${{ steps.tag.outputs.tag }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  META_PATH: ${{ steps.meta.outputs.meta-path }}
+                  SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
               run: |
                   set -euo pipefail
@@ -334,13 +387,13 @@ jobs:
                       --draft \
                       --title "iOS dev build ${TAG}" \
                       --notes "Automated development build. Build number: ${BUILD_NUMBER}."
-                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                    gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "iOS dev build ${TAG}" \
                       --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
-                      "$ARTIFACT_PATH"
+                      "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
@@ -513,6 +566,14 @@ jobs:
                   RUN_ATTEMPT: ${{ github.run_attempt }}
               run: echo "DEVELOPMENT_BUILD_NUMBER=${RUN_NUMBER}.${RUN_ATTEMPT}" >> "$GITHUB_ENV"
 
+            - name: Compute release tag
+              id: tag
+              shell: bash
+              env:
+                  TAG_PREFIX: ${{ inputs.tag-prefix }}
+                  RUN_NUMBER: ${{ github.run_number }}
+              run: echo "tag=${TAG_PREFIX}-android-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
             - name: EAS build (Android, development)
               id: build
               working-directory: ${{ inputs.app-dir }}
@@ -540,13 +601,58 @@ jobs:
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
+            - name: Compute build metadata
+              id: meta
+              shell: bash
+              working-directory: ${{ inputs.app-dir }}
+              env:
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  PLATFORM: android
+                  BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  COMMIT_SHA: ${{ github.sha }}
+                  BRANCH_NAME: ${{ github.ref_name }}
+                  WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                  TAG_NAME: ${{ steps.tag.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  asset_name="$(basename "$ARTIFACT_PATH")"
+                  artifact_dir="$(dirname "$ARTIFACT_PATH")"
+                  sums_path="$artifact_dir/SHA256SUMS"
+                  meta_path="$artifact_dir/build-meta.json"
+                  (cd "$artifact_dir" && shasum -a 256 "$asset_name") > "$sums_path"
+                  sha256="$(awk '{print $1}' "$sums_path")"
+                  version=""
+                  if [ -f app.json ]; then
+                    version="$(jq -r '.expo.version // empty' app.json)"
+                  fi
+                  built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  jq -n \
+                    --arg platform "$PLATFORM" \
+                    --arg version "$version" \
+                    --arg buildNumber "$BUILD_NUMBER" \
+                    --arg commitSha "$COMMIT_SHA" \
+                    --arg branch "$BRANCH_NAME" \
+                    --arg builtAt "$built_at" \
+                    --arg workflowUrl "$WORKFLOW_URL" \
+                    --arg tagName "$TAG_NAME" \
+                    --arg assetName "$asset_name" \
+                    --arg sha256 "$sha256" \
+                    '{platform: $platform}
+                     + (if $version == "" then {} else {version: $version} end)
+                     + {buildNumber: $buildNumber, commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
+                    > "$meta_path"
+                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
+                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+
             - name: Create GitHub Release (draft)
               id: release
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
-                  TAG: ${{ inputs.tag-prefix }}-android-${{ github.run_number }}
+                  TAG: ${{ steps.tag.outputs.tag }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  META_PATH: ${{ steps.meta.outputs.meta-path }}
+                  SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
               run: |
                   set -euo pipefail
@@ -556,13 +662,13 @@ jobs:
                       --draft \
                       --title "Android dev build ${TAG}" \
                       --notes "Automated development build. Build number: ${BUILD_NUMBER}."
-                    gh release upload "$TAG" "$ARTIFACT_PATH" --clobber
+                    gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "Android dev build ${TAG}" \
                       --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
-                      "$ARTIFACT_PATH"
+                      "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
