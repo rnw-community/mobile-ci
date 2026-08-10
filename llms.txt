@@ -22,6 +22,7 @@ opt-in publish workflows. Pre-`v1`: pin to `@main` or a commit SHA.
 - [docs/workflows/seed-native-cache.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/seed-native-cache.md): Reusable workflow that proactively populates the native-app cache.
 - [docs/workflows/native-publish.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/native-publish.md): Signed store publish reusable workflow (`eas build --local` + `eas submit`).
 - [docs/workflows/native-dev-release.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/native-dev-release.md): Dev-profile build published to a GitHub Release reusable workflow.
+- [docs/workflows/store-screenshots.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/store-screenshots.md): Fleet-native store screenshot capture matrix reusable workflow (iOS only in this release), with a gated fastlane upload job.
 - [docs/workflows/pr-closed-cleanup-reusable.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/pr-closed-cleanup-reusable.md): Reusable workflow that cancels zombie runs left on a closed PR's branch.
 
 ## Actions
@@ -36,4 +37,5 @@ opt-in publish workflows. Pre-`v1`: pin to `@main` or a commit SHA.
 - [run-maestro-ios](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-ios/README.md): Boots an iOS Simulator, installs a packaged .app, runs a Maestro flow shard, and captures final-state artifacts.
 - [run-maestro-android](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-android/README.md): Boots a headless Android emulator, installs a packaged .apk, runs a Maestro flow shard, and captures final-state artifacts.
 - [run-maestro-android-redroid](https://github.com/rnw-community/mobile-ci/blob/main/actions/run-maestro-android-redroid/README.md): Boots a prewarmed or cold-started Redroid Android-in-a-container instance, installs a packaged .apk, and runs a Maestro flow shard.
+- [capture-screenshots-ios](https://github.com/rnw-community/mobile-ci/blob/main/actions/capture-screenshots-ios/README.md): Boots a pinned iOS Simulator and captures one screenshot per locale x appearance x scene into a fixed raw/ios/<device-slug>/... layout for store screenshot pipelines.
 - [turbo-affected](https://github.com/rnw-community/mobile-ci/blob/main/actions/turbo-affected/README.md): Fail-closed detection of whether a set of target packages is affected relative to a base SHA.

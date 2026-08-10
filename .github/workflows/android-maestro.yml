@@ -265,7 +265,7 @@ on:
             test-timeout-minutes:
                 type: number
                 required: false
-                default: 60
+                default: 75
 
 concurrency:
     group: android-maestro-${{ github.workflow }}-${{ github.ref }}
@@ -630,8 +630,14 @@ jobs:
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
               run: |
+                  cancelled_hint() {
+                    if [ "$1" = 'cancelled' ]; then
+                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/test-timeout-minutes before assuming external cancellation."
+                    fi
+                  }
                   if [ "$DETECT_RESULT" != "success" ]; then
                     echo "Detection job did not succeed."
+                    cancelled_hint "$DETECT_RESULT"
                     exit 1
                   fi
                   if [ "$DETECT_AFFECTED" != "true" ]; then
@@ -640,10 +646,12 @@ jobs:
                   fi
                   if [ "$BUILD_RESULT" != "success" ]; then
                     echo "Build job failed."
+                    cancelled_hint "$BUILD_RESULT"
                     exit 1
                   fi
                   if [ "$TEST_RESULT" != "success" ]; then
                     echo "Maestro suite failed."
+                    cancelled_hint "$TEST_RESULT"
                     exit 1
                   fi
                   echo "Maestro suite passed."

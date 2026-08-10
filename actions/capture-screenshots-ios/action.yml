@@ -1,0 +1,506 @@
+name: capture-screenshots-ios
+description: >-
+  Boots a pinned iOS Simulator, installs a packaged .app, and captures one
+  screenshot per locale x appearance x scene into a fixed
+  raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png layout for store
+  screenshot pipelines.
+inputs:
+  app-path:
+    description: Path to a packaged .app to install (directory, not archive).
+    required: true
+  app-id:
+    description: Bundle identifier passed to Maestro as APP_ID.
+    required: true
+  screenshots-dir:
+    description: >-
+      Directory whose top-level files are the runnable screenshot scenes.
+      Subdirectories (subflows, fixtures) are never searched. Each scene file
+      must match '<number>.<name>.flow.yaml' - the number prefix is stripped
+      to derive the scene name used in the output path.
+    required: true
+  scenes-name-pattern:
+    description: >-
+      Space-separated find -name globs (OR'd together) selecting runnable
+      scenes directly inside screenshots-dir. Defaults to the *.flow.yaml
+      convention shared with run-maestro-ios.
+    required: false
+    default: '*.flow.yaml'
+  scenes-exclude-pattern:
+    description: Optional find ! -name glob excluding matched scenes by basename.
+    required: false
+    default: ''
+  simulator-device:
+    description: >-
+      Exact simulator device name to boot, e.g. 'iPhone 17 Pro Max', matched
+      against `xcrun simctl list devices available` with no fuzzy matching -
+      fails closed, listing the available devices, when no exact match
+      exists. Required (unlike run-maestro-ios's optional simulator-device):
+      store screenshots are shipped to a listing, so the exact device shape
+      they were captured on must be deterministic across runs.
+    required: true
+  locales:
+    description: Space- or comma-separated list of locale identifiers, e.g. 'en,de,fr'.
+    required: true
+  appearances:
+    description: Space- or comma-separated list of 'light' and/or 'dark'.
+    required: true
+  orientation:
+    description: >-
+      'portrait' or 'landscape'. The Simulator itself always renders in its
+      native portrait orientation - there is no supported simctl UI-rotation
+      call, and adding one would mean shelling out to a third-party
+      automation tool this repo does not otherwise depend on. landscape
+      instead bakes a 90-degree pixel rotation into each captured PNG via
+      the macOS-builtin `sips` after capture, matching the reference
+      bake-landscape-screenshot.ts behavior. This rotates pixels only; it
+      does not change how the app itself laid out the screen during
+      capture, so an app whose landscape layout meaningfully differs from
+      its portrait layout needs its own landscape-aware flow instead.
+    required: false
+    default: portrait
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation, in addition
+      to the always-passed APP_ID/LOCALE/APPEARANCE. Rejects (fails closed)
+      any line without '=' or whose name does not match
+      ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  maestro-version:
+    description: >-
+      Pinned Maestro CLI version, installed the same way as
+      run-maestro-ios's maestro-version.
+    required: false
+    default: '2.8.0'
+  output-dir:
+    description: >-
+      Root output directory. Screenshots are written to
+      <output-dir>/raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png,
+      where <device-slug> is simulator-device lowercased with every run of
+      non-alphanumeric characters collapsed to a single hyphen.
+    required: true
+outputs:
+  device-slug:
+    description: Slugified simulator-device, used as the raw/ios/<device-slug> path segment.
+    value: ${{ steps.device-slug.outputs.slug }}
+  raw-dir:
+    description: This run's output root - output-dir/raw/ios/<device-slug>.
+    value: ${{ inputs.output-dir }}/raw/ios/${{ steps.device-slug.outputs.slug }}
+runs:
+  using: composite
+  steps:
+    - name: Configure screenshot output directory
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
+
+    - name: Compute device slug
+      id: device-slug
+      shell: bash
+      env:
+        SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+      run: |
+          set -euo pipefail
+          test -n "$SIMULATOR_DEVICE" || { echo "::error::simulator-device is required for capture-screenshots-ios; deterministic capture needs a pinned device."; exit 1; }
+          slug=$(printf '%s' "$SIMULATOR_DEVICE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          test -n "$slug" || { echo "::error::simulator-device '$SIMULATOR_DEVICE' slugified to an empty string."; exit 1; }
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+
+    - name: Boot iOS Simulator
+      shell: bash
+      env:
+        SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+      run: |
+          set -euo pipefail
+          available_devices=$(xcrun simctl list devices available)
+          device_name_of() {
+            printf '%s\n' "$1" \
+              | sed -E 's/^[[:space:]]+//' \
+              | sed -E 's/[[:space:]]+$//' \
+              | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
+          }
+          device_line=''
+          while IFS= read -r line; do
+            udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)
+            [ -n "$udid" ] || continue
+            if [ "$(device_name_of "$line")" = "$SIMULATOR_DEVICE" ]; then
+              device_line="$line"
+              break
+            fi
+          done <<< "$available_devices"
+          if [ -z "$device_line" ]; then
+            echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
+            echo "$available_devices"
+            exit 1
+          fi
+          device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
+          test -n "$device_udid"
+          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
+          echo "Booting simulator: $device_line"
+          xcrun simctl boot "$device_udid" || true
+          bootstatus_timeout_seconds=300
+          if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$device_udid" -b; then
+            :
+          else
+            bootstatus_exit=$?
+            if [ "$bootstatus_exit" -eq 142 ]; then
+              echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$device_udid' to report booted; treating it as wedged."
+            else
+              echo "::error::xcrun simctl bootstatus failed for simulator '$device_udid' (exit $bootstatus_exit)."
+            fi
+            exit 1
+          fi
+          echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
+
+    - name: Install app on simulator
+      shell: bash
+      env:
+        APP_PATH: ${{ inputs.app-path }}
+      run: |
+          set -euo pipefail
+          test -d "$APP_PATH"
+          xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
+
+    - name: Install Maestro
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+          set -euo pipefail
+          if ! printf '%s' "$MAESTRO_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::maestro-version '$MAESTRO_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+            exit 1
+          fi
+          existing_bin="$(command -v maestro || true)"
+          existing_version=''
+          if [ -n "$existing_bin" ]; then
+            existing_version="$("$existing_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          fi
+          if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
+            echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
+            exit 0
+          fi
+          command -v unzip >/dev/null 2>&1 || { echo "::error::'unzip' is required to install the pinned Maestro release but is not on PATH."; exit 1; }
+
+          pinned_root="$HOME/.maestro-pinned"
+          pinned_dir="$pinned_root/$MAESTRO_VERSION"
+          pinned_bin="$pinned_dir/maestro/bin/maestro"
+          lock_dir="$pinned_root/.lock-$MAESTRO_VERSION"
+          mkdir -p "$pinned_root"
+
+          version_matches() {
+            [ -x "$pinned_bin" ] && [ "$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$MAESTRO_VERSION" ]
+          }
+
+          if ! version_matches; then
+            lock_acquired=''
+            lock_deadline=$((SECONDS + 300))
+            while :; do
+              if mkdir "$lock_dir" 2>/dev/null; then
+                lock_acquired=1
+                break
+              fi
+              if version_matches; then
+                break
+              fi
+              if [ "$SECONDS" -ge "$lock_deadline" ]; then
+                echo "::error::Timed out waiting for the Maestro install lock '$lock_dir'; a concurrent install on this host may be stuck."
+                exit 1
+              fi
+              sleep 2
+            done
+
+            if [ -n "$lock_acquired" ]; then
+              cleanup() {
+                [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
+                [ -n "${staging_dir:-}" ] && rm -rf "$staging_dir"
+                rmdir "$lock_dir" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              if ! version_matches; then
+                download_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+                checksum_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/checksums_sha256.txt"
+                scratch_dir="$(mktemp -d)"
+                zip_path="$scratch_dir/maestro.zip"
+
+                http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$zip_path" "$download_url")"
+                curl_exit=$?
+                if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
+                  echo "::error::Download of maestro-version '$MAESTRO_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'cli-$MAESTRO_VERSION' release publishing a maestro.zip asset exists at https://github.com/mobile-dev-inc/Maestro/releases."
+                  exit 1
+                fi
+
+                checksum_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 60 -w '%{http_code}' -o "$scratch_dir/checksums_sha256.txt" "$checksum_url")"
+                checksum_curl_exit=$?
+                if [ "$checksum_curl_exit" -eq 0 ] && [ "$checksum_status" = "200" ]; then
+                  expected_sha="$(awk '$2 == "maestro.zip" { print $1 }' "$scratch_dir/checksums_sha256.txt")"
+                  if [ -z "$expected_sha" ]; then
+                    echo "::error::checksums_sha256.txt for cli-$MAESTRO_VERSION has no maestro.zip entry; refusing to install an unverifiable download."
+                    exit 1
+                  fi
+                  if command -v sha256sum >/dev/null 2>&1; then
+                    actual_sha="$(sha256sum "$zip_path" | awk '{print $1}')"
+                  else
+                    actual_sha="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+                  fi
+                  if [ "$actual_sha" != "$expected_sha" ]; then
+                    echo "::error::maestro.zip checksum mismatch for cli-$MAESTRO_VERSION: expected $expected_sha, got $actual_sha."
+                    exit 1
+                  fi
+                elif [ "$checksum_status" = "404" ]; then
+                  echo "::warning::mobile-dev-inc/Maestro cli-$MAESTRO_VERSION did not publish checksums_sha256.txt (404); proceeding on the TLS-verified download from the official GitHub release only."
+                else
+                  echo "::error::Failed to retrieve checksums_sha256.txt for cli-$MAESTRO_VERSION from '$checksum_url' (curl exit $checksum_curl_exit, HTTP status '$checksum_status'). Refusing to install an unverifiable download."
+                  exit 1
+                fi
+
+                staging_dir="$(mktemp -d "$pinned_root/.staging-XXXXXX")"
+                unzip -q "$zip_path" -d "$staging_dir"
+                chmod +x "$staging_dir/maestro/bin/maestro" 2>/dev/null || true
+                staged_version="$("$staging_dir/maestro/bin/maestro" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+                if [ "$staged_version" != "$MAESTRO_VERSION" ]; then
+                  echo "::error::Extracted maestro from cli-$MAESTRO_VERSION's maestro.zip reports version '$staged_version', not the pinned $MAESTRO_VERSION; the release archive layout may have changed."
+                  exit 1
+                fi
+                rm -rf "$pinned_dir"
+                mkdir -p "$pinned_dir"
+                mv "$staging_dir/maestro" "$pinned_dir/maestro"
+              fi
+            fi
+          fi
+
+          if [ ! -x "$pinned_bin" ]; then
+            echo "::error::Expected a maestro binary at '$pinned_bin' after installing cli-$MAESTRO_VERSION; the install may have failed or been interrupted."
+            exit 1
+          fi
+          resolved_version="$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+            echo "::error::maestro at '$pinned_bin' reports version '$resolved_version', not the pinned $MAESTRO_VERSION."
+            exit 1
+          fi
+          echo "$pinned_dir/maestro/bin" >> "$GITHUB_PATH"
+          echo "Installed and using maestro $MAESTRO_VERSION at $pinned_bin"
+
+    - name: Run screenshot capture matrix
+      id: capture
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+        SCENES_NAME_PATTERN: ${{ inputs.scenes-name-pattern }}
+        SCENES_EXCLUDE_PATTERN: ${{ inputs.scenes-exclude-pattern }}
+        LOCALES: ${{ inputs.locales }}
+        APPEARANCES: ${{ inputs.appearances }}
+        ORIENTATION: ${{ inputs.orientation }}
+        MAESTRO_ENV: ${{ inputs.maestro-env }}
+        DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
+      run: |
+          set -euo pipefail
+          case "$ORIENTATION" in
+            portrait|landscape) ;;
+            *)
+              echo "::error::orientation '$ORIENTATION' must be 'portrait' or 'landscape'."
+              exit 1
+              ;;
+          esac
+          test -d "$SCREENSHOTS_DIR" || { echo "::error::screenshots-dir '$SCREENSHOTS_DIR' is not a directory."; exit 1; }
+
+          maestro_env_args=()
+          if [ -n "$MAESTRO_ENV" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                *=*) ;;
+                *)
+                  echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+                  exit 1
+                  ;;
+              esac
+              name="${line%%=*}"
+              case "$name" in
+                ''|[!A-Za-z_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              case "$name" in
+                *[!A-Za-z0-9_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              maestro_env_args+=(-e "$line")
+            done <<< "$MAESTRO_ENV"
+          fi
+
+          # Scenes are top-level-only (no -maxdepth override, unlike
+          # run-maestro-ios's configurable flows-max-depth): screenshot
+          # scenes are always a flat, numbered convention, and subflows
+          # (apply-language, apply-appearance, reset-app, ...) always live in
+          # subdirectories that must never be swept into the capture matrix.
+          find_cmd=(find "$SCREENSHOTS_DIR" -maxdepth 1 -type f)
+          IFS=' ' read -r -a name_patterns <<< "$SCENES_NAME_PATTERN"
+          name_args=('(')
+          for i in "${!name_patterns[@]}"; do
+            if [ "$i" -gt 0 ]; then
+              name_args+=(-o)
+            fi
+            name_args+=(-name "${name_patterns[$i]}")
+          done
+          name_args+=(')')
+          find_cmd+=("${name_args[@]}")
+          if [ -n "$SCENES_EXCLUDE_PATTERN" ]; then
+            find_cmd+=(! -name "$SCENES_EXCLUDE_PATTERN")
+          fi
+          scenes=()
+          while IFS= read -r scene_file; do
+            scenes+=("$scene_file")
+          done < <("${find_cmd[@]}" | sort)
+          if [ "${#scenes[@]}" -eq 0 ]; then
+            echo "::error::No scenes matching '$SCENES_NAME_PATTERN' found under screenshots-dir '$SCREENSHOTS_DIR'."
+            exit 1
+          fi
+          printf 'Resolved scene list (%s total):\n%s\n' "${#scenes[@]}" "${scenes[*]}"
+
+          scene_name_of() {
+            local base name
+            base=$(basename "$1")
+            base=${base%.flow.yaml}
+            name=$(printf '%s' "$base" | sed -E 's/^[0-9]+\.(.+)$/\1/')
+            if [ "$name" = "$base" ]; then
+              echo "::error::scene file '$1' does not match the '<number>.<name>.flow.yaml' convention; cannot derive a scene name." >&2
+              return 1
+            fi
+            printf '%s' "$name"
+          }
+
+          locales_list=$(printf '%s' "$LOCALES" | tr ',' ' ')
+          appearances_list=$(printf '%s' "$APPEARANCES" | tr ',' ' ')
+          IFS=' ' read -r -a locales_arr <<< "$locales_list"
+          IFS=' ' read -r -a appearances_arr <<< "$appearances_list"
+          if [ "${#locales_arr[@]}" -eq 0 ]; then
+            echo "::error::locales resolved to an empty list."
+            exit 1
+          fi
+          if [ "${#appearances_arr[@]}" -eq 0 ]; then
+            echo "::error::appearances resolved to an empty list."
+            exit 1
+          fi
+
+          summary_rows=()
+          overall_status=0
+          max_attempts=2
+
+          for locale in "${locales_arr[@]}"; do
+            # OS-level locale (best-effort, authoritative only for apps that
+            # read the system locale, e.g. via NSLocale/react-native-localize
+            # rather than an in-app language switcher): writes the app's own
+            # AppleLanguages/AppleLocale preferences before it is next
+            # launched by a scene below. An app with an in-app language
+            # switcher still needs its flows to read ${LOCALE} directly (see
+            # screenshots-dir's documented apply-language convention) - this
+            # write is not reverted, since a fresh app-id-scoped preference
+            # domain on a throwaway CI simulator does not need resetting.
+            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLanguages -array "$locale" 2>/dev/null; then
+              echo "::warning::Could not set the OS-level AppleLanguages preference for '$APP_ID' to '$locale'; continuing with in-flow \${LOCALE} handling only."
+            fi
+            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLocale -string "$locale" 2>/dev/null; then
+              echo "::warning::Could not set the OS-level AppleLocale preference for '$APP_ID' to '$locale'; continuing with in-flow \${LOCALE} handling only."
+            fi
+
+            for appearance in "${appearances_arr[@]}"; do
+              case "$appearance" in
+                light|dark) ;;
+                *)
+                  echo "::error::appearance '$appearance' must be 'light' or 'dark' (the only two values 'xcrun simctl ui appearance' accepts)."
+                  exit 1
+                  ;;
+              esac
+              # OS-level appearance is authoritative for any app following
+              # the system light/dark setting; -e APPEARANCE=<value> is still
+              # passed to every scene below for apps with an in-app theme
+              # switch instead (see screenshots-dir's documented
+              # apply-appearance convention).
+              if ! xcrun simctl ui "$SIMULATOR_UDID" appearance "$appearance"; then
+                echo "::error::'xcrun simctl ui $SIMULATOR_UDID appearance $appearance' failed."
+                exit 1
+              fi
+
+              for scene_file in "${scenes[@]}"; do
+                scene_name="$(scene_name_of "$scene_file")"
+                test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
+                debug_dir="$RUNNER_TEMP/screenshots-debug/${locale}-${appearance}-${scene_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+                start=$(date +%s)
+                attempts=0
+                status=failed
+                while [ "$attempts" -lt "$max_attempts" ]; do
+                  attempts=$((attempts + 1))
+                  rm -rf "$test_output_dir"
+                  mkdir -p "$test_output_dir"
+                  if maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" --debug-output "$debug_dir" "$scene_file"; then
+                    status=passed
+                    break
+                  fi
+                done
+                end=$(date +%s)
+                duration=$((end - start))
+
+                if [ "$status" = "passed" ]; then
+                  shots_dir="$test_output_dir/screenshots"
+                  shot_count=0
+                  shot_file=''
+                  if [ -d "$shots_dir" ]; then
+                    while IFS= read -r -d '' candidate; do
+                      shot_count=$((shot_count + 1))
+                      shot_file="$candidate"
+                    done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
+                  fi
+                  if [ "$shot_count" -ne 1 ]; then
+                    echo "::error::scene '$scene_file' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+                    status=failed
+                  else
+                    final_path="$OUTPUT_DIR/raw/ios/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
+                    mkdir -p "$(dirname "$final_path")"
+                    mv "$shot_file" "$final_path"
+                    if [ "$ORIENTATION" = "landscape" ]; then
+                      if command -v sips >/dev/null 2>&1; then
+                        sips --rotate 90 "$final_path" >/dev/null
+                      else
+                        echo "::warning::'sips' is not on PATH; leaving '$final_path' in the simulator's native portrait pixel orientation despite orientation=landscape."
+                      fi
+                    fi
+                  fi
+                fi
+
+                if [ "$status" != "passed" ]; then
+                  overall_status=1
+                fi
+                summary_rows+=("| $locale | $appearance | $(basename "$scene_file") | ${duration}s | $status | $attempts |")
+              done
+            done
+          done
+
+          {
+            echo "### Screenshot capture timing ($DEVICE_SLUG)"
+            echo "| Locale | Appearance | Scene | Duration | Status | Attempts |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            printf '%s\n' "${summary_rows[@]:-}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$overall_status"
+
+    - name: Shutdown simulator
+      if: always()
+      shell: bash
+      run: |
+          if command -v perl >/dev/null 2>&1; then
+            perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl shutdown "$SIMULATOR_UDID" || echo "::warning::xcrun simctl shutdown timed out or failed for simulator '$SIMULATOR_UDID'."
+          else
+            echo "::warning::'perl' is not on PATH; skipping the bounded simulator shutdown."
+          fi

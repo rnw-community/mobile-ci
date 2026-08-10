@@ -1,0 +1,787 @@
+name: store-screenshots
+
+on:
+    workflow_call:
+        inputs:
+            runner-labels:
+                description: JSON array of self-hosted runner labels for the build/capture jobs.
+                type: string
+                required: false
+                default: '["self-hosted","macOS","ARM64"]'
+            build-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the build job only. Falls
+                    back to runner-labels when empty.
+                type: string
+                required: false
+                default: ''
+            capture-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the capture job only.
+                    Falls back to runner-labels when empty. Must resolve to an arm64
+                    macOS pool regardless of the build pool's architecture, same
+                    constraint as ios-maestro.yml's test-runner-labels.
+                type: string
+                required: false
+                default: ''
+            upload-runner-labels:
+                description: >-
+                    JSON array of runner labels for the gated upload job. Falls back to
+                    runner-labels when empty.
+                type: string
+                required: false
+                default: ''
+            target:
+                description: >-
+                    Single build target JSON object: {name, appDir, workspace, scheme,
+                    appId, prebuildCommand}. prebuildCommand may be an empty string.
+                    Singular (unlike ios-maestro.yml's targets array) - store
+                    screenshots are captured for one app configuration per run.
+                type: string
+                required: true
+            capture-manifest:
+                description: >-
+                    JSON array of capture matrix entries, one job per entry:
+                    {"device": "iPhone 17 Pro Max", "locales": ["en","de"],
+                    "appearances": ["light","dark"], "orientation": "portrait"}.
+                    orientation defaults to "portrait" when omitted from an entry.
+                    locales x appearances x scenes are looped inside each job,
+                    reusing one booted simulator per device rather than a job per
+                    cell.
+                type: string
+                required: true
+            screenshots-dir:
+                description: >-
+                    Directory (relative to repo root) whose top-level files are the
+                    runnable screenshot scenes by default. Subdirectories (subflows,
+                    fixtures) are never searched - see docs/workflows/store-screenshots.md
+                    for the numbered-scene / subflow convention.
+                type: string
+                required: true
+            scenes-name-pattern:
+                type: string
+                required: false
+                default: '*.flow.yaml'
+            scenes-exclude-pattern:
+                type: string
+                required: false
+                default: ''
+            maestro-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs, each passed as an additional
+                    -e KEY=VALUE argument to every `maestro test` invocation, on top of
+                    the always-passed APP_ID/LOCALE/APPEARANCE. Rejects (fails closed)
+                    any line without '=' or whose name does not match
+                    ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
+            maestro-version:
+                type: string
+                required: false
+                default: '2.8.0'
+            post-capture-command:
+                description: >-
+                    Optional consumer-owned shell command run in the capture job after
+                    capture-screenshots-ios completes, before the raw screenshots are
+                    uploaded as an artifact - e.g. a framing/device-bezel script. Runs
+                    with SCREENSHOTS_OUTPUT_DIR (the capture-screenshots-ios output-dir)
+                    and DEVICE_SLUG in its environment. Its failure fails the capture
+                    job.
+                type: string
+                required: false
+                default: ''
+            xcode-version:
+                type: string
+                required: false
+                default: '26.4.1'
+            xcode-build:
+                type: string
+                required: false
+                default: '17E202'
+            cache-profile:
+                description: Cache-key prefix distinguishing this consumer/app.
+                type: string
+                required: false
+                default: ios-native-v1
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                description: Optional workspace JS build command run at repo root before the native build.
+                type: string
+                required: false
+                default: ''
+            rct-use-prebuilt-rncore:
+                type: boolean
+                required: false
+                default: false
+            rct-use-rn-dep:
+                type: boolean
+                required: false
+                default: false
+            expo-use-precompiled-modules:
+                type: boolean
+                required: false
+                default: false
+            ccache-max-size:
+                type: string
+                required: false
+                default: 2G
+            build-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the
+                    start of the build job. Rejects (fails closed) any line without
+                    '=' or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
+            repack-on-hit:
+                description: >-
+                    On a native-app-cache hit, run repack-app to inject a freshly
+                    exported JS bundle into the cached shell instead of reusing it
+                    unchanged. Falls back to a full native build if the repack fails.
+                type: boolean
+                required: false
+                default: false
+            repack-app-version:
+                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                type: string
+                required: false
+                default: '0.7.2'
+            build-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+            capture-timeout-minutes:
+                description: >-
+                    Capture job timeout. Default is generous because one job runs the
+                    full locales x appearances x scenes loop for its device on a single
+                    booted simulator (e.g. 13 locales x 2 appearances x 10 scenes).
+                type: number
+                required: false
+                default: 90
+            upload-screenshots:
+                description: >-
+                    Run the gated upload job, which downloads every capture job's raw
+                    screenshots and runs upload-command (e.g. a fastlane deliver lane).
+                type: boolean
+                required: false
+                default: false
+            upload-command:
+                description: >-
+                    Consumer-owned command run in the upload job, e.g.
+                    'bundle exec fastlane ios ios_screenshots'. Required when
+                    upload-screenshots is true; runs in fromJSON(inputs.target).appDir
+                    with the downloaded screenshots under screenshots-download-dir.
+                type: string
+                required: false
+                default: ''
+            screenshots-download-dir:
+                description: >-
+                    Path, relative to fromJSON(inputs.target).appDir, every capture
+                    job's raw-screenshots-<device-slug> artifact is merged into before
+                    upload-command runs. Defaults to the reference implementation's
+                    fastlane/screenshots/raw convention so an unmodified fastlane
+                    Deliverfile pointed at that path works unchanged.
+                type: string
+                required: false
+                default: fastlane/screenshots/raw
+            asc-key-path:
+                description: >-
+                    Optional path, relative to fromJSON(inputs.target).appDir, the App
+                    Store Connect API key (.p8) is written to and removed from for
+                    upload-command - set this only when your fastlane setup requires
+                    the key at a specific app-dir-relative location; otherwise leave
+                    empty so the key is written under $RUNNER_TEMP.
+                type: string
+                required: false
+                default: ''
+            publish-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs of non-secret env appended to
+                    $GITHUB_ENV at the start of the upload job, before upload-command
+                    runs. Rejects (fails closed) any line without '=' or whose name
+                    does not match ^[A-Za-z_][A-Za-z0-9_]*$. For secret values use the
+                    EAS_EXTRA_ENV secret instead - inputs are not masked in logs.
+                type: string
+                required: false
+                default: ''
+
+        secrets:
+            EXPO_TOKEN:
+                description: Expo access token, forwarded to the upload job's environment if upload-command needs it.
+                required: false
+            ASC_API_KEY:
+                description: >-
+                    App Store Connect API key contents (.p8). When set, written to
+                    asc-key-path (or $RUNNER_TEMP) before upload-command runs and
+                    removed afterward, same contract as native-publish.yml.
+                required: false
+            EAS_EXTRA_ENV:
+                description: >-
+                    Newline-separated KEY=VALUE pairs of secret env appended to
+                    $GITHUB_ENV at the start of the upload job, with each value masked
+                    in logs before being written. Same fail-closed parser and masking
+                    as native-publish.yml's EAS_EXTRA_ENV.
+                required: false
+
+concurrency:
+    group: store-screenshots-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+permissions:
+    contents: read
+
+jobs:
+    validate-manifest:
+        name: Validate capture-manifest
+        runs-on: ubuntu-latest
+        outputs:
+            entry-count: ${{ steps.validate.outputs.entry-count }}
+        steps:
+            - name: Validate structure and matrix limits
+              id: validate
+              shell: bash
+              env:
+                  CAPTURE_MANIFEST: ${{ inputs.capture-manifest }}
+              run: |
+                  set -euo pipefail
+                  if ! jq empty <<< "$CAPTURE_MANIFEST" 2>/dev/null; then
+                    echo "::error::capture-manifest is not valid JSON."
+                    exit 1
+                  fi
+                  if [ "$(jq 'type' <<< "$CAPTURE_MANIFEST")" != '"array"' ]; then
+                    echo "::error::capture-manifest must be a JSON array."
+                    exit 1
+                  fi
+                  entry_count=$(jq 'length' <<< "$CAPTURE_MANIFEST")
+                  if [ "$entry_count" -lt 1 ]; then
+                    echo "::error::capture-manifest must have at least one entry."
+                    exit 1
+                  fi
+                  if [ "$entry_count" -gt 256 ]; then
+                    echo "::error::capture-manifest has $entry_count entries, exceeding GitHub Actions' 256-job matrix limit."
+                    exit 1
+                  fi
+                  invalid=$(jq -c '
+                      [.[] | select(
+                          (.device | type != "string" or length == 0) or
+                          (.locales | type != "array" or length == 0) or
+                          (.appearances | type != "array" or length == 0) or
+                          ((.orientation // "portrait") as $o | ($o != "portrait" and $o != "landscape"))
+                      )]
+                  ' <<< "$CAPTURE_MANIFEST")
+                  if [ "$invalid" != '[]' ]; then
+                    echo "::error::capture-manifest has invalid entries (each needs a non-empty 'device' string, non-empty 'locales'/'appearances' arrays, and orientation 'portrait'/'landscape' if set): $invalid"
+                    exit 1
+                  fi
+                  echo "entry-count=$entry_count" >> "$GITHUB_OUTPUT"
+
+    build:
+        name: Build (${{ fromJSON(inputs.target).name }})
+        needs: validate-manifest
+        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        env:
+            APP_DIR: ${{ fromJSON(inputs.target).appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(inputs.target).name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(inputs.target).name }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: yarn
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: setup-xcode-pinned
+              id: xcode
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.4.3 # v1.4.3
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate native project
+              if: fromJSON(inputs.target).prebuildCommand != ''
+              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              shell: bash
+              env:
+                  PREBUILD_COMMAND: ${{ fromJSON(inputs.target).prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.4.3 # v1.4.3
+              with:
+                  platform: ios
+                  working-directory: ${{ fromJSON(inputs.target).appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.3 # v1.4.3
+              with:
+                  mode: restore
+                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
+                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.target).name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Repack fresh JS into cached native app
+              id: repack
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.4.3 # v1.4.3
+              with:
+                  platform: ios
+                  app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}/Base.app
+                  app-id: ${{ fromJSON(inputs.target).appId }}
+                  app-dir: ${{ fromJSON(inputs.target).appDir }}
+                  repack-version: ${{ inputs.repack-app-version }}
+
+            - name: Determine whether a native build is needed
+              id: build-decision
+              shell: bash
+              env:
+                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
+              run: |
+                  set -euo pipefail
+                  need_build=true
+                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
+                    need_build=false
+                  fi
+                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+              run: |
+                  {
+                    echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
+                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
+                    else
+                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Report repack fallback
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+              run: |
+                  echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Clean stale app before native build
+              if: steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}/Base.app
+              run: rm -rf "$APP_PATH"
+
+            - name: setup-ccache-ios (restore)
+              if: steps.build-decision.outputs.need-build == 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.4.3 # v1.4.3
+              with:
+                  mode: restore
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  max-size: ${{ inputs.ccache-max-size }}
+                  key: ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+                  restore-keys: |
+                      ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-
+
+            - name: build-ios-app
+              if: steps.build-decision.outputs.need-build == 'true'
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.4.3 # v1.4.3
+              with:
+                  app-dir: ${{ fromJSON(inputs.target).appDir }}
+                  workspace: ${{ fromJSON(inputs.target).workspace }}
+                  scheme: ${{ fromJSON(inputs.target).scheme }}
+                  derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
+                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
+                  pods-cache-key: pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+                  pods-cache-restore-keys: |
+                      pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-
+                  rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
+                  rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
+                  expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+
+            - name: setup-ccache-ios (save)
+              if: steps.build-decision.outputs.need-build == 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.4.3 # v1.4.3
+              with:
+                  mode: save
+                  ccache-dir: ${{ env.CCACHE_DIR }}
+                  key: ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.4.3 # v1.4.3
+              with:
+                  mode: save
+                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
+                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.target).name }}
+                  arch: arm64
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Archive app for the capture job
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+              run: |
+                  set -euo pipefail
+                  test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
+                  mkdir -p .ci-artifacts
+                  tar -czf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
+
+            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: store-screenshots-app-${{ fromJSON(inputs.target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}.tar.gz
+                  retention-days: 1
+
+    capture:
+        name: Capture (${{ matrix.entry.device }})
+        needs: [validate-manifest, build]
+        runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.capture-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                entry: ${{ fromJSON(inputs.capture-manifest) }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Assert capture runner architecture matches the packaged app
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  arch=$(uname -m)
+                  if [ "$arch" != 'arm64' ]; then
+                    echo "::error::Capture runner architecture is '$arch', but the packaged Simulator app is arm64-only. Set capture-runner-labels to an arm64 pool."
+                    exit 1
+                  fi
+
+            - name: setup-xcode-pinned
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.4.3 # v1.4.3
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: store-screenshots-app-${{ fromJSON(inputs.target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}
+
+            - name: Unpack app
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+              run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
+
+            - name: capture-screenshots-ios
+              id: capture
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.4.3 # v1.4.3
+              with:
+                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}/Base.app
+                  app-id: ${{ fromJSON(inputs.target).appId }}
+                  screenshots-dir: ${{ inputs.screenshots-dir }}
+                  scenes-name-pattern: ${{ inputs.scenes-name-pattern }}
+                  scenes-exclude-pattern: ${{ inputs.scenes-exclude-pattern }}
+                  simulator-device: ${{ matrix.entry.device }}
+                  locales: ${{ join(matrix.entry.locales, ',') }}
+                  appearances: ${{ join(matrix.entry.appearances, ',') }}
+                  orientation: ${{ matrix.entry.orientation || 'portrait' }}
+                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  output-dir: ${{ github.workspace }}/screenshots-output
+
+            - name: Run post-capture-command
+              if: inputs.post-capture-command != ''
+              shell: bash
+              env:
+                  SCREENSHOTS_OUTPUT_DIR: ${{ github.workspace }}/screenshots-output
+                  DEVICE_SLUG: ${{ steps.capture.outputs.device-slug }}
+                  POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
+              run: eval "$POST_CAPTURE_COMMAND"
+
+            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: raw-screenshots-${{ steps.capture.outputs.device-slug }}
+                  path: screenshots-output/raw/**
+                  if-no-files-found: error
+                  retention-days: 14
+
+    upload:
+        name: Upload screenshots
+        needs: capture
+        if: inputs.upload-screenshots
+        runs-on: ${{ fromJSON(inputs.upload-runner-labels != '' && inputs.upload-runner-labels || inputs.runner-labels) }}
+        env:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+            HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY != '' }}
+
+        steps:
+            - name: Validate required inputs
+              shell: bash
+              env:
+                  UPLOAD_COMMAND: ${{ inputs.upload-command }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "$UPLOAD_COMMAND" ]; then
+                    echo "::error::upload-command is required when upload-screenshots is true."
+                    exit 1
+                  fi
+
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply publish-env
+              if: inputs.publish-env != ''
+              shell: bash
+              env:
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::publish-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$PUBLISH_ENV"
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              shell: bash
+              env:
+                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    value="${line#*=}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    if [ -n "$value" ]; then
+                      echo "::add-mask::$value"
+                    fi
+                    echo "$name=$value" >> "$GITHUB_ENV"
+                  done <<< "$EAS_EXTRA_ENV"
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Download raw screenshots
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: raw-screenshots-*
+                  path: ${{ fromJSON(inputs.target).appDir }}/${{ inputs.screenshots-download-dir }}
+                  merge-multiple: true
+
+            - name: Write App Store Connect API key
+              id: asc-key
+              if: env.HAS_ASC_API_KEY == 'true'
+              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              shell: bash
+              env:
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_KEY_PATH_INPUT: ${{ inputs.asc-key-path }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$ASC_KEY_PATH_INPUT" ]; then
+                    key_path="$ASC_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/store-screenshots/asc-api-key.p8"
+                  fi
+                  mkdir -p "$(dirname "$key_path")"
+                  printf '%s' "$ASC_API_KEY" > "$key_path"
+                  chmod 600 "$key_path"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: Run upload-command
+              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              shell: bash
+              env:
+                  UPLOAD_COMMAND: ${{ inputs.upload-command }}
+                  SCREENSHOTS_DIR: ${{ inputs.screenshots-download-dir }}
+              run: eval "$UPLOAD_COMMAND"
+
+            - name: Remove App Store Connect API key
+              if: always() && steps.asc-key.outputs.key-path != ''
+              shell: bash
+              env:
+                  ASC_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+              run: rm -f "$ASC_KEY_PATH"
+
+    status:
+        name: Store screenshots result
+        needs: [validate-manifest, build, capture, upload]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Report
+              shell: bash
+              env:
+                  VALIDATE_RESULT: ${{ needs.validate-manifest.result }}
+                  BUILD_RESULT: ${{ needs.build.result }}
+                  CAPTURE_RESULT: ${{ needs.capture.result }}
+                  UPLOAD_ENABLED: ${{ inputs.upload-screenshots }}
+                  UPLOAD_RESULT: ${{ needs.upload.result }}
+              run: |
+                  fail() {
+                    echo "$1"
+                    if [ "$2" = 'cancelled' ]; then
+                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/capture-timeout-minutes before assuming external cancellation."
+                    fi
+                    exit 1
+                  }
+                  if [ "$VALIDATE_RESULT" != "success" ]; then
+                    fail "capture-manifest validation failed." "$VALIDATE_RESULT"
+                  fi
+                  if [ "$BUILD_RESULT" != "success" ]; then
+                    fail "Build job failed." "$BUILD_RESULT"
+                  fi
+                  if [ "$CAPTURE_RESULT" != "success" ]; then
+                    fail "Capture job failed." "$CAPTURE_RESULT"
+                  fi
+                  if [ "$UPLOAD_ENABLED" = "true" ] && [ "$UPLOAD_RESULT" != "success" ]; then
+                    fail "Upload job failed." "$UPLOAD_RESULT"
+                  fi
+                  echo "Store screenshots completed successfully."
