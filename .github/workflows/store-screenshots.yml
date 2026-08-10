@@ -186,7 +186,9 @@ on:
                     Consumer-owned command run in the upload job, e.g.
                     'bundle exec fastlane ios ios_screenshots'. Required when
                     upload-screenshots is true; runs in fromJSON(inputs.target).appDir
-                    with the downloaded screenshots under screenshots-download-dir.
+                    with the downloaded screenshots under screenshots-download-dir,
+                    which is also exposed to it as the SCREENSHOTS_DIR environment
+                    variable.
                 type: string
                 required: false
                 default: ''

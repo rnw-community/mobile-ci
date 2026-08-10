@@ -26,7 +26,7 @@ pointing at `build-timeout-minutes`/`capture-timeout-minutes`).
 Screenshot scenes are numbered top-level `*.flow.yaml` files directly inside
 `screenshots-dir`, exactly like `ios-maestro.yml`'s `flows-dir` convention:
 
-```
+```text
 apps/mobile/e2e/flows/screenshots/
 ├── 01.home.flow.yaml          # runnable scene -> raw/ios/<device-slug>/<locale>/<appearance>/home.png
 ├── 02.settings.flow.yaml      # runnable scene -> .../settings.png
@@ -118,7 +118,7 @@ appId: ${APP_ID}
 | `build-timeout-minutes`             | no       | `60`                                      | Build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | Capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop for its device (e.g. 13 locales x 2 appearances x 10 scenes) on a single booted simulator. |
 | `upload-screenshots`                | no       | `false`                                    | Run the gated upload job. |
-| `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in `fromJSON(inputs.target).appDir`. |
+| `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in `fromJSON(inputs.target).appDir` with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its environment. |
 | `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to `fromJSON(inputs.target).appDir`, every capture job's `raw-screenshots-<device-slug>` artifact is merged into before `upload-command` runs. Defaults to the reference implementation's convention so an unmodified fastlane `Deliverfile` pointed at that path works unchanged. |
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to `fromJSON(inputs.target).appDir`, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
 | `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job, before `upload-command` runs. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. |

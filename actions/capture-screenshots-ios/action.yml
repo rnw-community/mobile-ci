@@ -312,7 +312,10 @@ runs:
       run: |
           set -euo pipefail
           case "$ORIENTATION" in
-            portrait|landscape) ;;
+            portrait) ;;
+            landscape)
+              command -v sips >/dev/null 2>&1 || { echo "::error::'sips' is required to bake the 90-degree rotation for orientation=landscape but is not on PATH."; exit 1; }
+              ;;
             *)
               echo "::error::orientation '$ORIENTATION' must be 'portrait' or 'landscape'."
               exit 1
@@ -404,8 +407,8 @@ runs:
             exit 1
           fi
 
-          locales_list=$(printf '%s' "$LOCALES" | tr ',' ' ')
-          appearances_list=$(printf '%s' "$APPEARANCES" | tr ',' ' ')
+          locales_list=$(printf '%s' "$LOCALES" | tr ',\n\t' '   ')
+          appearances_list=$(printf '%s' "$APPEARANCES" | tr ',\n\t' '   ')
           IFS=' ' read -r -a locales_arr <<< "$locales_list"
           IFS=' ' read -r -a appearances_arr <<< "$appearances_list"
           if [ "${#locales_arr[@]}" -eq 0 ]; then
@@ -471,7 +474,6 @@ runs:
               for scene_file in "${scenes[@]}"; do
                 scene_name="$(scene_name_of "$scene_file")"
                 test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
-                debug_dir="$RUNNER_TEMP/screenshots-debug/${locale}-${appearance}-${scene_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
                 start=$(date +%s)
                 attempts=0
                 status=failed
@@ -479,7 +481,14 @@ runs:
                   attempts=$((attempts + 1))
                   rm -rf "$test_output_dir"
                   mkdir -p "$test_output_dir"
-                  if maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" --debug-output "$debug_dir" "$scene_file"; then
+                  # --test-output-dir (not --debug-output, which it silently
+                  # overrides once both are set - Maestro resolves a single
+                  # artifacts directory, preferring --test-output-dir) is
+                  # where a takeScreenshot command's output lands, in a
+                  # takeScreenshot/ subdirectory - not the screenshots/
+                  # subdirectory, which Maestro reserves for its own
+                  # automatic per-step captures.
+                  if maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file"; then
                     status=passed
                     break
                   fi
@@ -488,7 +497,7 @@ runs:
                 duration=$((end - start))
 
                 if [ "$status" = "passed" ]; then
-                  shots_dir="$test_output_dir/screenshots"
+                  shots_dir="$test_output_dir/takeScreenshot"
                   shot_count=0
                   shot_file=''
                   if [ -d "$shots_dir" ]; then
@@ -505,11 +514,7 @@ runs:
                     mkdir -p "$(dirname "$final_path")"
                     mv "$shot_file" "$final_path"
                     if [ "$ORIENTATION" = "landscape" ]; then
-                      if command -v sips >/dev/null 2>&1; then
-                        sips --rotate 90 "$final_path" >/dev/null
-                      else
-                        echo "::warning::'sips' is not on PATH; leaving '$final_path' in the simulator's native portrait pixel orientation despite orientation=landscape."
-                      fi
+                      sips --rotate 90 "$final_path" >/dev/null
                     fi
                   fi
                 fi
