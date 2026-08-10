@@ -291,14 +291,20 @@ jobs:
                     echo "::error::capture-manifest has invalid entries (each needs a non-empty 'device' string, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', and orientation 'portrait'/'landscape' if set): $invalid"
                     exit 1
                   fi
-                  # Two entries for the same device slugify to the same
-                  # raw-screenshots-<device-slug> artifact name, and
-                  # upload-artifact requires unique names within a run - the
-                  # second capture job's upload would fail rather than the
-                  # two devices' screenshots merging.
-                  duplicate_devices=$(jq -r '[.[] | .device] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_MANIFEST")
-                  if [ -n "$duplicate_devices" ]; then
-                    echo "::error::capture-manifest has duplicate device entries ($duplicate_devices); each device must be unique because the raw-screenshots-<device-slug> artifact name is derived from it."
+                  # Two entries that slugify to the same device slug (not
+                  # just two byte-identical device strings, e.g. "iPhone
+                  # 17-Pro" and "iPhone 17 Pro" both -> "iphone-17-pro")
+                  # collide on the same raw-screenshots-<device-slug>
+                  # artifact name, and upload-artifact requires unique names
+                  # within a run - the second capture job's upload would
+                  # fail rather than the two devices' screenshots merging.
+                  # Slug here exactly as capture-screenshots-ios does.
+                  duplicate_device_slugs=$(jq -r '
+                      [.[] | .device | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "")]
+                      | group_by(.) | map(select(length > 1)[0]) | join(", ")
+                  ' <<< "$CAPTURE_MANIFEST")
+                  if [ -n "$duplicate_device_slugs" ]; then
+                    echo "::error::capture-manifest has device entries that slugify to the same value ($duplicate_device_slugs); each device's slug must be unique because the raw-screenshots-<device-slug> artifact name is derived from it."
                     exit 1
                   fi
                   echo "entry-count=$entry_count" >> "$GITHUB_OUTPUT"
