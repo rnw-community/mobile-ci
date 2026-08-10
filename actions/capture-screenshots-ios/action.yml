@@ -34,7 +34,10 @@ inputs:
       Exact simulator device name to boot, e.g. 'iPhone 17 Pro Max', matched
       against `xcrun simctl list devices available` with no fuzzy matching -
       fails closed, listing the available devices, when no exact match
-      exists. Required (unlike run-maestro-ios's optional simulator-device):
+      exists, and also fails closed when more than one available simulator
+      shares that exact name (e.g. the same device model provisioned under
+      two runtimes) rather than booting whichever one a listing-order
+      heuristic picks. Required (unlike run-maestro-ios's optional simulator-device):
       store screenshots are shipped to a listing, so the exact device shape
       they were captured on must be deterministic across runs.
     required: true
@@ -124,20 +127,26 @@ runs:
               | sed -E 's/[[:space:]]+$//' \
               | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
           }
-          device_line=''
+          matching_device_lines=()
           while IFS= read -r line; do
             udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)
             [ -n "$udid" ] || continue
             if [ "$(device_name_of "$line")" = "$SIMULATOR_DEVICE" ]; then
-              device_line="$line"
-              break
+              matching_device_lines+=("$line")
             fi
           done <<< "$available_devices"
-          if [ -z "$device_line" ]; then
+          if [ "${#matching_device_lines[@]}" -eq 0 ]; then
             echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
             echo "$available_devices"
             exit 1
           fi
+          if [ "${#matching_device_lines[@]}" -gt 1 ]; then
+            echo "::error::simulator-device '$SIMULATOR_DEVICE' matches ${#matching_device_lines[@]} available simulators (e.g. the same device model provisioned under more than one runtime), which breaks capture-screenshots-ios's deterministic-device guarantee - whichever one boots would depend on listing order. Matching devices:"
+            printf '%s\n' "${matching_device_lines[@]}"
+            echo "::error::Delete the extra runtime/device pairing on this runner pool so exactly one simulator is named '$SIMULATOR_DEVICE', or pin a more specific name."
+            exit 1
+          fi
+          device_line="${matching_device_lines[0]}"
           device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
           test -n "$device_udid"
           command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }

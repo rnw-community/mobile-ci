@@ -64,7 +64,7 @@ appended to `$GITHUB_STEP_SUMMARY`.
 | `screenshots-dir`           | yes      | —             | Directory whose top-level files are the runnable screenshot scenes. |
 | `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. |
 | `scenes-exclude-pattern`    | no       | `''`          | Optional `find ! -name` glob excluding matched scenes by basename. |
-| `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching. Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
+| `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching; also fails closed if more than one available simulator shares that exact name. Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
 | `locales`                   | yes      | —             | Space- or comma-separated locale identifiers, e.g. `en,de,fr`. |
 | `appearances`               | yes      | —             | Space- or comma-separated list of `light` and/or `dark`. |
 | `orientation`               | no       | `portrait`    | `portrait` or `landscape`; see [Orientation](#orientation). |
