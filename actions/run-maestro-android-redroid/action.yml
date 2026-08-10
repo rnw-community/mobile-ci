@@ -153,6 +153,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Verify diagnostic tooling
+      shell: bash
+      run: command -v timeout >/dev/null 2>&1 || { echo "::error::'timeout' (GNU coreutils) is required to bound the docker/adb diagnostic and teardown calls below but is not on PATH."; exit 1; }
+
     - name: Start Redroid container
       id: redroid
       shell: bash

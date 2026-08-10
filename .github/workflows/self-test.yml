@@ -76,10 +76,29 @@ jobs:
                   # file-scoped-ignored for (see .github/zizmor.yml) - this closes
                   # that gap for third-party refs living in those same five files
                   # (#28) without touching the zizmor ignore itself.
+                  #
+                  # "uses" is matched with an optional surrounding quote
+                  # (["']?) so a quoted YAML key ("uses": ...) is not missed
+                  # the way an unquoted-only pattern would miss it.
+                  uses_pattern="^[[:space:]]*-?[[:space:]]*[\"']?uses[\"']?[[:space:]]*:[[:space:]]*[^[:space:]]"
                   violations=0
                   while IFS= read -r -d '' file; do
+                    # Fail closed on a genuine grep error (unreadable file,
+                    # bad pattern: exit >1), not just "no uses: line found"
+                    # (exit 1) -- `|| true` alone would mask both the same way.
+                    if grep_output="$(grep -nE "$uses_pattern" "$file")"; then
+                      grep_status=0
+                    else
+                      grep_status=$?
+                    fi
+                    if [ "$grep_status" -gt 1 ]; then
+                      echo "::error::Failed to scan '${file}' for 'uses:' references (grep exited ${grep_status})."
+                      violations=$((violations + 1))
+                      continue
+                    fi
+                    [ -n "$grep_output" ] || continue
                     while IFS=: read -r lineno content; do
-                      ref="$(printf '%s' "$content" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses[[:space:]]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+                      ref="$(printf '%s' "$content" | sed -E "s/^[[:space:]]*-?[[:space:]]*[\"']?uses[\"']?[[:space:]]*:[[:space:]]*//; s/[[:space:]]*#.*\$//; s/[[:space:]]+\$//")"
                       ref="${ref%\"}"; ref="${ref#\"}"
                       ref="${ref%\'}"; ref="${ref#\'}"
                       [ -n "$ref" ] || continue
@@ -99,7 +118,7 @@ jobs:
                           violations=$((violations + 1))
                           ;;
                       esac
-                    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses[[:space:]]*:[[:space:]]*[^[:space:]]' "$file" || true)
+                    done <<< "$grep_output"
                   done < <(find .github/workflows actions -type f \( -name '*.yml' -o -name 'action.yml' \) -print0 | sort -z)
 
                   if [ "$violations" -gt 0 ]; then

@@ -163,9 +163,9 @@ runs:
           fi
           device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
           test -n "$device_udid"
+          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
           echo "Booting simulator: $device_line"
           xcrun simctl boot "$device_udid" || true
-          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
           bootstatus_timeout_seconds=300
           if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$device_udid" -b; then
             :
