@@ -376,7 +376,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.5.1 # v1.5.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -398,7 +398,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.5.1 # v1.5.1
               with:
                   platform: ios
                   working-directory: ${{ fromJSON(inputs.target).appDir }}
@@ -406,7 +406,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
@@ -419,7 +419,7 @@ jobs:
               id: repack
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.5.1 # v1.5.1
               with:
                   platform: ios
                   app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}/Base.app
@@ -475,7 +475,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.5.1 # v1.5.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -488,7 +488,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.5.1 # v1.5.1
               with:
                   app-dir: ${{ fromJSON(inputs.target).appDir }}
                   workspace: ${{ fromJSON(inputs.target).workspace }}
@@ -505,7 +505,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.5.1 # v1.5.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -513,7 +513,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
@@ -565,7 +565,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.5.1 # v1.5.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -583,7 +583,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.5.0 # v1.5.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.5.1 # v1.5.1
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.target).appId }}
