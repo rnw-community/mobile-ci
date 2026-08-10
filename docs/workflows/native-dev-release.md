@@ -90,15 +90,23 @@ on `/releases/latest` to find "the latest dev build for platform X".
    `assetName`/`sha256`/`version`/`buildNumber` — **prefer this over parsing
    `tag_name` or the release notes body**, both of which are incidental
    formatting, not a contract. `build-meta.json` is the contract.
-5. Download the asset named `build-meta.json.assetName`, verify it against
-   `sha256` (or against `SHA256SUMS`) before installing/running it.
+5. Download the release asset whose name equals the `assetName` value read
+   from `build-meta.json`, then verify it against `sha256` (or against
+   `SHA256SUMS`) before installing/running it.
 
-If the consumer calls the GitHub API from a context with a low unauthenticated
-rate limit (e.g. a public web page fetching on every visitor request) or the
-releases live in a private repository, pass a bearer token
-(`Authorization: Bearer <token>`) with at least `contents: read` on the
-repository — a fine-grained PAT scoped to this single repo is sufficient,
-no write access is needed for discovery.
+If discovery needs a higher rate limit than unauthenticated requests allow,
+or the releases live in a private repository, authenticate with a bearer
+token (`Authorization: Bearer <token>`, a fine-grained PAT scoped to this
+single repo with at least `contents: read`) **only from a trusted
+server-side context** — a backend the consumer controls, a CI job, or a
+build script. Never embed that token in a public web page or any other
+client the token's owner does not control: a token sent in a browser
+request is visible to every visitor via devtools/network inspection, and a
+`contents: read` PAT for a private repository would hand out read access
+to that repository's contents to anyone who copies it out of the request.
+A public "latest dev build" page should call unauthenticated discovery
+directly (public repo) or proxy the authenticated call through a trusted
+backend it controls (private repo) — never ship the token to the browser.
 
 ## Inputs
 
