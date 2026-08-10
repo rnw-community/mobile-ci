@@ -311,6 +311,21 @@ flow timed out at launch, blocked on the app's own
 `Wallet.getPaymentsClient().isReadyToPay()` probe, which never resolves
 without GMS present in the image.
 
+**A hang is not the only failure signature to watch for.** A GMS-dependent
+call can instead resolve immediately into Play Services' own fallback UI: a
+full-screen, unrecoverable system dialog ("… won't run without Google Play
+services, which are not supported by your device.") from a *different*
+package (`com.google.android.gms`), not the app under test. Because that
+dialog sits on top of and blocks the accessibility tree Maestro walks, every
+subsequent assertion against the app's own elements times out — the
+observed symptom is `assertVisible` timing out on an app element that
+should obviously be rendered, which gives no hint that the real cause is a
+system dialog from another package rather than a bug in the app or the
+flow. If you see an inexplicable `assertVisible` timeout like this, capture
+`logcat` before debugging the app itself and check for the marker
+`GoogleApiAvailability: Google Play services is invalid. Cannot recover.`
+first — see option 4 below for what that log line does and does not mean.
+
 Options for a consumer app that depends on GMS at runtime:
 
 1. **Provision a GMS-enabled Redroid image.** Layer `gapps`/`microG` into

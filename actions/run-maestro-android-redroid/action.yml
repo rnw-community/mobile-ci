@@ -153,6 +153,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Verify diagnostic tooling
+      shell: bash
+      run: command -v timeout >/dev/null 2>&1 || { echo "::error::'timeout' (GNU coreutils) is required to bound the docker/adb diagnostic and teardown calls below but is not on PATH."; exit 1; }
+
     - name: Start Redroid container
       id: redroid
       shell: bash
@@ -713,12 +717,12 @@ runs:
         CONTAINER_NAME_INPUT: ${{ inputs.container-name }}
       run: |
           if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
-            sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
+            timeout 30 sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
           else
-            sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
+            timeout 30 sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
           fi
           if [ -n "${REDROID_DATA_DIR:-}" ]; then
-            sudo rm -rf "$REDROID_DATA_DIR" || true
+            timeout 30 sudo rm -rf "$REDROID_DATA_DIR" || true
           fi
 
     - name: Upload Maestro artifacts
