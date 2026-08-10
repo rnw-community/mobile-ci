@@ -153,7 +153,7 @@ jobs:
                   scratch="$RUNNER_TEMP/dry-lint"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release; do
+                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots; do
                     sed -E 's#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#' \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done

@@ -68,16 +68,16 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
 
 7. **Verify release self-consistency**: the tagged commit's own
    self-reference-bearing workflows (`ios-maestro.yml`, `android-maestro.yml`,
-   `seed-native-cache.yml` — `native-publish.yml` and `native-dev-release.yml`
-   have no self-references) must point at that same tag. Fail closed: any
-   reference whose tag or trailing comment does not match the release is a
-   broken release, not a warning.
+   `seed-native-cache.yml`, `store-screenshots.yml` — `native-publish.yml` and
+   `native-dev-release.yml` have no self-references) must point at that same
+   tag. Fail closed: any reference whose tag or trailing comment does not
+   match the release is a broken release, not a warning.
 
    ```bash
    tag=v1.2.3
    tag_re=$(printf '%s' "$tag" | sed 's/[.[\*^$]/\\&/g')
    check_status=0
-   for workflow in ios-maestro android-maestro seed-native-cache; do
+   for workflow in ios-maestro android-maestro seed-native-cache store-screenshots; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/.github/workflows/${workflow}.yml?ref=${tag}" \
        --jq '.content' | base64 -d)"
      if ! printf '%s\n' "$content" | grep -q 'rnw-community/mobile-ci/actions/'; then

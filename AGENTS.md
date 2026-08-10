@@ -101,6 +101,9 @@ carte tier — see [README.md](README.md#pick-your-tier)):
 - `seed-native-cache.yml` — proactively warms the native-app cache.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.
+- `store-screenshots.yml` — fleet-native store screenshot capture matrix
+  (iOS only so far) driven by a Maestro flow-per-scene convention, with a
+  gated fastlane upload job.
 - `pr-closed-cleanup-reusable.yml` — cancels zombie runs on a closed PR's branch.
 
 Full input/secret/permission tables and a copy-pasteable example live in

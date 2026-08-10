@@ -28,6 +28,7 @@ rules:
       - seed-native-cache.yml
       - native-publish.yml
       - native-dev-release.yml
+      - store-screenshots.yml
 
   # Each finding here is this action's OWN script exporting its OWN
   # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a Maestro
