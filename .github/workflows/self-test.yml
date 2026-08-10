@@ -79,7 +79,7 @@ jobs:
                   violations=0
                   while IFS= read -r -d '' file; do
                     while IFS=: read -r lineno content; do
-                      ref="$(printf '%s' "$content" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+                      ref="$(printf '%s' "$content" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses[[:space:]]*:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
                       ref="${ref%\"}"; ref="${ref#\"}"
                       ref="${ref%\'}"; ref="${ref#\'}"
                       [ -n "$ref" ] || continue
@@ -99,7 +99,7 @@ jobs:
                           violations=$((violations + 1))
                           ;;
                       esac
-                    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^[:space:]]' "$file" || true)
+                    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses[[:space:]]*:[[:space:]]*[^[:space:]]' "$file" || true)
                   done < <(find .github/workflows actions -type f \( -name '*.yml' -o -name 'action.yml' \) -print0 | sort -z)
 
                   if [ "$violations" -gt 0 ]; then
