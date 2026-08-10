@@ -713,12 +713,12 @@ runs:
         CONTAINER_NAME_INPUT: ${{ inputs.container-name }}
       run: |
           if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
-            sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
+            timeout 30 sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
           else
-            sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
+            timeout 30 sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
           fi
           if [ -n "${REDROID_DATA_DIR:-}" ]; then
-            sudo rm -rf "$REDROID_DATA_DIR" || true
+            timeout 30 sudo rm -rf "$REDROID_DATA_DIR" || true
           fi
 
     - name: Upload Maestro artifacts

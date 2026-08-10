@@ -57,6 +57,57 @@ jobs:
               shell: bash
               run: ~/.local/bin/zizmor --config .github/zizmor.yml .github/workflows actions
 
+    pin-check:
+        name: Third-party SHA pin check
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Enforce full-commit-SHA pinning on every third-party 'uses:'
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  # AGENTS.md's "Hard conventions" require every third-party uses:
+                  # (anything not rnw-community/mobile-ci/...) to be pinned to a full
+                  # commit SHA. zizmor's unpinned-uses rule enforces that everywhere
+                  # except the five self-reference-bearing workflow files it is
+                  # file-scoped-ignored for (see .github/zizmor.yml) - this closes
+                  # that gap for third-party refs living in those same five files
+                  # (#28) without touching the zizmor ignore itself.
+                  violations=0
+                  while IFS= read -r -d '' file; do
+                    while IFS=: read -r lineno content; do
+                      ref="$(printf '%s' "$content" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+                      ref="${ref%\"}"; ref="${ref#\"}"
+                      ref="${ref%\'}"; ref="${ref#\'}"
+                      [ -n "$ref" ] || continue
+                      case "$ref" in
+                        ./*|rnw-community/mobile-ci/*)
+                          continue
+                          ;;
+                        *@*)
+                          sha="${ref##*@}"
+                          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+                            echo "::error file=${file},line=${lineno}::Unpinned third-party 'uses:' ref '${ref}' - third-party actions must be pinned to a full 40-character commit SHA (got '@${sha}')."
+                            violations=$((violations + 1))
+                          fi
+                          ;;
+                        *)
+                          echo "::error file=${file},line=${lineno}::Third-party 'uses:' ref '${ref}' has no @ref at all; must be pinned to a full 40-character commit SHA."
+                          violations=$((violations + 1))
+                          ;;
+                      esac
+                    done < <(grep -nE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^[:space:]]' "$file" || true)
+                  done < <(find .github/workflows actions -type f \( -name '*.yml' -o -name 'action.yml' \) -print0 | sort -z)
+
+                  if [ "$violations" -gt 0 ]; then
+                    echo "::error::${violations} third-party 'uses:' reference(s) are not pinned to a full commit SHA. See annotations above."
+                    exit 1
+                  fi
+                  echo "All third-party 'uses:' references are pinned to a full commit SHA."
+
     dry-lint-local-refs:
         name: Dry lint (reusable workflow -> composite action schemas)
         runs-on: ubuntu-latest

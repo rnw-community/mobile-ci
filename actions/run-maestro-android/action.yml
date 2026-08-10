@@ -287,9 +287,9 @@ runs:
         SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$OUT_DIR"
-          adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
-          adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
-          adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+          timeout 30 adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
+          timeout 30 adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
+          timeout 30 adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
           if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
             debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
             max_debug_kb=$((200 * 1024))
@@ -307,7 +307,7 @@ runs:
     - name: Shutdown emulator
       if: always()
       shell: bash
-      run: adb emu kill || true
+      run: timeout 30 adb emu kill || true
 
     - name: Upload Maestro artifacts
       if: always()

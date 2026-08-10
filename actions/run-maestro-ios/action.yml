@@ -165,7 +165,19 @@ runs:
           test -n "$device_udid"
           echo "Booting simulator: $device_line"
           xcrun simctl boot "$device_udid" || true
-          xcrun simctl bootstatus "$device_udid" -b
+          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
+          bootstatus_timeout_seconds=300
+          if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$device_udid" -b; then
+            :
+          else
+            bootstatus_exit=$?
+            if [ "$bootstatus_exit" -eq 142 ]; then
+              echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$device_udid' to report booted; treating it as wedged."
+            else
+              echo "::error::xcrun simctl bootstatus failed for simulator '$device_udid' (exit $bootstatus_exit)."
+            fi
+            exit 1
+          fi
           echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
 
     - name: Install app on simulator
@@ -554,7 +566,11 @@ runs:
         SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
-          xcrun simctl io "$SIMULATOR_UDID" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/final-screen.png" || true
+          if command -v perl >/dev/null 2>&1; then
+            perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl io "$SIMULATOR_UDID" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/final-screen.png" || echo "::warning::xcrun simctl io screenshot timed out or failed for simulator '$SIMULATOR_UDID'; continuing without it."
+          else
+            echo "::warning::'perl' is not on PATH; skipping the bounded final-screen screenshot capture."
+          fi
           if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
             debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
             max_debug_kb=$((200 * 1024))
@@ -572,7 +588,12 @@ runs:
     - name: Shutdown simulator
       if: always()
       shell: bash
-      run: xcrun simctl shutdown "$SIMULATOR_UDID" || true
+      run: |
+          if command -v perl >/dev/null 2>&1; then
+            perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl shutdown "$SIMULATOR_UDID" || echo "::warning::xcrun simctl shutdown timed out or failed for simulator '$SIMULATOR_UDID'."
+          else
+            echo "::warning::'perl' is not on PATH; skipping the bounded simulator shutdown."
+          fi
 
     - name: Upload Maestro artifacts
       if: always()
