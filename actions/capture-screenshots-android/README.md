@@ -27,7 +27,7 @@ previous matrix.
 - **Below API 33 fails closed.** Locales are applied per-app via
   `cmd locale set-app-locales` (persistent, no reboot), which needs API 33+;
   the action reads `ro.build.version.sdk` up front and fails closed below
-  that. The default Redroid image (`redroid:15.0.0_64only`, API 35) is fine.
+  that. The default Redroid image (`redroid/redroid:15.0.0_64only-latest`, API 35) is fine.
 - **Appearance** is applied via `cmd uimode night yes|no` per appearance
   value; `-e APPEARANCE=<value>` is additionally passed to flow-backed
   scenes for apps with an in-app theme switch.

@@ -154,7 +154,7 @@ pull`/`push` into `/data/data/<app-id>/...` works directly, with no
   build).
 - The device must run **API 33+** (`cmd locale set-app-locales`);
   `capture-screenshots-android` fails closed below that. The default
-  `redroid:15.0.0_64only` image (API 35) is fine.
+  `redroid/redroid:15.0.0_64only-latest` image (API 35) is fine.
 - `status-bar-override` maps to SystemUI demo mode (clock 09:41, full wifi,
   no mobile data type, battery 100% unplugged, notifications hidden).
 - **Rendering fidelity caveat**: Redroid runs with guest-mode GPU rendering
