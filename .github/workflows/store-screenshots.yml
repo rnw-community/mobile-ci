@@ -1144,7 +1144,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@f0ffb9069144fa533e47c34239404eb122557528 # feat/v1.6-store-screenshots-direct-capture
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@22129ceb8ca528105b386c69dc500a409801219d # feat/v1.6-store-screenshots-direct-capture
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
@@ -1203,7 +1203,7 @@ jobs:
 
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@f0ffb9069144fa533e47c34239404eb122557528 # feat/v1.6-store-screenshots-direct-capture
+              uses: rnw-community/mobile-ci/actions/redroid-container@22129ceb8ca528105b386c69dc500a409801219d # feat/v1.6-store-screenshots-direct-capture
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -1215,7 +1215,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@f0ffb9069144fa533e47c34239404eb122557528 # feat/v1.6-store-screenshots-direct-capture
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@22129ceb8ca528105b386c69dc500a409801219d # feat/v1.6-store-screenshots-direct-capture
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}/app-release.apk
@@ -1253,7 +1253,7 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@f0ffb9069144fa533e47c34239404eb122557528 # feat/v1.6-store-screenshots-direct-capture
+              uses: rnw-community/mobile-ci/actions/redroid-container@22129ceb8ca528105b386c69dc500a409801219d # feat/v1.6-store-screenshots-direct-capture
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
