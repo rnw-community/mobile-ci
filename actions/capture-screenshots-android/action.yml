@@ -571,7 +571,7 @@ runs:
             while IFS= read -r -d '' candidate; do
               shot_count=$((shot_count + 1))
               shot_file="$candidate"
-            done < <(find "$test_output_dir" -type f -path '*takeScreenshot/*.png' -print0)
+            done < <(find "$test_output_dir" -type f -path '*takeScreenshot/*.png' -not -path "$shot_cwd/*" -print0)
             if [ "$shot_count" -ne 1 ]; then
               echo "::error::scene-screenshot collection found $shot_count PNG(s) across the maestro CWD '$shot_cwd' and the '$test_output_dir' bundle takeScreenshot/ dirs; expected exactly 1 from a single takeScreenshot command."
               return 2
