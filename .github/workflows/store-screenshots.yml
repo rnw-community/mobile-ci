@@ -1144,7 +1144,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@1973442868a5e6984aea7b65da60d19d3dae080b # main as of 2026-08-18, pending v1.6.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@7c74599c85de1e07540d0d440295d462b81e3f11 # main as of 2026-08-18, pending v1.6.0
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
@@ -1203,7 +1203,7 @@ jobs:
 
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@1973442868a5e6984aea7b65da60d19d3dae080b # main as of 2026-08-18, pending v1.6.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@7c74599c85de1e07540d0d440295d462b81e3f11 # main as of 2026-08-18, pending v1.6.0
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -1215,7 +1215,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@1973442868a5e6984aea7b65da60d19d3dae080b # main as of 2026-08-18, pending v1.6.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@7c74599c85de1e07540d0d440295d462b81e3f11 # main as of 2026-08-18, pending v1.6.0
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}/app-release.apk
@@ -1253,7 +1253,7 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@1973442868a5e6984aea7b65da60d19d3dae080b # main as of 2026-08-18, pending v1.6.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@7c74599c85de1e07540d0d440295d462b81e3f11 # main as of 2026-08-18, pending v1.6.0
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
