@@ -3,17 +3,62 @@
 Boots a pinned iOS Simulator, installs a packaged `.app`, then captures one
 screenshot per `locale` x `appearance` x scene, reusing the same booted
 simulator across the whole matrix rather than paying a fresh boot/install per
-cell. A scene is any top-level `*.flow.yaml` file directly inside
-`screenshots-dir` (subflows and fixtures live in subdirectories and are never
-swept in, same convention as `run-maestro-ios`'s `flows-dir`) named
-`<number>.<name>.flow.yaml` - the leading number is stripped to produce the
-scene name used in the output path.
+cell. Scenes come from one of two modes:
+
+- **Flow-discovery mode (legacy, `scenes` empty).** A scene is any top-level
+  `*.flow.yaml` file directly inside `screenshots-dir` (subflows and
+  fixtures live in subdirectories and are never swept in, same convention as
+  `run-maestro-ios`'s `flows-dir`) named `<number>.<name>.flow.yaml` - the
+  leading number is stripped to produce the scene name used in the output
+  path.
+- **Direct mode (`scenes` set).** Scenes come from a JSON manifest - see
+  [Direct mode](#direct-mode-scene-manifest) below. The
+  `<number>.<name>.flow.yaml` convention is not required; the scene name
+  comes from the manifest.
 
 **Output layout is fixed and not configurable:**
 `<output-dir>/raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png`, where
 `<device-slug>` is `simulator-device` lowercased with every run of
 non-alphanumeric characters collapsed to a single hyphen (e.g.
 `iPhone 17 Pro Max` -> `iphone-17-pro-max`).
+
+## Direct mode (scene manifest)
+
+`scenes` is the same JSON shape `store-screenshots.yml`'s `capture-scenes`
+input uses (see
+[docs/workflows/store-screenshots.md](../../docs/workflows/store-screenshots.md)
+for the full schema): each scene has a unique path-safe `name` and exactly
+one of
+
+- `deepLink` - per cell, the app is `simctl terminate`d, optionally seeded
+  (`seed-command`), launched with
+  `simctl launch <udid> <app-id> -AppleLanguages '("<locale>")' -AppleLocale <locale>`,
+  sent the deep link via `simctl openurl`, allowed `settle-seconds` (or the
+  scene's own `settleSeconds`) to settle, then captured with
+  `simctl io screenshot`.
+- `flow` - a Maestro flow path relative to `screenshots-dir`, run with the
+  same single-`takeScreenshot` contract as flow-discovery mode. Maestro
+  itself is installed lazily in direct mode, only when at least one
+  ios-applicable scene declares a flow.
+
+Optional per-scene `platforms`/`locales`/`appearances` filters restrict
+where a scene is captured; scenes whose `platforms` excludes `ios` are
+skipped entirely (all of them being skipped fails closed).
+
+`seed-command` (direct mode only - setting it in flow-discovery mode fails
+closed) runs once per locale x appearance x scene cell, from the repo root,
+with the app installed and terminated, and with `SCENE`, `LOCALE`,
+`APPEARANCE`, `APP_ID`, `PLATFORM=ios`, `DEVICE_SLUG`, `SIMULATOR_UDID`,
+and `APP_PATH` in its environment. Its failure marks that cell failed with
+no capture and no retry.
+
+## Status bar
+
+`status-bar-override: 'true'` (default) applies
+`xcrun simctl status_bar <udid> override` once after boot in **both** modes:
+time 9:41, wifi active with 3 bars, cellular active with 4 bars, battery
+100% charged. A failing override call fails closed; set the input to
+`'false'` to capture with the real status bar.
 
 ## Two-layer locale/appearance model
 
@@ -49,11 +94,13 @@ different from portrait needs its own landscape-aware flow.
 
 ## Retry and failure handling
 
-Each scene gets up to 2 attempts (1 retry, not configurable). A scene is
-expected to produce exactly one `takeScreenshot` output per run; zero or more
-than one fails that scene closed with an explicit error rather than guessing
-which file was intended. A per-locale/appearance/scene timing table is
-appended to `$GITHUB_STEP_SUMMARY`.
+Each failing cell gets up to 2 attempts (1 retry, not configurable) in both
+modes; a `seed-command` failure marks its cell failed with no capture and no
+retry. A flow-backed scene is expected to produce exactly one
+`takeScreenshot` output per run; zero or more than one fails that scene
+closed with an explicit error rather than guessing which file was intended.
+A per-locale/appearance/scene timing table is appended to
+`$GITHUB_STEP_SUMMARY`.
 
 ## Inputs
 
@@ -61,15 +108,19 @@ appended to `$GITHUB_STEP_SUMMARY`.
 | -------------------------- | -------- | ------------- | -------------- |
 | `app-path`                  | yes      | —             | Path to a packaged `.app` directory to install. |
 | `app-id`                    | yes      | —             | Bundle identifier passed to Maestro as `APP_ID`. |
-| `screenshots-dir`           | yes      | —             | Directory whose top-level files are the runnable screenshot scenes. |
-| `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. |
-| `scenes-exclude-pattern`    | no       | `''`          | Optional `find ! -name` glob excluding matched scenes by basename. |
+| `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. |
+| `seed-command`              | no       | `''`          | Consumer-owned per-cell seed hook, direct mode only (fails closed if set while `scenes` is empty). Failure fails the cell closed (no capture, no retry). |
+| `settle-seconds`            | no       | `3`           | Seconds (integer 0–120) between a deep-link launch and its screenshot in direct mode; a scene's `settleSeconds` overrides it. |
+| `status-bar-override`       | no       | `true`        | Apply the `simctl status_bar` 9:41 override once after boot (both modes); fails closed if the call fails. |
+| `screenshots-dir`           | no       | `''`          | Discovery root in flow-discovery mode; the directory flow-backed manifest scenes resolve against in direct mode. Required in flow-discovery mode, and in direct mode when an ios-applicable scene declares a `flow`. |
+| `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. Flow-discovery mode only. |
+| `scenes-exclude-pattern`    | no       | `''`          | Optional `find ! -name` glob excluding matched scenes by basename. Flow-discovery mode only. |
 | `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching; also fails closed if more than one available simulator shares that exact name. Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
 | `locales`                   | yes      | —             | Space- or comma-separated locale identifiers, e.g. `en,de,fr`. |
 | `appearances`               | yes      | —             | Space- or comma-separated list of `light` and/or `dark`. |
 | `orientation`               | no       | `portrait`    | `portrait` or `landscape`; see [Orientation](#orientation). |
 | `maestro-env`               | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE`. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `maestro-version`           | no       | `2.8.0`       | Pinned Maestro CLI version, installed the same way as `run-maestro-ios`'s `maestro-version`. |
+| `maestro-version`           | no       | `2.8.0`       | Pinned Maestro CLI version, installed the same way as `run-maestro-ios`'s `maestro-version` — and lazily: in direct mode only when an ios-applicable scene declares a `flow`. |
 | `output-dir`                | yes      | —             | Root output directory; see the fixed layout above. |
 
 ## Outputs
