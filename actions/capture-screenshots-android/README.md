@@ -57,8 +57,13 @@ one of
 - `flow` — a Maestro flow path relative to `screenshots-dir`, run with
   `ANDROID_SERIAL` set and expected to produce **exactly one**
   `takeScreenshot` output (zero or more than one fails that cell closed).
-  Maestro itself is installed lazily, only when at least one
-  android-applicable scene declares a flow.
+  Maestro is run from a fresh per-cell scratch working directory, because
+  it writes a relative `takeScreenshot` name into the process CWD (not
+  into `--test-output-dir`); the PNG is collected from the union of that
+  scratch CWD and `--test-output-dir`'s `takeScreenshot/` subdirectory.
+  Flow-internal `runFlow` references are unaffected — Maestro resolves
+  them against the flow file, not the CWD. Maestro itself is installed
+  lazily, only when at least one android-applicable scene declares a flow.
 
 Optional per-scene `platforms`/`locales`/`appearances` filters restrict
 where a scene is captured; scenes whose `platforms` excludes `android` are

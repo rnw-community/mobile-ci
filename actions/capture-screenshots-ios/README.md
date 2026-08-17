@@ -101,6 +101,12 @@ modes; a `seed-command` failure marks its cell failed with no capture and no
 retry. A flow-backed scene is expected to produce exactly one
 `takeScreenshot` output per run; zero or more than one fails that scene
 closed with an explicit error rather than guessing which file was intended.
+Maestro is run from a fresh per-cell scratch working directory, because it
+writes a relative `takeScreenshot` name into the process CWD (not into
+`--test-output-dir`); the PNG is collected from the union of that scratch
+CWD and `--test-output-dir`'s `takeScreenshot/` subdirectory.
+Flow-internal `runFlow` references are unaffected — Maestro resolves them
+against the flow file, not the CWD.
 A per-locale/appearance/scene timing table is appended to
 `$GITHUB_STEP_SUMMARY`.
 

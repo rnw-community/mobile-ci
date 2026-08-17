@@ -540,22 +540,35 @@ runs:
             local flow_rel="$1" scene_name="$2" locale="$3" appearance="$4" final_path="$5"
             local scene_file="$SCREENSHOTS_DIR/$flow_rel"
             test -f "$scene_file" || { echo "::error::scene '$scene_name' flow '$flow_rel' does not exist under screenshots-dir '$SCREENSHOTS_DIR'."; exit 1; }
+            case "$scene_file" in
+              /*) ;;
+              *) scene_file="$PWD/$scene_file" ;;
+            esac
             local test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
+            local shot_cwd="$test_output_dir/shot-cwd"
             rm -rf "$test_output_dir"
-            mkdir -p "$test_output_dir"
-            # --test-output-dir (not --debug-output, which it silently
-            # overrides once both are set) is where a takeScreenshot
-            # command's output lands, in a takeScreenshot/ subdirectory.
-            maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file" || return 1
-            local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate
-            if [ -d "$shots_dir" ]; then
+            mkdir -p "$shot_cwd"
+            # Maestro resolves a relative takeScreenshot name against the
+            # process CWD, not --test-output-dir (fleet-validated on 2.8.0),
+            # so run it from a fresh per-cell scratch CWD and collect the PNG
+            # from there. The flow path is passed absolute so it survives the
+            # cd; flow-internal runFlow references are unaffected - Maestro
+            # resolves those against the flow file, not the CWD.
+            # --test-output-dir's takeScreenshot/ subdirectory is still
+            # searched for forward-compatibility; its screenshots/
+            # subdirectory never is - newer Maestro reserves that for
+            # automatic per-step failure captures.
+            (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
+            local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate shot_search_dir
+            for shot_search_dir in "$shot_cwd" "$shots_dir"; do
+              [ -d "$shot_search_dir" ] || continue
               while IFS= read -r -d '' candidate; do
                 shot_count=$((shot_count + 1))
                 shot_file="$candidate"
-              done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
-            fi
+              done < <(find "$shot_search_dir" -maxdepth 1 -type f -name '*.png' -print0)
+            done
             if [ "$shot_count" -ne 1 ]; then
-              echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+              echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd' and '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
               return 2
             fi
             mv "$shot_file" "$final_path"
