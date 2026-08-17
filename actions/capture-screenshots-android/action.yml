@@ -565,7 +565,7 @@ runs:
               while IFS= read -r -d '' candidate; do
                 shot_count=$((shot_count + 1))
                 shot_file="$candidate"
-              done < <(find "$shot_search_dir" -maxdepth 1 -type f -name '*.png' -print0)
+              done < <(find "$shot_search_dir" -type f -name '*.png' -print0)
             done
             if [ "$shot_count" -ne 1 ]; then
               echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd' and '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
