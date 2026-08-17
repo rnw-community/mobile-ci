@@ -1144,7 +1144,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@8d51d0089ece6cec1b17ceecc11bc12c46ce4e63 # main as of 2026-08-18, pending v1.6.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@ff58867e5fbe243662f62a686f625261c30afbb4 # main as of 2026-08-18, pending v1.6.0
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
