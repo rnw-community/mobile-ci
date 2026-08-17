@@ -653,13 +653,14 @@ runs:
                     # absolute so it survives the cd; flow-internal runFlow
                     # references are unaffected - Maestro resolves those
                     # against the flow file, not the CWD.
-                    # A passing run's screenshot may land in the maestro
-                    # CWD, in --test-output-dir's screenshots/ subdirectory
-                    # (2.8.x observed on the fleet, and what suuudokuuu's
-                    # local pipeline flattens), or in a takeScreenshot/
-                    # subdirectory; all three are searched. Collection only
-                    # happens after a pass, so screenshots/ cannot contain
-                    # Maestro's automatic per-step failure captures here.
+                    # The CLI nests one artifacts bundle per flow inside
+                    # --test-output-dir (TestDebugReporter.createFlowDir), so a
+                    # passing run's takeScreenshot output lands under
+                    # <test-output-dir>/<flow>/takeScreenshot/ (v2.8.0 source);
+                    # no-bundle mode writes relative to the maestro CWD. Both
+                    # are searched; the bundle's screenshots/ dir is NOT - it
+                    # holds Maestro's own step captures (final.png) even on a
+                    # pass and would double-count.
                     if (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file_abs"); then
                       status=passed
                       break
@@ -669,18 +670,17 @@ runs:
                   duration=$((end - start))
 
                   if [ "$status" = "passed" ]; then
-                    shots_dir="$test_output_dir/takeScreenshot"
-                    shot_count=0
-                    shot_file=''
-                    for shot_search_dir in "$shot_cwd" "$shots_dir" "$test_output_dir/screenshots"; do
-                      [ -d "$shot_search_dir" ] || continue
-                      while IFS= read -r -d '' candidate; do
-                        shot_count=$((shot_count + 1))
-                        shot_file="$candidate"
-                      done < <(find "$shot_search_dir" -type f -name '*.png' -print0)
-                    done
+                    shot_count=0 shot_file=''
+                    while IFS= read -r -d '' candidate; do
+                      shot_count=$((shot_count + 1))
+                      shot_file="$candidate"
+                    done < <(find "$shot_cwd" -type f -name '*.png' -print0)
+                    while IFS= read -r -d '' candidate; do
+                      shot_count=$((shot_count + 1))
+                      shot_file="$candidate"
+                    done < <(find "$test_output_dir" -type f -path '*takeScreenshot/*.png' -print0)
                     if [ "$shot_count" -ne 1 ]; then
-                      echo "::error::scene '$scene_file' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd', '$shots_dir', and '$test_output_dir/screenshots'; expected exactly 1 from a single takeScreenshot command."
+                      echo "::error::scene-screenshot collection found $shot_count PNG(s) across the maestro CWD '$shot_cwd' and the '$test_output_dir' bundle takeScreenshot/ dirs; expected exactly 1 from a single takeScreenshot command."
                       status=failed
                     else
                       final_path="$OUTPUT_DIR/raw/ios/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
@@ -774,16 +774,17 @@ runs:
               # flow file, not the CWD) and collect from the union of the
               # scratch CWD and the forward-compat takeScreenshot/ layout.
               (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
-              local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate shot_search_dir
-              for shot_search_dir in "$shot_cwd" "$shots_dir" "$test_output_dir/screenshots"; do
-                [ -d "$shot_search_dir" ] || continue
-                while IFS= read -r -d '' candidate; do
-                  shot_count=$((shot_count + 1))
-                  shot_file="$candidate"
-                done < <(find "$shot_search_dir" -type f -name '*.png' -print0)
-              done
+              local shot_count=0 shot_file='' candidate
+              while IFS= read -r -d '' candidate; do
+                shot_count=$((shot_count + 1))
+                shot_file="$candidate"
+              done < <(find "$shot_cwd" -type f -name '*.png' -print0)
+              while IFS= read -r -d '' candidate; do
+                shot_count=$((shot_count + 1))
+                shot_file="$candidate"
+              done < <(find "$test_output_dir" -type f -path '*takeScreenshot/*.png' -print0)
               if [ "$shot_count" -ne 1 ]; then
-                echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd', '$shots_dir', and '$test_output_dir/screenshots'; expected exactly 1 from a single takeScreenshot command."
+                echo "::error::scene-screenshot collection found $shot_count PNG(s) across the maestro CWD '$shot_cwd' and the '$test_output_dir' bundle takeScreenshot/ dirs; expected exactly 1 from a single takeScreenshot command."
                 return 2
               fi
               mv "$shot_file" "$final_path"
