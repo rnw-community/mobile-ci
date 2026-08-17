@@ -216,7 +216,13 @@ runs:
           echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, terminate."
           xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID"
           sleep "$APP_WARM_SECONDS"
-          xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" || echo "::warning::simctl terminate failed for '$APP_ID'; the app may have exited on its own during the warm-up settle."
+          if ! xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID"; then
+            if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list 2>/dev/null | grep -qF "UIKitApplication:${APP_ID}["; then
+              echo "::error::simctl terminate failed for '$APP_ID' and the app is still running; the first flow would not start from a terminated app."
+              exit 1
+            fi
+            echo "::warning::simctl terminate failed for '$APP_ID'; the app had already exited on its own during the warm-up settle."
+          fi
 
     - name: Run pre-test command
       if: inputs.pre-test-command != ''
