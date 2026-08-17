@@ -4,23 +4,27 @@ on:
     workflow_call:
         inputs:
             runner-labels:
-                description: JSON array of self-hosted runner labels for the build/capture jobs.
+                description: JSON array of self-hosted runner labels for the iOS build/capture jobs.
                 type: string
                 required: false
                 default: '["self-hosted","macOS","ARM64"]'
             build-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the build job only. Falls
-                    back to runner-labels when empty.
+                    JSON array of self-hosted runner labels for the iOS build job (and
+                    the Android build job, unless android-build-runner-labels is set).
+                    Falls back to runner-labels when empty.
                 type: string
                 required: false
                 default: ''
             capture-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the capture job only.
-                    Falls back to runner-labels when empty. Must resolve to an arm64
-                    macOS pool regardless of the build pool's architecture, same
-                    constraint as ios-maestro.yml's test-runner-labels.
+                    JSON array of self-hosted runner labels for the iOS capture job
+                    only (the Android capture job uses
+                    android-capture-runner-labels instead - a deliberate asymmetry,
+                    since the two pools can never overlap). Falls back to
+                    runner-labels when empty. Must resolve to an arm64 macOS pool
+                    regardless of the build pool's architecture, same constraint as
+                    ios-maestro.yml's test-runner-labels.
                 type: string
                 required: false
                 default: ''
@@ -31,33 +35,109 @@ on:
                 type: string
                 required: false
                 default: ''
-            target:
+            ios-target:
                 description: >-
-                    Single build target JSON object: {name, appDir, workspace, scheme,
-                    appId, prebuildCommand}. prebuildCommand may be an empty string.
-                    Singular (unlike ios-maestro.yml's targets array) - store
+                    Single iOS build target JSON object: {name, appDir, workspace,
+                    scheme, appId, prebuildCommand}. prebuildCommand may be an empty
+                    string. Singular (unlike ios-maestro.yml's targets array) - store
                     screenshots are captured for one app configuration per run.
+                    Required when capture-manifest has iOS entries (renamed from
+                    'target' in v1.6.0).
                 type: string
-                required: true
+                required: false
+                default: ''
+            android-target:
+                description: >-
+                    Single Android build target JSON object: {name, appDir, appId,
+                    prebuildCommand} - the same per-target shape as
+                    android-maestro.yml's targets entries. Required when
+                    capture-manifest has Android entries.
+                type: string
+                required: false
+                default: ''
             capture-manifest:
                 description: >-
-                    JSON array of capture matrix entries, one job per entry:
-                    {"device": "iPhone 17 Pro Max", "locales": ["en","de"],
-                    "appearances": ["light","dark"], "orientation": "portrait"}.
-                    orientation defaults to "portrait" when omitted from an entry.
-                    locales x appearances x scenes are looped inside each job,
-                    reusing one booted simulator per device rather than a job per
-                    cell.
+                    JSON array of capture matrix entries, one capture job per entry.
+                    Each entry has an optional "platform" ("ios" default, or
+                    "android"), "locales", "appearances", and "device". iOS entries
+                    take an exact simulator name as "device" plus an optional
+                    "orientation"; Android entries take a free-form "device" label
+                    (slug only) plus required integer "width"/"height"/"density" and
+                    must be portrait. locales x appearances x scenes are looped
+                    inside each job, reusing one booted simulator/container per
+                    entry. See docs/workflows/store-screenshots.md for the full
+                    schema and validation rules.
                 type: string
                 required: true
+            capture-mode:
+                description: >-
+                    'flows' (default; legacy Maestro flow discovery under
+                    screenshots-dir, iOS-only) or 'direct' (scene-manifest-driven via
+                    capture-scenes, required for Android entries). Any other value
+                    fails closed.
+                type: string
+                required: false
+                default: flows
+            capture-scenes:
+                description: >-
+                    JSON array of scene objects shared across all capture-manifest
+                    entries, each {"name", and exactly one of "deepLink" or "flow",
+                    optional "settleSeconds", "platforms", "locales", "appearances"}.
+                    Required when capture-mode is 'direct'; fails closed if set in
+                    'flows' mode.
+                type: string
+                required: false
+                default: ''
+            seed-command:
+                description: >-
+                    Optional consumer-owned shell command run once per
+                    locale x appearance x scene cell, from the repo root, with the
+                    app installed and terminated/force-stopped, before the scene's
+                    launch. Direct mode only; fails closed if set in 'flows' mode.
+                    See docs/workflows/store-screenshots.md#seed-hook-contract for
+                    the environment it runs with.
+                type: string
+                required: false
+                default: ''
+            settle-seconds:
+                description: >-
+                    Seconds (integer 0-120) between a deep-link launch and its
+                    screenshot in direct mode; a scene's own settleSeconds overrides
+                    it per scene.
+                type: string
+                required: false
+                default: '3'
+            status-bar-override:
+                description: >-
+                    Force a store-clean status bar in both modes: 9:41, full
+                    wifi/cellular, battery 100 (iOS `simctl status_bar` override;
+                    Android SystemUI demo mode). Fails closed if the override cannot
+                    be applied; set to false to capture the real status bar.
+                type: boolean
+                required: false
+                default: true
+            apple-screenshot-slots:
+                description: >-
+                    Optional JSON object mapping pixel resolutions to App Store slot
+                    labels, e.g. {"1320x2868": "IPHONE_69", "2064x2752":
+                    "IPAD_PRO_3GEN_129"}. Non-empty enables a fail-closed resolution
+                    check in the upload job: every downloaded iOS PNG must match one
+                    of the keys (WxH or HxW), and a slot->count coverage table is
+                    appended to the job summary.
+                type: string
+                required: false
+                default: ''
             screenshots-dir:
                 description: >-
                     Directory (relative to repo root) whose top-level files are the
-                    runnable screenshot scenes by default. Subdirectories (subflows,
-                    fixtures) are never searched - see docs/workflows/store-screenshots.md
-                    for the numbered-scene / subflow convention.
+                    runnable screenshot scenes in 'flows' mode (subdirectories -
+                    subflows, fixtures - are never searched), and the directory
+                    flow-backed capture-scenes entries resolve against in 'direct'
+                    mode. Required in 'flows' mode, and in 'direct' mode when any
+                    scene declares a flow.
                 type: string
-                required: true
+                required: false
+                default: ''
             scenes-name-pattern:
                 type: string
                 required: false
@@ -77,17 +157,21 @@ on:
                 required: false
                 default: ''
             maestro-version:
+                description: >-
+                    Pinned Maestro CLI version, still used by flow-backed scenes in
+                    either capture mode (and installed lazily in direct mode, only on
+                    capture jobs whose scene set contains a flow).
                 type: string
                 required: false
                 default: '2.8.0'
             post-capture-command:
                 description: >-
-                    Optional consumer-owned shell command run in the capture job after
-                    capture-screenshots-ios completes, before the raw screenshots are
-                    uploaded as an artifact - e.g. a framing/device-bezel script. Runs
-                    with SCREENSHOTS_OUTPUT_DIR (the capture-screenshots-ios output-dir)
-                    and DEVICE_SLUG in its environment. Its failure fails the capture
-                    job.
+                    Optional consumer-owned shell command run in each capture job
+                    (iOS and Android alike) after capture completes, before the raw
+                    screenshots are uploaded as an artifact - e.g. a
+                    framing/device-bezel script. Runs with SCREENSHOTS_OUTPUT_DIR
+                    (the capture action's output-dir) and DEVICE_SLUG in its
+                    environment. Its failure fails the capture job.
                 type: string
                 required: false
                 default: ''
@@ -100,7 +184,7 @@ on:
                 required: false
                 default: '17E202'
             cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app.
+                description: Cache-key prefix distinguishing this consumer/app (iOS build job).
                 type: string
                 required: false
                 default: ios-native-v1
@@ -121,7 +205,7 @@ on:
                 required: false
                 default: true
             build-command:
-                description: Optional workspace JS build command run at repo root before the native build.
+                description: Optional workspace JS build command run at repo root before the native build (both build jobs).
                 type: string
                 required: false
                 default: ''
@@ -144,16 +228,18 @@ on:
             build-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the
-                    start of the build job. Rejects (fails closed) any line without
-                    '=' or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                    start of each build job (iOS and Android alike). Rejects (fails
+                    closed) any line without '=' or whose name does not match
+                    ^[A-Za-z_][A-Za-z0-9_]*$.
                 type: string
                 required: false
                 default: ''
             repack-on-hit:
                 description: >-
-                    On a native-app-cache hit, run repack-app to inject a freshly
-                    exported JS bundle into the cached shell instead of reusing it
-                    unchanged. Falls back to a full native build if the repack fails.
+                    On a native-app-cache hit (either platform), run repack-app to
+                    inject a freshly exported JS bundle into the cached shell instead
+                    of reusing it unchanged. Falls back to a full native build if the
+                    repack fails.
                 type: boolean
                 required: false
                 default: false
@@ -163,17 +249,103 @@ on:
                 required: false
                 default: '0.7.2'
             build-timeout-minutes:
+                description: iOS build job timeout.
                 type: number
                 required: false
                 default: 60
             capture-timeout-minutes:
                 description: >-
-                    Capture job timeout. Default is generous because one job runs the
-                    full locales x appearances x scenes loop for its device on a single
-                    booted simulator (e.g. 13 locales x 2 appearances x 10 scenes).
+                    iOS capture job timeout. Default is generous because one job runs
+                    the full locales x appearances x scenes loop for its device on a
+                    single booted simulator (e.g. 13 locales x 2 appearances x 10
+                    scenes).
                 type: number
                 required: false
                 default: 90
+            android-build-runner-labels:
+                description: >-
+                    JSON array of runner labels for the Android build job. Falls back
+                    to build-runner-labels, then runner-labels - the macOS default is
+                    deliberately correct, since Google publishes no linux-aarch64
+                    NDK/cmake and the Redroid capture pool therefore cannot build.
+                type: string
+                required: false
+                default: ''
+            android-capture-runner-labels:
+                description: >-
+                    JSON array of runner labels for the Android capture job (the
+                    Redroid pool). Deliberately does NOT fall back to runner-labels,
+                    whose macOS default can never run a Redroid container.
+                type: string
+                required: false
+                default: '["self-hosted","linux-tiered","linux-xl"]'
+            android-cmdline-tools-version:
+                description: See build-android-app README - pin explicitly, do not trust upstream defaults.
+                type: string
+                required: false
+                default: '12266719'
+            android-gradle-task:
+                type: string
+                required: false
+                default: assembleRelease
+            android-gradle-args:
+                type: string
+                required: false
+                default: ''
+            android-cache-profile:
+                description: Cache-key prefix distinguishing this consumer/app (Android build job).
+                type: string
+                required: false
+                default: android-native-v1
+            android-build-tools-version:
+                description: >-
+                    Android build-tools version installed via
+                    android-actions/setup-android on a native-app-cache hit, used
+                    only when repack-on-hit is true - same rationale as
+                    android-maestro.yml's input of the same name.
+                type: string
+                required: false
+                default: '35.0.0'
+            android-build-tools-dir:
+                description: >-
+                    Path to the Android SDK build-tools directory for repack-app's
+                    aapt2 validation, used only when repack-on-hit is true. Leave
+                    empty to rely on an aapt2 already on PATH.
+                type: string
+                required: false
+                default: ''
+            android-build-timeout-minutes:
+                type: number
+                required: false
+                default: 60
+            android-capture-timeout-minutes:
+                type: number
+                required: false
+                default: 90
+            redroid-image:
+                description: >-
+                    Redroid image tag, used on a redroid-prewarm-manifest-path miss.
+                    Must resolve to API 33+ (capture-screenshots-android fails closed
+                    below that).
+                type: string
+                required: false
+                default: redroid/redroid:15.0.0_64only-latest
+            redroid-memory:
+                type: string
+                required: false
+                default: 3g
+            redroid-cpus:
+                type: string
+                required: false
+                default: '2'
+            redroid-prewarm-manifest-path:
+                type: string
+                required: false
+                default: $HOME/.rnw-ci/android-emulator.json
+            redroid-boot-timeout-seconds:
+                type: string
+                required: false
+                default: '600'
             upload-screenshots:
                 description: >-
                     Run the gated upload job, which downloads every capture job's raw
@@ -185,26 +357,30 @@ on:
                 description: >-
                     Consumer-owned command run in the upload job, e.g.
                     'bundle exec fastlane ios ios_screenshots'. Required when
-                    upload-screenshots is true; runs in fromJSON(inputs.target).appDir
-                    with the downloaded screenshots under screenshots-download-dir,
-                    which is also exposed to it as the SCREENSHOTS_DIR environment
+                    upload-screenshots is true; runs in the resolved app directory
+                    (ios-target's appDir when set, android-target's otherwise) with
+                    the downloaded screenshots under screenshots-download-dir, which
+                    is also exposed to it as the SCREENSHOTS_DIR environment
                     variable.
                 type: string
                 required: false
                 default: ''
             screenshots-download-dir:
                 description: >-
-                    Path, relative to fromJSON(inputs.target).appDir, every capture
-                    job's raw-screenshots-<device-slug> artifact is merged into before
-                    upload-command runs. Defaults to the reference implementation's
-                    fastlane/screenshots/raw convention so an unmodified fastlane
-                    Deliverfile pointed at that path works unchanged.
+                    Path, relative to the resolved app directory (ios-target's appDir
+                    when set, android-target's otherwise), every capture job's
+                    raw-screenshots-<platform>-<device-slug> artifact is merged into
+                    before upload-command runs - iOS screenshots land under its ios/
+                    subdirectory and Android under android/. Defaults to the
+                    reference implementation's fastlane/screenshots/raw convention
+                    so an unmodified fastlane Deliverfile pointed at that path works
+                    unchanged.
                 type: string
                 required: false
                 default: fastlane/screenshots/raw
             asc-key-path:
                 description: >-
-                    Optional path, relative to fromJSON(inputs.target).appDir, the App
+                    Optional path, relative to the resolved app directory, the App
                     Store Connect API key (.p8) is written to and removed from for
                     upload-command - set this only when your fastlane setup requires
                     the key at a specific app-dir-relative location; otherwise leave
@@ -250,18 +426,64 @@ permissions:
 
 jobs:
     validate-manifest:
-        name: Validate capture-manifest
+        name: Validate capture manifest and scenes
         runs-on: ubuntu-latest
         outputs:
-            entry-count: ${{ steps.validate.outputs.entry-count }}
+            has-ios: ${{ steps.validate.outputs.has-ios }}
+            has-android: ${{ steps.validate.outputs.has-android }}
+            ios-entries: ${{ steps.validate.outputs.ios-entries }}
+            android-entries: ${{ steps.validate.outputs.android-entries }}
         steps:
-            - name: Validate structure and matrix limits
+            - name: Validate structure, cross-checks, and matrix limits
               id: validate
               shell: bash
               env:
                   CAPTURE_MANIFEST: ${{ inputs.capture-manifest }}
+                  CAPTURE_MODE: ${{ inputs.capture-mode }}
+                  CAPTURE_SCENES: ${{ inputs.capture-scenes }}
+                  SEED_COMMAND: ${{ inputs.seed-command }}
+                  SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+                  SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+                  IOS_TARGET: ${{ inputs.ios-target }}
+                  ANDROID_TARGET: ${{ inputs.android-target }}
               run: |
                   set -euo pipefail
+                  case "$CAPTURE_MODE" in
+                    flows|direct) ;;
+                    *)
+                      echo "::error::capture-mode '$CAPTURE_MODE' must be 'flows' or 'direct'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$CAPTURE_MODE" = 'flows' ]; then
+                    if [ -n "$CAPTURE_SCENES" ]; then
+                      echo "::error::capture-scenes is set but capture-mode is 'flows'; the scene manifest is only consumed in capture-mode: direct, so it would be silently ignored."
+                      exit 1
+                    fi
+                    if [ -n "$SEED_COMMAND" ]; then
+                      echo "::error::seed-command is set but capture-mode is 'flows'; the seed hook only runs in capture-mode: direct, so it would be silently ignored."
+                      exit 1
+                    fi
+                    if [ -z "$SCREENSHOTS_DIR" ]; then
+                      echo "::error::screenshots-dir is required when capture-mode is 'flows' (it is the scene-discovery root)."
+                      exit 1
+                    fi
+                  else
+                    if [ -z "$CAPTURE_SCENES" ]; then
+                      echo "::error::capture-scenes is required when capture-mode is 'direct'."
+                      exit 1
+                    fi
+                  fi
+                  case "$SETTLE_SECONDS" in
+                    ''|*[!0-9]*)
+                      echo "::error::settle-seconds '$SETTLE_SECONDS' must be a non-negative integer."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$SETTLE_SECONDS" -gt 120 ]; then
+                    echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
+                    exit 1
+                  fi
                   if ! jq empty <<< "$CAPTURE_MANIFEST" 2>/dev/null; then
                     echo "::error::capture-manifest is not valid JSON."
                     exit 1
@@ -270,54 +492,204 @@ jobs:
                     echo "::error::capture-manifest must be a JSON array."
                     exit 1
                   fi
-                  entry_count=$(jq 'length' <<< "$CAPTURE_MANIFEST")
-                  if [ "$entry_count" -lt 1 ]; then
+                  if [ "$(jq 'length' <<< "$CAPTURE_MANIFEST")" -lt 1 ]; then
                     echo "::error::capture-manifest must have at least one entry."
                     exit 1
                   fi
-                  if [ "$entry_count" -gt 256 ]; then
-                    echo "::error::capture-manifest has $entry_count entries, exceeding GitHub Actions' 256-job matrix limit."
+                  non_objects=$(jq -c '[.[] | select(type != "object")]' <<< "$CAPTURE_MANIFEST")
+                  if [ "$non_objects" != '[]' ]; then
+                    echo "::error::capture-manifest has non-object entries: $non_objects"
                     exit 1
                   fi
-                  invalid=$(jq -c '
+                  normalized=$(jq -c '[.[] | .platform = (.platform // "ios")]' <<< "$CAPTURE_MANIFEST")
+                  invalid_platform=$(jq -c '[.[] | select(.platform != "ios" and .platform != "android")]' <<< "$normalized")
+                  if [ "$invalid_platform" != '[]' ]; then
+                    echo "::error::capture-manifest has entries whose 'platform' is neither 'ios' nor 'android' (default when omitted: 'ios'): $invalid_platform"
+                    exit 1
+                  fi
+                  ios_entries=$(jq -c '[.[] | select(.platform == "ios")]' <<< "$normalized")
+                  android_entries=$(jq -c '[.[] | select(.platform == "android")]' <<< "$normalized")
+                  ios_count=$(jq 'length' <<< "$ios_entries")
+                  android_count=$(jq 'length' <<< "$android_entries")
+                  for platform_count in "iOS:$ios_count" "Android:$android_count"; do
+                    if [ "${platform_count#*:}" -gt 256 ]; then
+                      echo "::error::capture-manifest has ${platform_count#*:} ${platform_count%%:*} entries, exceeding GitHub Actions' 256-job matrix limit per capture job."
+                      exit 1
+                    fi
+                  done
+                  invalid_ios=$(jq -c '
                       [.[] | select(
                           (.device | type != "string" or length == 0) or
                           (.locales | type != "array" or length == 0 or any(.[]; type != "string" or length == 0)) or
                           (.appearances | type != "array" or length == 0 or any(.[]; . != "light" and . != "dark")) or
                           ((.orientation // "portrait") as $o | ($o != "portrait" and $o != "landscape"))
                       )]
-                  ' <<< "$CAPTURE_MANIFEST")
-                  if [ "$invalid" != '[]' ]; then
-                    echo "::error::capture-manifest has invalid entries (each needs a non-empty 'device' string, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', and orientation 'portrait'/'landscape' if set): $invalid"
+                  ' <<< "$ios_entries")
+                  if [ "$invalid_ios" != '[]' ]; then
+                    echo "::error::capture-manifest has invalid iOS entries (each needs a non-empty 'device' string naming an exact simulator, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', and orientation 'portrait'/'landscape' if set): $invalid_ios"
                     exit 1
                   fi
-                  # Two entries that slugify to the same device slug (not
-                  # just two byte-identical device strings, e.g. "iPhone
-                  # 17-Pro" and "iPhone 17 Pro" both -> "iphone-17-pro")
-                  # collide on the same raw-screenshots-<device-slug>
-                  # artifact name, and upload-artifact requires unique names
-                  # within a run - the second capture job's upload would
-                  # fail rather than the two devices' screenshots merging.
-                  # Slug here exactly as capture-screenshots-ios does.
-                  duplicate_device_slugs=$(jq -r '
-                      [.[] | .device | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "")]
-                      | group_by(.) | map(select(length > 1)[0]) | join(", ")
-                  ' <<< "$CAPTURE_MANIFEST")
-                  if [ -n "$duplicate_device_slugs" ]; then
-                    echo "::error::capture-manifest has device entries that slugify to the same value ($duplicate_device_slugs); each device's slug must be unique because the raw-screenshots-<device-slug> artifact name is derived from it."
+                  invalid_android=$(jq -c '
+                      [.[] | select(
+                          (.device | type != "string" or length == 0 or (test("^[A-Za-z0-9 ._-]+$") | not)) or
+                          (.locales | type != "array" or length == 0 or any(.[]; type != "string" or length == 0)) or
+                          (.appearances | type != "array" or length == 0 or any(.[]; . != "light" and . != "dark")) or
+                          ((.orientation // "portrait") != "portrait") or
+                          (.width | type != "number" or . != floor or . < 1) or
+                          (.height | type != "number" or . != floor or . < 1) or
+                          (.density | type != "number" or . != floor or . < 1)
+                      )]
+                  ' <<< "$android_entries")
+                  if [ "$invalid_android" != '[]' ]; then
+                    echo "::error::capture-manifest has invalid Android entries (each needs a 'device' label matching ^[A-Za-z0-9 ._-]+\$, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', positive integer 'width'/'height'/'density', and no orientation other than 'portrait' - Android landscape is a documented v1.6.0 non-goal): $invalid_android"
                     exit 1
                   fi
-                  echo "entry-count=$entry_count" >> "$GITHUB_OUTPUT"
+                  if [ "$android_count" -gt 0 ] && [ "$CAPTURE_MODE" != 'direct' ]; then
+                    echo "::error::capture-manifest has Android entries but capture-mode is 'flows'; Android capture requires capture-mode: direct."
+                    exit 1
+                  fi
+                  # Two entries that slugify to the same device slug (not just
+                  # two byte-identical device strings) collide on the same
+                  # raw-screenshots-<platform>-<device-slug> artifact name,
+                  # and upload-artifact requires unique names within a run.
+                  # Slug here exactly as the capture actions do; uniqueness is
+                  # per platform because the artifact name is
+                  # platform-prefixed.
+                  for pair in "ios:$ios_entries" "android:$android_entries"; do
+                    platform="${pair%%:*}"
+                    entries="${pair#*:}"
+                    duplicate_slugs=$(jq -r '
+                        [.[] | .device | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "")]
+                        | group_by(.) | map(select(length > 1)[0]) | join(", ")
+                    ' <<< "$entries")
+                    if [ -n "$duplicate_slugs" ]; then
+                      echo "::error::capture-manifest has $platform device entries that slugify to the same value ($duplicate_slugs); each device's slug must be unique per platform because the raw-screenshots-$platform-<device-slug> artifact name is derived from it."
+                      exit 1
+                    fi
+                    empty_slugs=$(jq -r '[.[] | .device | ascii_downcase | gsub("[^a-z0-9]+"; "-") | gsub("^-+|-+$"; "") | select(. == "")] | length' <<< "$entries")
+                    if [ "$empty_slugs" -gt 0 ]; then
+                      echo "::error::capture-manifest has $platform device entries that slugify to an empty string."
+                      exit 1
+                    fi
+                  done
+                  if [ "$ios_count" -gt 0 ]; then
+                    if [ -z "$IOS_TARGET" ]; then
+                      echo "::error::capture-manifest has iOS entries but ios-target is empty."
+                      exit 1
+                    fi
+                    ios_target_ok=$(jq -r '
+                        (type == "object")
+                        and ((.name // "") | type == "string" and . != "")
+                        and ((.appDir // "") | type == "string" and . != "")
+                        and ((.appId // "") | type == "string" and . != "")
+                        and ((.workspace // "") | type == "string" and . != "")
+                        and ((.scheme // "") | type == "string" and . != "")
+                        and ((.prebuildCommand // "") | type == "string")
+                    ' <<< "$IOS_TARGET" 2>/dev/null || echo false)
+                    if [ "$ios_target_ok" != 'true' ]; then
+                      echo "::error::ios-target must be a JSON object with non-empty string 'name', 'appDir', 'appId', 'workspace', 'scheme' (and an optional string 'prebuildCommand')."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$android_count" -gt 0 ]; then
+                    if [ -z "$ANDROID_TARGET" ]; then
+                      echo "::error::capture-manifest has Android entries but android-target is empty."
+                      exit 1
+                    fi
+                    android_target_ok=$(jq -r '
+                        (type == "object")
+                        and ((.name // "") | type == "string" and . != "")
+                        and ((.appDir // "") | type == "string" and . != "")
+                        and ((.appId // "") | type == "string" and . != "")
+                        and ((.prebuildCommand // "") | type == "string")
+                    ' <<< "$ANDROID_TARGET" 2>/dev/null || echo false)
+                    if [ "$android_target_ok" != 'true' ]; then
+                      echo "::error::android-target must be a JSON object with non-empty string 'name', 'appDir', 'appId' (and an optional string 'prebuildCommand')."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$CAPTURE_MODE" = 'direct' ]; then
+                    if ! jq empty <<< "$CAPTURE_SCENES" 2>/dev/null; then
+                      echo "::error::capture-scenes is not valid JSON."
+                      exit 1
+                    fi
+                    if [ "$(jq 'type' <<< "$CAPTURE_SCENES")" != '"array"' ]; then
+                      echo "::error::capture-scenes must be a JSON array."
+                      exit 1
+                    fi
+                    if [ "$(jq 'length' <<< "$CAPTURE_SCENES")" -lt 1 ]; then
+                      echo "::error::capture-scenes must have at least one entry."
+                      exit 1
+                    fi
+                    non_object_scenes=$(jq -c '[.[] | select(type != "object")]' <<< "$CAPTURE_SCENES")
+                    if [ "$non_object_scenes" != '[]' ]; then
+                      echo "::error::capture-scenes has non-object entries: $non_object_scenes"
+                      exit 1
+                    fi
+                    invalid_scenes=$(jq -c '
+                        [.[] | select(
+                            ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
+                            (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
+                            (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
+                            (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                            (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
+                            (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
+                            (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
+                            (has("appearances") and ((.appearances | type) != "array" or (.appearances | length) == 0 or any(.appearances[]; . != "light" and . != "dark")))
+                        )]
+                    ' <<< "$CAPTURE_SCENES")
+                    if [ "$invalid_scenes" != '[]' ]; then
+                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
+                      exit 1
+                    fi
+                    duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
+                    if [ -n "$duplicate_scene_names" ]; then
+                      echo "::error::capture-scenes has duplicate scene names ($duplicate_scene_names); each name is an output path segment and must be unique."
+                      exit 1
+                    fi
+                    for pair in "ios:$ios_count" "android:$android_count"; do
+                      platform="${pair%%:*}"
+                      count="${pair#*:}"
+                      if [ "$count" -gt 0 ]; then
+                        covered=$(jq -r --arg p "$platform" 'any(.[]; (has("platforms") | not) or ((.platforms | index($p)) != null))' <<< "$CAPTURE_SCENES")
+                        if [ "$covered" != 'true' ]; then
+                          echo "::error::capture-manifest has $platform entries but no scene in capture-scenes applies to platform '$platform' - every scene's platforms filter excludes it."
+                          exit 1
+                        fi
+                      fi
+                    done
+                    has_flow_scene=$(jq -r 'any(.[]; has("flow"))' <<< "$CAPTURE_SCENES")
+                    if [ "$has_flow_scene" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
+                      echo "::error::screenshots-dir is required because at least one capture-scenes entry declares a flow."
+                      exit 1
+                    fi
+                  fi
+                  has_ios=false
+                  if [ "$ios_count" -gt 0 ]; then
+                    has_ios=true
+                  fi
+                  has_android=false
+                  if [ "$android_count" -gt 0 ]; then
+                    has_android=true
+                  fi
+                  {
+                    echo "has-ios=$has_ios"
+                    echo "has-android=$has_android"
+                    echo "ios-entries=$ios_entries"
+                    echo "android-entries=$android_entries"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "capture-manifest OK: $ios_count iOS + $android_count Android entries, capture-mode=$CAPTURE_MODE."
 
-    build:
-        name: Build (${{ fromJSON(inputs.target).name }})
+    build-ios:
+        name: Build iOS (${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).name || 'skipped' }})
         needs: validate-manifest
+        if: needs.validate-manifest.outputs.has-ios == 'true'
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         env:
-            APP_DIR: ${{ fromJSON(inputs.target).appDir }}
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(inputs.target).name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(inputs.target).name }}
+            APP_DIR: ${{ fromJSON(inputs.ios-target).appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(inputs.ios-target).name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(inputs.ios-target).name }}
 
         steps:
             - name: Checkout repository
@@ -389,11 +761,11 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: fromJSON(inputs.target).prebuildCommand != ''
-              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              if: fromJSON(inputs.ios-target).prebuildCommand != ''
+              working-directory: ${{ fromJSON(inputs.ios-target).appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ fromJSON(inputs.target).prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ fromJSON(inputs.ios-target).prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
@@ -401,7 +773,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.5.1 # v1.5.1
               with:
                   platform: ios
-                  working-directory: ${{ fromJSON(inputs.target).appDir }}
+                  working-directory: ${{ fromJSON(inputs.ios-target).appDir }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 
             - name: native-app-cache (restore)
@@ -409,8 +781,8 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
               with:
                   mode: restore
-                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
-                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.target).name }}
+                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
+                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.ios-target).name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -422,9 +794,9 @@ jobs:
               uses: rnw-community/mobile-ci/actions/repack-app@v1.5.1 # v1.5.1
               with:
                   platform: ios
-                  app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}/Base.app
-                  app-id: ${{ fromJSON(inputs.target).appId }}
-                  app-dir: ${{ fromJSON(inputs.target).appDir }}
+                  app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}/Base.app
+                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
+                  app-dir: ${{ fromJSON(inputs.ios-target).appDir }}
                   repack-version: ${{ inputs.repack-app-version }}
 
             - name: Determine whether a native build is needed
@@ -446,7 +818,7 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
                   REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
               run: |
                   {
@@ -462,7 +834,7 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
               run: |
                   echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -470,7 +842,7 @@ jobs:
               if: steps.build-decision.outputs.need-build == 'true'
               shell: bash
               env:
-                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}/Base.app
+                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}/Base.app
               run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
@@ -481,24 +853,24 @@ jobs:
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+                  key: ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-
+                      ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-
 
             - name: build-ios-app
               if: steps.build-decision.outputs.need-build == 'true'
               uses: rnw-community/mobile-ci/actions/build-ios-app@v1.5.1 # v1.5.1
               with:
-                  app-dir: ${{ fromJSON(inputs.target).appDir }}
-                  workspace: ${{ fromJSON(inputs.target).workspace }}
-                  scheme: ${{ fromJSON(inputs.target).scheme }}
+                  app-dir: ${{ fromJSON(inputs.ios-target).appDir }}
+                  workspace: ${{ fromJSON(inputs.ios-target).workspace }}
+                  scheme: ${{ fromJSON(inputs.ios-target).scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
-                  pods-cache-key: pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
+                  pods-cache-key: pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-
+                      pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
@@ -509,15 +881,15 @@ jobs:
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ fromJSON(inputs.target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.target).appDir)) }}
+                  key: ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
               with:
                   mode: save
-                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.target).name }}
-                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.target).name }}
+                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
+                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.ios-target).name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -525,7 +897,7 @@ jobs:
             - name: Archive app for the capture job
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -534,19 +906,208 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(inputs.target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}.tar.gz
+                  name: store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}.tar.gz
                   retention-days: 1
 
-    capture:
-        name: Capture (${{ matrix.entry.device }})
-        needs: [validate-manifest, build]
+    build-android:
+        name: Build Android (${{ inputs.android-target != '' && fromJSON(inputs.android-target).name || 'skipped' }})
+        needs: validate-manifest
+        if: needs.validate-manifest.outputs.has-android == 'true'
+        runs-on: ${{ fromJSON(inputs.android-build-runner-labels != '' && inputs.android-build-runner-labels || (inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels)) }}
+        timeout-minutes: ${{ inputs.android-build-timeout-minutes }}
+        env:
+            APP_DIR: ${{ fromJSON(inputs.android-target).appDir }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: yarn
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate native project
+              if: fromJSON(inputs.android-target).prebuildCommand != ''
+              working-directory: ${{ fromJSON(inputs.android-target).appDir }}
+              shell: bash
+              env:
+                  PREBUILD_COMMAND: ${{ fromJSON(inputs.android-target).prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
+
+            - name: native-fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.5.1 # v1.5.1
+              with:
+                  platform: android
+                  working-directory: ${{ fromJSON(inputs.android-target).appDir }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: native-app-cache (restore)
+              id: native-app-cache
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
+              with:
+                  mode: restore
+                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ fromJSON(inputs.android-target).name }}-${{ inputs.android-gradle-task }}${{ inputs.android-gradle-args != '' && format('-{0}', inputs.android-gradle-args) || '' }}
+                  arch: arm64
+                  toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - name: Set up Android SDK (for repack-app validation)
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+              with:
+                  cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
+                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
+
+            - name: Repack fresh JS into cached native app
+              id: repack
+              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.5.1 # v1.5.1
+              with:
+                  platform: android
+                  app-path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}/app-release.apk
+                  app-id: ${{ fromJSON(inputs.android-target).appId }}
+                  app-dir: ${{ fromJSON(inputs.android-target).appDir }}
+                  repack-version: ${{ inputs.repack-app-version }}
+                  android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+
+            - name: Determine whether a native build is needed
+              id: build-decision
+              shell: bash
+              env:
+                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
+              run: |
+                  set -euo pipefail
+                  need_build=true
+                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
+                    need_build=false
+                  fi
+                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+
+            - name: Report cache hit
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.android-target).name }}
+                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+              run: |
+                  {
+                    echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
+                    if [ "$REPACK_ON_HIT" = "true" ]; then
+                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
+                    else
+                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Report repack fallback
+              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(inputs.android-target).name }}
+              run: |
+                  echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
+
+            - name: build-android-app
+              if: steps.build-decision.outputs.need-build == 'true'
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.5.1 # v1.5.1
+              with:
+                  app-dir: ${{ fromJSON(inputs.android-target).appDir }}
+                  cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
+                  gradle-task: ${{ inputs.android-gradle-task }}
+                  gradle-args: ${{ inputs.android-gradle-args }}
+                  output-dir: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
+                  gradle-cache-key: gradle-${{ fromJSON(inputs.android-target).name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', fromJSON(inputs.android-target).appDir), format('{0}/android/**/*.gradle*', fromJSON(inputs.android-target).appDir), format('{0}/package.json', fromJSON(inputs.android-target).appDir), 'yarn.lock') }}
+                  gradle-cache-restore-keys: |
+                      gradle-${{ fromJSON(inputs.android-target).name }}-${{ runner.os }}-
+
+            - name: native-app-cache (save)
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.5.1 # v1.5.1
+              with:
+                  mode: save
+                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ fromJSON(inputs.android-target).name }}-${{ inputs.android-gradle-task }}${{ inputs.android-gradle-args != '' && format('-{0}', inputs.android-gradle-args) || '' }}
+                  arch: arm64
+                  toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
+                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+
+            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
+                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}/app-release.apk
+                  retention-days: 1
+
+    capture-ios:
+        name: Capture iOS (${{ matrix.entry.device }})
+        needs: [validate-manifest, build-ios]
+        if: needs.validate-manifest.outputs.has-ios == 'true'
         runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
-                entry: ${{ fromJSON(inputs.capture-manifest) }}
+                entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
 
         steps:
             - name: Checkout repository
@@ -572,21 +1133,25 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(inputs.target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}
+                  name: store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
 
             - name: Unpack app
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.target).name }}
+                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
               run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.5.1 # v1.5.1
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@main # TODO: pin to feature-branch head SHA before fleet validation
               with:
-                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.target).name }}/Base.app
-                  app-id: ${{ fromJSON(inputs.target).appId }}
+                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
+                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
+                  scenes: ${{ inputs.capture-scenes }}
+                  seed-command: ${{ inputs.seed-command }}
+                  settle-seconds: ${{ inputs.settle-seconds }}
+                  status-bar-override: ${{ inputs.status-bar-override }}
                   screenshots-dir: ${{ inputs.screenshots-dir }}
                   scenes-name-pattern: ${{ inputs.scenes-name-pattern }}
                   scenes-exclude-pattern: ${{ inputs.scenes-exclude-pattern }}
@@ -609,15 +1174,98 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: raw-screenshots-${{ steps.capture.outputs.device-slug }}
+                  name: raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
                   if-no-files-found: error
                   retention-days: 14
 
+    capture-android:
+        name: Capture Android (${{ matrix.entry.device }})
+        needs: [validate-manifest, build-android]
+        if: needs.validate-manifest.outputs.has-android == 'true'
+        runs-on: ${{ fromJSON(inputs.android-capture-runner-labels) }}
+        timeout-minutes: ${{ inputs.android-capture-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                entry: ${{ fromJSON(needs.validate-manifest.outputs.android-entries) }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
+                  path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
+
+            - name: redroid-container (start)
+              id: redroid
+              uses: rnw-community/mobile-ci/actions/redroid-container@main # TODO: pin to feature-branch head SHA before fleet validation
+              with:
+                  mode: start
+                  container-name: redroid-screenshots-${{ strategy.job-index }}
+                  image: ${{ inputs.redroid-image }}
+                  memory: ${{ inputs.redroid-memory }}
+                  cpus: ${{ inputs.redroid-cpus }}
+                  prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
+                  boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
+
+            - name: capture-screenshots-android
+              id: capture
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@main # TODO: pin to feature-branch head SHA before fleet validation
+              with:
+                  android-serial: ${{ steps.redroid.outputs.android-serial }}
+                  apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}/app-release.apk
+                  app-id: ${{ fromJSON(inputs.android-target).appId }}
+                  scenes: ${{ inputs.capture-scenes }}
+                  screenshots-dir: ${{ inputs.screenshots-dir }}
+                  device-name: ${{ matrix.entry.device }}
+                  width: ${{ matrix.entry.width }}
+                  height: ${{ matrix.entry.height }}
+                  density: ${{ matrix.entry.density }}
+                  locales: ${{ join(matrix.entry.locales, ',') }}
+                  appearances: ${{ join(matrix.entry.appearances, ',') }}
+                  seed-command: ${{ inputs.seed-command }}
+                  settle-seconds: ${{ inputs.settle-seconds }}
+                  status-bar-override: ${{ inputs.status-bar-override }}
+                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  output-dir: ${{ github.workspace }}/screenshots-output
+
+            - name: Run post-capture-command
+              if: inputs.post-capture-command != ''
+              shell: bash
+              env:
+                  SCREENSHOTS_OUTPUT_DIR: ${{ github.workspace }}/screenshots-output
+                  DEVICE_SLUG: ${{ steps.capture.outputs.device-slug }}
+                  POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
+              run: eval "$POST_CAPTURE_COMMAND"
+
+            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: raw-screenshots-android-${{ steps.capture.outputs.device-slug }}
+                  path: screenshots-output/raw/**
+                  if-no-files-found: error
+                  retention-days: 14
+
+            - name: redroid-container (teardown)
+              if: always()
+              uses: rnw-community/mobile-ci/actions/redroid-container@main # TODO: pin to feature-branch head SHA before fleet validation
+              with:
+                  mode: teardown
+                  container-name: redroid-screenshots-${{ strategy.job-index }}
+
     upload:
         name: Upload screenshots
-        needs: capture
-        if: inputs.upload-screenshots
+        needs: [validate-manifest, capture-ios, capture-android]
+        if: >-
+            always() && inputs.upload-screenshots &&
+            needs.validate-manifest.result == 'success' &&
+            needs.capture-ios.result != 'failure' && needs.capture-ios.result != 'cancelled' &&
+            needs.capture-android.result != 'failure' && needs.capture-android.result != 'cancelled'
         runs-on: ${{ fromJSON(inputs.upload-runner-labels != '' && inputs.upload-runner-labels || inputs.runner-labels) }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -625,14 +1273,20 @@ jobs:
             HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY != '' }}
 
         steps:
-            - name: Validate required inputs
+            - name: Validate required inputs and capture results
               shell: bash
               env:
                   UPLOAD_COMMAND: ${{ inputs.upload-command }}
+                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
+                  CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
               run: |
                   set -euo pipefail
                   if [ -z "$UPLOAD_COMMAND" ]; then
                     echo "::error::upload-command is required when upload-screenshots is true."
+                    exit 1
+                  fi
+                  if [ "$CAPTURE_IOS_RESULT" != 'success' ] && [ "$CAPTURE_ANDROID_RESULT" != 'success' ]; then
+                    echo "::error::upload-screenshots is true but no capture job succeeded (capture-ios: $CAPTURE_IOS_RESULT, capture-android: $CAPTURE_ANDROID_RESULT); refusing to run upload-command with nothing to upload."
                     exit 1
                   fi
 
@@ -729,13 +1383,80 @@ jobs:
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   pattern: raw-screenshots-*
-                  path: ${{ fromJSON(inputs.target).appDir }}/${{ inputs.screenshots-download-dir }}
+                  path: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}/${{ inputs.screenshots-download-dir }}
                   merge-multiple: true
+
+            - name: Validate iOS screenshot resolutions against apple-screenshot-slots
+              if: inputs.apple-screenshot-slots != ''
+              shell: bash
+              env:
+                  APPLE_SCREENSHOT_SLOTS: ${{ inputs.apple-screenshot-slots }}
+                  DOWNLOAD_ROOT: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}/${{ inputs.screenshots-download-dir }}
+              run: |
+                  set -euo pipefail
+                  command -v python3 >/dev/null 2>&1 || { echo "::error::'python3' is required to read PNG headers for apple-screenshot-slots validation but is not on PATH."; exit 1; }
+                  if ! jq empty <<< "$APPLE_SCREENSHOT_SLOTS" 2>/dev/null; then
+                    echo "::error::apple-screenshot-slots is not valid JSON."
+                    exit 1
+                  fi
+                  if [ "$(jq 'type' <<< "$APPLE_SCREENSHOT_SLOTS")" != '"object"' ]; then
+                    echo "::error::apple-screenshot-slots must be a JSON object mapping '<W>x<H>' keys to slot labels."
+                    exit 1
+                  fi
+                  invalid_slots=$(jq -r '[to_entries[] | select(((.key | test("^[0-9]+x[0-9]+$")) | not) or ((.value | type) != "string") or .value == "") | .key] | join(", ")' <<< "$APPLE_SCREENSHOT_SLOTS")
+                  if [ -n "$invalid_slots" ]; then
+                    echo "::error::apple-screenshot-slots has invalid entries (keys must match ^[0-9]+x[0-9]+\$ and values must be non-empty slot-label strings): $invalid_slots"
+                    exit 1
+                  fi
+                  # PNG IHDR width/height live at fixed big-endian offsets 16/20
+                  # right after the 8-byte signature - reading them needs no
+                  # image library at all, so this stays dependency-free.
+                  python3 - <<'PY'
+                  import json
+                  import os
+                  import struct
+                  import sys
+
+                  slots = json.loads(os.environ['APPLE_SCREENSHOT_SLOTS'])
+                  root = os.path.join(os.environ['DOWNLOAD_ROOT'], 'ios')
+                  pngs = []
+                  for dirpath, _dirnames, filenames in os.walk(root):
+                      for filename in filenames:
+                          if filename.lower().endswith('.png'):
+                              pngs.append(os.path.join(dirpath, filename))
+                  if not pngs:
+                      print(f"::error::apple-screenshot-slots is set but no iOS PNGs were found under '{root}'.")
+                      sys.exit(1)
+                  counts = {label: 0 for label in slots.values()}
+                  offenders = []
+                  for path in sorted(pngs):
+                      with open(path, 'rb') as f:
+                          header = f.read(24)
+                      if len(header) < 24 or header[:8] != b'\x89PNG\r\n\x1a\n':
+                          offenders.append((path, 'not a valid PNG'))
+                          continue
+                      width, height = struct.unpack('>II', header[16:24])
+                      label = slots.get(f'{width}x{height}') or slots.get(f'{height}x{width}')
+                      if label is None:
+                          offenders.append((path, f'{width}x{height}'))
+                      else:
+                          counts[label] += 1
+                  if offenders:
+                      for path, resolution in offenders:
+                          print(f"::error::'{path}' ({resolution}) does not resolve to any apple-screenshot-slots entry (WxH and HxW both checked).")
+                      sys.exit(1)
+                  with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+                      f.write('### apple-screenshot-slots coverage\n')
+                      f.write('| Slot | Screenshots |\n')
+                      f.write('| --- | --- |\n')
+                      for label in sorted(counts):
+                          f.write(f'| {label} | {counts[label]} |\n')
+                  PY
 
             - name: Write App Store Connect API key
               id: asc-key
               if: env.HAS_ASC_API_KEY == 'true'
-              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              working-directory: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}
               shell: bash
               env:
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
@@ -754,7 +1475,7 @@ jobs:
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: Run upload-command
-              working-directory: ${{ fromJSON(inputs.target).appDir }}
+              working-directory: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}
               shell: bash
               env:
                   UPLOAD_COMMAND: ${{ inputs.upload-command }}
@@ -770,7 +1491,7 @@ jobs:
 
     status:
         name: Store screenshots result
-        needs: [validate-manifest, build, capture, upload]
+        needs: [validate-manifest, build-ios, build-android, capture-ios, capture-android, upload]
         if: always()
         runs-on: ubuntu-latest
         steps:
@@ -778,28 +1499,53 @@ jobs:
               shell: bash
               env:
                   VALIDATE_RESULT: ${{ needs.validate-manifest.result }}
-                  BUILD_RESULT: ${{ needs.build.result }}
-                  CAPTURE_RESULT: ${{ needs.capture.result }}
+                  HAS_IOS: ${{ needs.validate-manifest.outputs.has-ios }}
+                  HAS_ANDROID: ${{ needs.validate-manifest.outputs.has-android }}
+                  BUILD_IOS_RESULT: ${{ needs.build-ios.result }}
+                  BUILD_ANDROID_RESULT: ${{ needs.build-android.result }}
+                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
+                  CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
                   UPLOAD_ENABLED: ${{ inputs.upload-screenshots }}
                   UPLOAD_RESULT: ${{ needs.upload.result }}
               run: |
                   fail() {
                     echo "$1"
                     if [ "$2" = 'cancelled' ]; then
-                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/capture-timeout-minutes before assuming external cancellation."
+                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/capture-timeout-minutes (or their android-* siblings) before assuming external cancellation."
                     fi
                     exit 1
                   }
                   if [ "$VALIDATE_RESULT" != "success" ]; then
-                    fail "capture-manifest validation failed." "$VALIDATE_RESULT"
+                    fail "capture-manifest/capture-scenes validation failed." "$VALIDATE_RESULT"
                   fi
-                  if [ "$BUILD_RESULT" != "success" ]; then
-                    fail "Build job failed." "$BUILD_RESULT"
+                  # Honest-skip semantics: a platform's build/capture results
+                  # must be success when the manifest has entries for it;
+                  # 'skipped' is only acceptable for a platform with no
+                  # entries at all.
+                  ran_platforms=''
+                  if [ "$HAS_IOS" = 'true' ]; then
+                    if [ "$BUILD_IOS_RESULT" != "success" ]; then
+                      fail "iOS build job did not succeed (result: $BUILD_IOS_RESULT) despite the manifest having iOS entries." "$BUILD_IOS_RESULT"
+                    fi
+                    if [ "$CAPTURE_IOS_RESULT" != "success" ]; then
+                      fail "iOS capture job did not succeed (result: $CAPTURE_IOS_RESULT) despite the manifest having iOS entries." "$CAPTURE_IOS_RESULT"
+                    fi
+                    ran_platforms="$ran_platforms ios"
+                  else
+                    echo "iOS: no manifest entries - build-ios/capture-ios skipped."
                   fi
-                  if [ "$CAPTURE_RESULT" != "success" ]; then
-                    fail "Capture job failed." "$CAPTURE_RESULT"
+                  if [ "$HAS_ANDROID" = 'true' ]; then
+                    if [ "$BUILD_ANDROID_RESULT" != "success" ]; then
+                      fail "Android build job did not succeed (result: $BUILD_ANDROID_RESULT) despite the manifest having Android entries." "$BUILD_ANDROID_RESULT"
+                    fi
+                    if [ "$CAPTURE_ANDROID_RESULT" != "success" ]; then
+                      fail "Android capture job did not succeed (result: $CAPTURE_ANDROID_RESULT) despite the manifest having Android entries." "$CAPTURE_ANDROID_RESULT"
+                    fi
+                    ran_platforms="$ran_platforms android"
+                  else
+                    echo "Android: no manifest entries - build-android/capture-android skipped."
                   fi
                   if [ "$UPLOAD_ENABLED" = "true" ] && [ "$UPLOAD_RESULT" != "success" ]; then
                     fail "Upload job failed." "$UPLOAD_RESULT"
                   fi
-                  echo "Store screenshots completed successfully."
+                  echo "Store screenshots completed successfully for platforms:$ran_platforms."
