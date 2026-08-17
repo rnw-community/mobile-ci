@@ -1,0 +1,648 @@
+name: capture-screenshots-android
+description: >-
+  Drives an already-booted Android device (Redroid container, AVD, or
+  physical) over adb to capture one screenshot per locale x appearance x
+  scene from a JSON scene manifest into a fixed
+  raw/android/<device-slug>/<locale>/<appearance>/<scene>.png layout for
+  store screenshot pipelines. Scene-manifest-driven (direct mode) only;
+  device sizing is emulated via wm size / wm density.
+inputs:
+  android-serial:
+    description: >-
+      adb serial of an already-booted device this action drives. This action
+      never manages the device lifecycle itself - pair it with
+      redroid-container (mode start / mode teardown) or your own emulator
+      bring-up. The device must run API 33+ (cmd locale set-app-locales);
+      older API levels fail closed.
+    required: true
+  apk-path:
+    description: Path to the packaged .apk to install.
+    required: true
+  app-id:
+    description: Application ID the scenes are captured from, passed to Maestro as APP_ID.
+    required: true
+  scenes:
+    description: >-
+      JSON array of scene objects, each {"name", and exactly one of
+      "deepLink" or "flow", optional "settleSeconds", "platforms",
+      "locales", "appearances"}. name must match ^[A-Za-z0-9_-]+$ and be
+      unique; flow is a path relative to screenshots-dir (absolute paths and
+      '..' segments fail closed). Scenes whose platforms filter excludes
+      'android' are skipped; at least one scene must apply to android.
+    required: true
+  screenshots-dir:
+    description: >-
+      Directory flow-backed scenes' paths are resolved against. Required
+      only when at least one android-applicable scene declares a flow.
+    required: false
+    default: ''
+  device-name:
+    description: >-
+      Free-form device label matching ^[A-Za-z0-9 ._-]+$, used only to
+      derive the raw/android/<device-slug> output path segment (lowercased,
+      every run of non-alphanumeric characters collapsed to a single
+      hyphen). Unlike capture-screenshots-ios's simulator-device it selects
+      nothing - the device is whatever android-serial points at.
+    required: true
+  width:
+    description: Emulated display width in px, applied via `wm size <width>x<height>` before install.
+    required: true
+  height:
+    description: Emulated display height in px, applied via `wm size <width>x<height>` before install.
+    required: true
+  density:
+    description: Emulated display density in dpi, applied via `wm density` before install.
+    required: true
+  locales:
+    description: >-
+      Space- or comma-separated list of locale identifiers, e.g. 'en,de'.
+      Each is applied per-app via `cmd locale set-app-locales` (fails
+      closed), which is why API 33+ is required.
+    required: true
+  appearances:
+    description: Space- or comma-separated list of 'light' and/or 'dark', applied via `cmd uimode night`.
+    required: true
+  seed-command:
+    description: >-
+      Optional consumer-owned shell command run once per
+      locale x appearance x scene cell, from the repo root, with the app
+      installed and force-stopped, before the scene's launch. Runs with
+      SCENE, LOCALE, APPEARANCE, APP_ID, PLATFORM=android, DEVICE_SLUG,
+      ANDROID_SERIAL, and APK_PATH in its environment. Its failure marks
+      that cell failed (no capture, no retry) and the step fails at the end.
+    required: false
+    default: ''
+  settle-seconds:
+    description: >-
+      Seconds (integer 0-120) to wait between a deep-link launch and its
+      screenshot; a scene's own settleSeconds overrides it. Flow-backed
+      scenes control their own timing instead.
+    required: false
+    default: '3'
+  status-bar-override:
+    description: >-
+      When 'true', enables SystemUI demo mode before capture: clock 9:41,
+      full wifi, no mobile data type, battery 100 unplugged, notifications
+      hidden. Fails closed if the demo-mode broadcasts fail.
+    required: false
+    default: 'true'
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as an additional
+      -e KEY=VALUE argument to every `maestro test` invocation (flow-backed
+      scenes only), on top of the always-passed APP_ID/LOCALE/APPEARANCE.
+      Rejects (fails closed) any line without '=' or whose name does not
+      match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  maestro-version:
+    description: >-
+      Pinned Maestro CLI version, installed the same way as
+      run-maestro-android-redroid's maestro-version - and only lazily, when
+      at least one android-applicable scene declares a flow.
+    required: false
+    default: '2.8.0'
+  output-dir:
+    description: >-
+      Root output directory. Screenshots are written to
+      <output-dir>/raw/android/<device-slug>/<locale>/<appearance>/<scene>.png.
+    required: true
+outputs:
+  device-slug:
+    description: Slugified device-name, used as the raw/android/<device-slug> path segment.
+    value: ${{ steps.device-slug.outputs.slug }}
+  raw-dir:
+    description: This run's output root - output-dir/raw/android/<device-slug>.
+    value: ${{ inputs.output-dir }}/raw/android/${{ steps.device-slug.outputs.slug }}
+runs:
+  using: composite
+  steps:
+    - name: Configure screenshot output directory
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          echo "OUTPUT_DIR=$OUTPUT_DIR" >> "$GITHUB_ENV"
+
+    - name: Compute device slug
+      id: device-slug
+      shell: bash
+      env:
+        DEVICE_NAME: ${{ inputs.device-name }}
+      run: |
+          set -euo pipefail
+          test -n "$DEVICE_NAME" || { echo "::error::device-name is required; it derives the raw/android/<device-slug> output path segment."; exit 1; }
+          case "$DEVICE_NAME" in
+            *[!A-Za-z0-9\ ._-]*)
+              echo "::error::device-name '$DEVICE_NAME' must match ^[A-Za-z0-9 ._-]+\$."
+              exit 1
+              ;;
+          esac
+          slug=$(printf '%s' "$DEVICE_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          test -n "$slug" || { echo "::error::device-name '$DEVICE_NAME' slugified to an empty string."; exit 1; }
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+
+    - name: Validate scene manifest
+      id: scenes
+      shell: bash
+      env:
+        SCENES_JSON: ${{ inputs.scenes }}
+        SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+        SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+      run: |
+          set -euo pipefail
+          case "$SETTLE_SECONDS" in
+            ''|*[!0-9]*)
+              echo "::error::settle-seconds '$SETTLE_SECONDS' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SETTLE_SECONDS" -gt 120 ]; then
+            echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
+            exit 1
+          fi
+          if [ -z "$SCENES_JSON" ]; then
+            echo "::error::scenes is required - capture-screenshots-android is scene-manifest-driven only (there is no flow-discovery mode on Android)."
+            exit 1
+          fi
+          if ! jq empty <<< "$SCENES_JSON" 2>/dev/null; then
+            echo "::error::scenes is not valid JSON."
+            exit 1
+          fi
+          if [ "$(jq 'type' <<< "$SCENES_JSON")" != '"array"' ]; then
+            echo "::error::scenes must be a JSON array."
+            exit 1
+          fi
+          if [ "$(jq 'length' <<< "$SCENES_JSON")" -lt 1 ]; then
+            echo "::error::scenes must have at least one entry."
+            exit 1
+          fi
+          non_objects=$(jq -c '[.[] | select(type != "object")]' <<< "$SCENES_JSON")
+          if [ "$non_objects" != '[]' ]; then
+            echo "::error::scenes has non-object entries: $non_objects"
+            exit 1
+          fi
+          invalid=$(jq -c '
+              [.[] | select(
+                  ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
+                  (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
+                  (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
+                  (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                  (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
+                  (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
+                  (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
+                  (has("appearances") and ((.appearances | type) != "array" or (.appearances | length) == 0 or any(.appearances[]; . != "light" and . != "dark")))
+              )]
+          ' <<< "$SCENES_JSON")
+          if [ "$invalid" != '[]' ]; then
+            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
+            exit 1
+          fi
+          duplicate_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$SCENES_JSON")
+          if [ -n "$duplicate_names" ]; then
+            echo "::error::scenes has duplicate scene names ($duplicate_names); each name is an output path segment and must be unique."
+            exit 1
+          fi
+          selected=$(jq -c '[.[] | select(if has("platforms") then (.platforms | index("android")) != null else true end)]' <<< "$SCENES_JSON")
+          if [ "$(jq 'length' <<< "$selected")" -lt 1 ]; then
+            echo "::error::no scene in scenes applies to platform 'android' - every scene's platforms filter excludes it."
+            exit 1
+          fi
+          needs_maestro=$(jq -r 'any(.[]; has("flow"))' <<< "$selected")
+          if [ "$needs_maestro" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
+            echo "::error::screenshots-dir is required because at least one android-applicable scene declares a flow."
+            exit 1
+          fi
+          echo "needs-maestro=$needs_maestro" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare device (API guard, wm size/density)
+      shell: bash
+      env:
+        ANDROID_SERIAL: ${{ inputs.android-serial }}
+        DISPLAY_WIDTH: ${{ inputs.width }}
+        DISPLAY_HEIGHT: ${{ inputs.height }}
+        DISPLAY_DENSITY: ${{ inputs.density }}
+      run: |
+          set -euo pipefail
+          command -v adb >/dev/null 2>&1 || { echo "::error::'adb' is required but is not on PATH."; exit 1; }
+          test -n "$ANDROID_SERIAL" || { echo "::error::android-serial is required; this action drives an already-booted device and never boots one itself."; exit 1; }
+          for dim in "$DISPLAY_WIDTH" "$DISPLAY_HEIGHT" "$DISPLAY_DENSITY"; do
+            case "$dim" in
+              ''|*[!0-9]*|0*)
+                echo "::error::width/height/density must each be a positive integer without leading zeros; got width='$DISPLAY_WIDTH' height='$DISPLAY_HEIGHT' density='$DISPLAY_DENSITY'."
+                exit 1
+                ;;
+            esac
+          done
+          sdk=$(adb -s "$ANDROID_SERIAL" shell getprop ro.build.version.sdk </dev/null | tr -d '[:space:]')
+          case "$sdk" in
+            ''|*[!0-9]*)
+              echo "::error::Could not read ro.build.version.sdk from '$ANDROID_SERIAL' (got '$sdk'); is the device booted and adb-reachable?"
+              exit 1
+              ;;
+          esac
+          if [ "$sdk" -lt 33 ]; then
+            echo "::error::Device '$ANDROID_SERIAL' runs API level $sdk, but per-app locales ('cmd locale set-app-locales') require API 33+. Use a newer image."
+            exit 1
+          fi
+          adb -s "$ANDROID_SERIAL" shell wm size "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}"
+          adb -s "$ANDROID_SERIAL" shell wm density "$DISPLAY_DENSITY"
+
+    - name: Enable SystemUI demo-mode status bar
+      if: inputs.status-bar-override == 'true'
+      shell: bash
+      env:
+        ANDROID_SERIAL: ${{ inputs.android-serial }}
+      run: |
+          set -euo pipefail
+          adb -s "$ANDROID_SERIAL" shell settings put global sysui_demo_allowed 1
+          demo() {
+            adb -s "$ANDROID_SERIAL" shell am broadcast -a com.android.systemui.demo "$@" >/dev/null
+          }
+          demo -e command enter
+          demo -e command clock -e hhmm 0941
+          demo -e command network -e wifi show -e level 4 -e fully true
+          demo -e command network -e mobile show -e datatype none -e level 4
+          demo -e command battery -e level 100 -e plugged false
+          demo -e command notifications -e visible false
+
+    - name: Install APK
+      shell: bash
+      env:
+        ANDROID_SERIAL: ${{ inputs.android-serial }}
+        APK_PATH: ${{ inputs.apk-path }}
+      run: |
+          set -euo pipefail
+          test -f "$APK_PATH" || { echo "::error::apk-path '$APK_PATH' is not a file."; exit 1; }
+          adb -s "$ANDROID_SERIAL" install -r "$APK_PATH"
+
+    - name: Install Maestro
+      if: steps.scenes.outputs.needs-maestro == 'true'
+      shell: bash
+      env:
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+      run: |
+          set -euo pipefail
+          if ! printf '%s' "$MAESTRO_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::maestro-version '$MAESTRO_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+            exit 1
+          fi
+          existing_bin="$(command -v maestro || true)"
+          existing_version=''
+          if [ -n "$existing_bin" ]; then
+            existing_version="$("$existing_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          fi
+          if [ -n "$existing_bin" ] && [ "$existing_version" = "$MAESTRO_VERSION" ]; then
+            echo "Using existing maestro $MAESTRO_VERSION already on PATH: $existing_bin"
+            exit 0
+          fi
+          command -v unzip >/dev/null 2>&1 || { echo "::error::'unzip' is required to install the pinned Maestro release but is not on PATH."; exit 1; }
+
+          pinned_root="$HOME/.maestro-pinned"
+          pinned_dir="$pinned_root/$MAESTRO_VERSION"
+          pinned_bin="$pinned_dir/maestro/bin/maestro"
+          lock_dir="$pinned_root/.lock-$MAESTRO_VERSION"
+          mkdir -p "$pinned_root"
+
+          version_matches() {
+            [ -x "$pinned_bin" ] && [ "$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$MAESTRO_VERSION" ]
+          }
+
+          if ! version_matches; then
+            # Concurrent jobs on the same self-hosted host share $HOME, so two
+            # jobs installing the same not-yet-cached MAESTRO_VERSION could
+            # otherwise race rm -rf/unzip against each other or against a
+            # sibling's in-flight `maestro` invocation. A per-version
+            # mkdir-as-mutex lock serializes that; a losing waiter re-checks
+            # version_matches so it can skip straight past once the winner
+            # finishes instead of installing a second time.
+            lock_acquired=''
+            lock_deadline=$((SECONDS + 300))
+            while :; do
+              if mkdir "$lock_dir" 2>/dev/null; then
+                lock_acquired=1
+                break
+              fi
+              if version_matches; then
+                break
+              fi
+              if [ "$SECONDS" -ge "$lock_deadline" ]; then
+                echo "::error::Timed out waiting for the Maestro install lock '$lock_dir'; a concurrent install on this host may be stuck."
+                exit 1
+              fi
+              sleep 2
+            done
+
+            if [ -n "$lock_acquired" ]; then
+              cleanup() {
+                [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
+                [ -n "${staging_dir:-}" ] && rm -rf "$staging_dir"
+                rmdir "$lock_dir" 2>/dev/null || true
+              }
+              trap cleanup EXIT
+
+              if ! version_matches; then
+                download_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/maestro.zip"
+                checksum_url="https://github.com/mobile-dev-inc/Maestro/releases/download/cli-${MAESTRO_VERSION}/checksums_sha256.txt"
+                scratch_dir="$(mktemp -d)"
+                zip_path="$scratch_dir/maestro.zip"
+
+                http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$zip_path" "$download_url")"
+                curl_exit=$?
+                if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
+                  echo "::error::Download of maestro-version '$MAESTRO_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'cli-$MAESTRO_VERSION' release publishing a maestro.zip asset exists at https://github.com/mobile-dev-inc/Maestro/releases."
+                  exit 1
+                fi
+
+                checksum_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 60 -w '%{http_code}' -o "$scratch_dir/checksums_sha256.txt" "$checksum_url")"
+                checksum_curl_exit=$?
+                if [ "$checksum_curl_exit" -eq 0 ] && [ "$checksum_status" = "200" ]; then
+                  expected_sha="$(awk '$2 == "maestro.zip" { print $1 }' "$scratch_dir/checksums_sha256.txt")"
+                  if [ -z "$expected_sha" ]; then
+                    echo "::error::checksums_sha256.txt for cli-$MAESTRO_VERSION has no maestro.zip entry; refusing to install an unverifiable download."
+                    exit 1
+                  fi
+                  if command -v sha256sum >/dev/null 2>&1; then
+                    actual_sha="$(sha256sum "$zip_path" | awk '{print $1}')"
+                  else
+                    actual_sha="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+                  fi
+                  if [ "$actual_sha" != "$expected_sha" ]; then
+                    echo "::error::maestro.zip checksum mismatch for cli-$MAESTRO_VERSION: expected $expected_sha, got $actual_sha."
+                    exit 1
+                  fi
+                elif [ "$checksum_status" = "404" ]; then
+                  echo "::warning::mobile-dev-inc/Maestro cli-$MAESTRO_VERSION did not publish checksums_sha256.txt (404); proceeding on the TLS-verified download from the official GitHub release only."
+                else
+                  echo "::error::Failed to retrieve checksums_sha256.txt for cli-$MAESTRO_VERSION from '$checksum_url' (curl exit $checksum_curl_exit, HTTP status '$checksum_status'). Refusing to install an unverifiable download."
+                  exit 1
+                fi
+
+                staging_dir="$(mktemp -d "$pinned_root/.staging-XXXXXX")"
+                unzip -q "$zip_path" -d "$staging_dir"
+                chmod +x "$staging_dir/maestro/bin/maestro" 2>/dev/null || true
+                staged_version="$("$staging_dir/maestro/bin/maestro" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+                if [ "$staged_version" != "$MAESTRO_VERSION" ]; then
+                  echo "::error::Extracted maestro from cli-$MAESTRO_VERSION's maestro.zip reports version '$staged_version', not the pinned $MAESTRO_VERSION; the release archive layout may have changed."
+                  exit 1
+                fi
+                rm -rf "$pinned_dir"
+                mkdir -p "$pinned_dir"
+                mv "$staging_dir/maestro" "$pinned_dir/maestro"
+              fi
+            fi
+          fi
+
+          if [ ! -x "$pinned_bin" ]; then
+            echo "::error::Expected a maestro binary at '$pinned_bin' after installing cli-$MAESTRO_VERSION; the install may have failed or been interrupted."
+            exit 1
+          fi
+          resolved_version="$("$pinned_bin" --version 2>/dev/null | tail -n 1 | tr -d '\r' || true)"
+          if [ "$resolved_version" != "$MAESTRO_VERSION" ]; then
+            echo "::error::maestro at '$pinned_bin' reports version '$resolved_version', not the pinned $MAESTRO_VERSION."
+            exit 1
+          fi
+          echo "$pinned_dir/maestro/bin" >> "$GITHUB_PATH"
+          echo "Installed and using maestro $MAESTRO_VERSION at $pinned_bin"
+
+    - name: Run screenshot capture matrix
+      shell: bash
+      env:
+        JAVA_TOOL_OPTIONS: -Djava.awt.headless=true -Xmx2048m
+        MAESTRO_DRIVER_STARTUP_TIMEOUT: '180000'
+        ANDROID_SERIAL: ${{ inputs.android-serial }}
+        APK_PATH: ${{ inputs.apk-path }}
+        APP_ID: ${{ inputs.app-id }}
+        SCENES_JSON: ${{ inputs.scenes }}
+        SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+        CAPTURE_LOCALES: ${{ inputs.locales }}
+        CAPTURE_APPEARANCES: ${{ inputs.appearances }}
+        SEED_COMMAND: ${{ inputs.seed-command }}
+        SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+        MAESTRO_ENV: ${{ inputs.maestro-env }}
+        DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
+      run: |
+          set -euo pipefail
+
+          maestro_env_args=()
+          if [ -n "$MAESTRO_ENV" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              case "$line" in
+                *=*) ;;
+                *)
+                  echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+                  exit 1
+                  ;;
+              esac
+              name="${line%%=*}"
+              case "$name" in
+                ''|[!A-Za-z_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              case "$name" in
+                *[!A-Za-z0-9_]*)
+                  echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                  exit 1
+                  ;;
+              esac
+              maestro_env_args+=(-e "$line")
+            done <<< "$MAESTRO_ENV"
+          fi
+
+          locales_list=$(printf '%s' "$CAPTURE_LOCALES" | tr ',\n\t' '   ')
+          appearances_list=$(printf '%s' "$CAPTURE_APPEARANCES" | tr ',\n\t' '   ')
+          IFS=' ' read -r -a locales_arr <<< "$locales_list"
+          IFS=' ' read -r -a appearances_arr <<< "$appearances_list"
+          if [ "${#locales_arr[@]}" -eq 0 ]; then
+            echo "::error::locales resolved to an empty list."
+            exit 1
+          fi
+          if [ "${#appearances_arr[@]}" -eq 0 ]; then
+            echo "::error::appearances resolved to an empty list."
+            exit 1
+          fi
+          # locale becomes a raw output path segment below - reject anything
+          # that could traverse out of that layout instead of writing
+          # wherever it resolves to.
+          for locale in "${locales_arr[@]}"; do
+            case "$locale" in
+              *[!A-Za-z0-9_-]*|'')
+                echo "::error::locale '$locale' must be a non-empty path-safe segment matching ^[A-Za-z0-9_-]+\$."
+                exit 1
+                ;;
+            esac
+          done
+
+          scene_count_total=$(jq 'length' <<< "$SCENES_JSON")
+          sel_names=()
+          sel_deeplinks=()
+          sel_flows=()
+          sel_settles=()
+          sel_locale_filters=()
+          sel_appearance_filters=()
+          i=0
+          while [ "$i" -lt "$scene_count_total" ]; do
+            scene=$(jq -c ".[$i]" <<< "$SCENES_JSON")
+            if [ "$(jq -r 'if has("platforms") then ((.platforms | index("android")) != null) else true end' <<< "$scene")" = 'true' ]; then
+              sel_names+=("$(jq -r '.name' <<< "$scene")")
+              sel_deeplinks+=("$(jq -r '.deepLink // ""' <<< "$scene")")
+              sel_flows+=("$(jq -r '.flow // ""' <<< "$scene")")
+              sel_settles+=("$(jq -r 'if has("settleSeconds") then .settleSeconds else -1 end' <<< "$scene")")
+              sel_locale_filters+=("$(jq -r '(.locales // []) | join(",")' <<< "$scene")")
+              sel_appearance_filters+=("$(jq -r '(.appearances // []) | join(",")' <<< "$scene")")
+            fi
+            i=$((i + 1))
+          done
+          if [ "${#sel_names[@]}" -eq 0 ]; then
+            echo "::error::no scene in scenes applies to platform 'android'."
+            exit 1
+          fi
+          printf 'Selected android scene list (%s total): %s\n' "${#sel_names[@]}" "${sel_names[*]}"
+
+          in_filter() {
+            case ",$2," in
+              ,,) return 0 ;;
+              *",$1,"*) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          capture_deeplink_cell() {
+            local deep_link="$1" settle="$2" final_path="$3" launch_output
+            if ! launch_output=$(adb -s "$ANDROID_SERIAL" shell am start -W -a android.intent.action.VIEW -d "$deep_link" "$APP_ID" 2>&1); then
+              printf '%s\n' "$launch_output"
+              echo "'am start' failed for deep link '$deep_link'."
+              return 1
+            fi
+            printf '%s\n' "$launch_output"
+            if printf '%s\n' "$launch_output" | grep -qE '^(Error|Exception|java\.lang\.)'; then
+              echo "Deep-link launch for '$deep_link' reported an error."
+              return 1
+            fi
+            sleep "$settle"
+            if ! adb -s "$ANDROID_SERIAL" exec-out screencap -p > "$final_path"; then
+              echo "'screencap' failed for '$final_path'."
+              return 1
+            fi
+            if [ ! -s "$final_path" ]; then
+              echo "'screencap' produced an empty file at '$final_path'."
+              return 1
+            fi
+          }
+
+          capture_flow_cell() {
+            local flow_rel="$1" scene_name="$2" locale="$3" appearance="$4" final_path="$5"
+            local scene_file="$SCREENSHOTS_DIR/$flow_rel"
+            test -f "$scene_file" || { echo "::error::scene '$scene_name' flow '$flow_rel' does not exist under screenshots-dir '$SCREENSHOTS_DIR'."; exit 1; }
+            local test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
+            rm -rf "$test_output_dir"
+            mkdir -p "$test_output_dir"
+            # --test-output-dir (not --debug-output, which it silently
+            # overrides once both are set) is where a takeScreenshot
+            # command's output lands, in a takeScreenshot/ subdirectory.
+            maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file" || return 1
+            local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate
+            if [ -d "$shots_dir" ]; then
+              while IFS= read -r -d '' candidate; do
+                shot_count=$((shot_count + 1))
+                shot_file="$candidate"
+              done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
+            fi
+            if [ "$shot_count" -ne 1 ]; then
+              echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+              return 2
+            fi
+            mv "$shot_file" "$final_path"
+          }
+
+          summary_rows=()
+          overall_status=0
+          max_attempts=2
+
+          for locale in "${locales_arr[@]}"; do
+            if ! adb -s "$ANDROID_SERIAL" shell cmd locale set-app-locales "$APP_ID" --user 0 --locales "$locale"; then
+              echo "::error::'cmd locale set-app-locales' failed for app '$APP_ID', locale '$locale'."
+              exit 1
+            fi
+            for appearance in "${appearances_arr[@]}"; do
+              case "$appearance" in
+                light) night_mode=no ;;
+                dark) night_mode=yes ;;
+                *)
+                  echo "::error::appearance '$appearance' must be 'light' or 'dark'."
+                  exit 1
+                  ;;
+              esac
+              if ! adb -s "$ANDROID_SERIAL" shell cmd uimode night "$night_mode"; then
+                echo "::error::'cmd uimode night $night_mode' failed."
+                exit 1
+              fi
+              for idx in "${!sel_names[@]}"; do
+                scene_name="${sel_names[$idx]}"
+                deep_link="${sel_deeplinks[$idx]}"
+                flow_rel="${sel_flows[$idx]}"
+                scene_settle="${sel_settles[$idx]}"
+                in_filter "$locale" "${sel_locale_filters[$idx]}" || continue
+                in_filter "$appearance" "${sel_appearance_filters[$idx]}" || continue
+                settle="$SETTLE_SECONDS"
+                if [ "$scene_settle" -ge 0 ]; then
+                  settle="$scene_settle"
+                fi
+                final_path="$OUTPUT_DIR/raw/android/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
+                mkdir -p "$(dirname "$final_path")"
+                start=$(date +%s)
+                attempts=0
+                status=failed
+                adb -s "$ANDROID_SERIAL" shell am force-stop "$APP_ID"
+                if [ -n "$SEED_COMMAND" ]; then
+                  if ! (
+                    export SCENE="$scene_name" LOCALE="$locale" APPEARANCE="$appearance" PLATFORM=android
+                    eval "$SEED_COMMAND"
+                  ); then
+                    echo "::error::seed-command failed for scene '$scene_name' (locale=$locale, appearance=$appearance); marking the cell failed without capture."
+                    status=seed-failed
+                  fi
+                fi
+                if [ "$status" != 'seed-failed' ]; then
+                  while [ "$attempts" -lt "$max_attempts" ]; do
+                    attempts=$((attempts + 1))
+                    if [ "$attempts" -gt 1 ]; then
+                      adb -s "$ANDROID_SERIAL" shell am force-stop "$APP_ID" || true
+                    fi
+                    if [ -n "$deep_link" ]; then
+                      capture_deeplink_cell "$deep_link" "$settle" "$final_path" && cell_rc=0 || cell_rc=$?
+                    else
+                      capture_flow_cell "$flow_rel" "$scene_name" "$locale" "$appearance" "$final_path" && cell_rc=0 || cell_rc=$?
+                    fi
+                    if [ "$cell_rc" -eq 0 ]; then
+                      status=passed
+                      break
+                    fi
+                    if [ "$cell_rc" -eq 2 ]; then
+                      break
+                    fi
+                  done
+                fi
+                end=$(date +%s)
+                duration=$((end - start))
+                if [ "$status" != 'passed' ]; then
+                  overall_status=1
+                fi
+                summary_rows+=("| $locale | $appearance | $scene_name | ${duration}s | $status | $attempts |")
+              done
+            done
+          done
+
+          {
+            echo "### Screenshot capture timing (android/$DEVICE_SLUG)"
+            echo "| Locale | Appearance | Scene | Duration | Status | Attempts |"
+            echo "| --- | --- | --- | --- | --- | --- |"
+            printf '%s\n' "${summary_rows[@]:-}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$overall_status"
