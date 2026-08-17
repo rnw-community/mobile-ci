@@ -75,7 +75,9 @@ full input reference, and the same doc's siblings under
 | [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners; `android-maestro.yml`'s default. |
-| [`capture-screenshots-ios`](actions/capture-screenshots-ios/README.md) | Boots a pinned Simulator and captures one screenshot per locale x appearance x scene into a fixed `raw/ios/<device-slug>/...` layout for store screenshot pipelines. |
+| [`redroid-container`](actions/redroid-container/README.md)       | Standalone Redroid container lifecycle (`mode: start` / `mode: teardown`) — run-scoped naming, prewarm manifest, kernel-assigned loopback adb port — for jobs that drive the booted device themselves. |
+| [`capture-screenshots-ios`](actions/capture-screenshots-ios/README.md) | Boots a pinned Simulator and captures one screenshot per locale x appearance x scene — discovered Maestro flows or a deep-link/flow scene manifest with a per-cell seed hook — into a fixed `raw/ios/<device-slug>/...` layout for store screenshot pipelines. |
+| [`capture-screenshots-android`](actions/capture-screenshots-android/README.md) | Drives an already-booted Android device (Redroid/AVD/physical) through a scene manifest — `wm size`/`wm density` device shaping, per-app locales, demo-mode status bar, per-cell seed hook — into a fixed `raw/android/<device-slug>/...` layout. |
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 
 Each action has its own `README.md` under `actions/<name>/` with the full
@@ -90,7 +92,7 @@ input/output table and a usage example.
 | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
-| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator) → optional gated `upload` (consumer's fastlane `deliver` lane). iOS only in this release. |
+| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check). |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
