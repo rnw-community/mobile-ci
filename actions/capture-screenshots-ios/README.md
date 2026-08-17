@@ -20,7 +20,9 @@ cell. Scenes come from one of two modes:
 `<output-dir>/raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png`, where
 `<device-slug>` is `simulator-device` lowercased with every run of
 non-alphanumeric characters collapsed to a single hyphen (e.g.
-`iPhone 17 Pro Max` -> `iphone-17-pro-max`).
+`iPhone 17 Pro Max` -> `iphone-17-pro-max`). The `raw/ios/<device-slug>`
+directory is cleared at the start of every run, so a reused `output-dir`
+never republishes stale screenshots from a previous matrix.
 
 ## Direct mode (scene manifest)
 

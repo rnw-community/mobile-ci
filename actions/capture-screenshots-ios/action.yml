@@ -165,6 +165,7 @@ runs:
           test -n "$SIMULATOR_DEVICE" || { echo "::error::simulator-device is required for capture-screenshots-ios; deterministic capture needs a pinned device."; exit 1; }
           slug=$(printf '%s' "$SIMULATOR_DEVICE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
           test -n "$slug" || { echo "::error::simulator-device '$SIMULATOR_DEVICE' slugified to an empty string."; exit 1; }
+          rm -rf "$OUTPUT_DIR/raw/ios/$slug"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
 
     - name: Validate capture mode and scene manifest
@@ -837,6 +838,10 @@ runs:
             printf '%s\n' "${summary_rows[@]:-}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          if [ "${#summary_rows[@]}" -eq 0 ]; then
+            echo "::error::zero capture cells ran: the per-scene locales/appearances filters excluded every selected scene from the global locale/appearance matrix."
+            exit 1
+          fi
           exit "$overall_status"
 
     - name: Shutdown simulator

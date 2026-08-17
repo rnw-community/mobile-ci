@@ -17,11 +17,14 @@ non-alphanumeric characters collapsed to a single hyphen. `device-name` is a
 free-form label (`^[A-Za-z0-9 ._-]+$`) used *only* for that path segment —
 it selects nothing; the device is whatever `android-serial` points at.
 Device shape comes from `width`/`height`/`density` instead, applied via
-`wm size` / `wm density` before the app is installed or launched.
+`wm size` / `wm density` before the app is installed or launched. The
+`raw/android/<device-slug>` directory is cleared at the start of every run,
+so a reused `output-dir` never republishes stale screenshots from a
+previous matrix.
 
 ## Requirements and device prep
 
-- **API 33+ fails closed.** Locales are applied per-app via
+- **Below API 33 fails closed.** Locales are applied per-app via
   `cmd locale set-app-locales` (persistent, no reboot), which needs API 33+;
   the action reads `ro.build.version.sdk` up front and fails closed below
   that. The default Redroid image (`redroid:15.0.0_64only`, API 35) is fine.

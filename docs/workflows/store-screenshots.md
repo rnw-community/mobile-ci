@@ -29,8 +29,10 @@ loop `locales x appearances x scenes` on it, optional
 [`capture-screenshots-android`](../../actions/capture-screenshots-android/README.md)
 → optional `post-capture-command` → upload
 `raw-screenshots-android-<device-slug>` → `if: always()` teardown) →
-**upload** (gated by `upload-screenshots`; requires at least one capture job
-to have succeeded, merges every `raw-screenshots-*` artifact, optionally
+**upload** (gated by `upload-screenshots`; requires every platform with
+manifest entries to have captured successfully — a capture job skipped by a
+failed build blocks the upload, only a platform with no manifest entries may
+stay skipped — merges every `raw-screenshots-*` artifact, optionally
 validates iOS resolutions against `apple-screenshot-slots`, then runs a
 consumer-owned `upload-command`) → **status** (single required check with
 honest-skip semantics: a platform's build/capture jobs must succeed whenever

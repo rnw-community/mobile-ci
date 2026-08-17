@@ -1264,8 +1264,8 @@ jobs:
         if: >-
             always() && inputs.upload-screenshots &&
             needs.validate-manifest.result == 'success' &&
-            needs.capture-ios.result != 'failure' && needs.capture-ios.result != 'cancelled' &&
-            needs.capture-android.result != 'failure' && needs.capture-android.result != 'cancelled'
+            (needs.capture-ios.result == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
+            (needs.capture-android.result == 'success' || needs.validate-manifest.outputs.has-android != 'true')
         runs-on: ${{ fromJSON(inputs.upload-runner-labels != '' && inputs.upload-runner-labels || inputs.runner-labels) }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
