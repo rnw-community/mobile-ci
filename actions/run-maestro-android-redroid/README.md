@@ -13,8 +13,16 @@ could otherwise also be writing into. When any flow in the shard failed,
 that scratch directory (UI hierarchy dumps and per-flow screenshots) is
 copied into the artifact under a `maestro-debug/` subdirectory, capped at
 200MB combined — a `::warning::` is emitted and the copy skipped if the
-shard's debug output exceeds that. The container is always removed at the
-end (`if: always()`).
+shard's debug output exceeds that. Because the explicit `--debug-output`
+flag takes precedence, a caller-exported `MAESTRO_DEBUG_OUTPUT_DIRECTORY`
+environment variable is deliberately **not** honored by the shard's
+`maestro test` invocations — debug output always lands in the uploaded
+artifact as described above, so no fallback "copy `~/.maestro/tests`" step
+is needed on the caller's side. The container is always removed at the
+end (`if: always()`), and its Docker log and inspect dump
+(`redroid-container.log` / `redroid-container-inspect.json`) are captured
+into the artifact first — including when the container never became
+adb-reachable at all.
 
 Use this instead of `run-maestro-android` on hosts where the AVD emulator
 cannot run at all — Google publishes no `linux-aarch64` build of the Android
@@ -78,6 +86,7 @@ from outside the runner itself.
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |
 | `pre-run-flow`            | no       | `''`                                   | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
 | `pre-test-command`        | no       | `''`                                   | Consumer-owned shell command run once after the app is installed on the container and before any flow (including `pre-run-flow`) executes. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails the step immediately. |
+| `app-warm-seconds`        | no       | `20`                                   | Seconds the app is left running during a one-off warm-up (launch via `monkey`, settle, `am force-stop`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. |
 | `maestro-env`             | no       | `''`                                   | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `flow-retries`            | no       | `0`                                    | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts.        |
 | `maestro-version`         | no       | `2.8.0`                                | Pinned Maestro CLI version. Installed by downloading the matching `cli-<version>` release directly from [mobile-dev-inc/Maestro releases](https://github.com/mobile-dev-inc/Maestro/releases) to `$HOME/.maestro-pinned/<version>` — immune to a pre-existing Homebrew-managed `maestro` on the host. An existing `maestro` already on `PATH` is reused only when its version exactly matches. |

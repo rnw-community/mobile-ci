@@ -69,6 +69,16 @@ inputs:
       skip.
     required: false
     default: ''
+  app-warm-seconds:
+    description: >-
+      Seconds the app is left running during a one-off warm-up performed
+      after install and before any flow (including pre-run-flow) runs. The
+      app is launched, left to settle this long, then terminated, so
+      first-launch cold-start cost (JS bundle load, cache priming) is not
+      absorbed by the first flow's own timeout budget. Set to '0' to
+      disable warming.
+    required: false
+    default: '20'
   maestro-env:
     description: >-
       Newline-separated KEY=VALUE pairs, each passed as an additional
@@ -188,6 +198,25 @@ runs:
           set -euo pipefail
           test -d "$APP_PATH"
           xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
+
+    - name: Warm app before first flow
+      if: inputs.app-warm-seconds != '0'
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        APP_WARM_SECONDS: ${{ inputs.app-warm-seconds }}
+      run: |
+          set -euo pipefail
+          case "$APP_WARM_SECONDS" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::app-warm-seconds '$APP_WARM_SECONDS' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+          echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, terminate."
+          xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID"
+          sleep "$APP_WARM_SECONDS"
+          xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" || echo "::warning::simctl terminate failed for '$APP_ID'; the app may have exited on its own during the warm-up settle."
 
     - name: Run pre-test command
       if: inputs.pre-test-command != ''
