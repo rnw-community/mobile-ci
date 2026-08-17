@@ -554,13 +554,15 @@ runs:
             # from there. The flow path is passed absolute so it survives the
             # cd; flow-internal runFlow references are unaffected - Maestro
             # resolves those against the flow file, not the CWD.
-            # --test-output-dir's takeScreenshot/ subdirectory is still
-            # searched for forward-compatibility; its screenshots/
-            # subdirectory never is - newer Maestro reserves that for
-            # automatic per-step failure captures.
+            # A passing run's screenshot may land in the maestro CWD, in
+            # --test-output-dir's screenshots/ subdirectory (2.8.x observed
+            # on the fleet), or in a takeScreenshot/ subdirectory; all three
+            # are searched. Collection only happens after a pass, so
+            # screenshots/ cannot contain Maestro's automatic per-step
+            # failure captures here.
             (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
             local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate shot_search_dir
-            for shot_search_dir in "$shot_cwd" "$shots_dir"; do
+            for shot_search_dir in "$shot_cwd" "$shots_dir" "$test_output_dir/screenshots"; do
               [ -d "$shot_search_dir" ] || continue
               while IFS= read -r -d '' candidate; do
                 shot_count=$((shot_count + 1))
@@ -568,7 +570,7 @@ runs:
               done < <(find "$shot_search_dir" -type f -name '*.png' -print0)
             done
             if [ "$shot_count" -ne 1 ]; then
-              echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd' and '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+              echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) across '$shot_cwd', '$shots_dir', and '$test_output_dir/screenshots'; expected exactly 1 from a single takeScreenshot command."
               return 2
             fi
             mv "$shot_file" "$final_path"
