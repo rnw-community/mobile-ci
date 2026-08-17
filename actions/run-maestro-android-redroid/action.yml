@@ -93,6 +93,16 @@ inputs:
       skip.
     required: false
     default: ''
+  app-warm-seconds:
+    description: >-
+      Seconds the app is left running during a one-off warm-up performed
+      after install and before any flow (including pre-run-flow) runs. The
+      app is launched, left to settle this long, then force-stopped, so
+      first-launch cold-start cost (JS bundle load, cache priming) is not
+      absorbed by the first flow's own timeout budget. Set to '0' to
+      disable warming.
+    required: false
+    default: '20'
   maestro-env:
     description: >-
       Newline-separated KEY=VALUE pairs, each passed as an additional
@@ -282,16 +292,41 @@ runs:
           # Exported as soon as the container is adb-reachable, not after the
           # boot-completed wait below succeeds: a timed-out boot still leaves
           # a running, adb-connected container worth capturing diagnostics
-          # from (screenshot/logcat), and "Capture final device state"
-          # already guards on this being set — leaving it unset here would
-          # just make that step skip the one failure mode diagnostics matter
-          # most for. Only a genuine bring-up failure before this line (e.g.
-          # the binder_linux guard above) leaves it unset, which is still the
-          # right time to skip capture: there is no reachable device at all.
+          # from (screenshot/logcat), and "Capture final device state" takes
+          # adb captures only when this is set. Only a genuine bring-up
+          # failure before this line (e.g. the binder_linux guard above)
+          # leaves it unset, in which case that step still captures the
+          # container's Docker log/inspect dump when the container itself
+          # got far enough to have a name — just no adb-side captures, since
+          # there is no reachable device at all.
           echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
-          deadline=$(( $(date +%s) + REDROID_BOOT_TIMEOUT_SECONDS ))
-          until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
-            test "$(date +%s)" -lt "$deadline"
+          # Narrated boot wait: a silent poll that times out reads as an adb
+          # or runner failure in the job log, when the real story is almost
+          # always "the container never finished booting" (or never even
+          # stayed running). Report progress with the observed
+          # sys.boot_completed value and the container's Docker state every
+          # 30s, and fail with all of that context on timeout instead of
+          # aborting on a bare test(1).
+          boot_start=$(date +%s)
+          deadline=$(( boot_start + REDROID_BOOT_TIMEOUT_SECONDS ))
+          next_narration=$boot_start
+          echo "Waiting up to ${REDROID_BOOT_TIMEOUT_SECONDS}s for sys.boot_completed=1 on localhost:$port..."
+          while :; do
+            boot_prop="$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            now=$(date +%s)
+            if [ "$boot_prop" = "1" ]; then
+              echo "Boot completed after $(( now - boot_start ))s."
+              break
+            fi
+            container_state="$(sudo docker inspect -f '{{.State.Status}}' "$effective_name" 2>/dev/null || echo unknown)"
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::error::Redroid container '$effective_name' did not report sys.boot_completed=1 within ${REDROID_BOOT_TIMEOUT_SECONDS}s (last sys.boot_completed: '${boot_prop:-<empty>}', container state: $container_state). Screenshot, logcat, and the container log are captured into the uploaded artifacts."
+              exit 1
+            fi
+            if [ "$now" -ge "$next_narration" ]; then
+              echo "Still waiting ($(( now - boot_start ))s elapsed of ${REDROID_BOOT_TIMEOUT_SECONDS}s): sys.boot_completed='${boot_prop:-<empty>}', container state: $container_state"
+              next_narration=$(( now + 30 ))
+            fi
             sleep 5
             adb connect "localhost:$port" >/dev/null 2>&1 || true
           done
@@ -432,6 +467,25 @@ runs:
       env:
         APK_PATH: ${{ inputs.apk-path }}
       run: adb -s "$ANDROID_SERIAL" install -r "$APK_PATH"
+
+    - name: Warm app before first flow
+      if: inputs.app-warm-seconds != '0'
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        APP_WARM_SECONDS: ${{ inputs.app-warm-seconds }}
+      run: |
+          set -euo pipefail
+          case "$APP_WARM_SECONDS" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::app-warm-seconds '$APP_WARM_SECONDS' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
+          echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, force-stop."
+          adb -s "$ANDROID_SERIAL" shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1
+          sleep "$APP_WARM_SECONDS"
+          adb -s "$ANDROID_SERIAL" shell am force-stop "$APP_ID"
 
     - name: Run pre-test command
       if: inputs.pre-test-command != ''
@@ -683,13 +737,21 @@ runs:
           exit "$overall_status"
 
     - name: Capture final device state
-      if: always() && env.ANDROID_SERIAL != ''
+      if: always() && (env.ANDROID_SERIAL != '' || env.REDROID_EFFECTIVE_CONTAINER_NAME != '')
       shell: bash
       env:
         OUT_DIR: ${{ inputs.artifacts-dir }}
         SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
       run: |
           mkdir -p "$OUT_DIR"
+          if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
+            timeout 30 sudo docker logs "$REDROID_EFFECTIVE_CONTAINER_NAME" > "$OUT_DIR/redroid-container.log" 2>&1 || true
+            timeout 30 sudo docker inspect "$REDROID_EFFECTIVE_CONTAINER_NAME" > "$OUT_DIR/redroid-container-inspect.json" 2>&1 || true
+          fi
+          if [ -z "${ANDROID_SERIAL:-}" ]; then
+            echo "No adb-reachable device (ANDROID_SERIAL unset); captured container diagnostics only."
+            exit 0
+          fi
           timeout 30 adb -s "$ANDROID_SERIAL" exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
           timeout 30 adb -s "$ANDROID_SERIAL" logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
           timeout 30 adb -s "$ANDROID_SERIAL" logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true

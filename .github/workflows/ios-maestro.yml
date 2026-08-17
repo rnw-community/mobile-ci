@@ -105,6 +105,16 @@ on:
                 type: string
                 required: false
                 default: '0'
+            app-warm-seconds:
+                description: >-
+                    Seconds the app is left running during a one-off warm-up
+                    (launch, settle, terminate) performed after install and
+                    before any flow runs, so first-launch cold-start cost is
+                    not absorbed by the first flow's own timeout budget. Set
+                    to '0' to disable warming.
+                type: string
+                required: false
+                default: '20'
             shard-count:
                 type: number
                 required: false
@@ -572,6 +582,7 @@ jobs:
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
                   pre-test-command: ${{ inputs.pre-test-command }}
+                  app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
@@ -593,28 +604,36 @@ jobs:
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
               run: |
+                  summary() {
+                    printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+                  }
                   cancelled_hint() {
                     if [ "$1" = 'cancelled' ]; then
                       echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/test-timeout-minutes before assuming external cancellation."
                     fi
                   }
                   if [ "$DETECT_RESULT" != "success" ]; then
-                    echo "Detection job did not succeed."
+                    echo "Detection job did not succeed (result: $DETECT_RESULT)."
+                    summary "### iOS Maestro E2E: failed (detect job result: $DETECT_RESULT)"
                     cancelled_hint "$DETECT_RESULT"
                     exit 1
                   fi
                   if [ "$DETECT_AFFECTED" != "true" ]; then
-                    echo "Skipped: target packages untouched."
+                    echo "::notice::iOS Maestro E2E skipped: target packages untouched, so every build/test leg was skipped and zero Maestro flows ran. This is not a pass."
+                    summary "### iOS Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
                     exit 0
                   fi
                   if [ "$BUILD_RESULT" != "success" ]; then
-                    echo "Build job failed."
+                    echo "Build job did not succeed (result: $BUILD_RESULT)."
+                    summary "### iOS Maestro E2E: failed (build job result: $BUILD_RESULT)"
                     cancelled_hint "$BUILD_RESULT"
                     exit 1
                   fi
                   if [ "$TEST_RESULT" != "success" ]; then
-                    echo "Maestro suite failed."
+                    echo "Maestro suite did not succeed (result: $TEST_RESULT)."
+                    summary "### iOS Maestro E2E: failed (test job result: $TEST_RESULT)"
                     cancelled_hint "$TEST_RESULT"
                     exit 1
                   fi
                   echo "Maestro suite passed."
+                  summary "### iOS Maestro E2E: passed"

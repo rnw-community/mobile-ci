@@ -14,6 +14,14 @@ detect/build/test into a single required check). `build` and `test` default
 to a self-hosted `linux-tiered`/`linux-xl` pool; `detect` and `status` always
 run on `ubuntu-latest`.
 
+The `status` job reports three distinct outcomes, in its log and in
+`$GITHUB_STEP_SUMMARY`: **passed**, **failed** (naming the job and result
+that broke the run, with a `::notice::` hint when a `cancelled` result
+likely means a hit timeout), and **skipped** — every build/test leg skipped
+because the target packages were untouched, reported explicitly as "zero
+Maestro flows ran (not a pass)" rather than blending into a green check
+silently.
+
 ## Inputs
 
 | Name                        | Required | Default                                       | Description |
@@ -31,6 +39,7 @@ run on `ubuntu-latest`.
 | `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
 | `maestro-env`                   | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. Passed to both `android-driver` options. |
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
+| `app-warm-seconds`              | no       | `20`                                               | Seconds the app is left running during a one-off warm-up (launch via `monkey`, settle, `am force-stop`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. Passed to both `android-driver` options. |
 | `shard-count`                   | no       | `2`                                                | Number of test shards per target. |
 | `cmdline-tools-version`         | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults (see `build-android-app` README). |
 | `gradle-task`                   | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |

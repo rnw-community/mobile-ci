@@ -18,10 +18,27 @@ mkdir -p "$maestro_debug_scratch_dir"
 echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
 
 adb wait-for-device
+# shellcheck disable=SC2016 # single quotes are deliberate: the child bash expands this, not the parent
 timeout 180 bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = "1" ]; do sleep 2; done'
 ANDROID_SERIAL=$(adb devices | awk '$2 == "device" { print $1; exit }')
 export ANDROID_SERIAL
 adb install -r "$APK_PATH"
+
+# Warm the app once between install and the first flow (pre-run-flow
+# included) so first-launch cold-start cost (JS bundle load, cache priming)
+# is not absorbed by the first flow's own timeout budget.
+case "$APP_WARM_SECONDS" in
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::app-warm-seconds '$APP_WARM_SECONDS' must be a non-negative integer without leading zeros."
+    exit 1
+    ;;
+esac
+if [ "$APP_WARM_SECONDS" != "0" ]; then
+  echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, force-stop."
+  adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1
+  sleep "$APP_WARM_SECONDS"
+  adb shell am force-stop "$APP_ID"
+fi
 
 if [ -n "${PRE_TEST_COMMAND:-}" ]; then
   eval "$PRE_TEST_COMMAND"

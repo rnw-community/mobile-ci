@@ -69,6 +69,16 @@ inputs:
       skip.
     required: false
     default: ''
+  app-warm-seconds:
+    description: >-
+      Seconds the app is left running during a one-off warm-up performed
+      after install and before any flow (including pre-run-flow) runs. The
+      app is launched, left to settle this long, then force-stopped, so
+      first-launch cold-start cost (JS bundle load, cache priming) is not
+      absorbed by the first flow's own timeout budget. Set to '0' to
+      disable warming.
+    required: false
+    default: '20'
   maestro-env:
     description: >-
       Newline-separated KEY=VALUE pairs, each passed as an additional
@@ -270,6 +280,7 @@ runs:
           SHARD_COUNT: ${{ inputs.shard-count }}
           PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
           PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+          APP_WARM_SECONDS: ${{ inputs.app-warm-seconds }}
           MAESTRO_ENV: ${{ inputs.maestro-env }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
       with:
