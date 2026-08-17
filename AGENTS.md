@@ -108,8 +108,11 @@ carte tier — see [README.md](README.md#pick-your-tier)):
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.
 - `store-screenshots.yml` — fleet-native store screenshot capture matrix
-  (iOS only so far) driven by a Maestro flow-per-scene convention, with a
-  gated fastlane upload job.
+  (iOS simulators + Android Redroid containers) driven either by a Maestro
+  flow-per-scene convention (`capture-mode: flows`, iOS-only) or by a
+  deep-link/flow scene manifest with a per-cell seed hook
+  (`capture-mode: direct`, required for Android), with a gated fastlane
+  upload job and optional App Store slot-resolution validation.
 - `pr-closed-cleanup-reusable.yml` — cancels zombie runs on a closed PR's branch.
 
 Full input/secret/permission tables and a copy-pasteable example live in

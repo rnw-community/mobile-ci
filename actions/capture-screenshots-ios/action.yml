@@ -3,7 +3,10 @@ description: >-
   Boots a pinned iOS Simulator, installs a packaged .app, and captures one
   screenshot per locale x appearance x scene into a fixed
   raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png layout for store
-  screenshot pipelines.
+  screenshot pipelines. Scenes come either from flow discovery under
+  screenshots-dir (legacy mode, when scenes is empty) or from a JSON scene
+  manifest of deep-link or flow-backed scenes (direct mode, when scenes is
+  set).
 inputs:
   app-path:
     description: Path to a packaged .app to install (directory, not archive).
@@ -11,22 +14,70 @@ inputs:
   app-id:
     description: Bundle identifier passed to Maestro as APP_ID.
     required: true
+  scenes:
+    description: >-
+      Optional JSON array of scene objects, each {"name", and exactly one of
+      "deepLink" or "flow", optional "settleSeconds", "platforms",
+      "locales", "appearances"}. Empty (default) keeps the legacy
+      flow-discovery mode below byte-for-byte; non-empty switches to
+      manifest-driven direct mode, in which the '<number>.<name>.flow.yaml'
+      naming convention is NOT required - the scene name comes from the
+      manifest, name must match ^[A-Za-z0-9_-]+$ and be unique, and flow is
+      a path relative to screenshots-dir (absolute paths and '..' segments
+      fail closed). Scenes whose platforms filter excludes 'ios' are
+      skipped; at least one scene must apply to ios.
+    required: false
+    default: ''
+  seed-command:
+    description: >-
+      Optional consumer-owned shell command run once per
+      locale x appearance x scene cell in direct mode, from the repo root,
+      with the app installed and terminated, before the scene's launch. Runs
+      with SCENE, LOCALE, APPEARANCE, APP_ID, PLATFORM=ios, DEVICE_SLUG,
+      SIMULATOR_UDID, and APP_PATH in its environment. Its failure marks
+      that cell failed (no capture, no retry) and the step fails at the end.
+      Fails closed if set while scenes is empty - it never runs in legacy
+      flow-discovery mode.
+    required: false
+    default: ''
+  settle-seconds:
+    description: >-
+      Seconds (integer 0-120) to wait between a deep-link launch and its
+      screenshot in direct mode; a scene's own settleSeconds overrides it.
+      Flow-backed scenes control their own timing instead.
+    required: false
+    default: '3'
+  status-bar-override:
+    description: >-
+      When 'true', applies `xcrun simctl status_bar override` once after
+      boot in both modes: 9:41, full wifi and cellular bars, battery 100
+      charged. Fails closed if the override call fails.
+    required: false
+    default: 'true'
   screenshots-dir:
     description: >-
-      Directory whose top-level files are the runnable screenshot scenes.
-      Subdirectories (subflows, fixtures) are never searched. Each scene file
-      must match '<number>.<name>.flow.yaml' - the number prefix is stripped
-      to derive the scene name used in the output path.
-    required: true
+      Directory whose top-level files are the runnable screenshot scenes in
+      legacy flow-discovery mode (scenes empty), and the directory
+      flow-backed manifest scenes' paths are resolved against in direct
+      mode. Subdirectories (subflows, fixtures) are never searched by
+      discovery. In legacy mode each discovered file must match
+      '<number>.<name>.flow.yaml' - the number prefix is stripped to derive
+      the scene name used in the output path. Required in legacy mode, and
+      in direct mode when at least one ios-applicable scene declares a flow.
+    required: false
+    default: ''
   scenes-name-pattern:
     description: >-
       Space-separated find -name globs (OR'd together) selecting runnable
       scenes directly inside screenshots-dir. Defaults to the *.flow.yaml
-      convention shared with run-maestro-ios.
+      convention shared with run-maestro-ios. Legacy flow-discovery mode
+      only; ignored in direct mode.
     required: false
     default: '*.flow.yaml'
   scenes-exclude-pattern:
-    description: Optional find ! -name glob excluding matched scenes by basename.
+    description: >-
+      Optional find ! -name glob excluding matched scenes by basename.
+      Legacy flow-discovery mode only; ignored in direct mode.
     required: false
     default: ''
   simulator-device:
@@ -73,7 +124,9 @@ inputs:
   maestro-version:
     description: >-
       Pinned Maestro CLI version, installed the same way as
-      run-maestro-ios's maestro-version.
+      run-maestro-ios's maestro-version - and only lazily: always in legacy
+      flow-discovery mode, but in direct mode only when at least one
+      ios-applicable scene declares a flow.
     required: false
     default: '2.8.0'
   output-dir:
@@ -112,7 +165,90 @@ runs:
           test -n "$SIMULATOR_DEVICE" || { echo "::error::simulator-device is required for capture-screenshots-ios; deterministic capture needs a pinned device."; exit 1; }
           slug=$(printf '%s' "$SIMULATOR_DEVICE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
           test -n "$slug" || { echo "::error::simulator-device '$SIMULATOR_DEVICE' slugified to an empty string."; exit 1; }
+          rm -rf "$OUTPUT_DIR/raw/ios/$slug"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
+
+    - name: Validate capture mode and scene manifest
+      id: scenes
+      shell: bash
+      env:
+        SCENES_JSON: ${{ inputs.scenes }}
+        SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+        SEED_COMMAND: ${{ inputs.seed-command }}
+        SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+      run: |
+          set -euo pipefail
+          case "$SETTLE_SECONDS" in
+            ''|*[!0-9]*)
+              echo "::error::settle-seconds '$SETTLE_SECONDS' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$SETTLE_SECONDS" -gt 120 ]; then
+            echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
+            exit 1
+          fi
+          if [ -z "$SCENES_JSON" ]; then
+            if [ -z "$SCREENSHOTS_DIR" ]; then
+              echo "::error::screenshots-dir is required when scenes is empty (legacy flow-discovery mode)."
+              exit 1
+            fi
+            if [ -n "$SEED_COMMAND" ]; then
+              echo "::error::seed-command is set but scenes is empty; the seed hook only runs in scene-manifest (direct) mode, so it would be silently skipped."
+              exit 1
+            fi
+            echo "needs-maestro=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! jq empty <<< "$SCENES_JSON" 2>/dev/null; then
+            echo "::error::scenes is not valid JSON."
+            exit 1
+          fi
+          if [ "$(jq 'type' <<< "$SCENES_JSON")" != '"array"' ]; then
+            echo "::error::scenes must be a JSON array."
+            exit 1
+          fi
+          if [ "$(jq 'length' <<< "$SCENES_JSON")" -lt 1 ]; then
+            echo "::error::scenes must have at least one entry."
+            exit 1
+          fi
+          non_objects=$(jq -c '[.[] | select(type != "object")]' <<< "$SCENES_JSON")
+          if [ "$non_objects" != '[]' ]; then
+            echo "::error::scenes has non-object entries: $non_objects"
+            exit 1
+          fi
+          invalid=$(jq -c '
+              [.[] | select(
+                  ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
+                  (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
+                  (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
+                  (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                  (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
+                  (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
+                  (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
+                  (has("appearances") and ((.appearances | type) != "array" or (.appearances | length) == 0 or any(.appearances[]; . != "light" and . != "dark")))
+              )]
+          ' <<< "$SCENES_JSON")
+          if [ "$invalid" != '[]' ]; then
+            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
+            exit 1
+          fi
+          duplicate_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$SCENES_JSON")
+          if [ -n "$duplicate_names" ]; then
+            echo "::error::scenes has duplicate scene names ($duplicate_names); each name is an output path segment and must be unique."
+            exit 1
+          fi
+          selected=$(jq -c '[.[] | select(if has("platforms") then (.platforms | index("ios")) != null else true end)]' <<< "$SCENES_JSON")
+          if [ "$(jq 'length' <<< "$selected")" -lt 1 ]; then
+            echo "::error::no scene in scenes applies to platform 'ios' - every scene's platforms filter excludes it."
+            exit 1
+          fi
+          needs_maestro=$(jq -r 'any(.[]; has("flow"))' <<< "$selected")
+          if [ "$needs_maestro" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
+            echo "::error::screenshots-dir is required because at least one ios-applicable scene declares a flow."
+            exit 1
+          fi
+          echo "needs-maestro=$needs_maestro" >> "$GITHUB_OUTPUT"
 
     - name: Boot iOS Simulator
       shell: bash
@@ -166,6 +302,16 @@ runs:
           fi
           echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
 
+    - name: Override simulator status bar
+      if: inputs.status-bar-override == 'true'
+      shell: bash
+      run: |
+          set -euo pipefail
+          if ! xcrun simctl status_bar "$SIMULATOR_UDID" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100; then
+            echo "::error::'xcrun simctl status_bar override' failed for simulator '$SIMULATOR_UDID'; set status-bar-override to 'false' to capture with the real status bar instead."
+            exit 1
+          fi
+
     - name: Install app on simulator
       shell: bash
       env:
@@ -176,6 +322,7 @@ runs:
           xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
 
     - name: Install Maestro
+      if: steps.scenes.outputs.needs-maestro == 'true'
       shell: bash
       env:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
@@ -301,11 +448,15 @@ runs:
       shell: bash
       env:
         APP_ID: ${{ inputs.app-id }}
+        APP_PATH: ${{ inputs.app-path }}
         SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
         SCENES_NAME_PATTERN: ${{ inputs.scenes-name-pattern }}
         SCENES_EXCLUDE_PATTERN: ${{ inputs.scenes-exclude-pattern }}
-        LOCALES: ${{ inputs.locales }}
-        APPEARANCES: ${{ inputs.appearances }}
+        SCENES_JSON: ${{ inputs.scenes }}
+        SEED_COMMAND: ${{ inputs.seed-command }}
+        SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+        CAPTURE_LOCALES: ${{ inputs.locales }}
+        CAPTURE_APPEARANCES: ${{ inputs.appearances }}
         ORIENTATION: ${{ inputs.orientation }}
         MAESTRO_ENV: ${{ inputs.maestro-env }}
         DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
@@ -321,7 +472,6 @@ runs:
               exit 1
               ;;
           esac
-          test -d "$SCREENSHOTS_DIR" || { echo "::error::screenshots-dir '$SCREENSHOTS_DIR' is not a directory."; exit 1; }
 
           maestro_env_args=()
           if [ -n "$MAESTRO_ENV" ]; then
@@ -351,64 +501,8 @@ runs:
             done <<< "$MAESTRO_ENV"
           fi
 
-          # Scenes are top-level-only (no -maxdepth override, unlike
-          # run-maestro-ios's configurable flows-max-depth): screenshot
-          # scenes are always a flat, numbered convention, and subflows
-          # (apply-language, apply-appearance, reset-app, ...) always live in
-          # subdirectories that must never be swept into the capture matrix.
-          find_cmd=(find "$SCREENSHOTS_DIR" -maxdepth 1 -type f)
-          IFS=' ' read -r -a name_patterns <<< "$SCENES_NAME_PATTERN"
-          name_args=('(')
-          for i in "${!name_patterns[@]}"; do
-            if [ "$i" -gt 0 ]; then
-              name_args+=(-o)
-            fi
-            name_args+=(-name "${name_patterns[$i]}")
-          done
-          name_args+=(')')
-          find_cmd+=("${name_args[@]}")
-          if [ -n "$SCENES_EXCLUDE_PATTERN" ]; then
-            find_cmd+=(! -name "$SCENES_EXCLUDE_PATTERN")
-          fi
-          scenes=()
-          while IFS= read -r scene_file; do
-            scenes+=("$scene_file")
-          done < <("${find_cmd[@]}" | sort)
-          if [ "${#scenes[@]}" -eq 0 ]; then
-            echo "::error::No scenes matching '$SCENES_NAME_PATTERN' found under screenshots-dir '$SCREENSHOTS_DIR'."
-            exit 1
-          fi
-          printf 'Resolved scene list (%s total):\n%s\n' "${#scenes[@]}" "${scenes[*]}"
-
-          scene_name_of() {
-            local base name
-            base=$(basename "$1")
-            base=${base%.flow.yaml}
-            name=$(printf '%s' "$base" | sed -E 's/^[0-9]+\.(.+)$/\1/')
-            if [ "$name" = "$base" ]; then
-              echo "::error::scene file '$1' does not match the '<number>.<name>.flow.yaml' convention; cannot derive a scene name." >&2
-              return 1
-            fi
-            printf '%s' "$name"
-          }
-
-          # Two scene files that share a derived name after the numeric
-          # prefix is stripped (e.g. 01.home.flow.yaml and 02.home.flow.yaml)
-          # would otherwise silently overwrite each other's output at the
-          # same final_path below - resolve every scene name up front and
-          # fail closed on a collision instead of losing a screenshot.
-          scene_names=()
-          for scene_file in "${scenes[@]}"; do
-            scene_names+=("$(scene_name_of "$scene_file")")
-          done
-          duplicate_scene_names=$(printf '%s\n' "${scene_names[@]}" | sort | uniq -d)
-          if [ -n "$duplicate_scene_names" ]; then
-            echo "::error::Multiple scene files derive the same scene name, which would overwrite each other's output: $(printf '%s' "$duplicate_scene_names" | tr '\n' ' ')"
-            exit 1
-          fi
-
-          locales_list=$(printf '%s' "$LOCALES" | tr ',\n\t' '   ')
-          appearances_list=$(printf '%s' "$APPEARANCES" | tr ',\n\t' '   ')
+          locales_list=$(printf '%s' "$CAPTURE_LOCALES" | tr ',\n\t' '   ')
+          appearances_list=$(printf '%s' "$CAPTURE_APPEARANCES" | tr ',\n\t' '   ')
           IFS=' ' read -r -a locales_arr <<< "$locales_list"
           IFS=' ' read -r -a appearances_arr <<< "$appearances_list"
           if [ "${#locales_arr[@]}" -eq 0 ]; then
@@ -432,11 +526,7 @@ runs:
             esac
           done
 
-          summary_rows=()
-          overall_status=0
-          max_attempts=2
-
-          for locale in "${locales_arr[@]}"; do
+          set_app_locale_prefs() {
             # OS-level locale (best-effort, authoritative only for apps that
             # read the system locale, e.g. via NSLocale/react-native-localize
             # rather than an in-app language switcher): writes the app's own
@@ -446,86 +536,300 @@ runs:
             # screenshots-dir's documented apply-language convention) - this
             # write is not reverted, since a fresh app-id-scoped preference
             # domain on a throwaway CI simulator does not need resetting.
-            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLanguages -array "$locale" 2>/dev/null; then
-              echo "::warning::Could not set the OS-level AppleLanguages preference for '$APP_ID' to '$locale'; continuing with in-flow \${LOCALE} handling only."
+            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLanguages -array "$1" 2>/dev/null; then
+              echo "::warning::Could not set the OS-level AppleLanguages preference for '$APP_ID' to '$1'; continuing with in-flow \${LOCALE} handling only."
             fi
-            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLocale -string "$locale" 2>/dev/null; then
-              echo "::warning::Could not set the OS-level AppleLocale preference for '$APP_ID' to '$locale'; continuing with in-flow \${LOCALE} handling only."
+            if ! xcrun simctl spawn "$SIMULATOR_UDID" defaults write "$APP_ID" AppleLocale -string "$1" 2>/dev/null; then
+              echo "::warning::Could not set the OS-level AppleLocale preference for '$APP_ID' to '$1'; continuing with in-flow \${LOCALE} handling only."
             fi
+          }
 
-            for appearance in "${appearances_arr[@]}"; do
-              case "$appearance" in
-                light|dark) ;;
-                *)
-                  echo "::error::appearance '$appearance' must be 'light' or 'dark' (the only two values 'xcrun simctl ui appearance' accepts)."
-                  exit 1
-                  ;;
-              esac
-              # OS-level appearance is authoritative for any app following
-              # the system light/dark setting; -e APPEARANCE=<value> is still
-              # passed to every scene below for apps with an in-app theme
-              # switch instead (see screenshots-dir's documented
-              # apply-appearance convention).
-              if ! xcrun simctl ui "$SIMULATOR_UDID" appearance "$appearance"; then
-                echo "::error::'xcrun simctl ui $SIMULATOR_UDID appearance $appearance' failed."
+          apply_appearance() {
+            case "$1" in
+              light|dark) ;;
+              *)
+                echo "::error::appearance '$1' must be 'light' or 'dark' (the only two values 'xcrun simctl ui appearance' accepts)."
                 exit 1
+                ;;
+            esac
+            # OS-level appearance is authoritative for any app following
+            # the system light/dark setting; -e APPEARANCE=<value> is still
+            # passed to every flow-backed scene below for apps with an
+            # in-app theme switch instead (see screenshots-dir's documented
+            # apply-appearance convention).
+            if ! xcrun simctl ui "$SIMULATOR_UDID" appearance "$1"; then
+              echo "::error::'xcrun simctl ui $SIMULATOR_UDID appearance $1' failed."
+              exit 1
+            fi
+          }
+
+          summary_rows=()
+          overall_status=0
+          max_attempts=2
+
+          if [ -z "$SCENES_JSON" ]; then
+            test -d "$SCREENSHOTS_DIR" || { echo "::error::screenshots-dir '$SCREENSHOTS_DIR' is not a directory."; exit 1; }
+            # Scenes are top-level-only (no -maxdepth override, unlike
+            # run-maestro-ios's configurable flows-max-depth): screenshot
+            # scenes are always a flat, numbered convention, and subflows
+            # (apply-language, apply-appearance, reset-app, ...) always live in
+            # subdirectories that must never be swept into the capture matrix.
+            find_cmd=(find "$SCREENSHOTS_DIR" -maxdepth 1 -type f)
+            IFS=' ' read -r -a name_patterns <<< "$SCENES_NAME_PATTERN"
+            name_args=('(')
+            for i in "${!name_patterns[@]}"; do
+              if [ "$i" -gt 0 ]; then
+                name_args+=(-o)
               fi
+              name_args+=(-name "${name_patterns[$i]}")
+            done
+            name_args+=(')')
+            find_cmd+=("${name_args[@]}")
+            if [ -n "$SCENES_EXCLUDE_PATTERN" ]; then
+              find_cmd+=(! -name "$SCENES_EXCLUDE_PATTERN")
+            fi
+            scenes=()
+            while IFS= read -r scene_file; do
+              scenes+=("$scene_file")
+            done < <("${find_cmd[@]}" | sort)
+            if [ "${#scenes[@]}" -eq 0 ]; then
+              echo "::error::No scenes matching '$SCENES_NAME_PATTERN' found under screenshots-dir '$SCREENSHOTS_DIR'."
+              exit 1
+            fi
+            printf 'Resolved scene list (%s total):\n%s\n' "${#scenes[@]}" "${scenes[*]}"
 
-              for scene_file in "${scenes[@]}"; do
-                scene_name="$(scene_name_of "$scene_file")"
-                test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
-                start=$(date +%s)
-                attempts=0
-                status=failed
-                while [ "$attempts" -lt "$max_attempts" ]; do
-                  attempts=$((attempts + 1))
-                  rm -rf "$test_output_dir"
-                  mkdir -p "$test_output_dir"
-                  # --test-output-dir (not --debug-output, which it silently
-                  # overrides once both are set - Maestro resolves a single
-                  # artifacts directory, preferring --test-output-dir) is
-                  # where a takeScreenshot command's output lands, in a
-                  # takeScreenshot/ subdirectory - not the screenshots/
-                  # subdirectory, which Maestro reserves for its own
-                  # automatic per-step captures.
-                  if maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file"; then
-                    status=passed
-                    break
-                  fi
-                done
-                end=$(date +%s)
-                duration=$((end - start))
+            scene_name_of() {
+              local base name
+              base=$(basename "$1")
+              base=${base%.flow.yaml}
+              name=$(printf '%s' "$base" | sed -E 's/^[0-9]+\.(.+)$/\1/')
+              if [ "$name" = "$base" ]; then
+                echo "::error::scene file '$1' does not match the '<number>.<name>.flow.yaml' convention; cannot derive a scene name." >&2
+                return 1
+              fi
+              printf '%s' "$name"
+            }
 
-                if [ "$status" = "passed" ]; then
-                  shots_dir="$test_output_dir/takeScreenshot"
-                  shot_count=0
-                  shot_file=''
-                  if [ -d "$shots_dir" ]; then
-                    while IFS= read -r -d '' candidate; do
-                      shot_count=$((shot_count + 1))
-                      shot_file="$candidate"
-                    done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
-                  fi
-                  if [ "$shot_count" -ne 1 ]; then
-                    echo "::error::scene '$scene_file' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
-                    status=failed
-                  else
-                    final_path="$OUTPUT_DIR/raw/ios/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
-                    mkdir -p "$(dirname "$final_path")"
-                    mv "$shot_file" "$final_path"
-                    if [ "$ORIENTATION" = "landscape" ]; then
-                      sips --rotate 90 "$final_path" >/dev/null
+            # Two scene files that share a derived name after the numeric
+            # prefix is stripped (e.g. 01.home.flow.yaml and 02.home.flow.yaml)
+            # would otherwise silently overwrite each other's output at the
+            # same final_path below - resolve every scene name up front and
+            # fail closed on a collision instead of losing a screenshot.
+            scene_names=()
+            for scene_file in "${scenes[@]}"; do
+              scene_names+=("$(scene_name_of "$scene_file")")
+            done
+            duplicate_scene_names=$(printf '%s\n' "${scene_names[@]}" | sort | uniq -d)
+            if [ -n "$duplicate_scene_names" ]; then
+              echo "::error::Multiple scene files derive the same scene name, which would overwrite each other's output: $(printf '%s' "$duplicate_scene_names" | tr '\n' ' ')"
+              exit 1
+            fi
+
+            for locale in "${locales_arr[@]}"; do
+              set_app_locale_prefs "$locale"
+
+              for appearance in "${appearances_arr[@]}"; do
+                apply_appearance "$appearance"
+
+                for scene_file in "${scenes[@]}"; do
+                  scene_name="$(scene_name_of "$scene_file")"
+                  test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
+                  start=$(date +%s)
+                  attempts=0
+                  status=failed
+                  while [ "$attempts" -lt "$max_attempts" ]; do
+                    attempts=$((attempts + 1))
+                    rm -rf "$test_output_dir"
+                    mkdir -p "$test_output_dir"
+                    # --test-output-dir (not --debug-output, which it silently
+                    # overrides once both are set - Maestro resolves a single
+                    # artifacts directory, preferring --test-output-dir) is
+                    # where a takeScreenshot command's output lands, in a
+                    # takeScreenshot/ subdirectory - not the screenshots/
+                    # subdirectory, which Maestro reserves for its own
+                    # automatic per-step captures.
+                    if maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file"; then
+                      status=passed
+                      break
+                    fi
+                  done
+                  end=$(date +%s)
+                  duration=$((end - start))
+
+                  if [ "$status" = "passed" ]; then
+                    shots_dir="$test_output_dir/takeScreenshot"
+                    shot_count=0
+                    shot_file=''
+                    if [ -d "$shots_dir" ]; then
+                      while IFS= read -r -d '' candidate; do
+                        shot_count=$((shot_count + 1))
+                        shot_file="$candidate"
+                      done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
+                    fi
+                    if [ "$shot_count" -ne 1 ]; then
+                      echo "::error::scene '$scene_file' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+                      status=failed
+                    else
+                      final_path="$OUTPUT_DIR/raw/ios/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
+                      mkdir -p "$(dirname "$final_path")"
+                      mv "$shot_file" "$final_path"
+                      if [ "$ORIENTATION" = "landscape" ]; then
+                        sips --rotate 90 "$final_path" >/dev/null
+                      fi
                     fi
                   fi
-                fi
 
-                if [ "$status" != "passed" ]; then
-                  overall_status=1
-                fi
-                summary_rows+=("| $locale | $appearance | $(basename "$scene_file") | ${duration}s | $status | $attempts |")
+                  if [ "$status" != "passed" ]; then
+                    overall_status=1
+                  fi
+                  summary_rows+=("| $locale | $appearance | $(basename "$scene_file") | ${duration}s | $status | $attempts |")
+                done
               done
             done
-          done
+          else
+            scene_count_total=$(jq 'length' <<< "$SCENES_JSON")
+            sel_names=()
+            sel_deeplinks=()
+            sel_flows=()
+            sel_settles=()
+            sel_locale_filters=()
+            sel_appearance_filters=()
+            i=0
+            while [ "$i" -lt "$scene_count_total" ]; do
+              scene=$(jq -c ".[$i]" <<< "$SCENES_JSON")
+              if [ "$(jq -r 'if has("platforms") then ((.platforms | index("ios")) != null) else true end' <<< "$scene")" = 'true' ]; then
+                sel_names+=("$(jq -r '.name' <<< "$scene")")
+                sel_deeplinks+=("$(jq -r '.deepLink // ""' <<< "$scene")")
+                sel_flows+=("$(jq -r '.flow // ""' <<< "$scene")")
+                sel_settles+=("$(jq -r 'if has("settleSeconds") then .settleSeconds else -1 end' <<< "$scene")")
+                sel_locale_filters+=("$(jq -r '(.locales // []) | join(",")' <<< "$scene")")
+                sel_appearance_filters+=("$(jq -r '(.appearances // []) | join(",")' <<< "$scene")")
+              fi
+              i=$((i + 1))
+            done
+            if [ "${#sel_names[@]}" -eq 0 ]; then
+              echo "::error::no scene in scenes applies to platform 'ios'."
+              exit 1
+            fi
+            printf 'Selected ios scene list (%s total): %s\n' "${#sel_names[@]}" "${sel_names[*]}"
+
+            in_filter() {
+              case ",$2," in
+                ,,) return 0 ;;
+                *",$1,"*) return 0 ;;
+                *) return 1 ;;
+              esac
+            }
+
+            capture_deeplink_cell() {
+              local deep_link="$1" settle="$2" locale="$3" final_path="$4"
+              if ! xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID" -AppleLanguages "(\"$locale\")" -AppleLocale "$locale"; then
+                echo "'simctl launch' failed for '$APP_ID' (locale=$locale)."
+                return 1
+              fi
+              if ! xcrun simctl openurl "$SIMULATOR_UDID" "$deep_link"; then
+                echo "'simctl openurl' failed for deep link '$deep_link'."
+                return 1
+              fi
+              sleep "$settle"
+              if ! xcrun simctl io "$SIMULATOR_UDID" screenshot "$final_path"; then
+                echo "'simctl io screenshot' failed for '$final_path'."
+                return 1
+              fi
+              if [ "$ORIENTATION" = "landscape" ]; then
+                sips --rotate 90 "$final_path" >/dev/null
+              fi
+            }
+
+            capture_flow_cell() {
+              local flow_rel="$1" scene_name="$2" locale="$3" appearance="$4" final_path="$5"
+              local scene_file="$SCREENSHOTS_DIR/$flow_rel"
+              test -f "$scene_file" || { echo "::error::scene '$scene_name' flow '$flow_rel' does not exist under screenshots-dir '$SCREENSHOTS_DIR'."; exit 1; }
+              local test_output_dir="$RUNNER_TEMP/screenshots-test-output/${locale}-${appearance}-${scene_name}"
+              rm -rf "$test_output_dir"
+              mkdir -p "$test_output_dir"
+              # Same --test-output-dir / single-takeScreenshot contract as
+              # the flow-discovery loop above.
+              maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file" || return 1
+              local shots_dir="$test_output_dir/takeScreenshot" shot_count=0 shot_file='' candidate
+              if [ -d "$shots_dir" ]; then
+                while IFS= read -r -d '' candidate; do
+                  shot_count=$((shot_count + 1))
+                  shot_file="$candidate"
+                done < <(find "$shots_dir" -maxdepth 1 -type f -name '*.png' -print0)
+              fi
+              if [ "$shot_count" -ne 1 ]; then
+                echo "::error::scene '$scene_name' (locale=$locale, appearance=$appearance) produced $shot_count screenshot(s) under '$shots_dir'; expected exactly 1 from a single takeScreenshot command."
+                return 2
+              fi
+              mv "$shot_file" "$final_path"
+              if [ "$ORIENTATION" = "landscape" ]; then
+                sips --rotate 90 "$final_path" >/dev/null
+              fi
+            }
+
+            for locale in "${locales_arr[@]}"; do
+              set_app_locale_prefs "$locale"
+
+              for appearance in "${appearances_arr[@]}"; do
+                apply_appearance "$appearance"
+
+                for idx in "${!sel_names[@]}"; do
+                  scene_name="${sel_names[$idx]}"
+                  deep_link="${sel_deeplinks[$idx]}"
+                  flow_rel="${sel_flows[$idx]}"
+                  scene_settle="${sel_settles[$idx]}"
+                  in_filter "$locale" "${sel_locale_filters[$idx]}" || continue
+                  in_filter "$appearance" "${sel_appearance_filters[$idx]}" || continue
+                  settle="$SETTLE_SECONDS"
+                  if [ "$scene_settle" -ge 0 ]; then
+                    settle="$scene_settle"
+                  fi
+                  final_path="$OUTPUT_DIR/raw/ios/$DEVICE_SLUG/$locale/$appearance/${scene_name}.png"
+                  mkdir -p "$(dirname "$final_path")"
+                  start=$(date +%s)
+                  attempts=0
+                  status=failed
+                  xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" 2>/dev/null || true
+                  if [ -n "$SEED_COMMAND" ]; then
+                    if ! (
+                      export SCENE="$scene_name" LOCALE="$locale" APPEARANCE="$appearance" PLATFORM=ios
+                      eval "$SEED_COMMAND"
+                    ); then
+                      echo "::error::seed-command failed for scene '$scene_name' (locale=$locale, appearance=$appearance); marking the cell failed without capture."
+                      status=seed-failed
+                    fi
+                  fi
+                  if [ "$status" != 'seed-failed' ]; then
+                    while [ "$attempts" -lt "$max_attempts" ]; do
+                      attempts=$((attempts + 1))
+                      if [ "$attempts" -gt 1 ]; then
+                        xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" 2>/dev/null || true
+                      fi
+                      if [ -n "$deep_link" ]; then
+                        capture_deeplink_cell "$deep_link" "$settle" "$locale" "$final_path" && cell_rc=0 || cell_rc=$?
+                      else
+                        capture_flow_cell "$flow_rel" "$scene_name" "$locale" "$appearance" "$final_path" && cell_rc=0 || cell_rc=$?
+                      fi
+                      if [ "$cell_rc" -eq 0 ]; then
+                        status=passed
+                        break
+                      fi
+                      if [ "$cell_rc" -eq 2 ]; then
+                        break
+                      fi
+                    done
+                  fi
+                  end=$(date +%s)
+                  duration=$((end - start))
+                  if [ "$status" != 'passed' ]; then
+                    overall_status=1
+                  fi
+                  summary_rows+=("| $locale | $appearance | $scene_name | ${duration}s | $status | $attempts |")
+                done
+              done
+            done
+          fi
 
           {
             echo "### Screenshot capture timing ($DEVICE_SLUG)"
@@ -534,6 +838,10 @@ runs:
             printf '%s\n' "${summary_rows[@]:-}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          if [ "${#summary_rows[@]}" -eq 0 ]; then
+            echo "::error::zero capture cells ran: the per-scene locales/appearances filters excluded every selected scene from the global locale/appearance matrix."
+            exit 1
+          fi
           exit "$overall_status"
 
     - name: Shutdown simulator
