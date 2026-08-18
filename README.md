@@ -20,9 +20,11 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 `native-dev-release.yml`), scoped to exactly the jobs that submit to a store
 or cut a dev release, and only for the platforms you enable.
 
-**Pre-release: the `v1` tag is pending pipeline proof.** Pin to `@main` until
-then — see [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning plan and
-[RELEASE.md](RELEASE.md) for how `v1` gets cut.
+**Released.** Exact `vX.Y.Z` tags are published, plus a floating `v1` tag
+that moves with the latest release — pin to an exact tag or a full commit
+SHA for reproducibility, or `@v1` to float. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
+[RELEASE.md](RELEASE.md) for the release procedure.
 
 ## Quick start
 
@@ -186,7 +188,7 @@ maintainer-only fleet self-test job reads.
 
 ## Repo practices
 
-- Semver + sliding `v1` tag once cut (see [CONTRIBUTING.md](CONTRIBUTING.md)
+- Semver + sliding `v1` tag (see [CONTRIBUTING.md](CONTRIBUTING.md)
   and [RELEASE.md](RELEASE.md)).
 - Every third-party action pinned by full commit SHA with a `# vX.Y.Z` comment.
 - `actionlint`, `shellcheck`, and `zizmor` run in CI (`self-test.yml`) on
@@ -195,10 +197,10 @@ maintainer-only fleet self-test job reads.
   consuming repos.
 - MIT licensed.
 
-**Versioning note:** this repo is pre-`v1`. Examples throughout this README
-and the per-action/per-workflow docs use `@v1` for readability, but that tag
-does not exist yet — pin to a specific commit SHA (or `@main` at your own
-risk) until [RELEASE.md](RELEASE.md)'s checklist cuts it.
+**Versioning note:** examples in this README and the per-action/per-workflow
+docs use `@v1` or `@main` for readability. `@v1` floats to the latest
+release and `@main` can change without a deprecation window — pin to an
+exact `vX.Y.Z` tag or a full commit SHA when you need reproducibility.
 
 ## Used in the wild
 

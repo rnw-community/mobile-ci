@@ -107,6 +107,10 @@ writes a relative `takeScreenshot` name into the process CWD (not into
 CWD and `--test-output-dir`'s `takeScreenshot/` subdirectory.
 Flow-internal `runFlow` references are unaffected — Maestro resolves them
 against the flow file, not the CWD.
+Flow scenes are validated against the default Maestro (2.8.x): older 2.6.x
+releases store `takeScreenshot` output in a layout the collector does not
+search, so a downgraded `maestro-version` fails closed with the
+zero-screenshot error rather than silently capturing nothing.
 A per-locale/appearance/scene timing table is appended to
 `$GITHUB_STEP_SUMMARY`.
 

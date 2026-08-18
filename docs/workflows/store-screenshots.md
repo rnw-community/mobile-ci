@@ -94,7 +94,11 @@ One shared scene list; per-scene filters narrow where each scene runs.
   is checked at capture time). Any flow scene makes `screenshots-dir`
   required. In direct mode the `<number>.<name>.flow.yaml` naming convention
   is **not** required — the scene name comes from the manifest, and each
-  flow must still produce exactly one `takeScreenshot` output.
+  flow must still produce exactly one `takeScreenshot` output. Flow scenes
+  are validated against the default Maestro (2.8.x): older 2.6.x releases
+  store `takeScreenshot` output in a layout the collector does not search,
+  so a downgraded `maestro-version` fails closed with the zero-screenshot
+  error rather than silently capturing nothing.
 - Optional `settleSeconds` — integer 0–120, overriding the workflow-level
   `settle-seconds` for deep-link scenes.
 - Optional `platforms` — non-empty subset of `["ios","android"]`; default
@@ -133,11 +137,16 @@ the app's data container via
 write the seed JSON into the expo-sqlite DB under it — creating the DB
 directory itself if the app has never launched (expo-sqlite's directory does
 not exist before first launch; the hook must `mkdir -p` it). On Android,
-`adb pull` the DB, rewrite it with `sqlite3`, `adb push` it back, and delete
+`adb pull` the DB, rewrite it, `adb push` it back, and delete
 any stale `-wal`/`-shm` sidecar files so SQLite does not replay them over
-the seeded state. **Redroid's adbd runs as root already** — `adb
-pull`/`push` into `/data/data/<app-id>/...` works directly, with no
-`adb root` dance and no `run-as` gymnastics.
+the seeded state. To rewrite the DB the hook can shell out to a host
+`sqlite3` binary, or — on Node >= 22.13 — use the built-in `node:sqlite`
+module with no host prerequisite at all. **Redroid's stock image does
+_not_ run adbd as root** — `adb pull`/`push` into
+`/data/data/<app-id>/...` is denied until the hook elevates: run
+`adb root` first, and because that restarts adbd (dropping a TCP serial's
+connection), retry `adb connect "$ANDROID_SERIAL"` and probe
+`adb shell id` until it reports `uid=0` before touching app data.
 
 ## Android capture
 
