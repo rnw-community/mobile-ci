@@ -90,8 +90,9 @@ and style findings may be fixed or answered with reasoning.**
 
 ### Versioning
 
-Pre-`v1`: pin self-references and tell consumers to pin to `@main` (at their
-own risk) or a specific commit SHA. The exact tag-and-publish procedure,
+Self-references pin to the exact release tag (`@vX.Y.Z # vX.Y.Z`);
+consumers pin to an exact tag or a full commit SHA, or float on the
+sliding `v1` tag at their own risk. The exact tag-and-publish procedure,
 including moving the floating `v1` tag, lives in
 [RELEASE.md](RELEASE.md) — never move a release tag manually outside that
 procedure.
@@ -119,12 +120,13 @@ Full input/secret/permission tables and a copy-pasteable example live in
 `docs/workflows/<name>.md` for each workflow above — read the doc for the
 workflow you are wiring, do not guess at input names or defaults.
 
-**Pin to a full commit SHA with a trailing `# comment`.** No `v1` tag exists
-yet (see [README.md](README.md) and [RELEASE.md](RELEASE.md)); `@main` can
-change without a deprecation window.
+**Pin to an exact `vX.Y.Z` tag or a full commit SHA with a trailing
+`# comment`.** A floating `v1` tag exists for consumers who accept moving
+with the latest release (see [README.md](README.md) and
+[RELEASE.md](RELEASE.md)); `@main` can change without a deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha> # main as of 2026-08-06
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.6.0 # v1.6.0
 ```
 
 ### Maestro flow-file convention

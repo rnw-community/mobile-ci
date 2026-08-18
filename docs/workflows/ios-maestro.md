@@ -86,7 +86,7 @@ concurrency:
     cancel-in-progress: true
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@main
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.6.0 # v1.6.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]

@@ -64,6 +64,10 @@ one of
   Flow-internal `runFlow` references are unaffected — Maestro resolves
   them against the flow file, not the CWD. Maestro itself is installed
   lazily, only when at least one android-applicable scene declares a flow.
+  Flow scenes are validated against the default Maestro (2.8.x): older
+  2.6.x releases store `takeScreenshot` output in a layout the collector
+  does not search, so a downgraded `maestro-version` fails closed with the
+  zero-screenshot error rather than silently capturing nothing.
 
 Optional per-scene `platforms`/`locales`/`appearances` filters restrict
 where a scene is captured; scenes whose `platforms` excludes `android` are
@@ -77,9 +81,12 @@ capture and no retry. A per-cell timing table is appended to
 `seed-command` runs once per locale x appearance x scene cell, from the repo
 root, with the app installed and force-stopped, and with `SCENE`, `LOCALE`,
 `APPEARANCE`, `APP_ID`, `PLATFORM=android`, `DEVICE_SLUG`,
-`ANDROID_SERIAL`, and `APK_PATH` in its environment. On Redroid, adbd runs
-as root already — `adb pull`/`adb push` into the app's data directory works
-without any `adb root` dance. See the seed-hook contract in
+`ANDROID_SERIAL`, and `APK_PATH` in its environment. Redroid's stock image
+does **not** run adbd as root — `adb pull`/`adb push` into the app's data
+directory is denied until the hook elevates: run `adb root`, then (because
+that restarts adbd and drops a TCP serial's connection) retry
+`adb connect "$ANDROID_SERIAL"` and probe `adb shell id` until it reports
+`uid=0`. See the seed-hook contract in
 [docs/workflows/store-screenshots.md](../../docs/workflows/store-screenshots.md).
 
 ## Inputs
