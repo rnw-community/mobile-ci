@@ -36,7 +36,7 @@ silently.
 | `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` glob excluding matched flows by basename. |
 | `shard-manifest-dir`            | no       | `''`                                                | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `pre-run-flow`                  | no       | `''`                                               | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
-| `flow-recovery-flow`            | no       | `''`                                               | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Unlike `pre-run-flow` it is not removed from the discovered flow list, so keep it in a subdirectory of `flows-dir`. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. Passed to both `android-driver` options. |
+| `flow-recovery-flow`            | no       | `''`                                               | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. Passed to both `android-driver` options. |
 | `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
 | `maestro-env`                   | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. Passed to both `android-driver` options. |
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
@@ -110,10 +110,12 @@ appId: ${APP_ID}
 flow-recovery-flow: e2e/flows/setup/recover-after-failure.flow.yaml
 ```
 
-Keep it in a subdirectory of `flows-dir` (the convention for flows that are not
-runnable scenarios). Unlike `pre-run-flow`, the recovery flow is *not* filtered
-out of the discovered flow list, so one sitting at the top level of `flows-dir`
-would also be sharded and run as a scenario in its own right.
+The convention is still to keep it in a subdirectory of `flows-dir` alongside
+your other non-scenario flows, but nothing depends on that: like `pre-run-flow`,
+the recovery flow is filtered out of the shard's discovered flow list by file
+identity, so it never also runs as an ordinary scenario — even at the top level
+of `flows-dir`, or when `flows-max-depth` is raised past the subdirectory it
+lives in.
 
 The per-flow timing table in the step summary excludes time spent in recovery;
 a line below the table reports how many times recovery ran and how many of

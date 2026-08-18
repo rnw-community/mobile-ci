@@ -86,9 +86,9 @@ on:
                     next flow starts, so a failure cannot strand the app in a state that
                     cascades into the flows after it. Not run after a passing attempt,
                     and not after a shard's last flow. Its own failure only logs a
-                    warning and never fails the shard. Unlike pre-run-flow it is not
-                    removed from the discovered flow list, so keep it in a subdirectory
-                    of flows-dir. Leave empty to skip recovery.
+                    warning and never fails the shard. Like pre-run-flow it is removed
+                    from the discovered flow list, so it never also runs as a scenario of
+                    its own. Leave empty to skip recovery.
                 type: string
                 required: false
                 default: ''

@@ -197,21 +197,26 @@ if [ "${#flows[@]}" -eq 0 ]; then
 fi
 printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
 
-# pre-run-flow is run once as a priming flow below, outside of sharding. If
-# it also happens to be a top-level file inside flows-dir matching
-# flows-name-pattern, discovery above finds it too, and without this filter
-# it would be selected again by the manifest or modulo split and run a
-# second time. Compare with -ef (same-inode test) since PRE_RUN_FLOW and the
-# discovered flow's path string may differ in form (relative vs
-# "./"-prefixed, etc.) while resolving to the same file; -ef is
-# POSIX-available in bash's test on both macOS and Linux, unlike GNU-only
-# realpath -m.
-if [ -n "$PRE_RUN_FLOW" ]; then
+# pre-run-flow (run once as priming below) and flow-recovery-flow (run on
+# demand after a failed attempt) are not runnable scenarios. Whenever
+# discovery above also finds either of them - a top-level match, or a match
+# at any depth once flows-max-depth is raised - this filter is what stops
+# the manifest or modulo split from selecting it and running it a second
+# time as a scenario of its own. Compare with -ef (same-inode test) since
+# the input and the discovered flow's path string may differ in form
+# (relative vs "./"-prefixed, etc.) while resolving to the same file; -ef
+# is POSIX-available in bash's test on both macOS and Linux, unlike
+# GNU-only realpath -m.
+if [ -n "$PRE_RUN_FLOW" ] || [ -n "$FLOW_RECOVERY_FLOW" ]; then
   remaining_flows=()
   for flow in "${flows[@]}"; do
-    if [ ! "$flow" -ef "$PRE_RUN_FLOW" ]; then
-      remaining_flows+=("$flow")
+    if [ -n "$PRE_RUN_FLOW" ] && [ "$flow" -ef "$PRE_RUN_FLOW" ]; then
+      continue
     fi
+    if [ -n "$FLOW_RECOVERY_FLOW" ] && [ "$flow" -ef "$FLOW_RECOVERY_FLOW" ]; then
+      continue
+    fi
+    remaining_flows+=("$flow")
   done
   flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
 fi
@@ -265,8 +270,6 @@ fi
 printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
 
 overall_status=0
-# The shard's last flow gets no recovery after its final failed attempt:
-# nothing runs after it, so the reset would only cost wall-clock time.
 last_flow_index=$(( ${#selected[@]} - 1 ))
 for flow_index in "${!selected[@]}"; do
   flow="${selected[$flow_index]}"

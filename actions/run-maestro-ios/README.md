@@ -48,7 +48,7 @@ the pool — see
 | `shard-index`           | yes      | —             | Zero-based shard index this job runs.                             |
 | `shard-count`           | yes      | —             | Total number of shards flows are distributed across.              |
 | `pre-run-flow`          | no       | `''`          | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
-| `flow-recovery-flow`    | no       | `''`          | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after this shard's last flow. Its own failure only logs a `::warning::` and never fails the step. Unlike `pre-run-flow` it is not removed from the discovered flow list, so keep it in a subdirectory of `flows-dir`. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
+| `flow-recovery-flow`    | no       | `''`          | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after this shard's last flow. Its own failure only logs a `::warning::` and never fails the step. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
 | `pre-test-command`      | no       | `''`          | Consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails the step immediately. |
 | `app-warm-seconds`      | no       | `20`          | Seconds the app is left running during a one-off warm-up (`simctl launch`, settle, `simctl terminate`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. |
 | `maestro-env`           | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
@@ -88,9 +88,10 @@ appId: ${APP_ID}
 - runFlow: prime-deep-links.flow.yaml
 ```
 
-Keep it in a subdirectory of `flows-dir`: unlike `pre-run-flow`, it is not
-filtered out of the discovered flow list, so a top-level recovery flow would
-also be sharded and run as a scenario.
+Like `pre-run-flow`, it is filtered out of the shard's discovered flow list by
+file identity, so it never also runs as an ordinary scenario — even when it
+sits at the top level of `flows-dir` or `flows-max-depth` is raised past the
+subdirectory it lives in.
 
 ## Example
 
