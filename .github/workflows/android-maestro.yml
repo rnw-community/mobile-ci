@@ -77,6 +77,20 @@ on:
                 type: string
                 required: false
                 default: ''
+            flow-recovery-flow:
+                description: >-
+                    Path to a single best-effort recovery flow run after a failed flow
+                    attempt: before the same flow's next retry attempt, and before the
+                    next flow starts, so a failure cannot strand the app in a state that
+                    cascades into the flows after it. Not run after a passing attempt,
+                    and not after a shard's last flow. Its own failure only logs a
+                    warning and never fails the shard. Unlike pre-run-flow it is not
+                    removed from the discovered flow list, so keep it in a subdirectory
+                    of flows-dir. Leave empty to skip recovery. Passed to both
+                    android-driver options.
+                type: string
+                required: false
+                default: ''
             pre-test-command:
                 description: >-
                     Optional consumer-owned shell command run once after the app is
@@ -591,6 +605,7 @@ jobs:
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
+                  flow-recovery-flow: ${{ inputs.flow-recovery-flow }}
                   pre-test-command: ${{ inputs.pre-test-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
@@ -617,6 +632,7 @@ jobs:
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
+                  flow-recovery-flow: ${{ inputs.flow-recovery-flow }}
                   pre-test-command: ${{ inputs.pre-test-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}

@@ -59,6 +59,19 @@ inputs:
       running the shard. Leave empty to skip priming.
     required: false
     default: ''
+  flow-recovery-flow:
+    description: >-
+      Path to a single best-effort recovery flow run after a failed flow
+      attempt: before the same flow's next retry attempt, and before the
+      next flow starts, so a failure cannot strand the app in a state that
+      cascades into the flows after it. Not run after a passing attempt,
+      and not after the shard's last flow. Its own failure only logs a
+      warning and never fails the shard. Unlike pre-run-flow it is not
+      removed from the discovered flow list, so keep it in a subdirectory
+      of flows-dir (the convention) if it must not also run as a scenario.
+      Leave empty to skip recovery.
+    required: false
+    default: ''
   pre-test-command:
     description: >-
       Optional consumer-owned shell command run once after the app is
@@ -279,6 +292,7 @@ runs:
           SHARD_INDEX: ${{ inputs.shard-index }}
           SHARD_COUNT: ${{ inputs.shard-count }}
           PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+          FLOW_RECOVERY_FLOW: ${{ inputs.flow-recovery-flow }}
           PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
           APP_WARM_SECONDS: ${{ inputs.app-warm-seconds }}
           MAESTRO_ENV: ${{ inputs.maestro-env }}

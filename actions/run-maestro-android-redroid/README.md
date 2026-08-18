@@ -85,6 +85,7 @@ from outside the runner itself.
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |
 | `pre-run-flow`            | no       | `''`                                   | Path to a single priming flow run once before this shard's flows, excluded from sharding. Its failure fails the step immediately. |
+| `flow-recovery-flow`      | no       | `''`                                   | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after this shard's last flow. Its own failure only logs a `::warning::` and never fails the step. Unlike `pre-run-flow` it is not removed from the discovered flow list, so keep it in a subdirectory of `flows-dir`. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
 | `pre-test-command`        | no       | `''`                                   | Consumer-owned shell command run once after the app is installed on the container and before any flow (including `pre-run-flow`) executes. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails the step immediately. |
 | `app-warm-seconds`        | no       | `20`                                   | Seconds the app is left running during a one-off warm-up (launch via `monkey`, settle, `am force-stop`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. |
 | `maestro-env`             | no       | `''`                                   | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
@@ -100,10 +101,36 @@ from outside the runner itself.
 
 A per-flow timing table (flow, duration, status, attempts) is appended to
 `$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
-when `pre-run-flow` is set. The resolved flow list (before sharding) is
-logged to the step output before selection, so a consumer can confirm
+when `pre-run-flow` is set. Time spent in `flow-recovery-flow` is excluded
+from those rows; when a recovery flow is configured, a line below the table
+reports how many times it ran and how many of those runs failed.
+
+The resolved flow list (before sharding) is logged to the step output before
+selection, so a consumer can confirm
 `flows-max-depth`/`flows-name-pattern`/`flows-exclude-pattern` resolved to
 the intended set.
+
+`flow-recovery-flow` runs after **every failed attempt** — before the same
+flow's next retry attempt, and before the shard moves on to the next flow —
+so a failure cannot strand the app in a state that fails the flows after it.
+It never runs after a passing attempt, and it is skipped after the shard's
+last flow. It is invoked exactly like `pre-run-flow` (same `-e APP_ID=…`,
+`--debug-output`, and `maestro-env` passthrough), and it is **best-effort**:
+a failing recovery only emits a `::warning::` and the shard continues. One
+file can chain everything the app needs with `runFlow`, e.g. suuudokuuu's
+state reset plus deep-link prime:
+
+```yaml
+# e2e/flows/setup/recover-after-failure.flow.yaml
+appId: ${APP_ID}
+---
+- runFlow: reset-app-state.flow.yaml
+- runFlow: prime-deep-links.flow.yaml
+```
+
+Keep it in a subdirectory of `flows-dir`: unlike `pre-run-flow`, it is not
+filtered out of the discovered flow list, so a top-level recovery flow would
+also be sharded and run as a scenario.
 
 ## Example
 

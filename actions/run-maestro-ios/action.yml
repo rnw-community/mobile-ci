@@ -59,6 +59,19 @@ inputs:
       running the shard. Leave empty to skip priming.
     required: false
     default: ''
+  flow-recovery-flow:
+    description: >-
+      Path to a single best-effort recovery flow run after a failed flow
+      attempt: before the same flow's next retry attempt, and before the
+      next flow starts, so a failure cannot strand the app in a state that
+      cascades into the flows after it. Not run after a passing attempt,
+      and not after the shard's last flow. Its own failure only logs a
+      warning and never fails the shard. Unlike pre-run-flow it is not
+      removed from the discovered flow list, so keep it in a subdirectory
+      of flows-dir (the convention) if it must not also run as a scenario.
+      Leave empty to skip recovery.
+    required: false
+    default: ''
   pre-test-command:
     description: >-
       Optional consumer-owned shell command run once after the app is
@@ -374,6 +387,7 @@ runs:
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
         PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+        FLOW_RECOVERY_FLOW: ${{ inputs.flow-recovery-flow }}
         FLOW_RETRIES: ${{ inputs.flow-retries }}
         MAESTRO_ENV: ${{ inputs.maestro-env }}
       run: |
@@ -428,6 +442,10 @@ runs:
             test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
           fi
 
+          if [ -n "$FLOW_RECOVERY_FLOW" ]; then
+            test -f "$FLOW_RECOVERY_FLOW" || { echo "::error::flow-recovery-flow '$FLOW_RECOVERY_FLOW' is not a file."; exit 1; }
+          fi
+
           maestro_env_args=()
           if [ -n "$MAESTRO_ENV" ]; then
             while IFS= read -r line; do
@@ -457,9 +475,23 @@ runs:
           fi
 
           summary_rows=()
+          recovery_runs=0
+          recovery_failures=0
+
+          run_flow_recovery() {
+            local after="$1"
+            [ -n "$FLOW_RECOVERY_FLOW" ] || return 0
+            recovery_runs=$((recovery_runs + 1))
+            echo "Running recovery flow '$FLOW_RECOVERY_FLOW' after the failed attempt of '$after'."
+            if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
+              recovery_failures=$((recovery_failures + 1))
+              echo "::warning::Recovery flow '$FLOW_RECOVERY_FLOW' failed after '$after'; continuing anyway because recovery is best-effort."
+            fi
+          }
 
           run_flow_with_retries() {
-            local flow="$1" label="$2" attempts=0 status=failed start end duration
+            local flow="$1" label="$2" recover_after_last_attempt="$3" attempts=0 status=failed start end duration
+            local recovery_seconds=0 recovery_start
             start=$(date +%s)
             while [ "$attempts" -lt "$max_attempts" ]; do
               attempts=$((attempts + 1))
@@ -467,9 +499,14 @@ runs:
                 status=passed
                 break
               fi
+              if [ "$attempts" -lt "$max_attempts" ] || [ "$recover_after_last_attempt" = '1' ]; then
+                recovery_start=$(date +%s)
+                run_flow_recovery "$label"
+                recovery_seconds=$((recovery_seconds + $(date +%s) - recovery_start))
+              fi
             done
             end=$(date +%s)
-            duration=$((end - start))
+            duration=$((end - start - recovery_seconds))
             summary_rows+=("| $label | ${duration}s | $status | $attempts |")
             [ "$status" = "passed" ]
           }
@@ -480,6 +517,10 @@ runs:
               echo "| Flow | Duration | Status | Attempts |"
               echo "| --- | --- | --- | --- |"
               printf '%s\n' "${summary_rows[@]:-}"
+              if [ -n "$FLOW_RECOVERY_FLOW" ]; then
+                echo ""
+                echo "Recovery flow \`$(basename "$FLOW_RECOVERY_FLOW")\` ran $recovery_runs time(s) after a failed attempt, $recovery_failures of which failed and were tolerated. Its duration is excluded from the rows above."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -570,7 +611,7 @@ runs:
           fi
 
           if [ -n "$PRE_RUN_FLOW" ]; then
-            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then
+            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0; then
               write_summary
               echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
               exit 1
@@ -585,8 +626,16 @@ runs:
           printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
 
           overall_status=0
-          for flow in "${selected[@]}"; do
-            if ! run_flow_with_retries "$flow" "$(basename "$flow")"; then
+          # The shard's last flow gets no recovery after its final failed attempt:
+          # nothing runs after it, so the reset would only cost wall-clock time.
+          last_flow_index=$(( ${#selected[@]} - 1 ))
+          for flow_index in "${!selected[@]}"; do
+            flow="${selected[$flow_index]}"
+            recover_after_last_attempt=1
+            if [ "$flow_index" -eq "$last_flow_index" ]; then
+              recover_after_last_attempt=0
+            fi
+            if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt"; then
               overall_status=1
             fi
           done
