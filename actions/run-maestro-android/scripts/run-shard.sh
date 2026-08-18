@@ -82,6 +82,10 @@ if [ -n "$PRE_RUN_FLOW" ]; then
   test -f "$PRE_RUN_FLOW" || { echo "::error::pre-run-flow '$PRE_RUN_FLOW' is not a file."; exit 1; }
 fi
 
+if [ -n "$FLOW_RECOVERY_FLOW" ]; then
+  test -f "$FLOW_RECOVERY_FLOW" || { echo "::error::flow-recovery-flow '$FLOW_RECOVERY_FLOW' is not a file."; exit 1; }
+fi
+
 maestro_env_args=()
 if [ -n "${MAESTRO_ENV:-}" ]; then
   while IFS= read -r line; do
@@ -111,9 +115,23 @@ if [ -n "${MAESTRO_ENV:-}" ]; then
 fi
 
 summary_rows=()
+recovery_runs=0
+recovery_failures=0
+
+run_flow_recovery() {
+  local after="$1"
+  [ -n "$FLOW_RECOVERY_FLOW" ] || return 0
+  recovery_runs=$((recovery_runs + 1))
+  echo "Running recovery flow '$FLOW_RECOVERY_FLOW' after the failed attempt of '$after'."
+  if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
+    recovery_failures=$((recovery_failures + 1))
+    echo "::warning::Recovery flow '$FLOW_RECOVERY_FLOW' failed after '$after'; continuing anyway because recovery is best-effort."
+  fi
+}
 
 run_flow_with_retries() {
-  local flow="$1" label="$2" attempts=0 status=failed start end duration
+  local flow="$1" label="$2" recover_after_last_attempt="$3" attempts=0 status=failed start end duration
+  local recovery_seconds=0 recovery_start
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
@@ -121,9 +139,14 @@ run_flow_with_retries() {
       status=passed
       break
     fi
+    if [ "$attempts" -lt "$max_attempts" ] || [ "$recover_after_last_attempt" = '1' ]; then
+      recovery_start=$(date +%s)
+      run_flow_recovery "$label"
+      recovery_seconds=$((recovery_seconds + $(date +%s) - recovery_start))
+    fi
   done
   end=$(date +%s)
-  duration=$((end - start))
+  duration=$((end - start - recovery_seconds))
   summary_rows+=("| $label | ${duration}s | $status | $attempts |")
   [ "$status" = "passed" ]
 }
@@ -134,6 +157,10 @@ write_summary() {
     echo "| Flow | Duration | Status | Attempts |"
     echo "| --- | --- | --- | --- |"
     printf '%s\n' "${summary_rows[@]:-}"
+    if [ -n "$FLOW_RECOVERY_FLOW" ]; then
+      echo ""
+      echo "Recovery flow \`$(basename "$FLOW_RECOVERY_FLOW")\` ran $recovery_runs time(s) after a failed attempt, $recovery_failures of which failed and were tolerated. Its duration is excluded from the rows above."
+    fi
   } >> "$GITHUB_STEP_SUMMARY"
 }
 
@@ -170,21 +197,26 @@ if [ "${#flows[@]}" -eq 0 ]; then
 fi
 printf 'Resolved flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
 
-# pre-run-flow is run once as a priming flow below, outside of sharding. If
-# it also happens to be a top-level file inside flows-dir matching
-# flows-name-pattern, discovery above finds it too, and without this filter
-# it would be selected again by the manifest or modulo split and run a
-# second time. Compare with -ef (same-inode test) since PRE_RUN_FLOW and the
-# discovered flow's path string may differ in form (relative vs
-# "./"-prefixed, etc.) while resolving to the same file; -ef is
-# POSIX-available in bash's test on both macOS and Linux, unlike GNU-only
-# realpath -m.
-if [ -n "$PRE_RUN_FLOW" ]; then
+# pre-run-flow (run once as priming below) and flow-recovery-flow (run on
+# demand after a failed attempt) are not runnable scenarios. Whenever
+# discovery above also finds either of them - a top-level match, or a match
+# at any depth once flows-max-depth is raised - this filter is what stops
+# the manifest or modulo split from selecting it and running it a second
+# time as a scenario of its own. Compare with -ef (same-inode test) since
+# the input and the discovered flow's path string may differ in form
+# (relative vs "./"-prefixed, etc.) while resolving to the same file; -ef
+# is POSIX-available in bash's test on both macOS and Linux, unlike
+# GNU-only realpath -m.
+if [ -n "$PRE_RUN_FLOW" ] || [ -n "$FLOW_RECOVERY_FLOW" ]; then
   remaining_flows=()
   for flow in "${flows[@]}"; do
-    if [ ! "$flow" -ef "$PRE_RUN_FLOW" ]; then
-      remaining_flows+=("$flow")
+    if [ -n "$PRE_RUN_FLOW" ] && [ "$flow" -ef "$PRE_RUN_FLOW" ]; then
+      continue
     fi
+    if [ -n "$FLOW_RECOVERY_FLOW" ] && [ "$flow" -ef "$FLOW_RECOVERY_FLOW" ]; then
+      continue
+    fi
+    remaining_flows+=("$flow")
   done
   flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
 fi
@@ -223,7 +255,7 @@ else
 fi
 
 if [ -n "$PRE_RUN_FLOW" ]; then
-  if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)"; then
+  if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0; then
     write_summary
     echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
     exit 1
@@ -238,8 +270,14 @@ fi
 printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
 
 overall_status=0
-for flow in "${selected[@]}"; do
-  if ! run_flow_with_retries "$flow" "$(basename "$flow")"; then
+last_flow_index=$(( ${#selected[@]} - 1 ))
+for flow_index in "${!selected[@]}"; do
+  flow="${selected[$flow_index]}"
+  recover_after_last_attempt=1
+  if [ "$flow_index" -eq "$last_flow_index" ]; then
+    recover_after_last_attempt=0
+  fi
+  if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt"; then
     overall_status=1
   fi
 done
