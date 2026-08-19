@@ -691,7 +691,11 @@ runs:
                 [ -e "$hidden_entry" ] || continue
                 hidden_base=$(basename "$hidden_entry")
                 visible_entry="$MAESTRO_DEBUG_OUTPUT_DIRECTORY/maestro-debug/dot-${hidden_base#.}"
-                rm -rf "$visible_entry"
+                collision_suffix=1
+                while [ -e "$visible_entry" ]; do
+                  visible_entry="$MAESTRO_DEBUG_OUTPUT_DIRECTORY/maestro-debug/dot-${hidden_base#.}-$collision_suffix"
+                  collision_suffix=$((collision_suffix + 1))
+                done
                 mv "$hidden_entry" "$visible_entry"
               done
             fi

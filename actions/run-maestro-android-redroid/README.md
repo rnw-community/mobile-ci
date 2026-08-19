@@ -66,7 +66,8 @@ bundle into a hidden `.maestro/tests/<timestamp>/` path, and
 `final-screen.png` alone and drop the very UI hierarchy dumps the failure
 message tells you to inspect. Staging now renames any hidden top-level entry
 to a `dot-`-prefixed visible name (`.maestro/` becomes
-`maestro-debug/dot-maestro/`) and the upload step sets
+`maestro-debug/dot-maestro/`, suffixed `-1`, `-2`, … if a real `dot-maestro`
+entry already exists, so neither tree is lost) and the upload step sets
 `include-hidden-files: true`, so the hierarchy dumps always reach the
 artifact.
 

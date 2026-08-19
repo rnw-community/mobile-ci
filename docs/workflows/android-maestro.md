@@ -144,7 +144,8 @@ When a shard fails, the shard-private `--debug-output` directory (UI hierarchy
 dumps, per-flow screenshots) is copied into the uploaded artifact under
 `maestro-debug/`. Maestro writes that bundle behind a hidden
 `.maestro/tests/<timestamp>/` path, so staging renames any hidden top-level
-entry to a visible `dot-`-prefixed name and the upload step sets
+entry to a visible `dot-`-prefixed name (suffixed `-1`, `-2`, … if that name
+is already taken, so neither tree is lost) and the upload step sets
 `include-hidden-files: true` — `actions/upload-artifact` skips hidden files by
 default, which previously shipped `final-screen.png` alone and dropped the
 hierarchy dumps the failure message points you at.
