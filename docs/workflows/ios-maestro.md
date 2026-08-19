@@ -138,7 +138,7 @@ exports:
 | `FLOW_NAME`             | `basename` of `FLOW_PATH`.                                              |
 | `APP_ID`                | The `app-id` input.                                                     |
 | `SIMULATOR_UDID`        | UDID of the booted simulator this shard drives.                         |
-| `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. |
+| `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. Its directory is deleted when the shard finishes. |
 
 ### Contributing per-flow `-e` pairs
 

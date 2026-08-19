@@ -662,6 +662,7 @@ runs:
           if [ -n "$PRE_FLOW_COMMAND" ]; then
             flow_env_scratch_dir="$RUNNER_TEMP/maestro-flow-env-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
             mkdir -p "$flow_env_scratch_dir"
+            echo "FLOW_ENV_SCRATCH_DIR=$flow_env_scratch_dir" >> "$GITHUB_ENV"
             # Materialised as a script run by a child bash rather than eval'd in this
             # shell: bash suppresses `set -e` inside a function invoked from an `if`
             # condition, so an eval'd multi-command string would surface only its last
@@ -939,6 +940,9 @@ runs:
           fi
           if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
             rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
+          fi
+          if [ -n "${FLOW_ENV_SCRATCH_DIR:-}" ]; then
+            rm -rf "$FLOW_ENV_SCRATCH_DIR" || true
           fi
 
     - name: Teardown Redroid container

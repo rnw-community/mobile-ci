@@ -156,7 +156,7 @@ exports:
 | `FLOW_NAME`             | `basename` of `FLOW_PATH`.                                              |
 | `APP_ID`                | The `app-id` input.                                                     |
 | `SIMULATOR_UDID`        | UDID of the booted simulator this shard drives.                         |
-| `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. |
+| `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. Its directory is deleted when the shard finishes. |
 
 ### Contributing per-flow `-e` pairs
 
@@ -184,8 +184,10 @@ action neither deduplicates nor claims a precedence.
       app-path: ./build/MyApp.app
       app-id: com.example.app
       flows-dir: e2e/flows
-      shard-index: '0'
-      shard-count: '2'
+      shard-index: ${{ matrix.shard-index }}
+      shard-count: 2
+      artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-bare-${{ matrix.shard-index }}
+      artifact-name: maestro-ios-bare-shard-${{ matrix.shard-index }}
       pre-flow-command: |
           fixture=$(sed -n "s/.*FIXTURE_ROW_ID_MATCH: '\(.*\)\.db'.*/\1/p" "$FLOW_PATH" | tail -n 1)
           [ -n "$fixture" ] || exit 0

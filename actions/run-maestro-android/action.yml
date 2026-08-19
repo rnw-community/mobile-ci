@@ -370,6 +370,9 @@ runs:
           if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
             rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
           fi
+          if [ -n "${FLOW_ENV_SCRATCH_DIR:-}" ]; then
+            rm -rf "$FLOW_ENV_SCRATCH_DIR" || true
+          fi
 
     - name: Shutdown emulator
       if: always()
