@@ -60,6 +60,16 @@ directory (`RUNNER_TEMP/redroid-data/<the run-scoped name>`) are removed in
 the `if: always()` teardown step, so this run-scoping doesn't leak one
 directory per run forever on a persistent self-hosted runner.
 
+**Hidden debug output is un-hidden before upload.** Maestro writes its debug
+bundle into a hidden `.maestro/tests/<timestamp>/` path, and
+`actions/upload-artifact` skips hidden files by default — which used to ship
+`final-screen.png` alone and drop the very UI hierarchy dumps the failure
+message tells you to inspect. Staging now renames any hidden top-level entry
+to a `dot-`-prefixed visible name (`.maestro/` becomes
+`maestro-debug/dot-maestro/`) and the upload step sets
+`include-hidden-files: true`, so the hierarchy dumps always reach the
+artifact.
+
 There is no `adb-port` input. The container publishes 5555 on loopback with
 an OS-assigned ephemeral host port (`docker run -p 127.0.0.1::5555`) rather
 than a port this action or its caller picks — asking the kernel for "any free

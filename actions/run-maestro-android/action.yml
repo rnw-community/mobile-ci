@@ -338,6 +338,13 @@ runs:
             else
               mkdir -p "$OUT_DIR/maestro-debug"
               cp -R "$MAESTRO_DEBUG_SCRATCH_DIR/." "$OUT_DIR/maestro-debug/"
+              for hidden_entry in "$OUT_DIR/maestro-debug"/.[!.]* "$OUT_DIR/maestro-debug"/..?*; do
+                [ -e "$hidden_entry" ] || continue
+                hidden_base=$(basename "$hidden_entry")
+                visible_entry="$OUT_DIR/maestro-debug/dot-${hidden_base#.}"
+                rm -rf "$visible_entry"
+                mv "$hidden_entry" "$visible_entry"
+              done
             fi
           fi
           if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
@@ -355,5 +362,6 @@ runs:
       with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifacts-dir }}/**
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: ${{ inputs.retention-days }}

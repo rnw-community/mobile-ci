@@ -122,6 +122,33 @@ The per-flow timing table in the step summary excludes time spent in recovery;
 a line below the table reports how many times recovery ran and how many of
 those runs failed.
 
+## Maestro workspace config
+
+Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
+at a **directory**. Every shard here discovers its flows itself and hands the
+CLI one flow file per invocation, so a workspace `config.yaml` is never read
+and nothing warns about it. `maestro-config` is the input that passes it
+explicitly (`--config`) to every `maestro test` a shard runs — shard flows,
+`pre-run-flow`, and `flow-recovery-flow` alike.
+
+The case that motivated it: an `@expo/ui` SwiftUI `.sheet()` modal renders its
+React Native content outside the app's main window, so the XCUITest hierarchy
+Maestro snapshots never contains it and every selector inside the sheet times
+out at its assertion budget. The fix is one workspace-config key —
+`platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
+`--config` actually reaches the CLI.
+
+## Debug artifacts
+
+When a shard fails, the shard-private `--debug-output` directory (UI hierarchy
+dumps, per-flow screenshots) is copied into the uploaded artifact under
+`maestro-debug/`. Maestro writes that bundle behind a hidden
+`.maestro/tests/<timestamp>/` path, so staging renames any hidden top-level
+entry to a visible `dot-`-prefixed name and the upload step sets
+`include-hidden-files: true` — `actions/upload-artifact` skips hidden files by
+default, which previously shipped `final-screen.png` alone and dropped the
+hierarchy dumps the failure message points you at.
+
 ## Permissions
 
 `contents: read` is sufficient in the caller workflow; this workflow does not

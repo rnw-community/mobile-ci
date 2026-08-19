@@ -20,6 +20,16 @@ debug output always lands in the uploaded artifact as described above, so
 no fallback "copy `~/.maestro/tests`" step is needed on the caller's side.
 The emulator is always killed at the end (`if: always()`).
 
+**Hidden debug output is un-hidden before upload.** Maestro writes its debug
+bundle into a hidden `.maestro/tests/<timestamp>/` path, and
+`actions/upload-artifact` skips hidden files by default — which used to ship
+`final-screen.png` alone and drop the very UI hierarchy dumps the failure
+message tells you to inspect. Staging now renames any hidden top-level entry
+to a `dot-`-prefixed visible name (`.maestro/` becomes
+`maestro-debug/dot-maestro/`) and the upload step sets
+`include-hidden-files: true`, so the hierarchy dumps always reach the
+artifact.
+
 Uses `reactivecircus/android-emulator-runner`, which owns the emulator
 boot/kill lifecycle; this action supplies the headless flags and a bundled
 `scripts/run-shard.sh` that installs the app and runs the shard inside it.
