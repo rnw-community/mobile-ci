@@ -778,7 +778,20 @@ jobs:
               shell: bash
               env:
                   PREBUILD_COMMAND: ${{ fromJSON(inputs.ios-target).prebuildCommand }}
-              run: eval "$PREBUILD_COMMAND"
+                  RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
+                  RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
+                  EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
+              run: |
+                  if [ "$RCT_USE_PREBUILT_RNCORE_ENABLED" = 'true' ]; then
+                    export RCT_USE_PREBUILT_RNCORE=1
+                  fi
+                  if [ "$RCT_USE_RN_DEP_ENABLED" = 'true' ]; then
+                    export RCT_USE_RN_DEP=1
+                  fi
+                  if [ "$EXPO_USE_PRECOMPILED_MODULES_ENABLED" = 'true' ]; then
+                    export EXPO_USE_PRECOMPILED_MODULES=1
+                  fi
+                  eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint

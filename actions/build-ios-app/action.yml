@@ -39,15 +39,25 @@ inputs:
     required: false
     default: x86_64
   rct-use-prebuilt-rncore:
-    description: Sets RCT_USE_PREBUILT_RNCORE=1 for the build step when `true`.
+    description: >-
+      Exports RCT_USE_PREBUILT_RNCORE=1 for `pod install` and the build step
+      when `true`. Any other value exports nothing at all: React Native's
+      CocoaPods scripts test for the variable's presence, so exporting it
+      empty reads as enabled.
     required: false
     default: 'false'
   rct-use-rn-dep:
-    description: Sets RCT_USE_RN_DEP=1 for the build step when `true`.
+    description: >-
+      Exports RCT_USE_RN_DEP=1 for `pod install` and the build step when
+      `true`. Any other value exports nothing at all, for the same
+      presence-not-value reason as rct-use-prebuilt-rncore.
     required: false
     default: 'false'
   expo-use-precompiled-modules:
-    description: Sets EXPO_USE_PRECOMPILED_MODULES=1 for the build step when `true`.
+    description: >-
+      Exports EXPO_USE_PRECOMPILED_MODULES=1 for `pod install` and the build
+      step when `true`. Any other value exports nothing at all, for the same
+      presence-not-value reason as rct-use-prebuilt-rncore.
     required: false
     default: 'false'
 outputs:
@@ -69,7 +79,22 @@ runs:
     - name: Install CocoaPods dependencies
       shell: bash
       working-directory: ${{ inputs.app-dir }}/ios
-      run: pod install --repo-update
+      env:
+        RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
+        RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
+        EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
+      run: |
+        set -euo pipefail
+        if [ "$RCT_USE_PREBUILT_RNCORE_ENABLED" = 'true' ]; then
+          export RCT_USE_PREBUILT_RNCORE=1
+        fi
+        if [ "$RCT_USE_RN_DEP_ENABLED" = 'true' ]; then
+          export RCT_USE_RN_DEP=1
+        fi
+        if [ "$EXPO_USE_PRECOMPILED_MODULES_ENABLED" = 'true' ]; then
+          export EXPO_USE_PRECOMPILED_MODULES=1
+        fi
+        pod install --repo-update
 
     - name: Save CocoaPods cache
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -89,11 +114,20 @@ runs:
         CONFIGURATION: ${{ inputs.configuration }}
         ARCHS: ${{ inputs.archs }}
         EXCLUDED_ARCHS: ${{ inputs.excluded-archs }}
-        RCT_USE_PREBUILT_RNCORE: ${{ inputs.rct-use-prebuilt-rncore == 'true' && '1' || '' }}
-        RCT_USE_RN_DEP: ${{ inputs.rct-use-rn-dep == 'true' && '1' || '' }}
-        EXPO_USE_PRECOMPILED_MODULES: ${{ inputs.expo-use-precompiled-modules == 'true' && '1' || '' }}
+        RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
+        RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
+        EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
       run: |
         set -euo pipefail
+        if [ "$RCT_USE_PREBUILT_RNCORE_ENABLED" = 'true' ]; then
+          export RCT_USE_PREBUILT_RNCORE=1
+        fi
+        if [ "$RCT_USE_RN_DEP_ENABLED" = 'true' ]; then
+          export RCT_USE_RN_DEP=1
+        fi
+        if [ "$EXPO_USE_PRECOMPILED_MODULES_ENABLED" = 'true' ]; then
+          export EXPO_USE_PRECOMPILED_MODULES=1
+        fi
         mkdir -p "$DERIVED_DATA_DIR"
         build_start=$(date +%s)
         xcodebuild build \

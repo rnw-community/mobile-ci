@@ -36,9 +36,9 @@ optionally `push`/`schedule`) in the consuming repository.
 | `enable-corepack`                 | no       | `true`                                             | Run `corepack enable` before install. |
 | `build-command`                   | no       | `''`                                               | Optional workspace JS build command run at repo root before the native build. |
 | `build-env`                       | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each seed job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `rct-use-prebuilt-rncore`         | no       | `false`                                            | Sets `RCT_USE_PREBUILT_RNCORE=1` for the iOS build step when `true`. |
-| `rct-use-rn-dep`                  | no       | `false`                                            | Sets `RCT_USE_RN_DEP=1` for the iOS build step when `true`. |
-| `expo-use-precompiled-modules`    | no       | `false`                                            | Sets `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS build step when `true`. |
+| `rct-use-prebuilt-rncore`         | no       | `false`                                            | Exports `RCT_USE_PREBUILT_RNCORE=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `rct-use-rn-dep`                  | no       | `false`                                            | Exports `RCT_USE_RN_DEP=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `expo-use-precompiled-modules`    | no       | `false`                                            | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`                 | no       | `2G`                                               | Bounded, compressed ccache maximum size (iOS only). |
 | `ios-timeout-minutes`             | no       | `90`                                               | `seed-ios` job timeout. |
 | `android-timeout-minutes`         | no       | `60`                                               | `seed-android` job timeout. |

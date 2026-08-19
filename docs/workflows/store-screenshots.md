@@ -297,9 +297,9 @@ out at its assertion budget. The fix is one workspace-config key —
 | `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. |
 | `enable-corepack`                   | no       | `true`                                    | Run `corepack enable` before install. |
 | `build-command`                     | no       | `''`                                     | Optional workspace JS build command run at repo root before the native build (both build jobs). |
-| `rct-use-prebuilt-rncore`           | no       | `false`                                    | Sets `RCT_USE_PREBUILT_RNCORE=1` for the iOS build step when `true`. |
-| `rct-use-rn-dep`                    | no       | `false`                                    | Sets `RCT_USE_RN_DEP=1` for the iOS build step when `true`. |
-| `expo-use-precompiled-modules`      | no       | `false`                                    | Sets `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS build step when `true`. |
+| `rct-use-prebuilt-rncore`           | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `rct-use-rn-dep`                    | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `expo-use-precompiled-modules`      | no       | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`                   | no       | `2G`                                     | Bounded, compressed ccache maximum size (iOS build). |
 | `build-env`                         | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each build job. Fails closed on a malformed line. |
 | `repack-on-hit`                     | no       | `false`                                    | On a native-app-cache hit (either platform), run `repack-app` instead of reusing the cached shell unchanged. |

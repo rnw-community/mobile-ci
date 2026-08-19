@@ -53,9 +53,9 @@ silently.
 | `install-command`             | no       | `yarn install --immutable`                 | JS dependency install command. |
 | `enable-corepack`             | no       | `true`                                     | Run `corepack enable` before install. |
 | `build-command`               | no       | `''`                                       | Optional workspace JS build command run at repo root before the native build. |
-| `rct-use-prebuilt-rncore`     | no       | `false`                                    | Sets `RCT_USE_PREBUILT_RNCORE=1` for the build step when `true`. |
-| `rct-use-rn-dep`              | no       | `false`                                    | Sets `RCT_USE_RN_DEP=1` for the build step when `true`. |
-| `expo-use-precompiled-modules` | no     | `false`                                    | Sets `EXPO_USE_PRECOMPILED_MODULES=1` for the build step when `true`. |
+| `rct-use-prebuilt-rncore`     | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `rct-use-rn-dep`              | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `expo-use-precompiled-modules` | no     | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`             | no       | `2G`                                       | Bounded, compressed ccache maximum size. |
 | `build-env`                   | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `repack-on-hit`               | no       | `false`                                    | On a native-app-cache hit, run `repack-app` to inject a freshly exported JS bundle into the cached shell instead of reusing it unchanged. Falls back to a full native build if the repack fails. |
