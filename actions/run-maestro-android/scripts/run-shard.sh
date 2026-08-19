@@ -35,9 +35,11 @@ case "$APP_WARM_SECONDS" in
 esac
 if [ "$APP_WARM_SECONDS" != "0" ]; then
   echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, force-stop."
-  adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1
+  if ! adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; then
+    echo "::warning::Warm-up launch of '$APP_ID' reported a non-zero status; continuing (warming is best-effort)."
+  fi
   sleep "$APP_WARM_SECONDS"
-  adb shell am force-stop "$APP_ID"
+  adb shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
 fi
 
 if [ -n "${PRE_TEST_COMMAND:-}" ]; then
