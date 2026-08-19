@@ -36,6 +36,7 @@ silently.
 | `pre-run-flow`                | no       | `''`                                       | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
 | `flow-recovery-flow`          | no       | `''`                                       | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
 | `pre-test-command`            | no       | `''`                                       | Optional consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails that shard immediately. |
+| `pre-flow-command`            | no       | `''`                                       | Consumer-owned shell command run **before every flow attempt**, each retry included, after `pre-run-flow` and the warm-up. Never run before `pre-run-flow` or `flow-recovery-flow` themselves. Runs with `FLOW_PATH`, `FLOW_NAME`, `APP_ID`, `SIMULATOR_UDID` and `MAESTRO_FLOW_ENV_FILE` in its environment. Unlike the best-effort `flow-recovery-flow` it is a **precondition**: a non-zero exit fails that attempt without running the flow, consuming one of its `1 + flow-retries` attempts and triggering the recovery flow like any other failed attempt. Every `KEY=VALUE` line it appends to `$MAESTRO_FLOW_ENV_FILE` becomes an extra `-e KEY=VALUE` argument for that one flow's `maestro test` — see [Per-flow preconditions](#per-flow-preconditions). |
 | `maestro-env`                 | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `maestro-config`              | no       | `''`                                       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `flow-retries`                | no       | `0`                                        | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
@@ -111,6 +112,76 @@ lives in.
 The per-flow timing table in the step summary excludes time spent in recovery;
 a line below the table reports how many times recovery ran and how many of
 those runs failed.
+
+## Per-flow preconditions
+
+`pre-test-command` runs **once per shard**. `pre-flow-command` runs **before
+every flow attempt** — each retry of the same flow included — so a consumer
+whose flows each need their own fixture can seed it per flow instead of
+driving an import through the app's UI.
+
+It runs after `pre-run-flow` and the warm-up, and is never run before
+`pre-run-flow` or `flow-recovery-flow` themselves. Unlike the best-effort
+`flow-recovery-flow` it is a **precondition**: a non-zero exit fails that
+attempt and the flow is not run for it. That failed attempt still consumes one
+of the flow's `1 + flow-retries` attempts and still triggers the recovery
+flow, so a transient seeding failure can recover on the next attempt instead
+of taking the shard down.
+
+The command is executed by its own `bash` under `set -euo pipefail`, with
+these variables in its environment on top of everything the step already
+exports:
+
+| Variable                | Value                                                                   |
+| ----------------------- | ----------------------------------------------------------------------- |
+| `FLOW_PATH`             | The flow's path exactly as it is passed to `maestro test`.               |
+| `FLOW_NAME`             | `basename` of `FLOW_PATH`.                                              |
+| `APP_ID`                | The `app-id` input.                                                     |
+| `SIMULATOR_UDID`        | UDID of the booted simulator this shard drives.                         |
+| `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. Its directory is deleted when the shard finishes. |
+
+### Contributing per-flow `-e` pairs
+
+Every `KEY=VALUE` line the command appends to `$MAESTRO_FLOW_ENV_FILE` becomes
+an extra `-e KEY=VALUE` argument on **that one flow's** `maestro test`
+invocation and on no other — the file is recreated empty before every
+attempt. Empty lines and lines whose first character is `#` are ignored. Every
+other line must contain `=` and have a name matching
+`^[A-Za-z_][A-Za-z0-9_]*$`, or the step fails closed with an `::error::`
+naming the offending line, exactly as `maestro-env` already does. Only the
+**first** `=` splits a line, so values may themselves contain `=`. The format
+is line-based, so a value cannot contain a newline; a trailing newline is
+fine.
+
+The per-flow arguments are appended **after** the `maestro-env` arguments. A
+key present in both is therefore passed to `maestro test` twice, and Maestro's
+own argument handling — not this action — decides which of the two wins; the
+action neither deduplicates nor claims a precedence.
+
+### Example: seeding a per-flow database fixture
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha>
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
+            pre-flow-command: |
+                fixture=$(sed -n "s/.*FIXTURE_ROW_ID_MATCH: '\(.*\)\.db'.*/\1/p" "$FLOW_PATH" | tail -n 1)
+                [ -n "$fixture" ] || exit 0
+                container=$(xcrun simctl get_app_container "$SIMULATOR_UDID" "$APP_ID" data)
+                xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" || true
+                cp "$container/Documents/E2EFixtures/$fixture.db" "$container/Documents/SQLite/app.db"
+                echo "DATABASE_FIXTURE_SEEDED=true" >> "$MAESTRO_FLOW_ENV_FILE"
+```
+
+Each flow carrying a `FIXTURE_ROW_ID_MATCH: 'NN.db'` marker gets `NN.db`
+copied over the app's live database and runs with
+`DATABASE_FIXTURE_SEEDED=true`, so its import subflow short-circuits instead
+of walking the file-picker UI. Flows without the marker exit the command early
+and run exactly as they did before, with no extra `-e` argument.
 
 ## Maestro workspace config
 
