@@ -111,6 +111,18 @@ on:
                 type: string
                 required: false
                 default: ''
+            maestro-config:
+                description: >-
+                    Path to the consumer's Maestro workspace config (config.yaml),
+                    passed as --config to every `maestro test` invocation. Maestro only
+                    auto-discovers a workspace config.yaml when it is pointed at a
+                    directory, and the actions below always pass individual flow files,
+                    so without this input a workspace config is silently ignored.
+                    Relative paths resolve against the job's working directory. Fails
+                    closed when set to a path that is not a file.
+                type: string
+                required: false
+                default: ''
             flow-retries:
                 description: >-
                     Non-negative retry budget per flow; each flow gets up to
@@ -598,6 +610,7 @@ jobs:
                   pre-test-command: ${{ inputs.pre-test-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  maestro-config: ${{ inputs.maestro-config }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   simulator-device: ${{ inputs.simulator-device }}

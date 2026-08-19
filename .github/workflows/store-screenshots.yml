@@ -156,6 +156,18 @@ on:
                 type: string
                 required: false
                 default: ''
+            maestro-config:
+                description: >-
+                    Path to the consumer's Maestro workspace config (config.yaml),
+                    passed as --config to every `maestro test` invocation. Maestro only
+                    auto-discovers a workspace config.yaml when it is pointed at a
+                    directory, and the actions below always pass individual flow files,
+                    so without this input a workspace config is silently ignored.
+                    Relative paths resolve against the job's working directory. Fails
+                    closed when set to a path that is not a file.
+                type: string
+                required: false
+                default: ''
             maestro-version:
                 description: >-
                     Pinned Maestro CLI version, still used by flow-backed scenes in
@@ -1160,6 +1172,7 @@ jobs:
                   appearances: ${{ join(matrix.entry.appearances, ',') }}
                   orientation: ${{ matrix.entry.orientation || 'portrait' }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  maestro-config: ${{ inputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
 
@@ -1232,6 +1245,7 @@ jobs:
                   settle-seconds: ${{ inputs.settle-seconds }}
                   status-bar-override: ${{ inputs.status-bar-override }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  maestro-config: ${{ inputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
 

@@ -250,6 +250,21 @@ appId: ${APP_ID}
 - takeScreenshot: 'home'
 ```
 
+## Maestro workspace config
+
+Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
+at a **directory**. Both capture actions hand the CLI one scene flow file per
+invocation, so a workspace `config.yaml` is never read and nothing warns about
+it. `maestro-config` passes it explicitly (`--config`) to every `maestro test`
+a flow-backed scene runs.
+
+The case that motivated it: an `@expo/ui` SwiftUI `.sheet()` modal renders its
+React Native content outside the app's main window, so the XCUITest hierarchy
+Maestro snapshots never contains it and every selector inside the sheet times
+out at its assertion budget. The fix is one workspace-config key —
+`platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
+`--config` actually reaches the CLI.
+
 ## Inputs
 
 | Name                          | Required | Default                             | Description |
@@ -271,6 +286,7 @@ appId: ${APP_ID}
 | `scenes-name-pattern`               | no       | `*.flow.yaml`                             | Space-separated `find -name` globs selecting scenes directly inside `screenshots-dir` (`flows` mode only). |
 | `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` glob excluding matched scenes by basename (`flows` mode only). |
 | `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line. |
+| `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. |
 | `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode. |
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
 | `xcode-version`                     | no       | `26.4.1`                                  | Xcode version string. |

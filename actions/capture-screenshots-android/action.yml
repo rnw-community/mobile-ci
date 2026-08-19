@@ -95,6 +95,17 @@ inputs:
       match ^[A-Za-z_][A-Za-z0-9_]*$.
     required: false
     default: ''
+  maestro-config:
+    description: >-
+      Path to the consumer's Maestro workspace config (config.yaml), passed
+      as --config to every `maestro test` invocation. Maestro only
+      auto-discovers a workspace config.yaml when it is pointed at a
+      directory, and this action always passes individual flow files, so
+      without this input a workspace config is silently ignored. Relative
+      paths resolve against the job's working directory. Fails closed when
+      set to a path that is not a file. Leave empty to pass no --config.
+    required: false
+    default: ''
   maestro-version:
     description: >-
       Pinned Maestro CLI version, installed the same way as
@@ -423,9 +434,20 @@ runs:
         SEED_COMMAND: ${{ inputs.seed-command }}
         SETTLE_SECONDS: ${{ inputs.settle-seconds }}
         MAESTRO_ENV: ${{ inputs.maestro-env }}
+        MAESTRO_CONFIG: ${{ inputs.maestro-config }}
         DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
       run: |
           set -euo pipefail
+
+          maestro_config_args=()
+          if [ -n "$MAESTRO_CONFIG" ]; then
+            test -f "$MAESTRO_CONFIG" || { echo "::error::maestro-config '$MAESTRO_CONFIG' is not a file."; exit 1; }
+            case "$MAESTRO_CONFIG" in
+              /*) ;;
+              *) MAESTRO_CONFIG="$PWD/$MAESTRO_CONFIG" ;;
+            esac
+            maestro_config_args=(--config "$MAESTRO_CONFIG")
+          fi
 
           maestro_env_args=()
           if [ -n "$MAESTRO_ENV" ]; then
@@ -562,7 +584,7 @@ runs:
             # searched; the bundle's screenshots/ dir is NOT - it holds
             # Maestro's own step captures (final.png) even on a pass and
             # would double-count.
-            (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
+            (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
             local shot_count=0 shot_file='' candidate
             while IFS= read -r -d '' candidate; do
               shot_count=$((shot_count + 1))

@@ -89,6 +89,30 @@ that restarts adbd and drops a TCP serial's connection) retry
 `uid=0`. See the seed-hook contract in
 [docs/workflows/store-screenshots.md](../../docs/workflows/store-screenshots.md).
 
+## Maestro workspace config
+
+Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
+at a **directory**. This action passes the CLI one scene flow file per
+invocation, so a workspace config sitting next to those flows is never read
+and nothing warns about it. Point `maestro-config` at that file and it is
+passed as `--config` to **every** `maestro test` this action runs for a
+flow-backed scene.
+
+The case that motivated the input is iOS-specific, but the mechanism is not —
+any workspace-level `platform:` / `flows:` / tag setting is dropped the same
+way. An `@expo/ui` SwiftUI `.sheet()` modal renders its React Native content
+outside the app's main window, so the XCUITest hierarchy Maestro snapshots
+never contains it and every selector inside the sheet times out at its
+assertion budget. The fix lives entirely in the workspace config —
+
+```yaml
+platform:
+    ios:
+        snapshotKeyHonorModalViews: false
+```
+
+— and is inert unless `--config` actually reaches the CLI.
+
 ## Inputs
 
 | Name                   | Required | Default    | Description |
@@ -108,6 +132,7 @@ that restarts adbd and drops a TCP serial's connection) retry
 | `settle-seconds`        | no       | `3`        | Seconds (integer 0–120) between a deep-link launch and its screenshot; a scene's `settleSeconds` overrides it. |
 | `status-bar-override`   | no       | `true`     | Enable the SystemUI demo-mode status bar; fails closed if the broadcasts fail. |
 | `maestro-env`           | no       | `''`       | Newline-separated `KEY=VALUE` pairs passed as extra `-e` arguments to every `maestro test` (flow-backed scenes only). Fails closed on a malformed line. |
+| `maestro-config`         | no       | `''`       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `maestro-version`       | no       | `2.8.0`    | Pinned Maestro CLI version, installed lazily and the same way as `run-maestro-android-redroid`'s. |
 | `output-dir`            | yes      | —          | Root output directory; see the fixed layout above. |
 

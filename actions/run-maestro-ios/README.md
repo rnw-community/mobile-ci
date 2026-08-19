@@ -34,6 +34,30 @@ rendering, and provision that same device identically across every host in
 the pool — see
 [docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#macos-pools-ios).
 
+## Maestro workspace config
+
+Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
+at a **directory**. This action always resolves flows itself and passes the
+CLI an individual flow file per invocation, so a workspace config sitting next
+to those flows is never read and nothing warns about it. Point
+`maestro-config` at that file and it is passed as `--config` to **every**
+`maestro test` this action runs — shard flows, `pre-run-flow` and
+`flow-recovery-flow` alike.
+
+The case that motivated the input: an `@expo/ui` SwiftUI `.sheet()` modal
+renders its React Native content outside the app's main window, so the
+XCUITest hierarchy Maestro snapshots never contains it and every selector
+inside the sheet times out at its assertion budget. The fix lives entirely in
+the workspace config —
+
+```yaml
+platform:
+    ios:
+        snapshotKeyHonorModalViews: false
+```
+
+— and is inert unless `--config` actually reaches the CLI.
+
 ## Inputs
 
 | Name                    | Required | Default       | Description                                                |
@@ -52,6 +76,7 @@ the pool — see
 | `pre-test-command`      | no       | `''`          | Consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails the step immediately. |
 | `app-warm-seconds`      | no       | `20`          | Seconds the app is left running during a one-off warm-up (`simctl launch`, settle, `simctl terminate`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. |
 | `maestro-env`           | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `maestro-config`         | no       | `''`           | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `flow-retries`          | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `maestro-version`       | no       | `2.8.0`       | Pinned Maestro CLI version. Installed by downloading the matching `cli-<version>` release directly from [mobile-dev-inc/Maestro releases](https://github.com/mobile-dev-inc/Maestro/releases) to `$HOME/.maestro-pinned/<version>` — immune to a pre-existing Homebrew-managed `maestro` on the host. An existing `maestro` already on `PATH` is reused only when its version exactly matches. |
 | `simulator-device`      | no       | `''`          | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched with no fuzzy matching. Fails closed, listing available devices, on no exact match. Empty keeps the last-available-iPhone heuristic (emits a `::notice::` naming its choice). |
