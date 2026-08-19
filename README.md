@@ -40,7 +40,7 @@ on:
         branches: [main]
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.6.2 # v1.6.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.6.3 # v1.6.3
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -160,7 +160,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.6.2 # v1.6.2
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.6.3 # v1.6.3
 ```
 
 ## Scope
