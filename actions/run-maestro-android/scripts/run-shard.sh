@@ -131,8 +131,7 @@ pre_flow_script=''
 flow_env_seq=0
 flow_env_args=()
 if [ -n "${PRE_FLOW_COMMAND:-}" ]; then
-  flow_env_scratch_dir="$RUNNER_TEMP/maestro-flow-env-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-  mkdir -p "$flow_env_scratch_dir"
+  flow_env_scratch_dir="$(mktemp -d "$RUNNER_TEMP/maestro-flow-env-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-XXXXXX")"
   echo "FLOW_ENV_SCRATCH_DIR=$flow_env_scratch_dir" >> "$GITHUB_ENV"
   # Materialised as a script run by a child bash rather than eval'd in this
   # shell: bash suppresses `set -e` inside a function invoked from an `if`
