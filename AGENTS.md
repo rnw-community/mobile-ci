@@ -75,6 +75,34 @@ self-references to relative paths in a scratch copy to lint their composite
 schemas too — reproduce that locally with the same `sed` substitution before
 running `actionlint` if you touched a reusable workflow's inputs.
 
+### Consumer validation on the fleet
+
+Static checks prove a change is well-formed, not that it works. Every change
+that alters runtime behaviour — action `run:` logic, workflow wiring, new or
+changed inputs, pinned third-party action bumps — **must be validated against
+`vitalyiegorov/suuudokuuu` on the real fleet before it is released**, because
+that repo consumes every reusable workflow end to end (e2e, cache seeding,
+dev release, store publish, screenshots).
+
+Procedure:
+
+1. Push the branch, then pin suuudokuuu's callers to the branch head SHA
+   (`...@<sha> # <branch>`) in a scratch branch of that repo.
+2. Run the pipelines the change can affect, **one fleet run at a time**:
+   `mobile-e2e.yml` (push to a `ci/*` branch), and where relevant
+   `seed-native-cache.yml`, `native-dev-release.yml`, `native-publish.yml`
+   via `workflow_dispatch`.
+3. Read the artifacts, not just the check marks. Several defects have shipped
+   green: an `aab` no tester could install, an App Store Connect key that was
+   written but never exported, a Maestro workspace config silently dropped.
+   Confirm the *effect* — the artifact's extension, the absence of a fallback
+   log line, the screenshot actually collected.
+4. Only then open the release PR and move the tag.
+
+A change that cannot be exercised by suuudokuuu (a driver it does not use, a
+platform it does not ship) must say so explicitly in its PR body, and name
+whatever validation was done instead.
+
 ### PR review etiquette
 
 **ALWAYS address every bot comment on a PR (CI bots, review bots,
