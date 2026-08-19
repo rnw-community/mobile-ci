@@ -111,6 +111,18 @@ on:
                 type: string
                 required: false
                 default: ''
+            maestro-config:
+                description: >-
+                    Path to the consumer's Maestro workspace config (config.yaml),
+                    passed as --config to every `maestro test` invocation. Maestro only
+                    auto-discovers a workspace config.yaml when it is pointed at a
+                    directory, and the actions below always pass individual flow files,
+                    so without this input a workspace config is silently ignored.
+                    Relative paths resolve against the job's working directory. Fails
+                    closed when set to a path that is not a file.
+                type: string
+                required: false
+                default: ''
             flow-retries:
                 description: >-
                     Non-negative retry budget per flow; each flow gets up to
@@ -385,7 +397,20 @@ jobs:
               shell: bash
               env:
                   PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
-              run: eval "$PREBUILD_COMMAND"
+                  RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
+                  RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
+                  EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
+              run: |
+                  if [ "$RCT_USE_PREBUILT_RNCORE_ENABLED" = 'true' ]; then
+                    export RCT_USE_PREBUILT_RNCORE=1
+                  fi
+                  if [ "$RCT_USE_RN_DEP_ENABLED" = 'true' ]; then
+                    export RCT_USE_RN_DEP=1
+                  fi
+                  if [ "$EXPO_USE_PRECOMPILED_MODULES_ENABLED" = 'true' ]; then
+                    export EXPO_USE_PRECOMPILED_MODULES=1
+                  fi
+                  eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
               id: fingerprint
@@ -598,6 +623,7 @@ jobs:
                   pre-test-command: ${{ inputs.pre-test-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  maestro-config: ${{ inputs.maestro-config }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   simulator-device: ${{ inputs.simulator-device }}

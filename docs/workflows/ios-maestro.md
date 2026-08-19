@@ -37,6 +37,7 @@ silently.
 | `flow-recovery-flow`          | no       | `''`                                       | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
 | `pre-test-command`            | no       | `''`                                       | Optional consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails that shard immediately. |
 | `maestro-env`                 | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `maestro-config`              | no       | `''`                                       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `flow-retries`                | no       | `0`                                        | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `app-warm-seconds`            | no       | `20`                                       | Seconds the app is left running during a one-off warm-up (`simctl launch`, settle, `simctl terminate`) performed after install and before `pre-test-command` or any flow runs, so first-launch cold-start cost is not absorbed by the first flow's own timeout budget. `0` disables warming. |
 | `shard-count`                 | no       | `2`                                        | Number of test shards per target. |
@@ -52,9 +53,9 @@ silently.
 | `install-command`             | no       | `yarn install --immutable`                 | JS dependency install command. |
 | `enable-corepack`             | no       | `true`                                     | Run `corepack enable` before install. |
 | `build-command`               | no       | `''`                                       | Optional workspace JS build command run at repo root before the native build. |
-| `rct-use-prebuilt-rncore`     | no       | `false`                                    | Sets `RCT_USE_PREBUILT_RNCORE=1` for the build step when `true`. |
-| `rct-use-rn-dep`              | no       | `false`                                    | Sets `RCT_USE_RN_DEP=1` for the build step when `true`. |
-| `expo-use-precompiled-modules` | no     | `false`                                    | Sets `EXPO_USE_PRECOMPILED_MODULES=1` for the build step when `true`. |
+| `rct-use-prebuilt-rncore`     | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `rct-use-rn-dep`              | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `expo-use-precompiled-modules` | no     | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`             | no       | `2G`                                       | Bounded, compressed ccache maximum size. |
 | `build-env`                   | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `repack-on-hit`               | no       | `false`                                    | On a native-app-cache hit, run `repack-app` to inject a freshly exported JS bundle into the cached shell instead of reusing it unchanged. Falls back to a full native build if the repack fails. |
@@ -77,8 +78,8 @@ before the same flow's next retry attempt (when `flow-retries` allows one) and
 before the shard moves on to the next flow. It never runs after a passing
 attempt, and it is skipped after the shard's last flow, where nothing would
 benefit from it. It is invoked exactly like `pre-run-flow` — same
-`-e APP_ID=…`, `--debug-output`, and `maestro-env` passthrough — so its debug
-artifacts land alongside the shard's.
+`-e APP_ID=…`, `--debug-output`, `maestro-env`, and `maestro-config`
+passthrough — so its debug artifacts land alongside the shard's.
 
 Recovery is **best-effort**: if the recovery flow itself fails, the shard logs a
 `::warning::` and carries on with the next flow. A recovery that cannot run must
@@ -110,6 +111,36 @@ lives in.
 The per-flow timing table in the step summary excludes time spent in recovery;
 a line below the table reports how many times recovery ran and how many of
 those runs failed.
+
+## Maestro workspace config
+
+Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
+at a **directory**. Every shard here discovers its flows itself and hands the
+CLI one flow file per invocation, so a workspace `config.yaml` is never read
+and nothing warns about it. `maestro-config` is the input that passes it
+explicitly (`--config`) to every `maestro test` a shard runs — shard flows,
+`pre-run-flow`, and `flow-recovery-flow` alike.
+
+The case that motivated it: an `@expo/ui` SwiftUI `.sheet()` modal renders its
+React Native content outside the app's main window, so the XCUITest hierarchy
+Maestro snapshots never contains it and every selector inside the sheet times
+out at its assertion budget. The fix is one workspace-config key —
+`platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
+`--config` actually reaches the CLI.
+
+## Debug artifacts
+
+When a shard fails, the shard-private `--debug-output` directory (UI hierarchy
+dumps, per-flow screenshots) is copied into the uploaded artifact under
+`maestro-debug/`, unless the bundle exceeds the 200MB cap — an oversized
+bundle is skipped entirely with a `::warning::` and the artifact then holds
+only the final-state capture. Maestro writes that bundle behind a hidden
+`.maestro/tests/<timestamp>/` path, so staging renames any hidden top-level
+entry to a visible `dot-`-prefixed name (suffixed `-1`, `-2`, … if that name
+is already taken, so neither tree is lost) and the upload step sets
+`include-hidden-files: true` — `actions/upload-artifact` skips hidden files by
+default, which previously shipped `final-screen.png` alone and dropped the
+hierarchy dumps the failure message points you at.
 
 ## Permissions
 

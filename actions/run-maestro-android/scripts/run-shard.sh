@@ -86,6 +86,16 @@ if [ -n "$FLOW_RECOVERY_FLOW" ]; then
   test -f "$FLOW_RECOVERY_FLOW" || { echo "::error::flow-recovery-flow '$FLOW_RECOVERY_FLOW' is not a file."; exit 1; }
 fi
 
+maestro_config_args=()
+if [ -n "${MAESTRO_CONFIG:-}" ]; then
+  test -f "$MAESTRO_CONFIG" || { echo "::error::maestro-config '$MAESTRO_CONFIG' is not a file."; exit 1; }
+  case "$MAESTRO_CONFIG" in
+    /*) ;;
+    *) MAESTRO_CONFIG="$PWD/$MAESTRO_CONFIG" ;;
+  esac
+  maestro_config_args=(--config "$MAESTRO_CONFIG")
+fi
+
 maestro_env_args=()
 if [ -n "${MAESTRO_ENV:-}" ]; then
   while IFS= read -r line; do
@@ -123,7 +133,7 @@ run_flow_recovery() {
   [ -n "$FLOW_RECOVERY_FLOW" ] || return 0
   recovery_runs=$((recovery_runs + 1))
   echo "Running recovery flow '$FLOW_RECOVERY_FLOW' after the failed attempt of '$after'."
-  if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
+  if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
     recovery_failures=$((recovery_failures + 1))
     echo "::warning::Recovery flow '$FLOW_RECOVERY_FLOW' failed after '$after'; continuing anyway because recovery is best-effort."
   fi
@@ -135,7 +145,7 @@ run_flow_with_retries() {
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
-    if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} "$flow"; then
+    if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$flow"; then
       status=passed
       break
     fi

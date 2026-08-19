@@ -21,6 +21,25 @@ PROVISIONING_PROFILE_SPECIFIER=` signs the build ad hoc — no certificate or
 provisioning profile lookup required — while still embedding the project's
 entitlements.
 
+**Prebuilt/precompiled flags are applied at `pod install`, not just the build
+step (behavior fix).** `RCT_USE_PREBUILT_RNCORE`, `RCT_USE_RN_DEP`, and
+`EXPO_USE_PRECOMPILED_MODULES` are read by React Native's and Expo's CocoaPods
+scripts while the Pods project is being generated — not by `xcodebuild`. They
+used to be set only on the `xcodebuild` step, which made them no-ops unless
+the consumer independently pinned the same switches through
+`expo-build-properties`. They are now exported for `pod install` as well (and
+the reusable workflows export them for the `expo prebuild` step, which runs
+`pod install` itself).
+
+They are also **omitted entirely** when their input is not `true`, instead of
+being exported as an empty string: the Ruby side tests for the variable's
+presence (`ENV['RCT_USE_PREBUILT_RNCORE']` is truthy even when `""`), so an
+empty export read as *enabled*. If your build previously behaved as if a flag
+was off while it was set to `false`, that is now actually the case — and
+because the flags now reach `pod install`/prebuild, the generated Pods project
+(and therefore the native fingerprint the caching workflows compute) can
+change, invalidating an existing native-app cache once.
+
 Run `setup-xcode-pinned` and (optionally) `setup-ccache-ios` before this
 action so `DEVELOPER_DIR` and the ccache toolchain are already in place.
 
@@ -38,9 +57,9 @@ action so `DEVELOPER_DIR` and the ccache toolchain are already in place.
 | `configuration`                  | no       | `Release` | xcodebuild configuration.                                        |
 | `archs`                          | no       | `arm64`   | xcodebuild `ARCHS`.                                              |
 | `excluded-archs`                 | no       | `x86_64`  | xcodebuild `EXCLUDED_ARCHS`.                                     |
-| `rct-use-prebuilt-rncore`        | no       | `false`   | Sets `RCT_USE_PREBUILT_RNCORE=1` when `true`.                    |
-| `rct-use-rn-dep`                 | no       | `false`   | Sets `RCT_USE_RN_DEP=1` when `true`.                             |
-| `expo-use-precompiled-modules`   | no       | `false`   | Sets `EXPO_USE_PRECOMPILED_MODULES=1` when `true`.               |
+| `rct-use-prebuilt-rncore`        | no       | `false`   | Exports `RCT_USE_PREBUILT_RNCORE=1` for `pod install` **and** `xcodebuild` when `true`; exports nothing at all otherwise. |
+| `rct-use-rn-dep`                 | no       | `false`   | Exports `RCT_USE_RN_DEP=1` for `pod install` **and** `xcodebuild` when `true`; exports nothing at all otherwise. |
+| `expo-use-precompiled-modules`   | no       | `false`   | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for `pod install` **and** `xcodebuild` when `true`; exports nothing at all otherwise. |
 
 ## Outputs
 
