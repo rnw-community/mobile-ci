@@ -40,5 +40,5 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.6.4 # v1.6.4
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.6.5 # v1.6.5
 ```

@@ -85,7 +85,7 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.4 # v1.6.4
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.5 # v1.6.5
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -104,7 +104,7 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.4 # v1.6.4
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.5 # v1.6.5
         with:
             app-dir: apps/mobile
             enable-ios: true
