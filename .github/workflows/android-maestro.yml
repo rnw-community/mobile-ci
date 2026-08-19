@@ -489,7 +489,7 @@ jobs:
             - name: Set up Android SDK (for repack-app validation)
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
+              uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
               with:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
