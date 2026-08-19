@@ -54,8 +54,14 @@ single required check.
 | ---------------------------------- | -------- | -------------- |
 | `EXPO_TOKEN`                        | no*      | Expo access token, required by `ios-publish` and `android-publish`. |
 | `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish`. |
+| `ASC_KEY_ID`                        | no*      | App Store Connect API key ID matching `ASC_API_KEY`, exported to the iOS build and submit steps as `EXPO_ASC_KEY_ID`. |
+| `ASC_ISSUER_ID`                     | no*      | App Store Connect API key issuer ID matching `ASC_API_KEY`, exported as `EXPO_ASC_ISSUER_ID`. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. |
 | `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-publish` and `android-publish`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build`/`eas submit` or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
+
+\* `ASC_KEY_ID` and `ASC_ISSUER_ID` must accompany `ASC_API_KEY`: without them EAS cannot
+resolve the key non-interactively and falls back to an interactive prompt that cannot be
+answered in CI, so `ios-publish` fails closed when any of the three is missing.
 
 \* `EXPO_TOKEN`, `ASC_API_KEY`, and `GOOGLE_SERVICE_ACCOUNT_JSON` are declared
 optional at the `workflow_call` level (so a caller that only enables one
