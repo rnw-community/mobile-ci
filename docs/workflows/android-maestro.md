@@ -173,7 +173,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@<full-commit-sha>
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v1.6.5
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]

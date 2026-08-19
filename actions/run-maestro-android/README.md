@@ -179,7 +179,7 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-android@<full-commit-sha>
+- uses: rnw-community/mobile-ci/actions/run-maestro-android@v1
   with:
       apk-path: ./build/app-release.apk
       app-id: com.example.app

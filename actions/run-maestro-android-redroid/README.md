@@ -220,7 +220,7 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@<full-commit-sha>
+- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v1
   with:
       container-name: redroid-e2e-${{ strategy.job-index }}
       apk-path: ./build/app-release.apk
