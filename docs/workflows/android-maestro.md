@@ -142,7 +142,9 @@ out at its assertion budget. The fix is one workspace-config key —
 
 When a shard fails, the shard-private `--debug-output` directory (UI hierarchy
 dumps, per-flow screenshots) is copied into the uploaded artifact under
-`maestro-debug/`. Maestro writes that bundle behind a hidden
+`maestro-debug/`, unless the bundle exceeds the 200MB cap — an oversized
+bundle is skipped entirely with a `::warning::` and the artifact then holds
+only the final-state capture. Maestro writes that bundle behind a hidden
 `.maestro/tests/<timestamp>/` path, so staging renames any hidden top-level
 entry to a visible `dot-`-prefixed name (suffixed `-1`, `-2`, … if that name
 is already taken, so neither tree is lost) and the upload step sets

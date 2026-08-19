@@ -31,8 +31,9 @@ message tells you to inspect. Staging now renames any hidden top-level entry
 to a `dot-`-prefixed visible name (`.maestro/` becomes
 `maestro-debug/dot-maestro/`, suffixed `-1`, `-2`, … if a real `dot-maestro`
 entry already exists, so neither tree is lost) and the upload step sets
-`include-hidden-files: true`, so the hierarchy dumps always reach the
-artifact.
+`include-hidden-files: true`, so the hierarchy dumps reach the artifact
+whenever the copy runs at all — the 200MB cap above still skips the whole copy
+(with a `::warning::`) for an oversized debug bundle.
 
 **Pinning `simulator-device`.** Leaving it empty keeps booting the last
 available iPhone-family device by `xcrun simctl list devices available`
