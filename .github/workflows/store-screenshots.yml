@@ -760,7 +760,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.6.5 # v1.6.5
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -795,7 +795,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.6.5 # v1.6.5
               with:
                   platform: ios
                   working-directory: ${{ fromJSON(inputs.ios-target).appDir }}
@@ -803,7 +803,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.5 # v1.6.5
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
@@ -816,7 +816,7 @@ jobs:
               id: repack
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.6.5 # v1.6.5
               with:
                   platform: ios
                   app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}/Base.app
@@ -872,7 +872,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.6.5 # v1.6.5
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -885,7 +885,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v1.6.5 # v1.6.5
               with:
                   app-dir: ${{ fromJSON(inputs.ios-target).appDir }}
                   workspace: ${{ fromJSON(inputs.ios-target).workspace }}
@@ -902,7 +902,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v1.6.5 # v1.6.5
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -910,7 +910,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.5 # v1.6.5
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
@@ -1016,7 +1016,7 @@ jobs:
 
             - name: native-fingerprint
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.6.5 # v1.6.5
               with:
                   platform: android
                   working-directory: ${{ fromJSON(inputs.android-target).appDir }}
@@ -1024,7 +1024,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.5 # v1.6.5
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
@@ -1045,7 +1045,7 @@ jobs:
               id: repack
               if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/repack-app@v1.6.5 # v1.6.5
               with:
                   platform: android
                   app-path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}/app-release.apk
@@ -1095,7 +1095,7 @@ jobs:
 
             - name: build-android-app
               if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/build-android-app@v1.6.5 # v1.6.5
               with:
                   app-dir: ${{ fromJSON(inputs.android-target).appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
@@ -1108,7 +1108,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v1.6.5 # v1.6.5
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
@@ -1151,7 +1151,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.6.5 # v1.6.5
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1169,7 +1169,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.6.5 # v1.6.5
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
@@ -1229,7 +1229,7 @@ jobs:
 
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/redroid-container@v1.6.5 # v1.6.5
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -1241,7 +1241,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v1.6.5 # v1.6.5
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}/app-release.apk
@@ -1280,7 +1280,7 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@v1.6.4 # v1.6.4
+              uses: rnw-community/mobile-ci/actions/redroid-container@v1.6.5 # v1.6.5
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}

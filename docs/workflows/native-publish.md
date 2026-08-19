@@ -85,7 +85,7 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.4 # v1.6.4
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.5 # v1.6.5
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -104,12 +104,14 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.4 # v1.6.4
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.6.5 # v1.6.5
         with:
             app-dir: apps/mobile
             enable-ios: true
         secrets:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
             EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
