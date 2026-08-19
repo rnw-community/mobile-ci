@@ -131,6 +131,12 @@ backend it controls (private repo) — never ship the token to the browser.
 
 ## Secrets
 
+> **Secret values must be the raw file contents, not base64.** Every key secret
+> below is written to disk verbatim by these workflows — no decoding step. If a
+> secret was previously stored base64-encoded for an action such as
+> `MobileDevOps/secret-to-file-action` (which decodes on write), re-store it as
+> the plain file contents or `eas submit`/fastlane will read a corrupt key.
+
 | Name                | Required | Description |
 | ---------------------- | -------- | -------------- |
 | `EXPO_TOKEN`             | no*      | Expo access token, required by both dev-release jobs. |
