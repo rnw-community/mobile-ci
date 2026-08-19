@@ -111,5 +111,7 @@ jobs:
         secrets:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
             EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
