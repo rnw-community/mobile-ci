@@ -140,6 +140,20 @@ on:
             ASC_API_KEY:
                 description: App Store Connect API key contents (.p8), required by ios-publish.
                 required: false
+            ASC_KEY_ID:
+                description: >-
+                    App Store Connect API key ID matching ASC_API_KEY. Required alongside
+                    ASC_API_KEY and ASC_ISSUER_ID for EAS to resolve the key
+                    non-interactively; exported to the iOS build and submit steps as
+                    EXPO_ASC_KEY_ID.
+                required: false
+            ASC_ISSUER_ID:
+                description: >-
+                    App Store Connect API key issuer ID matching ASC_API_KEY. Required
+                    alongside ASC_API_KEY and ASC_KEY_ID for EAS to resolve the key
+                    non-interactively; exported to the iOS build and submit steps as
+                    EXPO_ASC_ISSUER_ID.
+                required: false
             GOOGLE_SERVICE_ACCOUNT_JSON:
                 description: Google Play service account key JSON contents, required by android-publish.
                 required: false
@@ -174,13 +188,17 @@ jobs:
               shell: bash
               env:
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
                   missing=()
                   [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
                   [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
+                  [ -z "${ASC_KEY_ID:-}" ] && missing+=(ASC_KEY_ID)
+                  [ -z "${ASC_ISSUER_ID:-}" ] && missing+=(ASC_ISSUER_ID)
                   if [ "${#missing[@]}" -gt 0 ]; then
-                    echo "::error::ios-publish requires secrets: ${missing[*]}. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    echo "::error::ios-publish requires secrets: ${missing[*]}. ASC_KEY_ID and ASC_ISSUER_ID must accompany ASC_API_KEY, otherwise EAS cannot resolve the key non-interactively and falls back to an interactive prompt that cannot be answered in CI. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
                   fi
 
@@ -315,6 +333,9 @@ jobs:
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
                   BUILD_PROFILE: ${{ inputs.build-profile }}
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
                   output_path="$RUNNER_TEMP/ios-publish/app.ipa"
@@ -341,6 +362,9 @@ jobs:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
                   SUBMIT_PROFILE: ${{ inputs.submit-profile }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
