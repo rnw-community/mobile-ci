@@ -126,6 +126,60 @@ if [ -n "${MAESTRO_ENV:-}" ]; then
   done <<< "$MAESTRO_ENV"
 fi
 
+flow_env_scratch_dir=''
+pre_flow_script=''
+flow_env_seq=0
+flow_env_args=()
+if [ -n "${PRE_FLOW_COMMAND:-}" ]; then
+  flow_env_scratch_dir="$RUNNER_TEMP/maestro-flow-env-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+  mkdir -p "$flow_env_scratch_dir"
+  # Materialised as a script run by a child bash rather than eval'd in this
+  # shell: bash suppresses `set -e` inside a function invoked from an `if`
+  # condition, so an eval'd multi-command string would surface only its last
+  # command's status and a failed precondition could pass as satisfied.
+  pre_flow_script="$flow_env_scratch_dir/pre-flow-command.sh"
+  printf '%s\n%s\n' 'set -euo pipefail' "$PRE_FLOW_COMMAND" > "$pre_flow_script"
+fi
+
+run_pre_flow_command() {
+  local flow="$1" env_file="$2"
+  echo "Running pre-flow-command before '$flow'."
+  FLOW_PATH="$flow" FLOW_NAME="$(basename "$flow")" MAESTRO_FLOW_ENV_FILE="$env_file" bash "$pre_flow_script"
+}
+
+read_flow_env_file() {
+  local env_file="$1" label="$2" line name
+  flow_env_args=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [ -z "$line" ] && continue
+    case "$line" in
+      '#'*) continue ;;
+    esac
+    case "$line" in
+      *=*) ;;
+      *)
+        echo "::error::pre-flow-command env line '$line' contributed for '$label' is missing '='; expected KEY=VALUE."
+        exit 1
+        ;;
+    esac
+    name="${line%%=*}"
+    case "$name" in
+      ''|[!A-Za-z_]*)
+        echo "::error::pre-flow-command env variable name '$name' contributed for '$label' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+        exit 1
+        ;;
+    esac
+    case "$name" in
+      *[!A-Za-z0-9_]*)
+        echo "::error::pre-flow-command env variable name '$name' contributed for '$label' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+        exit 1
+        ;;
+    esac
+    flow_env_args+=(-e "$line")
+  done < "$env_file"
+}
+
 summary_rows=()
 recovery_runs=0
 recovery_failures=0
@@ -142,12 +196,25 @@ run_flow_recovery() {
 }
 
 run_flow_with_retries() {
-  local flow="$1" label="$2" recover_after_last_attempt="$3" attempts=0 status=failed start end duration
-  local recovery_seconds=0 recovery_start
+  local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
+  local recovery_seconds=0 recovery_start attempt_ok flow_env_file
   start=$(date +%s)
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
-    if maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$flow"; then
+    attempt_ok=1
+    flow_env_args=()
+    if [ "$run_precondition" = '1' ] && [ -n "$pre_flow_script" ]; then
+      flow_env_seq=$((flow_env_seq + 1))
+      flow_env_file="$flow_env_scratch_dir/flow-$flow_env_seq.env"
+      : > "$flow_env_file"
+      if run_pre_flow_command "$flow" "$flow_env_file"; then
+        read_flow_env_file "$flow_env_file" "$label"
+      else
+        attempt_ok=0
+        echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
+      fi
+    fi
+    if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$flow"; then
       status=passed
       break
     fi
@@ -267,7 +334,7 @@ else
 fi
 
 if [ -n "$PRE_RUN_FLOW" ]; then
-  if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0; then
+  if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
     write_summary
     echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
     exit 1
@@ -289,7 +356,7 @@ for flow_index in "${!selected[@]}"; do
   if [ "$flow_index" -eq "$last_flow_index" ]; then
     recover_after_last_attempt=0
   fi
-  if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt"; then
+  if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt" 1; then
     overall_status=1
   fi
 done

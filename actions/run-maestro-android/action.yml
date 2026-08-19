@@ -81,6 +81,21 @@ inputs:
       skip.
     required: false
     default: ''
+  pre-flow-command:
+    description: >-
+      Optional consumer-owned shell command run before every flow attempt,
+      each retry included, after pre-run-flow and the warm-up. It is never
+      run before pre-run-flow or flow-recovery-flow themselves. Runs with
+      FLOW_PATH, FLOW_NAME, APP_ID, ANDROID_SERIAL and MAESTRO_FLOW_ENV_FILE
+      in its environment. Unlike the best-effort flow-recovery-flow this is a
+      precondition: a non-zero exit fails that attempt without running the
+      flow, consuming one of its 1 + flow-retries attempts and triggering the
+      recovery flow as any other failed attempt would. Every KEY=VALUE line
+      the command appends to the file at MAESTRO_FLOW_ENV_FILE becomes an
+      extra -e KEY=VALUE argument for that one flow's `maestro test`,
+      validated exactly like maestro-env. Leave empty to skip.
+    required: false
+    default: ''
   app-warm-seconds:
     description: >-
       Seconds the app is left running during a one-off warm-up performed
@@ -308,6 +323,7 @@ runs:
           MAESTRO_ENV: ${{ inputs.maestro-env }}
           MAESTRO_CONFIG: ${{ inputs.maestro-config }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
+          PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
       with:
           api-level: ${{ inputs.api-level }}
           target: ${{ inputs.target }}

@@ -102,6 +102,22 @@ on:
                 type: string
                 required: false
                 default: ''
+            pre-flow-command:
+                description: >-
+                    Optional consumer-owned shell command run before every flow attempt,
+                    each retry included, after pre-run-flow and the warm-up. It is never
+                    run before pre-run-flow or flow-recovery-flow themselves. Runs with
+                    FLOW_PATH, FLOW_NAME, APP_ID, SIMULATOR_UDID and MAESTRO_FLOW_ENV_FILE
+                    in its environment. Unlike the best-effort flow-recovery-flow this is
+                    a precondition: a non-zero exit fails that attempt without running the
+                    flow, consuming one of its 1 + flow-retries attempts and triggering the
+                    recovery flow as any other failed attempt would. Every KEY=VALUE line
+                    the command appends to the file at MAESTRO_FLOW_ENV_FILE becomes an
+                    extra -e KEY=VALUE argument for that one flow's `maestro test`,
+                    validated exactly like maestro-env.
+                type: string
+                required: false
+                default: ''
             maestro-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs, each passed as an additional
@@ -621,6 +637,7 @@ jobs:
                   pre-run-flow: ${{ inputs.pre-run-flow }}
                   flow-recovery-flow: ${{ inputs.flow-recovery-flow }}
                   pre-test-command: ${{ inputs.pre-test-command }}
+                  pre-flow-command: ${{ inputs.pre-flow-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
                   maestro-config: ${{ inputs.maestro-config }}
