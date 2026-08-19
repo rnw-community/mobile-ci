@@ -172,7 +172,7 @@ concurrency:
     cancel-in-progress: true
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v1.6.1 # v1.6.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v1.6.2 # v1.6.2
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]

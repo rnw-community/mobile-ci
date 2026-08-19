@@ -60,7 +60,7 @@ on:
         - cron: '0 4 * * *'
 jobs:
     seed:
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v1.6.1 # v1.6.1
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v1.6.2 # v1.6.2
         with:
             ios-targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":""}]
