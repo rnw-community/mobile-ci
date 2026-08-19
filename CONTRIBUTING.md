@@ -97,6 +97,23 @@ workflows and actions themselves (see the `zizmor` job in `self-test.yml`
 for the pinned version); run it with the same `--config` flag CI uses so
 findings match.
 
+## Validating changes on the fleet
+
+Local linting proves shape, not behaviour. Any change to runtime behaviour —
+`run:` logic, workflow wiring, inputs, or a pinned third-party action bump —
+must be exercised against `vitalyiegorov/suuudokuuu` on the self-hosted fleet
+before release. That repo consumes every reusable workflow (e2e, cache
+seeding, dev release, store publish, screenshots), so it is the fastest way
+to learn whether a change actually works.
+
+Pin its callers to your branch head SHA in a scratch branch, run the affected
+pipelines one fleet run at a time, and verify the *effect* rather than the
+check mark — several defects have shipped green, including a dev release that
+published an `aab` no tester could install and an App Store Connect key that
+was written but never exported to `eas`. See
+[AGENTS.md](AGENTS.md#consumer-validation-on-the-fleet) for the exact
+procedure.
+
 ## Adding or changing an action
 
 - One composite action per directory under `actions/`, with `action.yml` plus
