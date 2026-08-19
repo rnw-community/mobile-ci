@@ -179,7 +179,8 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-ios@v1
+# @main until the release that ships pre-flow-command, then pin to that tag
+- uses: rnw-community/mobile-ci/actions/run-maestro-ios@main
   with:
       app-path: ./build/MyApp.app
       app-id: com.example.app

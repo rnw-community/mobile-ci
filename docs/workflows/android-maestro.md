@@ -173,7 +173,8 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v1.6.5
+        # @main until the release that ships pre-flow-command, then pin to that tag
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@main
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
