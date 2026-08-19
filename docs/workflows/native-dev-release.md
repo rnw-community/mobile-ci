@@ -22,7 +22,7 @@ contents: write` to create/prune releases.
 ## Release assets
 
 Every dev release carries three assets: the build artifact (`app.ipa` /
-`app.aab`), a `SHA256SUMS` file, and a `build-meta.json` file.
+`app.apk` by default, or `app.aab`), a `SHA256SUMS` file, and a `build-meta.json` file.
 
 `SHA256SUMS` is the standard `shasum -a 256`-format checksum file for the
 build artifact, one line, `<hash>  <filename>` (two spaces), e.g.:
@@ -59,7 +59,7 @@ code never has to hand-parse the release tag or scrape release notes:
 | `builtAt`     | yes              | UTC build timestamp, ISO 8601 (`date -u +%Y-%m-%dT%H:%M:%SZ`). |
 | `workflowUrl` | yes              | Direct link to the workflow run that produced this release. |
 | `tagName`     | yes              | The release tag this asset was attached to (`<tag-prefix>-<platform>-<run_number>`). |
-| `assetName`   | yes              | Basename of the build artifact in this release (`app.ipa` / `app.aab`). |
+| `assetName`   | yes              | Basename of the build artifact in this release (`app.ipa` / `app.apk` or `app.aab`). |
 | `sha256`      | yes              | SHA-256 of the build artifact, same value as in `SHA256SUMS`. |
 
 On a re-run of the same workflow run (same tag), `build-meta.json` and
@@ -123,6 +123,7 @@ backend it controls (private repo) — never ship the token to the browser.
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
+| `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |

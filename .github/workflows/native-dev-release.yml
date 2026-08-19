@@ -51,6 +51,15 @@ on:
                 type: string
                 required: false
                 default: '20.5.1'
+            android-artifact-extension:
+                description: >-
+                    Artifact container EAS produces for the Android dev build, inferred by
+                    eas-cli from the --output extension: apk or aab. Defaults to apk because
+                    a dev release is an internal-distribution build that testers sideload;
+                    an aab cannot be installed on a device. Fails closed on any other value.
+                type: string
+                required: false
+                default: apk
             build-profile:
                 description: EAS build profile (eas.json build.<profile>) used for both platforms.
                 type: string
@@ -581,9 +590,17 @@ jobs:
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
                   BUILD_PROFILE: ${{ inputs.build-profile }}
+                  ANDROID_ARTIFACT_EXTENSION: ${{ inputs.android-artifact-extension }}
               run: |
                   set -euo pipefail
-                  output_path="$RUNNER_TEMP/android-dev-release/app.aab"
+                  case "$ANDROID_ARTIFACT_EXTENSION" in
+                    apk|aab) ;;
+                    *)
+                      echo "::error::android-artifact-extension '$ANDROID_ARTIFACT_EXTENSION' must be 'apk' or 'aab'."
+                      exit 1
+                      ;;
+                  esac
+                  output_path="$RUNNER_TEMP/android-dev-release/app.$ANDROID_ARTIFACT_EXTENSION"
                   mkdir -p "$(dirname "$output_path")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
                     --platform android \
