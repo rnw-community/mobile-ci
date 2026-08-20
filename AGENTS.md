@@ -154,7 +154,7 @@ with the latest release (see [README.md](README.md) and
 [RELEASE.md](RELEASE.md)); `@main` can change without a deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.6.5 # v1.6.5
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.7.0 # v1.7.0
 ```
 
 ### Maestro flow-file convention
