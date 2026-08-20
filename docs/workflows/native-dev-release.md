@@ -169,7 +169,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.6.5 # v1.6.5
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.7.0 # v1.7.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -191,7 +191,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.6.5 # v1.6.5
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.7.0 # v1.7.0
         with:
             app-dir: apps/mobile
             enable-ios: true
