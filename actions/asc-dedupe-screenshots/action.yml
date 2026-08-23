@@ -233,14 +233,14 @@ runs:
 
           removed=0
           summary_rows=()
-          localizations_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations?page%5Blimit%5D=200")"
+          localizations_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations")"
           localization_count="$(jq '.data | length' "$localizations_file")"
           loc_idx=0
           while [ "$loc_idx" -lt "$localization_count" ]; do
             locale="$(jq -r ".data[$loc_idx].attributes.locale" "$localizations_file")"
             localization_id="$(jq -r ".data[$loc_idx].id" "$localizations_file")"
 
-            sets_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets?page%5Blimit%5D=100")"
+            sets_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets")"
             set_count="$(jq '.data | length' "$sets_file")"
             set_idx=0
             while [ "$set_idx" -lt "$set_count" ]; do
@@ -249,7 +249,7 @@ runs:
 
               set_screenshots_file="$(mktemp)"
               echo '[]' > "$set_screenshots_file"
-              page_url="https://api.appstoreconnect.apple.com/v1/appScreenshotSets/${set_id}/appScreenshots?page%5Blimit%5D=200"
+              page_url="https://api.appstoreconnect.apple.com/v1/appScreenshotSets/${set_id}/appScreenshots"
               pages=0
               while [ -n "$page_url" ]; do
                 pages=$((pages + 1))
