@@ -33,8 +33,9 @@ loop `locales x appearances x scenes` on it, optional
 manifest entries to have captured successfully — a capture job skipped by a
 failed build blocks the upload, only a platform with no manifest entries may
 stay skipped — merges every `raw-screenshots-*` artifact, optionally
-validates iOS resolutions against `apple-screenshot-slots`, then runs a
-consumer-owned `upload-command`) → **status** (single required check with
+validates iOS resolutions against `apple-screenshot-slots`, runs a
+consumer-owned `upload-command`, and optionally verifies/repairs App Store
+Connect duplicates via `asc-dedupe-screenshots`) → **status** (single required check with
 honest-skip semantics: a platform's build/capture jobs must succeed whenever
 the manifest has entries for it — `skipped` only passes for a platform with
 no entries).
@@ -47,7 +48,7 @@ keep working unchanged).
 ```json
 [
   {"platform":"ios","device":"iPhone 17 Pro Max","locales":["en","de"],"appearances":["light","dark"],"orientation":"portrait"},
-  {"platform":"ios","device":"iPad Pro 13-inch (M4)","locales":["en"],"appearances":["light"],"orientation":"landscape"},
+  {"platform":"ios","device":"iPad Pro 13-inch (M4)","locales":[{"id":"en"},{"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE"}}],"appearances":["light"],"orientation":"landscape"},
   {"platform":"android","device":"phone-6.7","width":1080,"height":2340,"density":440,"locales":["en","de"],"appearances":["light","dark"]}
 ]
 ```
@@ -66,6 +67,14 @@ Validation rules (all fail closed in `validate-manifest`):
   `orientation` must be absent or `portrait` (**Android landscape is a
   v1.6.0 non-goal** — the pixel-rotation bake relies on macOS-only `sips`).
   Android entries also require `capture-mode: direct`.
+- **Locale items** may be a plain string (`"de"`) or an object
+  `{"id": "de", "env": {"LOCALE_IDENTIFIER": "de-DE"}}`. The object's `id`
+  must match `^[A-Za-z0-9_-]+$`, its optional `env` maps env names
+  (`^[A-Za-z_][A-Za-z0-9_]*$`) to string values, and the reserved names
+  `APP_ID`/`LOCALE`/`APPEARANCE` fail closed — the capture actions always
+  pass those themselves and an override would be order-dependent. The same
+  locale may not be listed twice in one entry. See
+  [Per-locale flow env](#per-locale-flow-env) for why this exists.
 - Device slugs (lowercased, non-alphanumeric runs collapsed to `-`) must be
   unique **per platform** — artifact names are platform-prefixed, so
   `iPhone 17 Pro` (iOS) and an Android label slugifying identically may
@@ -73,6 +82,39 @@ Validation rules (all fail closed in `validate-manifest`):
 - iOS entries require `ios-target`; Android entries require
   `android-target`; at least one entry overall; at most 256 entries per
   platform.
+
+## Per-locale flow env
+
+**The problem:** a screenshot flow often needs Maestro env inputs that must
+*vary per locale* — suuudokuuu's flows read `LOCALE_IDENTIFIER` (the BCP-47
+tag the in-app language switcher applies) and `OS_LANGUAGE_MODE`, which
+cannot be derived from the bare `${LOCALE}` path segment. The workflow-level
+`maestro-env` input is one static list applied to every cell of every device,
+so the only pre-v1.8 workarounds were splitting the manifest into one entry
+per locale (one simulator boot each) or templating files inside a
+`seed-command`.
+
+**The contract:** declare a locale as an object instead:
+
+```json
+{"platform":"ios","device":"iPhone 17 Pro Max",
+ "locales":[
+   "en",
+   {"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE","OS_LANGUAGE_MODE":"german"}},
+   {"id":"fr","env":{"LOCALE_IDENTIFIER":"fr-FR"}}
+ ],
+ "appearances":["light","dark"]}
+```
+
+Every flow-backed scene captured for `de` then receives `-e LOCALE=de -e
+LOCALE_IDENTIFIER=de-DE -e OS_LANGUAGE_MODE=german ...`; `en` receives only
+the global `maestro-env`. Precedence is documented and deterministic:
+global `maestro-env` pairs first, then the locale's own pairs (Maestro's
+last `-e` wins). Deep-link scenes run no Maestro and receive nothing.
+
+**When not to use it:** if the value is identical for every locale it
+belongs in `maestro-env`; if it varies per scene rather than per locale,
+give the scene its own flow that derives the value from `${LOCALE}`.
 
 ## capture-scenes (direct mode)
 
@@ -187,6 +229,36 @@ offending file and its resolution — unless each one matches a key (`WxH` or
 PNGs also fails closed (e.g. an Android-only run with slots configured). A
 slot → screenshot-count coverage table is appended to the job summary.
 
+## App Store Connect dedupe gate
+
+`asc-dedupe-screenshots: true` adds a post-upload verification/repair step to
+the upload job, implemented by
+[`asc-dedupe-screenshots`](../../actions/asc-dedupe-screenshots/README.md)
+with no dependencies beyond `curl`/`jq`/`openssl` (it signs its own ES256
+App Store Connect API JWT).
+
+**Why:** fastlane's `deliver` occasionally reports a freshly uploaded
+screenshot as "missing on App Store Connect", retries it, and both copies
+survive — the listing then shows the same image twice. This was first hit by
+a consumer whose bespoke Spaceship lane had to delete duplicates by hand;
+the gate folds that lane into the workflow so every caller gets it.
+
+**What it does:** walks every screenshot set of the target version
+(default `asc-dedupe-version-state: PREPARE_FOR_SUBMISSION`, the editable
+version this run just uploaded to; use `READY_FOR_SALE` to audit the live
+listing), groups each set by file name, deletes all but the oldest copy of
+every duplicate, and appends a per-locale coverage table to the job summary.
+
+**Fail-closed stance:** deleting duplicates repairs the listing but still
+fails the job by default (`asc-fail-on-duplicates: true`) — duplicates are
+evidence your upload lane double-uploads under retry and should be fixed.
+Set it to `false` if a successful repair should count as success.
+
+**When:** enable it whenever `upload-command` uploads iOS screenshots to App
+Store Connect. It requires the `ASC_API_KEY`, `ASC_KEY_ID`, and
+`ASC_ISSUER_ID` secrets and an `ios-target`; Android-only runs have nothing
+to dedupe and fail closed if enabled without an `ios-target`.
+
 ## Flow convention (`capture-mode: flows`)
 
 Unchanged from v1.5.x — screenshot scenes are numbered top-level
@@ -285,7 +357,7 @@ out at its assertion budget. The fix is one workspace-config key —
 | `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). |
 | `scenes-name-pattern`               | no       | `*.flow.yaml`                             | Space-separated `find -name` globs selecting scenes directly inside `screenshots-dir` (`flows` mode only). |
 | `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` glob excluding matched scenes by basename (`flows` mode only). |
-| `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line. |
+| `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. |
 | `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. |
 | `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode. |
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
@@ -326,13 +398,18 @@ out at its assertion budget. The fix is one workspace-config key —
 | `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to the resolved app dir, every capture job's artifact is merged into before `upload-command` runs — iOS under its `ios/` subdirectory, Android under `android/`. |
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to the resolved app dir, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
 | `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. |
+| `asc-dedupe-screenshots`            | no       | `false`                                   | Post-upload App Store Connect duplicate-screenshot verification/repair gate; see [App Store Connect dedupe gate](#app-store-connect-dedupe-gate). Requires `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` secrets and an `ios-target`. |
+| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). |
+| `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. |
 
 ## Secrets
 
 | Name                | Required | Description |
 | --------------------- | -------- | -------------- |
 | `EXPO_TOKEN`          | no       | Forwarded to the upload job's environment if `upload-command` needs it. |
-| `ASC_API_KEY`         | no       | App Store Connect API key contents (`.p8`). When set, written to `asc-key-path` (or `$RUNNER_TEMP`) before `upload-command` runs and removed afterward - same contract as `native-publish.yml`'s `ASC_API_KEY`. |
+| `ASC_API_KEY`         | no       | App Store Connect API key contents (`.p8`). When set, written to `asc-key-path` (or `$RUNNER_TEMP`) before `upload-command` runs and removed afterward - same contract as `native-publish.yml`'s `ASC_API_KEY`. Also the key the dedupe gate signs with. |
+| `ASC_KEY_ID`          | with `asc-dedupe-screenshots` | App Store Connect API key ID for the dedupe gate's JWT. |
+| `ASC_ISSUER_ID`       | with `asc-dedupe-screenshots` | App Store Connect API issuer ID (UUID) for the dedupe gate's JWT. |
 | `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - same fail-closed parser and masking as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
 
 Unlike `native-publish.yml`, none of these secrets are hard-required even
@@ -369,8 +446,8 @@ jobs:
                 {"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}
             capture-manifest: >-
                 [
-                  {"device":"iPhone 17 Pro Max","locales":["en","de","fr"],"appearances":["light","dark"]},
-                  {"platform":"android","device":"phone-6.7","width":1080,"height":2340,"density":440,"locales":["en","de","fr"],"appearances":["light","dark"]}
+                  {"device":"iPhone 17 Pro Max","locales":["en",{"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE"}}],"appearances":["light","dark"]},
+                  {"platform":"android","device":"phone-6.7","width":1080,"height":2340,"density":440,"locales":["en","de"],"appearances":["light","dark"]}
                 ]
             capture-mode: direct
             capture-scenes: >-
@@ -385,8 +462,11 @@ jobs:
                 {"1320x2868":"IPHONE_69"}
             upload-screenshots: true
             upload-command: bundle exec fastlane ios ios_screenshots
+            asc-dedupe-screenshots: true
         secrets:
             ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
 ```
 
 ## Migrating from v1.5.x

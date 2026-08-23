@@ -63,10 +63,14 @@ on:
                     take an exact simulator name as "device" plus an optional
                     "orientation"; Android entries take a free-form "device" label
                     (slug only) plus required integer "width"/"height"/"density" and
-                    must be portrait. locales x appearances x scenes are looped
-                    inside each job, reusing one booted simulator/container per
-                    entry. See docs/workflows/store-screenshots.md for the full
-                    schema and validation rules.
+                    must be portrait. A "locales" item may be a plain string or an
+                    object {"id": "<locale>", "env": {"KEY": "VALUE"}} whose env is
+                    passed as extra Maestro -e pairs to that locale's cells only
+                    (reserved names APP_ID/LOCALE/APPEARANCE fail closed). locales x
+                    appearances x scenes are looped inside each job, reusing one
+                    booted simulator/container per entry. See
+                    docs/workflows/store-screenshots.md for the full schema and
+                    validation rules.
                 type: string
                 required: true
             capture-mode:
@@ -149,10 +153,12 @@ on:
             maestro-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs, each passed as an additional
-                    -e KEY=VALUE argument to every `maestro test` invocation, on top of
-                    the always-passed APP_ID/LOCALE/APPEARANCE. Rejects (fails closed)
-                    any line without '=' or whose name does not match
-                    ^[A-Za-z_][A-Za-z0-9_]*$.
+                    -e KEY=VALUE argument to every `maestro test` invocation, on top
+                    of the always-passed APP_ID/LOCALE/APPEARANCE. Rejects (fails
+                    closed) any line without '=', any name not matching
+                    ^[A-Za-z_][A-Za-z0-9_]*$, and any reserved APP_ID/LOCALE/
+                    APPEARANCE override. Per-locale values belong in the manifest's
+                    {"id","env"} locale objects instead.
                 type: string
                 required: false
                 default: ''
@@ -410,6 +416,35 @@ on:
                 type: string
                 required: false
                 default: ''
+            asc-dedupe-screenshots:
+                description: >-
+                    After upload-command succeeds, verify (and repair) that the App
+                    Store Connect version carries no duplicate screenshots via the
+                    asc-dedupe-screenshots action - deliver's retry logic can
+                    double-upload a screenshot so both copies survive on the listing.
+                    Requires the ASC_API_KEY, ASC_KEY_ID, and ASC_ISSUER_ID secrets
+                    and an ios-target (App Store Connect is iOS-only). Fails the
+                    upload job when any duplicate had to be deleted unless
+                    asc-fail-on-duplicates is false - duplicates mean the upload
+                    lane is flaky even though this repaired the listing.
+                type: boolean
+                required: false
+                default: false
+            asc-dedupe-version-state:
+                description: >-
+                    App Store Connect appStoreState whose localizations are deduped;
+                    PREPARE_FOR_SUBMISSION (the editable version) targets the same
+                    run's upload, READY_FOR_SALE audits the live listing.
+                type: string
+                required: false
+                default: PREPARE_FOR_SUBMISSION
+            asc-fail-on-duplicates:
+                description: >-
+                    Set to false to treat asc-dedupe-screenshots repairing
+                    duplicates as success instead of failing the upload job.
+                type: boolean
+                required: false
+                default: true
 
         secrets:
             EXPO_TOKEN:
@@ -419,7 +454,15 @@ on:
                 description: >-
                     App Store Connect API key contents (.p8). When set, written to
                     asc-key-path (or $RUNNER_TEMP) before upload-command runs and
-                    removed afterward, same contract as native-publish.yml.
+                    removed afterward, same contract as native-publish.yml. Also the
+                    key asc-dedupe-screenshots signs with when
+                    asc-dedupe-screenshots is true.
+                required: false
+            ASC_KEY_ID:
+                description: App Store Connect API key ID; required (with ASC_ISSUER_ID) only when asc-dedupe-screenshots is true.
+                required: false
+            ASC_ISSUER_ID:
+                description: App Store Connect API issuer ID (UUID); required (with ASC_KEY_ID) only when asc-dedupe-screenshots is true.
                 required: false
             EAS_EXTRA_ENV:
                 description: >-
@@ -521,6 +564,53 @@ jobs:
                   fi
                   ios_entries=$(jq -c '[.[] | select(.platform == "ios")]' <<< "$normalized")
                   android_entries=$(jq -c '[.[] | select(.platform == "android")]' <<< "$normalized")
+                  # A locale item may be a plain string or an {"id","env"}
+                  # object carrying per-locale Maestro env. Validate the
+                  # object shape and per-entry id uniqueness first, then
+                  # normalize every entry to string locales plus a localeEnv
+                  # map so the capture jobs can pass
+                  # join(matrix.entry.locales, ",") through unchanged.
+                  for pair in "ios:$ios_entries" "android:$android_entries"; do
+                    platform="${pair%%:*}"
+                    entries="${pair#*:}"
+                    invalid_locale_objects=$(jq -c '
+                        [.[]
+                         | .device as $d
+                         | .locales
+                         | to_entries[]
+                         | select(
+                             (.value | type == "object") and
+                             (
+                               (((.value.id // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not))) or
+                               (.value | has("env") and (
+                                 ((.env | type) != "object") or
+                                 ([.env | keys[] | select((test("^[A-Za-z_][A-Za-z0-9_]*$") | not) or . == "APP_ID" or . == "LOCALE" or . == "APPEARANCE")] | length > 0) or
+                                 ([.env[] | select(type != "string")] | length > 0)
+                               ))
+                             )
+                           )
+                         | {device: $d, localeIndex: .key}
+                        ]' <<< "$entries")
+                    if [ "$invalid_locale_objects" != '[]' ]; then
+                      echo "::error::capture-manifest has invalid $platform locale objects (each needs an 'id' matching ^[A-Za-z0-9_-]+\$ and an optional 'env' object whose keys match ^[A-Za-z_][A-Za-z0-9_]*\$, are not the reserved APP_ID/LOCALE/APPEARANCE, and map to string values): $invalid_locale_objects"
+                      exit 1
+                    fi
+                    duplicate_locales=$(jq -c '
+                        [.[]
+                         | .device as $d
+                         | ([.locales[] | if type == "object" then .id else . end]
+                            | group_by(.)
+                            | map(select(length > 1)[0])) as $dups
+                         | select(($dups | length) > 0)
+                         | {device: $d, duplicates: $dups}
+                        ]' <<< "$entries")
+                    if [ "$duplicate_locales" != '[]' ]; then
+                      echo "::error::capture-manifest has $platform entries listing the same locale more than once; give each locale one entry and put its env in the object form instead: $duplicate_locales"
+                      exit 1
+                    fi
+                  done
+                  ios_entries=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$ios_entries")
+                  android_entries=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$android_entries")
                   ios_count=$(jq 'length' <<< "$ios_entries")
                   android_count=$(jq 'length' <<< "$android_entries")
                   for platform_count in "iOS:$ios_count" "Android:$android_count"; do
@@ -1185,6 +1275,7 @@ jobs:
                   appearances: ${{ join(matrix.entry.appearances, ',') }}
                   orientation: ${{ matrix.entry.orientation || 'portrait' }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
                   maestro-config: ${{ inputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
@@ -1258,6 +1349,7 @@ jobs:
                   settle-seconds: ${{ inputs.settle-seconds }}
                   status-bar-override: ${{ inputs.status-bar-override }}
                   maestro-env: ${{ inputs.maestro-env }}
+                  locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
                   maestro-config: ${{ inputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
@@ -1298,6 +1390,8 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
             HAS_ASC_API_KEY: ${{ secrets.ASC_API_KEY != '' }}
+            HAS_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID != '' }}
+            HAS_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID != '' }}
 
         steps:
             - name: Validate required inputs and capture results
@@ -1306,6 +1400,8 @@ jobs:
                   UPLOAD_COMMAND: ${{ inputs.upload-command }}
                   CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
+                  ASC_DEDUPE: ${{ inputs.asc-dedupe-screenshots }}
+                  IOS_TARGET: ${{ inputs.ios-target }}
               run: |
                   set -euo pipefail
                   if [ -z "$UPLOAD_COMMAND" ]; then
@@ -1315,6 +1411,16 @@ jobs:
                   if [ "$CAPTURE_IOS_RESULT" != 'success' ] && [ "$CAPTURE_ANDROID_RESULT" != 'success' ]; then
                     echo "::error::upload-screenshots is true but no capture job succeeded (capture-ios: $CAPTURE_IOS_RESULT, capture-android: $CAPTURE_ANDROID_RESULT); refusing to run upload-command with nothing to upload."
                     exit 1
+                  fi
+                  if [ "$ASC_DEDUPE" = 'true' ]; then
+                    if [ -z "$IOS_TARGET" ]; then
+                      echo "::error::asc-dedupe-screenshots is true but ios-target is empty; App Store Connect dedupe is iOS-only and needs the iOS appId."
+                      exit 1
+                    fi
+                    if [ "$HAS_ASC_API_KEY" != 'true' ] || [ "$HAS_ASC_KEY_ID" != 'true' ] || [ "$HAS_ASC_ISSUER_ID" != 'true' ]; then
+                      echo "::error::asc-dedupe-screenshots is true but ASC_API_KEY, ASC_KEY_ID, or ASC_ISSUER_ID is unset; all three secrets are required."
+                      exit 1
+                    fi
                   fi
 
             - name: Checkout repository
@@ -1508,6 +1614,18 @@ jobs:
                   UPLOAD_COMMAND: ${{ inputs.upload-command }}
                   SCREENSHOTS_DIR: ${{ inputs.screenshots-download-dir }}
               run: eval "$UPLOAD_COMMAND"
+
+            - name: Dedupe App Store Connect screenshots
+              id: asc-dedupe
+              if: inputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v1.7.0 # v1.7.0
+              with:
+                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
+                  asc-key-path: ${{ steps.asc-key.outputs.key-path }}
+                  asc-key-id: ${{ secrets.ASC_KEY_ID }}
+                  asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+                  version-state: ${{ inputs.asc-dedupe-version-state }}
+                  fail-on-duplicates: ${{ inputs.asc-fail-on-duplicates }}
 
             - name: Remove App Store Connect API key
               if: always() && steps.asc-key.outputs.key-path != ''

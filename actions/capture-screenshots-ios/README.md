@@ -83,6 +83,22 @@ with its own in-app switcher produces correct screenshots:
   `apply-appearance.flow.yaml` subflow convention documented in
   [docs/workflows/store-screenshots.md](../../docs/workflows/store-screenshots.md).
 
+## Per-locale flow env
+
+`locale-env` closes the contract gap where a flow needs inputs that must
+**vary per locale** (e.g. `LOCALE_IDENTIFIER`, `OS_LANGUAGE_MODE`) while the
+global `maestro-env` input is one static list for the whole capture job:
+
+```json
+{"de": {"LOCALE_IDENTIFIER": "de-DE", "OS_LANGUAGE_MODE": "german"}, "fr": {"LOCALE_IDENTIFIER": "fr-FR"}}
+```
+
+Every flow-backed scene of that locale's cells receives the global
+`maestro-env` pairs followed by the locale's own pairs. Deep-link scenes run
+no Maestro and receive no env. Reserved names (`APP_ID`, `LOCALE`,
+`APPEARANCE`) are rejected in both inputs, fail-closed, because a duplicate
+`-e` would make behavior depend on argument order.
+
 ## Orientation
 
 `orientation: landscape` does **not** rotate the Simulator's own UI - there
@@ -154,7 +170,8 @@ platform:
 | `locales`                   | yes      | —             | Space- or comma-separated locale identifiers, e.g. `en,de,fr`. |
 | `appearances`               | yes      | —             | Space- or comma-separated list of `light` and/or `dark`. |
 | `orientation`               | no       | `portrait`    | `portrait` or `landscape`; see [Orientation](#orientation). |
-| `maestro-env`               | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE`. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
+| `maestro-env`               | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE`. Rejects (fails closed) any line without `=`, any name not matching `^[A-Za-z_][A-Za-z0-9_]*$`, and any reserved `APP_ID`/`LOCALE`/`APPEARANCE` override (a duplicate `-e` would be order-dependent). |
+| `locale-env`                | no       | `''`          | JSON object mapping a locale from `locales` to extra env pairs applied only to that locale's cells - e.g. `{"de": {"LOCALE_IDENTIFIER": "de-DE"}}`. Precedence: global `maestro-env`, then these (Maestro's last `-e` wins). Fails closed on invalid JSON, an unknown locale key, a reserved name, a non-string value, or a value containing a newline/tab. See [Per-locale flow env](#per-locale-flow-env). |
 | `maestro-config`             | no       | `''`          | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `maestro-version`           | no       | `2.8.0`       | Pinned Maestro CLI version, installed the same way as `run-maestro-ios`'s `maestro-version` — and lazily: in direct mode only when an ios-applicable scene declares a `flow`. |
 | `output-dir`                | yes      | —             | Root output directory; see the fixed layout above. |
