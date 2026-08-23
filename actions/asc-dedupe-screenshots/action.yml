@@ -167,18 +167,33 @@ runs:
           jwt="${signing_input}.${sig_b64}"
 
           api() {
-            local method="$1" url="$2" out_file http_status
+            local method="$1" url="$2" out_file http_status attempt max_attempts=4 backoff
             out_file="$(mktemp)"
-            http_status="$(curl -sS --max-time 60 -w '%{http_code}' \
-              -X "$method" \
-              -H "Authorization: Bearer $jwt" \
-              -H 'Content-Type: application/json' \
-              -o "$out_file" \
-              "$url")" || {
+            # --retry-all-errors: self-hosted fleets see transient DNS
+            # failures (curl exit 6), which plain --retry does not cover.
+            attempt=1
+            while :; do
+              if http_status="$(curl -sS --max-time 60 \
+                --retry 3 --retry-delay 5 --retry-all-errors \
+                -w '%{http_code}' \
+                -X "$method" \
+                -H "Authorization: Bearer $jwt" \
+                -H 'Content-Type: application/json' \
+                -o "$out_file" \
+                "$url")"; then
+                break
+              fi
+              if [ "$attempt" -ge "$max_attempts" ]; then
                 rm -f "$out_file"
-                echo "::error::curl failed calling App Store Connect '$url'."
+                echo "::error::App Store Connect '$method $url' failed after $max_attempts attempts (last curl output above)."
                 exit 1
-              }
+              fi
+              backoff=$((attempt * 10))
+              echo "::warning::curl failed calling App Store Connect (attempt $attempt/$max_attempts); retrying in ${backoff}s."
+              rm -f "$out_file"
+              sleep "$backoff"
+              attempt=$((attempt + 1))
+            done
             case "$http_status" in
               2*) printf '%s' "$out_file" ;;
               *)
