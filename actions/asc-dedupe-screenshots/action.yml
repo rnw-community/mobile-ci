@@ -210,7 +210,7 @@ runs:
             rm -f "$dead_file"
           }
 
-          apps_file="$(api GET "https://api.appstoreconnect.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
+          apps_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
           app_count="$(jq '.data | length' "$apps_file")"
           if [ "$app_count" -ne 1 ]; then
             echo "::error::bundle id '$APP_ID' resolved to $app_count App Store Connect apps; expected exactly 1."
@@ -219,7 +219,7 @@ runs:
           asc_app_id="$(jq -r '.data[0].id' "$apps_file")"
           rm -f "$apps_file"
 
-          versions_file="$(api GET "https://api.appstoreconnect.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}&page%5Blimit%5D=50")"
+          versions_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}&page%5Blimit%5D=50")"
           version_count="$(jq '.data | length' "$versions_file")"
           if [ "$version_count" -lt 1 ]; then
             echo "::error::no app store version in state '$VERSION_STATE' found for '$APP_ID'; nothing to dedupe."
@@ -230,14 +230,14 @@ runs:
 
           removed=0
           summary_rows=()
-          localizations_file="$(api GET "https://api.appstoreconnect.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations?page%5Blimit%5D=200")"
+          localizations_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations?page%5Blimit%5D=200")"
           localization_count="$(jq '.data | length' "$localizations_file")"
           loc_idx=0
           while [ "$loc_idx" -lt "$localization_count" ]; do
             locale="$(jq -r ".data[$loc_idx].attributes.locale" "$localizations_file")"
             localization_id="$(jq -r ".data[$loc_idx].id" "$localizations_file")"
 
-            sets_file="$(api GET "https://api.appstoreconnect.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets?page%5Blimit%5D=100")"
+            sets_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets?page%5Blimit%5D=100")"
             set_count="$(jq '.data | length' "$sets_file")"
             set_idx=0
             while [ "$set_idx" -lt "$set_count" ]; do
@@ -246,7 +246,7 @@ runs:
 
               set_screenshots_file="$(mktemp)"
               echo '[]' > "$set_screenshots_file"
-              page_url="https://api.appstoreconnect.com/v1/appScreenshotSets/${set_id}/appScreenshots?page%5Blimit%5D=200"
+              page_url="https://api.appstoreconnect.apple.com/v1/appScreenshotSets/${set_id}/appScreenshots?page%5Blimit%5D=200"
               pages=0
               while [ -n "$page_url" ]; do
                 pages=$((pages + 1))
@@ -273,7 +273,7 @@ runs:
               while [ "$dup_idx" -lt "$duplicate_count" ]; do
                 shot_id="$(jq -r ".[$dup_idx].id" <<< "$duplicates")"
                 file_name="$(jq -r ".[$dup_idx].attributes.fileName" <<< "$duplicates")"
-                api_delete DELETE "https://api.appstoreconnect.com/v1/appScreenshots/${shot_id}"
+                api_delete DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}"
                 echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
                 removed=$((removed + 1))
                 dup_idx=$((dup_idx + 1))
