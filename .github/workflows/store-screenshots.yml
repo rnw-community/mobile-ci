@@ -1617,7 +1617,9 @@ jobs:
 
             - name: Dedupe App Store Connect screenshots
               id: asc-dedupe
-              if: inputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
+              # Boolean input - truthiness, not a string comparison: in an
+              # if: expression `boolean-input == 'true'` is always false.
+              if: inputs.asc-dedupe-screenshots && env.HAS_ASC_API_KEY == 'true'
               uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@feat/store-screenshots-locale-env-asc-dedupe
               with:
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
