@@ -438,6 +438,15 @@ on:
                 type: string
                 required: false
                 default: PREPARE_FOR_SUBMISSION
+            asc-dedupe-app-id:
+                description: >-
+                    Bundle identifier of the App Store Connect app whose listing is
+                    deduped. Defaults to ios-target's appId - set this when the
+                    capture build uses a suffixed/e2e bundle id while the listing
+                    lives under the store app's own id.
+                type: string
+                required: false
+                default: ''
             asc-fail-on-duplicates:
                 description: >-
                     Set to false to treat asc-dedupe-screenshots repairing
@@ -1622,7 +1631,7 @@ jobs:
               if: inputs.asc-dedupe-screenshots && env.HAS_ASC_API_KEY == 'true'
               uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@feat/store-screenshots-locale-env-asc-dedupe
               with:
-                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
+                  app-id: ${{ inputs.asc-dedupe-app-id != '' && inputs.asc-dedupe-app-id || fromJSON(inputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}
                   asc-key-id: ${{ secrets.ASC_KEY_ID }}
                   asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
