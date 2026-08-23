@@ -42,6 +42,12 @@ outputs:
   removed-count:
     description: Number of duplicate screenshots deleted from App Store Connect.
     value: ${{ steps.dedupe.outputs.removed-count }}
+  undeletable-count:
+    description: >-
+      Duplicates detected on a version whose screenshots can no longer be
+      modified (e.g. READY_FOR_SALE) - they need manual cleanup in App Store
+      Connect or will age out with the next version submission.
+    value: ${{ steps.dedupe.outputs.undeletable-count }}
 runs:
   using: composite
   steps:
@@ -204,12 +210,6 @@ runs:
                 ;;
             esac
           }
-          api_delete() {
-            local dead_file
-            dead_file="$(api "$@")"
-            rm -f "$dead_file"
-          }
-
           apps_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
           app_count="$(jq '.data | length' "$apps_file")"
           if [ "$app_count" -ne 1 ]; then
@@ -232,6 +232,7 @@ runs:
           rm -f "$versions_file"
 
           removed=0
+          undeletable=0
           summary_rows=()
           localizations_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations")"
           localization_count="$(jq '.data | length' "$localizations_file")"
@@ -276,9 +277,43 @@ runs:
               while [ "$dup_idx" -lt "$duplicate_count" ]; do
                 shot_id="$(jq -r ".[$dup_idx].id" <<< "$duplicates")"
                 file_name="$(jq -r ".[$dup_idx].attributes.fileName" <<< "$duplicates")"
-                api_delete DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}"
-                echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
-                removed=$((removed + 1))
+                # A submitted/live version's screenshots are immutable (HTTP
+                # 409 STATE_ERROR); duplicates there can only be reported,
+                # never auto-repaired.
+                delete_out_file="$(mktemp)"
+                attempt=1
+                while :; do
+                  if http_code="$(curl -sS --max-time 60 \
+                    --retry 3 --retry-delay 5 --retry-all-errors \
+                    -w '%{http_code}' \
+                    -X DELETE \
+                    -H "Authorization: Bearer $jwt" \
+                    -H 'Content-Type: application/json' \
+                    -o "$delete_out_file" \
+                    "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"; then
+                    break
+                  fi
+                  if [ "$attempt" -ge 4 ]; then
+                    rm -f "$delete_out_file"
+                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' failed after 4 attempts (last curl output above)."
+                    exit 1
+                  fi
+                  sleep $((attempt * 10))
+                  attempt=$((attempt + 1))
+                done
+                if [ "$http_code" = "409" ]; then
+                  echo "Duplicate not deletable (version already submitted for review): ${locale}/${display_type}: ${file_name} (${shot_id})"
+                  undeletable=$((undeletable + 1))
+                elif [ "${http_code:0:1}" = "2" ]; then
+                  echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
+                  removed=$((removed + 1))
+                else
+                  echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP ${http_code}:" >&2
+                  head -c 2000 "$delete_out_file" >&2 || true
+                  rm -f "$delete_out_file"
+                  exit 1
+                fi
+                rm -f "$delete_out_file"
                 dup_idx=$((dup_idx + 1))
               done
               summary_rows+=("| $locale | $display_type | $total_in_set | $duplicate_count |")
@@ -298,12 +333,27 @@ runs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           echo "removed-count=$removed" >> "$GITHUB_OUTPUT"
+          echo "undeletable-count=$undeletable" >> "$GITHUB_OUTPUT"
+
+          if [ "$undeletable" -gt 0 ]; then
+            echo "::warning::$undeletable duplicate(s) live on a version that is already submitted for review - App Store Connect forbids modifying their screenshots. They must be cleaned up manually or will disappear with the next version submission; use the editable version (PREPARE_FOR_SUBMISSION) to dedupe before submitting."
+          fi
 
           if [ "$removed" -gt 0 ]; then
             echo "::error::$removed duplicate screenshot(s) were deleted from App Store Connect. The listing is now correct, but duplicates mean upload-command's lane double-uploads under retry - fix that lane (deliver with overwrite_screenshots: true is known to do this when its post-upload verification retries a fresh upload). Re-run this gate afterwards; it should report zero."
             if [ "$FAIL_ON_DUPLICATES" = "true" ]; then
               exit 1
             fi
-          else
+          elif [ "$undeletable" -eq 0 ]; then
             echo "No duplicate screenshots on App Store Connect."
+          fi
+
+          if [ "$FAIL_ON_DUPLICATES" != "true" ]; then
+            echo "fail-on-duplicates=false: reporting $removed deleted and $undeletable undeletable duplicate(s) as success."
+            exit 0
+          fi
+
+          if [ "$undeletable" -gt 0 ]; then
+            echo "::error::$undeletable duplicate(s) detected but not repairable on this version; failing per fail-on-duplicates=true."
+            exit 1
           fi

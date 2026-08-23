@@ -248,6 +248,9 @@ the gate folds that lane into the workflow so every caller gets it.
 version this run just uploaded to; use `READY_FOR_SALE` to audit the live
 listing), groups each set by file name, deletes all but the oldest copy of
 every duplicate, and appends a per-locale coverage table to the job summary.
+Duplicates on an already-submitted version cannot be modified (ASC returns
+HTTP 409) - they are counted in `undeletable-count`, warned about, and, with
+the default `fail-on-duplicates: true`, still fail the job.
 
 **Fail-closed stance:** deleting duplicates repairs the listing but still
 fails the job by default (`asc-fail-on-duplicates: true`) — duplicates are

@@ -23,6 +23,14 @@ upload lane is flaky, so the run stays red even though the listing is now
 correct. Set `fail-on-duplicates: false` to treat a successful repair as
 success.
 
+**Submitted versions are detect-only.** App Store Connect forbids modifying
+a version's screenshots once it has been submitted for review (HTTP 409
+`STATE_ERROR`). Auditing `READY_FOR_SALE` therefore reports undeletable
+duplicates via the `undeletable-count` output and a `::warning::`, and - with
+the default `fail-on-duplicates: true` - still fails the run: someone must
+clean those up manually or they age out with the next version submission.
+Dedupe *before* submitting by targeting `PREPARE_FOR_SUBMISSION`.
+
 ## When to use
 
 - **After every screenshot upload to App Store Connect** - wire it into
@@ -51,6 +59,7 @@ listing is a read-only pass that appends a coverage table to the job summary.
 | Name             | Description |
 | ------------------ | -------------- |
 | `removed-count`     | Number of duplicate screenshots deleted. |
+| `undeletable-count` | Duplicates detected on an already-submitted version (detect-only; see above). |
 
 ## Example
 
