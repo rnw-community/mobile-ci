@@ -219,7 +219,10 @@ runs:
           asc_app_id="$(jq -r '.data[0].id' "$apps_file")"
           rm -f "$apps_file"
 
-          versions_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}&page%5Blimit%5D=50")"
+          # appStoreVersions rejects page[limit] (HTTP 400
+          # PARAMETER_ERROR.ILLEGAL); the collection is small enough that
+          # default paging is fine here.
+          versions_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}")"
           version_count="$(jq '.data | length' "$versions_file")"
           if [ "$version_count" -lt 1 ]; then
             echo "::error::no app store version in state '$VERSION_STATE' found for '$APP_ID'; nothing to dedupe."
