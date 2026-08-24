@@ -175,9 +175,10 @@ runs:
           # Single request primitive: bounded retries through transport-level
           # failures only (self-hosted fleets see transient DNS errors, curl
           # exit 6); HTTP statuses are always returned to the caller for
-          # classification. Prints the response temp file and sets ASC_CODE.
+          # classification. Prints "<status>\t<response-file>" - both values
+          # must travel through stdout because command substitution runs in a
+          # subshell and cannot hand back variables.
           max_attempts=4
-          ASC_CODE=''
           asc_request() {
             local method="$1" url="$2" out_file attempt=1 backoff code
             out_file="$(mktemp)"
@@ -188,8 +189,7 @@ runs:
                 -H 'Content-Type: application/json' \
                 -o "$out_file" \
                 "$url")"; then
-                ASC_CODE="$code"
-                printf '%s' "$out_file"
+                printf '%s\t%s\n' "$code" "$out_file"
                 return 0
               fi
               if [ "$attempt" -ge "$max_attempts" ]; then
@@ -205,12 +205,14 @@ runs:
             done
           }
           asc_get() {
-            local file
-            file="$(asc_request GET "$1")"
-            case "$ASC_CODE" in
+            local pair code file
+            pair="$(asc_request GET "$1")"
+            code="${pair%%$'\t'*}"
+            file="${pair#*$'\t'}"
+            case "$code" in
               2*) printf '%s' "$file" ;;
               *)
-                echo "::error::App Store Connect 'GET $1' returned HTTP $ASC_CODE:" >&2
+                echo "::error::App Store Connect 'GET $1' returned HTTP $code:" >&2
                 head -c 2000 "$file" >&2 || true
                 rm -f "$file"
                 exit 1
@@ -282,8 +284,10 @@ runs:
               while [ "$dup_idx" -lt "$duplicate_count" ]; do
                 shot_id="$(jq -r ".[$dup_idx].id" <<< "$duplicates")"
                 file_name="$(jq -r ".[$dup_idx].attributes.fileName" <<< "$duplicates")"
-                delete_file="$(asc_request DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"
-                case "$ASC_CODE" in
+                delete_pair="$(asc_request DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"
+                delete_code="${delete_pair%%$'\t'*}"
+                delete_file="${delete_pair#*$'\t'}"
+                case "$delete_code" in
                   204)
                     echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
                     rm -f "$delete_file"
@@ -297,7 +301,7 @@ runs:
                     undeletable=$((undeletable + 1))
                     ;;
                   *)
-                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP $ASC_CODE:" >&2
+                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP $delete_code:" >&2
                     head -c 2000 "$delete_file" >&2 || true
                     rm -f "$delete_file"
                     exit 1
