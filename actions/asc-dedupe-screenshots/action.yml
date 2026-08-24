@@ -1,0 +1,344 @@
+name: asc-dedupe-screenshots
+description: >-
+  Reads every screenshot of an App Store Connect app version (default: the
+  editable PREPARE_FOR_SUBMISSION version) via the App Store Connect API -
+  self-signed ES256 JWT, curl+jq+openssl only - groups each localization's
+  screenshot sets by file name, and deletes all but the oldest copy of every
+  duplicate. fastlane's deliver sometimes double-uploads a screenshot when its
+  post-upload verification retries a fresh upload it believes is missing;
+  both copies survive on App Store Connect and the listing shows the same
+  image twice. Exits non-zero when duplicates were found so the flaky upload
+  upstream gets attention instead of passing silently.
+inputs:
+  app-id:
+    description: Bundle identifier, e.g. com.example.app. Resolved to exactly one App Store Connect app or the step fails closed.
+    required: true
+  asc-key-path:
+    description: Path to the App Store Connect API key (.p8) file.
+    required: true
+  asc-key-id:
+    description: App Store Connect API key ID (the .p8 file name without extension).
+    required: true
+  asc-issuer-id:
+    description: App Store Connect API issuer ID (a UUID).
+    required: true
+  version-state:
+    description: >-
+      App Store version state whose localizations are deduped, e.g.
+      PREPARE_FOR_SUBMISSION (the editable version - the default),
+      READY_FOR_SALE (the live version). Must be an App Store Connect
+      appStoreState enum value.
+    required: false
+    default: PREPARE_FOR_SUBMISSION
+  fail-on-duplicates:
+    description: >-
+      When 'true' (default), exit non-zero when any duplicate was found -
+      deleted or undeletable - because duplicates mean upload-command's lane
+      is flaky even though this action repaired the listing. Set to 'false'
+      for report-only audits.
+    required: false
+    default: 'true'
+outputs:
+  removed-count:
+    description: Number of duplicate screenshots deleted from App Store Connect.
+    value: ${{ steps.dedupe.outputs.removed-count }}
+  undeletable-count:
+    description: >-
+      Duplicates detected on a version whose screenshots can no longer be
+      modified (e.g. READY_FOR_SALE) - they need manual cleanup in App Store
+      Connect or will age out with the next version submission.
+    value: ${{ steps.dedupe.outputs.undeletable-count }}
+runs:
+  using: composite
+  steps:
+    - name: Deduplicate App Store Connect screenshots
+      id: dedupe
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+        VERSION_STATE: ${{ inputs.version-state }}
+        FAIL_ON_DUPLICATES: ${{ inputs.fail-on-duplicates }}
+      run: |
+          set -euo pipefail
+
+          for tool in jq openssl curl; do
+            command -v "$tool" >/dev/null 2>&1 || { echo "::error::'$tool' is required by asc-dedupe-screenshots but is not on PATH."; exit 1; }
+          done
+          test -f "$ASC_KEY_PATH" || { echo "::error::asc-key-path '$ASC_KEY_PATH' is not a file."; exit 1; }
+          case "$APP_ID" in
+            ''|*[!A-Za-z0-9.-]*)
+              echo "::error::app-id '$APP_ID' must match ^[A-Za-z0-9.-]+\$ (a bundle identifier)."
+              exit 1
+              ;;
+          esac
+          case "$VERSION_STATE" in
+            ''|*[!A-Z_]*)
+              echo "::error::version-state '$VERSION_STATE' must be an App Store Connect appStoreState enum value (uppercase words joined by underscores), e.g. PREPARE_FOR_SUBMISSION."
+              exit 1
+              ;;
+          esac
+          case "$FAIL_ON_DUPLICATES" in
+            true|false) ;;
+            *)
+              echo "::error::fail-on-duplicates must be 'true' or 'false'."
+              exit 1
+              ;;
+          esac
+          case "$ASC_KEY_ID" in
+            ''|*[!A-Za-z0-9]*)
+              echo "::error::asc-key-id must be a non-empty alphanumeric App Store Connect key ID."
+              exit 1
+              ;;
+          esac
+          issuer_stripped=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '-')
+          case "$issuer_stripped" in
+            ''|*[!0-9a-fA-F]*)
+              echo "::error::asc-issuer-id '$ASC_ISSUER_ID' must be a UUID."
+              exit 1
+              ;;
+          esac
+          if [ "${#issuer_stripped}" -ne 32 ]; then
+            echo "::error::asc-issuer-id '$ASC_ISSUER_ID' must be a UUID."
+            exit 1
+          fi
+
+          b64url() {
+            openssl base64 -A | tr '+/' '-_' | tr -d '='
+          }
+
+          now=$(date +%s)
+          header_b64=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$ASC_KEY_ID" | b64url)
+          payload_b64=$(printf '{"iss":"%s","iat":%s,"exp":%s,"aud":"appstoreconnect-v1"}' \
+            "$ASC_ISSUER_ID" "$now" "$((now + 1200))" | b64url)
+          signing_input="${header_b64}.${payload_b64}"
+
+          # ES256 JWTs carry the signature as 32 bytes of r concatenated with
+          # 32 bytes of s; OpenSSL emits DER (SEQUENCE { INTEGER r, INTEGER s })
+          # where each integer drops leading zero bytes or carries one extra
+          # when its high bit is set. Convert to hex inside the pipe - binary
+          # must never be captured in a variable, because command substitution
+          # silently strips NUL bytes.
+          der_hex="$(printf '%s' "$signing_input" \
+            | openssl dgst -sha256 -sign "$ASC_KEY_PATH" -binary \
+            | od -An -v -tx1 \
+            | tr -d ' \n')" || {
+            echo "::error::openssl failed to sign the App Store Connect JWT with '$ASC_KEY_PATH'; confirm the .p8 contents are an EC private key."
+            exit 1
+          }
+          case "$der_hex" in 30*) ;; *) echo "::error::JWT signature is not a DER SEQUENCE."; exit 1 ;; esac
+          pos=4
+          if [ "${der_hex:$pos:2}" != "02" ]; then
+            echo "::error::JWT signature DER is malformed (r marker)."
+            exit 1
+          fi
+          pos=$((pos + 2))
+          rlen=$(( 16#${der_hex:$pos:2} ))
+          pos=$((pos + 2))
+          r_hex=${der_hex:$pos:$((rlen * 2))}
+          pos=$((pos + rlen * 2))
+          if [ "${der_hex:$pos:2}" != "02" ]; then
+            echo "::error::JWT signature DER is malformed (s marker)."
+            exit 1
+          fi
+          pos=$((pos + 2))
+          slen=$(( 16#${der_hex:$pos:2} ))
+          pos=$((pos + 2))
+          s_hex=${der_hex:$pos:$((slen * 2))}
+          strip_leading_zeros() {
+            local h="$1"
+            while [ "${h:0:2}" = "00" ] && [ "${#h}" -gt 2 ]; do h="${h:2}"; done
+            printf '%s' "$h"
+          }
+          r_hex=$(strip_leading_zeros "$r_hex")
+          s_hex=$(strip_leading_zeros "$s_hex")
+          if [ "${#r_hex}" -gt 64 ] || [ "${#s_hex}" -gt 64 ]; then
+            echo "::error::JWT signature components exceed 32 bytes; refusing to emit a corrupt token."
+            exit 1
+          fi
+          while [ "${#r_hex}" -lt 64 ]; do r_hex="00${r_hex}"; done
+          while [ "${#s_hex}" -lt 64 ]; do s_hex="00${s_hex}"; done
+          sig_fmt=''
+          for ((i = 0; i < 64; i += 2)); do
+            sig_fmt="${sig_fmt}\\x${r_hex:$i:2}"
+          done
+          for ((i = 0; i < 64; i += 2)); do
+            sig_fmt="${sig_fmt}\\x${s_hex:$i:2}"
+          done
+          # Pipe straight into base64 - never capture the raw binary in a
+          # variable: command substitution silently strips NUL bytes.
+          sig_b64="$(printf '%b' "$sig_fmt" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+          jwt="${signing_input}.${sig_b64}"
+
+          # Single request primitive: bounded retries through transport-level
+          # failures only (self-hosted fleets see transient DNS errors, curl
+          # exit 6); HTTP statuses are always returned to the caller for
+          # classification. Prints "<status>\t<response-file>" - both values
+          # must travel through stdout because command substitution runs in a
+          # subshell and cannot hand back variables.
+          max_attempts=4
+          asc_request() {
+            local method="$1" url="$2" out_file attempt=1 backoff code
+            out_file="$(mktemp)"
+            while :; do
+              if code="$(curl -sS --max-time 60 -w '%{http_code}' \
+                -X "$method" \
+                -H "Authorization: Bearer $jwt" \
+                -H 'Content-Type: application/json' \
+                -o "$out_file" \
+                "$url")"; then
+                printf '%s\t%s\n' "$code" "$out_file"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                rm -f "$out_file"
+                echo "::error::App Store Connect '$method $url' failed after $max_attempts attempts (last curl output above)."
+                exit 1
+              fi
+              backoff=$((attempt * 10))
+              echo "::warning::curl failed calling App Store Connect (attempt $attempt/$max_attempts); retrying in ${backoff}s."
+              rm -f "$out_file"
+              sleep "$backoff"
+              attempt=$((attempt + 1))
+            done
+          }
+          asc_get() {
+            local pair code file
+            pair="$(asc_request GET "$1")"
+            code="${pair%%$'\t'*}"
+            file="${pair#*$'\t'}"
+            case "$code" in
+              2*) printf '%s' "$file" ;;
+              *)
+                echo "::error::App Store Connect 'GET $1' returned HTTP $code:" >&2
+                head -c 2000 "$file" >&2 || true
+                rm -f "$file"
+                exit 1
+                ;;
+            esac
+          }
+
+          apps_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
+          app_count="$(jq '.data | length' "$apps_file")"
+          if [ "$app_count" -ne 1 ]; then
+            echo "::error::bundle id '$APP_ID' resolved to $app_count App Store Connect apps; expected exactly 1."
+            exit 1
+          fi
+          asc_app_id="$(jq -r '.data[0].id' "$apps_file")"
+          rm -f "$apps_file"
+
+          versions_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}")"
+          version_count="$(jq '.data | length' "$versions_file")"
+          if [ "$version_count" -lt 1 ]; then
+            echo "::error::no app store version in state '$VERSION_STATE' found for '$APP_ID'; nothing to dedupe."
+            exit 1
+          fi
+          asc_version_id="$(jq -r '.data[0].id' "$versions_file")"
+          rm -f "$versions_file"
+
+          removed=0
+          undeletable=0
+          summary_rows=()
+          localizations_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations")"
+          localization_count="$(jq '.data | length' "$localizations_file")"
+          loc_idx=0
+          while [ "$loc_idx" -lt "$localization_count" ]; do
+            locale="$(jq -r ".data[$loc_idx].attributes.locale" "$localizations_file")"
+            localization_id="$(jq -r ".data[$loc_idx].id" "$localizations_file")"
+
+            sets_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets")"
+            set_count="$(jq '.data | length' "$sets_file")"
+            set_idx=0
+            while [ "$set_idx" -lt "$set_count" ]; do
+              display_type="$(jq -r ".data[$set_idx].attributes.screenshotDisplayType" "$sets_file")"
+              set_id="$(jq -r ".data[$set_idx].id" "$sets_file")"
+
+              set_screenshots_file="$(mktemp)"
+              echo '[]' > "$set_screenshots_file"
+              page_url="https://api.appstoreconnect.apple.com/v1/appScreenshotSets/${set_id}/appScreenshots"
+              pages=0
+              while [ -n "$page_url" ]; do
+                pages=$((pages + 1))
+                if [ "$pages" -gt 50 ]; then
+                  echo "::error::more than 50 pages of screenshots for locale '$locale' display type '$display_type'; aborting rather than deduping a partially-fetched set."
+                  exit 1
+                fi
+                page_file="$(asc_get "$page_url")"
+                jq -c --slurpfile acc "$set_screenshots_file" '$acc[0] + (.data // [])' "$page_file" > "${set_screenshots_file}.next"
+                mv "${set_screenshots_file}.next" "$set_screenshots_file"
+                page_url="$(jq -r '.links.next // ""' "$page_file")"
+                rm -f "$page_file"
+              done
+
+              total_in_set="$(jq 'length' "$set_screenshots_file")"
+              duplicates="$(jq -c '
+                  sort_by(.attributes.uploadedDate, .id)
+                  | group_by(.attributes.fileName)
+                  | map(select(length > 1)[1:])
+                  | flatten
+              ' "$set_screenshots_file")"
+              duplicate_count="$(jq 'length' <<< "$duplicates")"
+              dup_idx=0
+              while [ "$dup_idx" -lt "$duplicate_count" ]; do
+                shot_id="$(jq -r ".[$dup_idx].id" <<< "$duplicates")"
+                file_name="$(jq -r ".[$dup_idx].attributes.fileName" <<< "$duplicates")"
+                delete_pair="$(asc_request DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"
+                delete_code="${delete_pair%%$'\t'*}"
+                delete_file="${delete_pair#*$'\t'}"
+                case "$delete_code" in
+                  204)
+                    echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
+                    rm -f "$delete_file"
+                    removed=$((removed + 1))
+                    ;;
+                  # A submitted/live version's screenshots are immutable;
+                  # duplicates there can only be reported, never repaired.
+                  409)
+                    echo "Duplicate not deletable (version already submitted for review): ${locale}/${display_type}: ${file_name} (${shot_id})"
+                    rm -f "$delete_file"
+                    undeletable=$((undeletable + 1))
+                    ;;
+                  *)
+                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP $delete_code:" >&2
+                    head -c 2000 "$delete_file" >&2 || true
+                    rm -f "$delete_file"
+                    exit 1
+                    ;;
+                esac
+                dup_idx=$((dup_idx + 1))
+              done
+              summary_rows+=("| $locale | $display_type | $total_in_set | $duplicate_count |")
+              rm -f "$set_screenshots_file"
+              set_idx=$((set_idx + 1))
+            done
+            rm -f "$sets_file"
+            loc_idx=$((loc_idx + 1))
+          done
+          rm -f "$localizations_file"
+
+          {
+            echo "### App Store Connect screenshot dedupe ($APP_ID, version state $VERSION_STATE)"
+            echo "| Locale | Display type | Screenshots | Duplicates found |"
+            echo "| --- | --- | --- | --- |"
+            printf '%s\n' "${summary_rows[@]:-}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "removed-count=$removed" >> "$GITHUB_OUTPUT"
+          echo "undeletable-count=$undeletable" >> "$GITHUB_OUTPUT"
+
+          if [ "$removed" -gt 0 ]; then
+            echo "::error::$removed duplicate screenshot(s) were deleted from App Store Connect. The listing is now correct, but duplicates mean upload-command's lane double-uploads under retry - fix that lane (deliver with overwrite_screenshots: true is known to do this when its post-upload verification retries a fresh upload). Re-run this gate afterwards; it should report zero."
+          fi
+          if [ "$undeletable" -gt 0 ]; then
+            echo "::warning::$undeletable duplicate(s) live on a version that is already submitted for review - App Store Connect forbids modifying their screenshots. They must be cleaned up manually or will disappear with the next version submission; use the editable version (PREPARE_FOR_SUBMISSION) to dedupe before submitting."
+          fi
+          if [ "$removed" -eq 0 ] && [ "$undeletable" -eq 0 ]; then
+            echo "No duplicate screenshots on App Store Connect."
+          fi
+
+          if [ "$FAIL_ON_DUPLICATES" = "true" ] && [ "$((removed + undeletable))" -gt 0 ]; then
+            echo "::error::failing per fail-on-duplicates=true ($removed deleted, $undeletable undeletable)."
+            exit 1
+          fi

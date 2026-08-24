@@ -91,8 +91,25 @@ inputs:
       Newline-separated KEY=VALUE pairs, each passed as an additional
       -e KEY=VALUE argument to every `maestro test` invocation (flow-backed
       scenes only), on top of the always-passed APP_ID/LOCALE/APPEARANCE.
-      Rejects (fails closed) any line without '=' or whose name does not
-      match ^[A-Za-z_][A-Za-z0-9_]*$.
+      Rejects (fails closed) any line without '=', any name not matching
+      ^[A-Za-z_][A-Za-z0-9_]*$, and any line whose name is one of the
+      reserved APP_ID/LOCALE/APPEARANCE (overriding them via -e duplicates
+      would be order-dependent). A key redefined in locale-env is fine: the
+      locale value wins.
+    required: false
+    default: ''
+  locale-env:
+    description: >-
+      JSON object mapping a locale from locales to an object of additional
+      Maestro env pairs applied only to that locale's cells - e.g.
+      {"de": {"LOCALE_IDENTIFIER": "de-DE", "OS_LANGUAGE_MODE": "german"}}.
+      This is how per-locale flow inputs vary inside one capture job without
+      splitting the manifest into one entry per locale. Precedence: global
+      maestro-env first, then these per-locale pairs (Maestro's last -e wins).
+      Fails closed on invalid JSON, a non-object value, an unknown locale
+      key, a name not matching ^[A-Za-z_][A-Za-z0-9_]*$, a name that is one
+      of the reserved APP_ID/LOCALE/APPEARANCE, a non-string value, or a
+      value containing a newline/tab.
     required: false
     default: ''
   maestro-config:
@@ -434,6 +451,7 @@ runs:
         SEED_COMMAND: ${{ inputs.seed-command }}
         SETTLE_SECONDS: ${{ inputs.settle-seconds }}
         MAESTRO_ENV: ${{ inputs.maestro-env }}
+        LOCALE_ENV_JSON: ${{ inputs.locale-env }}
         MAESTRO_CONFIG: ${{ inputs.maestro-config }}
         DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
       run: |
@@ -473,8 +491,51 @@ runs:
                   exit 1
                   ;;
               esac
+              case "$name" in
+                APP_ID|LOCALE|APPEARANCE)
+                  echo "::error::maestro-env cannot define '$name'; it is always passed by this action and an override would be order-dependent. Use locale-env for per-locale values instead."
+                  exit 1
+                  ;;
+              esac
               maestro_env_args+=(-e "$line")
             done <<< "$MAESTRO_ENV"
+          fi
+
+          if [ -n "$LOCALE_ENV_JSON" ]; then
+            jq empty <<< "$LOCALE_ENV_JSON" 2>/dev/null || { echo "::error::locale-env is not valid JSON."; exit 1; }
+            if [ "$(jq 'type' <<< "$LOCALE_ENV_JSON")" != '"object"' ]; then
+              echo "::error::locale-env must be a JSON object mapping locale identifiers to env objects."
+              exit 1
+            fi
+            bad_locale_env=$(jq -r '
+                [to_entries[]
+                 | .key as $l
+                 | select((.value | type) != "object")
+                 | $l]
+                | join(", ")
+            ' <<< "$LOCALE_ENV_JSON")
+            if [ -n "$bad_locale_env" ]; then
+              echo "::error::locale-env values must be objects of KEY=VALUE pairs; offending locales: $bad_locale_env"
+              exit 1
+            fi
+            bad_locale_env=$(jq -r '
+                [to_entries[]
+                 | .key as $l
+                 | .value
+                 | to_entries[]
+                 | select(
+                     ((.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) | not) or
+                     (.key == "APP_ID" or .key == "LOCALE" or .key == "APPEARANCE") or
+                     ((.value | type) != "string") or
+                     ((.value | test("[\\n\\t\\r]")))
+                 )
+                 | "\($l).\(.key)"]
+                | join(", ")
+            ' <<< "$LOCALE_ENV_JSON")
+            if [ -n "$bad_locale_env" ]; then
+              echo "::error::locale-env entries must have names matching ^[A-Za-z_][A-Za-z0-9_]*\$, string values without newline/tab, and none of the reserved names APP_ID/LOCALE/APPEARANCE (always passed by this action); offending entries: $bad_locale_env"
+              exit 1
+            fi
           fi
 
           locales_list=$(printf '%s' "$CAPTURE_LOCALES" | tr ',\n\t' '   ')
@@ -500,6 +561,43 @@ runs:
                 ;;
             esac
           done
+
+          # Per-locale env contract: every flow-backed scene of this locale's
+          # cells gets the global maestro-env pairs followed by this locale's
+          # own pairs (Maestro's last -e wins), so a manifest can vary inputs
+          # like LOCALE_IDENTIFIER per locale inside one capture job.
+          locale_env_args_for() {
+            if [ -n "$LOCALE_ENV_JSON" ]; then
+              jq -r --arg l "$1" 'select(has($l)) | .[$l] | to_entries[] | "-e", "\(.key)=\(.value)"' <<< "$LOCALE_ENV_JSON"
+            fi
+          }
+          build_cell_env_args() {
+            cell_env_args=()
+            if [ "${#maestro_env_args[@]}" -gt 0 ]; then
+              cell_env_args+=("${maestro_env_args[@]}")
+            fi
+            local arg
+            while IFS= read -r arg; do
+              [ -z "$arg" ] && continue
+              cell_env_args+=("$arg")
+            done < <(locale_env_args_for "$1")
+          }
+          if [ -n "$LOCALE_ENV_JSON" ]; then
+            while IFS= read -r env_locale; do
+              [ -z "$env_locale" ] && continue
+              found=''
+              for locale in "${locales_arr[@]}"; do
+                if [ "$env_locale" = "$locale" ]; then
+                  found=1
+                  break
+                fi
+              done
+              if [ -z "$found" ]; then
+                echo "::error::locale-env has key '$env_locale' that is not among locales ($locales_list)."
+                exit 1
+              fi
+            done < <(jq -r 'keys[]' <<< "$LOCALE_ENV_JSON")
+          fi
 
           scene_count_total=$(jq 'length' <<< "$SCENES_JSON")
           sel_names=()
@@ -584,7 +682,7 @@ runs:
             # searched; the bundle's screenshots/ dir is NOT - it holds
             # Maestro's own step captures (final.png) even on a pass and
             # would double-count.
-            (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
+            (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
             local shot_count=0 shot_file='' candidate
             while IFS= read -r -d '' candidate; do
               shot_count=$((shot_count + 1))
@@ -610,6 +708,7 @@ runs:
               echo "::error::'cmd locale set-app-locales' failed for app '$APP_ID', locale '$locale'."
               exit 1
             fi
+            build_cell_env_args "$locale"
             for appearance in "${appearances_arr[@]}"; do
               case "$appearance" in
                 light) night_mode=no ;;
