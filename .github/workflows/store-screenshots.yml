@@ -571,55 +571,50 @@ jobs:
                     echo "::error::capture-manifest has entries whose 'platform' is neither 'ios' nor 'android' (default when omitted: 'ios'): $invalid_platform"
                     exit 1
                   fi
-                  ios_entries=$(jq -c '[.[] | select(.platform == "ios")]' <<< "$normalized")
-                  android_entries=$(jq -c '[.[] | select(.platform == "android")]' <<< "$normalized")
                   # A locale item may be a plain string or an {"id","env"}
                   # object carrying per-locale Maestro env. Validate the
-                  # object shape and per-entry id uniqueness first, then
-                  # normalize every entry to string locales plus a localeEnv
-                  # map so the capture jobs can pass
+                  # object shape and per-entry id uniqueness, then normalize
+                  # every entry to string locales plus a localeEnv map before
+                  # the platform split so the capture jobs can pass
                   # join(matrix.entry.locales, ",") through unchanged.
-                  for pair in "ios:$ios_entries" "android:$android_entries"; do
-                    platform="${pair%%:*}"
-                    entries="${pair#*:}"
-                    invalid_locale_objects=$(jq -c '
-                        [.[]
-                         | .device as $d
-                         | .locales
-                         | to_entries[]
-                         | select(
-                             (.value | type == "object") and
-                             (
-                               (((.value.id // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not))) or
-                               (.value | has("env") and (
-                                 ((.env | type) != "object") or
-                                 ([.env | keys[] | select((test("^[A-Za-z_][A-Za-z0-9_]*$") | not) or . == "APP_ID" or . == "LOCALE" or . == "APPEARANCE")] | length > 0) or
-                                 ([.env[] | select(type != "string")] | length > 0)
-                               ))
-                             )
+                  invalid_locale_objects=$(jq -c '
+                      [.[]
+                       | .device as $d
+                       | .locales
+                       | to_entries[]
+                       | select(
+                           (.value | type == "object") and
+                           (
+                             (((.value.id // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not))) or
+                             (.value | has("env") and (
+                               ((.env | type) != "object") or
+                               ([.env | keys[] | select((test("^[A-Za-z_][A-Za-z0-9_]*$") | not) or . == "APP_ID" or . == "LOCALE" or . == "APPEARANCE")] | length > 0) or
+                               ([.env[] | select(type != "string")] | length > 0)
+                             ))
                            )
-                         | {device: $d, localeIndex: .key}
-                        ]' <<< "$entries")
-                    if [ "$invalid_locale_objects" != '[]' ]; then
-                      echo "::error::capture-manifest has invalid $platform locale objects (each needs an 'id' matching ^[A-Za-z0-9_-]+\$ and an optional 'env' object whose keys match ^[A-Za-z_][A-Za-z0-9_]*\$, are not the reserved APP_ID/LOCALE/APPEARANCE, and map to string values): $invalid_locale_objects"
-                      exit 1
-                    fi
-                    duplicate_locales=$(jq -c '
-                        [.[]
-                         | .device as $d
-                         | ([.locales[] | if type == "object" then .id else . end]
-                            | group_by(.)
-                            | map(select(length > 1)[0])) as $dups
-                         | select(($dups | length) > 0)
-                         | {device: $d, duplicates: $dups}
-                        ]' <<< "$entries")
-                    if [ "$duplicate_locales" != '[]' ]; then
-                      echo "::error::capture-manifest has $platform entries listing the same locale more than once; give each locale one entry and put its env in the object form instead: $duplicate_locales"
-                      exit 1
-                    fi
-                  done
-                  ios_entries=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$ios_entries")
-                  android_entries=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$android_entries")
+                         )
+                       | {device: $d, localeIndex: .key}
+                      ]' <<< "$normalized")
+                  if [ "$invalid_locale_objects" != '[]' ]; then
+                    echo "::error::capture-manifest has invalid locale objects (each needs an 'id' matching ^[A-Za-z0-9_-]+\$ and an optional 'env' object whose keys match ^[A-Za-z_][A-Za-z0-9_]*\$, are not the reserved APP_ID/LOCALE/APPEARANCE, and map to string values): $invalid_locale_objects"
+                    exit 1
+                  fi
+                  duplicate_locales=$(jq -c '
+                      [.[]
+                       | .device as $d
+                       | ([.locales[] | if type == "object" then .id else . end]
+                          | group_by(.)
+                          | map(select(length > 1)[0])) as $dups
+                       | select(($dups | length) > 0)
+                       | {device: $d, duplicates: $dups}
+                      ]' <<< "$normalized")
+                  if [ "$duplicate_locales" != '[]' ]; then
+                    echo "::error::capture-manifest has entries listing the same locale more than once; give each locale one entry and put its env in the object form instead: $duplicate_locales"
+                    exit 1
+                  fi
+                  normalized=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$normalized")
+                  ios_entries=$(jq -c '[.[] | select(.platform == "ios")]' <<< "$normalized")
+                  android_entries=$(jq -c '[.[] | select(.platform == "android")]' <<< "$normalized")
                   ios_count=$(jq 'length' <<< "$ios_entries")
                   android_count=$(jq 'length' <<< "$android_entries")
                   for platform_count in "iOS:$ios_count" "Android:$android_count"; do

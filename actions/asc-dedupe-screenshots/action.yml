@@ -32,10 +32,10 @@ inputs:
     default: PREPARE_FOR_SUBMISSION
   fail-on-duplicates:
     description: >-
-      When 'true' (default), exit non-zero if any duplicate was deleted -
-      a duplicate means upload-command's lane is flaky and should be fixed,
-      even though this action repaired the listing. Set to 'false' to treat
-      a successful repair as success.
+      When 'true' (default), exit non-zero when any duplicate was found -
+      deleted or undeletable - because duplicates mean upload-command's lane
+      is flaky even though this action repaired the listing. Set to 'false'
+      for report-only audits.
     required: false
     default: 'true'
 outputs:
@@ -106,7 +106,7 @@ runs:
           fi
 
           b64url() {
-            openssl base64 -A | tr '+/' '-_' | tr -d '=' | tr -d '\n'
+            openssl base64 -A | tr '+/' '-_' | tr -d '='
           }
 
           now=$(date +%s)
@@ -172,22 +172,25 @@ runs:
           sig_b64="$(printf '%b' "$sig_fmt" | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
           jwt="${signing_input}.${sig_b64}"
 
-          api() {
-            local method="$1" url="$2" out_file http_status attempt max_attempts=4 backoff
+          # Single request primitive: bounded retries through transport-level
+          # failures only (self-hosted fleets see transient DNS errors, curl
+          # exit 6); HTTP statuses are always returned to the caller for
+          # classification. Prints the response temp file and sets ASC_CODE.
+          max_attempts=4
+          ASC_CODE=''
+          asc_request() {
+            local method="$1" url="$2" out_file attempt=1 backoff code
             out_file="$(mktemp)"
-            # --retry-all-errors: self-hosted fleets see transient DNS
-            # failures (curl exit 6), which plain --retry does not cover.
-            attempt=1
             while :; do
-              if http_status="$(curl -sS --max-time 60 \
-                --retry 3 --retry-delay 5 --retry-all-errors \
-                -w '%{http_code}' \
+              if code="$(curl -sS --max-time 60 -w '%{http_code}' \
                 -X "$method" \
                 -H "Authorization: Bearer $jwt" \
                 -H 'Content-Type: application/json' \
                 -o "$out_file" \
                 "$url")"; then
-                break
+                ASC_CODE="$code"
+                printf '%s' "$out_file"
+                return 0
               fi
               if [ "$attempt" -ge "$max_attempts" ]; then
                 rm -f "$out_file"
@@ -200,17 +203,22 @@ runs:
               sleep "$backoff"
               attempt=$((attempt + 1))
             done
-            case "$http_status" in
-              2*) printf '%s' "$out_file" ;;
+          }
+          asc_get() {
+            local file
+            file="$(asc_request GET "$1")"
+            case "$ASC_CODE" in
+              2*) printf '%s' "$file" ;;
               *)
-                echo "::error::App Store Connect '$method $url' returned HTTP $http_status:" >&2
-                head -c 2000 "$out_file" >&2 || true
-                rm -f "$out_file"
+                echo "::error::App Store Connect 'GET $1' returned HTTP $ASC_CODE:" >&2
+                head -c 2000 "$file" >&2 || true
+                rm -f "$file"
                 exit 1
                 ;;
             esac
           }
-          apps_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
+
+          apps_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/apps?filter%5BbundleId%5D=${APP_ID}")"
           app_count="$(jq '.data | length' "$apps_file")"
           if [ "$app_count" -ne 1 ]; then
             echo "::error::bundle id '$APP_ID' resolved to $app_count App Store Connect apps; expected exactly 1."
@@ -219,10 +227,7 @@ runs:
           asc_app_id="$(jq -r '.data[0].id' "$apps_file")"
           rm -f "$apps_file"
 
-          # appStoreVersions rejects page[limit] (HTTP 400
-          # PARAMETER_ERROR.ILLEGAL); the collection is small enough that
-          # default paging is fine here.
-          versions_file="$(api GET "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}")"
+          versions_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/apps/${asc_app_id}/appStoreVersions?filter%5BappStoreState%5D=${VERSION_STATE}")"
           version_count="$(jq '.data | length' "$versions_file")"
           if [ "$version_count" -lt 1 ]; then
             echo "::error::no app store version in state '$VERSION_STATE' found for '$APP_ID'; nothing to dedupe."
@@ -234,14 +239,14 @@ runs:
           removed=0
           undeletable=0
           summary_rows=()
-          localizations_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations")"
+          localizations_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/appStoreVersions/${asc_version_id}/appStoreVersionLocalizations")"
           localization_count="$(jq '.data | length' "$localizations_file")"
           loc_idx=0
           while [ "$loc_idx" -lt "$localization_count" ]; do
             locale="$(jq -r ".data[$loc_idx].attributes.locale" "$localizations_file")"
             localization_id="$(jq -r ".data[$loc_idx].id" "$localizations_file")"
 
-            sets_file="$(api GET "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets")"
+            sets_file="$(asc_get "https://api.appstoreconnect.apple.com/v1/appStoreVersionLocalizations/${localization_id}/appScreenshotSets")"
             set_count="$(jq '.data | length' "$sets_file")"
             set_idx=0
             while [ "$set_idx" -lt "$set_count" ]; do
@@ -258,7 +263,7 @@ runs:
                   echo "::error::more than 50 pages of screenshots for locale '$locale' display type '$display_type'; aborting rather than deduping a partially-fetched set."
                   exit 1
                 fi
-                page_file="$(api GET "$page_url")"
+                page_file="$(asc_get "$page_url")"
                 jq -c --slurpfile acc "$set_screenshots_file" '$acc[0] + (.data // [])' "$page_file" > "${set_screenshots_file}.next"
                 mv "${set_screenshots_file}.next" "$set_screenshots_file"
                 page_url="$(jq -r '.links.next // ""' "$page_file")"
@@ -277,43 +282,27 @@ runs:
               while [ "$dup_idx" -lt "$duplicate_count" ]; do
                 shot_id="$(jq -r ".[$dup_idx].id" <<< "$duplicates")"
                 file_name="$(jq -r ".[$dup_idx].attributes.fileName" <<< "$duplicates")"
-                # A submitted/live version's screenshots are immutable (HTTP
-                # 409 STATE_ERROR); duplicates there can only be reported,
-                # never auto-repaired.
-                delete_out_file="$(mktemp)"
-                attempt=1
-                while :; do
-                  if http_code="$(curl -sS --max-time 60 \
-                    --retry 3 --retry-delay 5 --retry-all-errors \
-                    -w '%{http_code}' \
-                    -X DELETE \
-                    -H "Authorization: Bearer $jwt" \
-                    -H 'Content-Type: application/json' \
-                    -o "$delete_out_file" \
-                    "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"; then
-                    break
-                  fi
-                  if [ "$attempt" -ge 4 ]; then
-                    rm -f "$delete_out_file"
-                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' failed after 4 attempts (last curl output above)."
+                delete_file="$(asc_request DELETE "https://api.appstoreconnect.apple.com/v1/appScreenshots/${shot_id}")"
+                case "$ASC_CODE" in
+                  204)
+                    echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
+                    rm -f "$delete_file"
+                    removed=$((removed + 1))
+                    ;;
+                  # A submitted/live version's screenshots are immutable;
+                  # duplicates there can only be reported, never repaired.
+                  409)
+                    echo "Duplicate not deletable (version already submitted for review): ${locale}/${display_type}: ${file_name} (${shot_id})"
+                    rm -f "$delete_file"
+                    undeletable=$((undeletable + 1))
+                    ;;
+                  *)
+                    echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP $ASC_CODE:" >&2
+                    head -c 2000 "$delete_file" >&2 || true
+                    rm -f "$delete_file"
                     exit 1
-                  fi
-                  sleep $((attempt * 10))
-                  attempt=$((attempt + 1))
-                done
-                if [ "$http_code" = "409" ]; then
-                  echo "Duplicate not deletable (version already submitted for review): ${locale}/${display_type}: ${file_name} (${shot_id})"
-                  undeletable=$((undeletable + 1))
-                elif [ "${http_code:0:1}" = "2" ]; then
-                  echo "Deleted duplicate ${locale}/${display_type}: ${file_name} (${shot_id})"
-                  removed=$((removed + 1))
-                else
-                  echo "::error::App Store Connect 'DELETE appScreenshots/${shot_id}' returned HTTP ${http_code}:" >&2
-                  head -c 2000 "$delete_out_file" >&2 || true
-                  rm -f "$delete_out_file"
-                  exit 1
-                fi
-                rm -f "$delete_out_file"
+                    ;;
+                esac
                 dup_idx=$((dup_idx + 1))
               done
               summary_rows+=("| $locale | $display_type | $total_in_set | $duplicate_count |")
@@ -327,7 +316,7 @@ runs:
 
           {
             echo "### App Store Connect screenshot dedupe ($APP_ID, version state $VERSION_STATE)"
-            echo "| Locale | Display type | Screenshots | Duplicates deleted |"
+            echo "| Locale | Display type | Screenshots | Duplicates found |"
             echo "| --- | --- | --- | --- |"
             printf '%s\n' "${summary_rows[@]:-}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -335,25 +324,17 @@ runs:
           echo "removed-count=$removed" >> "$GITHUB_OUTPUT"
           echo "undeletable-count=$undeletable" >> "$GITHUB_OUTPUT"
 
+          if [ "$removed" -gt 0 ]; then
+            echo "::error::$removed duplicate screenshot(s) were deleted from App Store Connect. The listing is now correct, but duplicates mean upload-command's lane double-uploads under retry - fix that lane (deliver with overwrite_screenshots: true is known to do this when its post-upload verification retries a fresh upload). Re-run this gate afterwards; it should report zero."
+          fi
           if [ "$undeletable" -gt 0 ]; then
             echo "::warning::$undeletable duplicate(s) live on a version that is already submitted for review - App Store Connect forbids modifying their screenshots. They must be cleaned up manually or will disappear with the next version submission; use the editable version (PREPARE_FOR_SUBMISSION) to dedupe before submitting."
           fi
-
-          if [ "$removed" -gt 0 ]; then
-            echo "::error::$removed duplicate screenshot(s) were deleted from App Store Connect. The listing is now correct, but duplicates mean upload-command's lane double-uploads under retry - fix that lane (deliver with overwrite_screenshots: true is known to do this when its post-upload verification retries a fresh upload). Re-run this gate afterwards; it should report zero."
-            if [ "$FAIL_ON_DUPLICATES" = "true" ]; then
-              exit 1
-            fi
-          elif [ "$undeletable" -eq 0 ]; then
+          if [ "$removed" -eq 0 ] && [ "$undeletable" -eq 0 ]; then
             echo "No duplicate screenshots on App Store Connect."
           fi
 
-          if [ "$FAIL_ON_DUPLICATES" != "true" ]; then
-            echo "fail-on-duplicates=false: reporting $removed deleted and $undeletable undeletable duplicate(s) as success."
-            exit 0
-          fi
-
-          if [ "$undeletable" -gt 0 ]; then
-            echo "::error::$undeletable duplicate(s) detected but not repairable on this version; failing per fail-on-duplicates=true."
+          if [ "$FAIL_ON_DUPLICATES" = "true" ] && [ "$((removed + undeletable))" -gt 0 ]; then
+            echo "::error::failing per fail-on-duplicates=true ($removed deleted, $undeletable undeletable)."
             exit 1
           fi
