@@ -15,9 +15,9 @@ way `build-android-app`'s `gradle-args` scopes a build, e.g. to a single ABI
 to avoid an all-ABI lint OOMing D8) — **android-publish** (needs
 `android-lint-gate`; `eas build --local --platform android`, verifies the
 built `.aab` contains the required 64-bit ABI, uploads the artifact, writes
-the Google service account key to `$RUNNER_TEMP`, `eas submit`, removes the
-key in `always()`). A final **status** job aggregates the enabled jobs into a
-single required check.
+the Google service account key to `$RUNNER_TEMP` (or `google-key-path` if
+set), `eas submit`, removes the key in `always()`). A final **status** job
+aggregates the enabled jobs into a single required check.
 
 ## Inputs
 
@@ -43,6 +43,7 @@ single required check.
 | `android-lint-gate`                | no       | `true`                                    | Require the `android-lint-gate` job (Play policy manifest check + `lintVitalRelease`) to pass before `android-publish` runs. |
 | `required-android-abi`             | no       | `arm64-v8a`                                | ABI that must be present in the built `.aab` (Google Play 64-bit requirement). Empty string disables the check. |
 | `asc-key-path`                     | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
+| `google-key-path`                  | no       | `''`                                       | Optional path, relative to `app-dir`, the Google Play service account key (`.json`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` or fastlane requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`            | no       | `120`                                     | Publish job timeout (both platforms). |
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
 | `android-lint-gate-gradle-args`    | no       | `''`                                      | Extra whitespace-split arguments appended after `:app:lintVitalRelease` in the `android-lint-gate` job, e.g. `-PreactNativeArchitectures=arm64-v8a`. Not shell-quoted. |
@@ -62,7 +63,7 @@ single required check.
 | `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish`. |
 | `ASC_KEY_ID`                        | no*      | App Store Connect API key ID matching `ASC_API_KEY`, exported to the iOS build and submit steps as `EXPO_ASC_KEY_ID`. |
 | `ASC_ISSUER_ID`                     | no*      | App Store Connect API key issuer ID matching `ASC_API_KEY`, exported as `EXPO_ASC_ISSUER_ID`. |
-| `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. |
+| `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. Written to disk at the path resolved by the `google-key-path` input (or `$RUNNER_TEMP` if empty). |
 | `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build`/`eas submit`, the `android-lint-gate` prebuild, or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
 
 \* `ASC_KEY_ID` and `ASC_ISSUER_ID` must accompany `ASC_API_KEY`: without them EAS cannot
