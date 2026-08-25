@@ -228,9 +228,33 @@ runs:
           # (e.g. the binder_linux guard above) leaves it unset.
           echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
           echo "android-serial=localhost:$port" >> "$GITHUB_OUTPUT"
-          deadline=$(( $(date +%s) + REDROID_BOOT_TIMEOUT_SECONDS ))
-          until [ "$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
-            test "$(date +%s)" -lt "$deadline"
+          # Narrated boot wait: a silent poll that times out reads as an adb
+          # or runner failure in the job log, when the real story is almost
+          # always "the container never finished booting" (or never even
+          # stayed running). Report progress with the observed
+          # sys.boot_completed value and the container's Docker state every
+          # 30s, and fail with all of that context on timeout instead of
+          # aborting on a bare test(1).
+          boot_start=$(date +%s)
+          deadline=$(( boot_start + REDROID_BOOT_TIMEOUT_SECONDS ))
+          next_narration=$boot_start
+          echo "Waiting up to ${REDROID_BOOT_TIMEOUT_SECONDS}s for sys.boot_completed=1 on localhost:$port..."
+          while :; do
+            boot_prop="$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            now=$(date +%s)
+            if [ "$boot_prop" = "1" ]; then
+              echo "Boot completed after $(( now - boot_start ))s."
+              break
+            fi
+            container_state="$(sudo docker inspect -f '{{.State.Status}}' "$effective_name" 2>/dev/null || echo unknown)"
+            if [ "$now" -ge "$deadline" ]; then
+              echo "::error::Redroid container '$effective_name' did not report sys.boot_completed=1 within ${REDROID_BOOT_TIMEOUT_SECONDS}s (last sys.boot_completed: '${boot_prop:-<empty>}', container state: $container_state)."
+              exit 1
+            fi
+            if [ "$now" -ge "$next_narration" ]; then
+              echo "Still waiting ($(( now - boot_start ))s elapsed of ${REDROID_BOOT_TIMEOUT_SECONDS}s): sys.boot_completed='${boot_prop:-<empty>}', container state: $container_state"
+              next_narration=$(( now + 30 ))
+            fi
             sleep 5
             adb connect "localhost:$port" >/dev/null 2>&1 || true
           done
