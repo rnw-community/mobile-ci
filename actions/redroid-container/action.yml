@@ -228,6 +228,12 @@ runs:
           # (e.g. the binder_linux guard above) leaves it unset.
           echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
           echo "android-serial=localhost:$port" >> "$GITHUB_OUTPUT"
+          case "$REDROID_BOOT_TIMEOUT_SECONDS" in
+            ''|*[!0-9]*|0[0-9]*)
+              echo "::error::boot-timeout-seconds '$REDROID_BOOT_TIMEOUT_SECONDS' must be a non-negative integer without leading zeros."
+              exit 1
+              ;;
+          esac
           # Narrated boot wait: a silent poll that times out reads as an adb
           # or runner failure in the job log, when the real story is almost
           # always "the container never finished booting" (or never even
