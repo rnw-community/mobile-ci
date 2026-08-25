@@ -16,6 +16,18 @@ set -euo pipefail
 maestro_debug_scratch_dir="$RUNNER_TEMP/maestro-debug-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 mkdir -p "$maestro_debug_scratch_dir"
 echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
+# Maestro nests every `maestro test` process's output under
+# .maestro/tests/<timestamp>/, keyed by invocation time and never by flow, so
+# the only way to tell a failing flow's output apart from a passing one's is
+# to diff the scratch dir's entries around each flow's attempt sequence. The
+# manifest written below (final_status TAB flow TAB entry, one line per entry
+# a flow's attempts and its recovery-flow runs produced) is what lets the
+# capture step in ../action.yml stage only the failing flows' output instead
+# of weighing the whole shard's output against the artifact cap.
+maestro_debug_manifest_file="$maestro_debug_scratch_dir.manifest.tsv"
+maestro_debug_units_before_file="$maestro_debug_manifest_file.before"
+: > "$maestro_debug_manifest_file"
+echo "MAESTRO_DEBUG_MANIFEST_FILE=$maestro_debug_manifest_file" >> "$GITHUB_ENV"
 
 adb wait-for-device
 # shellcheck disable=SC2016 # single quotes are deliberate: the child bash expands this, not the parent
@@ -180,6 +192,32 @@ read_flow_env_file() {
   done < "$env_file"
 }
 
+maestro_debug_units() {
+  local entry base
+  [ -d "$maestro_debug_scratch_dir" ] || return 0
+  for entry in "$maestro_debug_scratch_dir"/.maestro/tests/*; do
+    [ -e "$entry" ] || continue
+    printf '%s\n' ".maestro/tests/$(basename "$entry")"
+  done
+  for entry in "$maestro_debug_scratch_dir"/* "$maestro_debug_scratch_dir"/.[!.]* "$maestro_debug_scratch_dir"/..?*; do
+    [ -e "$entry" ] || continue
+    base=$(basename "$entry")
+    if [ "$base" != '.maestro' ]; then
+      printf '%s\n' "$base"
+    fi
+  done
+  return 0
+}
+
+record_maestro_debug_units() {
+  local label="$1" status="$2" unit
+  maestro_debug_units | while IFS= read -r unit; do
+    if ! grep -Fxq -- "$unit" "$maestro_debug_units_before_file"; then
+      printf '%s\t%s\t%s\n' "$status" "$label" "$unit" >> "$maestro_debug_manifest_file"
+    fi
+  done
+}
+
 summary_rows=()
 recovery_runs=0
 recovery_failures=0
@@ -199,6 +237,7 @@ run_flow_with_retries() {
   local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
   local recovery_seconds=0 recovery_start attempt_ok flow_env_file
   start=$(date +%s)
+  maestro_debug_units > "$maestro_debug_units_before_file"
   while [ "$attempts" -lt "$max_attempts" ]; do
     attempts=$((attempts + 1))
     attempt_ok=1
@@ -226,6 +265,7 @@ run_flow_with_retries() {
   done
   end=$(date +%s)
   duration=$((end - start - recovery_seconds))
+  record_maestro_debug_units "$label" "$status"
   summary_rows+=("| $label | ${duration}s | $status | $attempts |")
   [ "$status" = "passed" ]
 }

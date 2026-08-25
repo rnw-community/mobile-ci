@@ -347,28 +347,107 @@ runs:
           timeout 30 adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
           timeout 30 adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
           if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
-            debug_size_kb=$(du -sck "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null | tail -1 | awk '{print $1}')
-            max_debug_kb=$((200 * 1024))
-            if [ "${debug_size_kb:-0}" -gt "$max_debug_kb" ]; then
-              echo "::warning::Maestro debug output for this shard is ${debug_size_kb}KB, exceeding the 200MB cap; skipping copy into artifacts."
-            else
-              mkdir -p "$OUT_DIR/maestro-debug"
-              cp -R "$MAESTRO_DEBUG_SCRATCH_DIR/." "$OUT_DIR/maestro-debug/"
-              for hidden_entry in "$OUT_DIR/maestro-debug"/.[!.]* "$OUT_DIR/maestro-debug"/..?*; do
-                [ -e "$hidden_entry" ] || continue
-                hidden_base=$(basename "$hidden_entry")
-                visible_entry="$OUT_DIR/maestro-debug/dot-${hidden_base#.}"
-                collision_suffix=1
-                while [ -e "$visible_entry" ]; do
-                  visible_entry="$OUT_DIR/maestro-debug/dot-${hidden_base#.}-$collision_suffix"
-                  collision_suffix=$((collision_suffix + 1))
-                done
-                mv "$hidden_entry" "$visible_entry"
-              done
+            stage_dir="$OUT_DIR/maestro-debug"
+            work_dir="$MAESTRO_DEBUG_SCRATCH_DIR.pack"
+            manifest_file="${MAESTRO_DEBUG_MANIFEST_FILE:-}"
+            if [ -z "$manifest_file" ] || [ ! -f "$manifest_file" ]; then
+              manifest_file=/dev/null
             fi
+            rm -rf "$work_dir"
+            mkdir -p "$stage_dir" "$work_dir"
+            max_debug_kb=$((200 * 1024))
+            staged_kb=0
+            staged_bundles=0
+            dropped_bundles=0
+            dropped_kb=0
+
+            list_maestro_debug_units() {
+              local entry base
+              for entry in "$MAESTRO_DEBUG_SCRATCH_DIR"/.maestro/tests/*; do
+                [ -e "$entry" ] || continue
+                printf '%s\n' ".maestro/tests/$(basename "$entry")"
+              done
+              for entry in "$MAESTRO_DEBUG_SCRATCH_DIR"/* "$MAESTRO_DEBUG_SCRATCH_DIR"/.[!.]* "$MAESTRO_DEBUG_SCRATCH_DIR"/..?*; do
+                [ -e "$entry" ] || continue
+                base=$(basename "$entry")
+                if [ "$base" != '.maestro' ]; then
+                  printf '%s\n' "$base"
+                fi
+              done
+              return 0
+            }
+
+            stage_debug_bundle() {
+              local label="$1" list_file="$2" name bundle size_kb collision_suffix
+              [ -s "$list_file" ] || return 0
+              name="${label//[^A-Za-z0-9._-]/_}"
+              if [ -z "$name" ]; then
+                name=flow
+              fi
+              bundle="$stage_dir/$name.tar.gz"
+              collision_suffix=1
+              while [ -e "$bundle" ]; do
+                bundle="$stage_dir/$name-$collision_suffix.tar.gz"
+                collision_suffix=$((collision_suffix + 1))
+              done
+              if ! tar -czf "$bundle" -C "$MAESTRO_DEBUG_SCRATCH_DIR" -T "$list_file"; then
+                rm -f "$bundle"
+                echo "::warning::Archiving Maestro debug output for '$label' failed; its bundle is missing from the artifact."
+                return 0
+              fi
+              size_kb=$(( ( $(wc -c < "$bundle") + 1023 ) / 1024 ))
+              if [ $((staged_kb + size_kb)) -gt "$max_debug_kb" ]; then
+                rm -f "$bundle"
+                dropped_bundles=$((dropped_bundles + 1))
+                dropped_kb=$((dropped_kb + size_kb))
+                echo "::warning::Compressed Maestro debug output for '$label' is ${size_kb}KB and does not fit what is left of the 200MB cap (${staged_kb}KB already staged); dropping this flow's bundle."
+                return 0
+              fi
+              staged_kb=$((staged_kb + size_kb))
+              staged_bundles=$((staged_bundles + 1))
+              echo "Staged maestro-debug/$(basename "$bundle") (${size_kb}KB) for '$label'."
+            }
+
+            list_maestro_debug_units > "$work_dir/disk-units"
+            cut -f3 "$manifest_file" > "$work_dir/attributed-units"
+            : > "$work_dir/failing-flows"
+            while IFS=$'\t' read -r unit_status unit_label _; do
+              if [ "$unit_status" = 'failed' ] && ! grep -Fxq -- "$unit_label" "$work_dir/failing-flows"; then
+                printf '%s\n' "$unit_label" >> "$work_dir/failing-flows"
+              fi
+            done < "$manifest_file"
+            while IFS= read -r disk_unit; do
+              if ! grep -Fxq -- "$disk_unit" "$work_dir/attributed-units"; then
+                printf '%s\n' "$disk_unit" >> "$work_dir/unattributed-units"
+              fi
+            done < "$work_dir/disk-units"
+            while IFS= read -r failing_flow; do
+              : > "$work_dir/flow-units"
+              while IFS=$'\t' read -r unit_status unit_label unit; do
+                if [ "$unit_status" = 'failed' ] && [ "$unit_label" = "$failing_flow" ] && [ -e "$MAESTRO_DEBUG_SCRATCH_DIR/$unit" ]; then
+                  printf '%s\n' "$unit" >> "$work_dir/flow-units"
+                fi
+              done < "$manifest_file"
+              stage_debug_bundle "$failing_flow" "$work_dir/flow-units"
+            done < "$work_dir/failing-flows"
+            if [ -f "$work_dir/unattributed-units" ]; then
+              stage_debug_bundle 'unattributed' "$work_dir/unattributed-units"
+            fi
+            if [ "$staged_bundles" -eq 0 ]; then
+              if [ "$dropped_bundles" -gt 0 ]; then
+                echo "::warning::Maestro debug output existed for $dropped_bundles failing flow(s) (${dropped_kb}KB compressed in total) but none of it fit the 200MB cap; the artifact holds the final-state capture only."
+              else
+                echo "No failing flow owns Maestro debug output in this shard; staging the final-state capture only."
+              fi
+              rmdir "$stage_dir" 2>/dev/null || true
+            fi
+            rm -rf "$work_dir"
           fi
           if [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ]; then
             rm -rf "$MAESTRO_DEBUG_SCRATCH_DIR" || true
+          fi
+          if [ -n "${MAESTRO_DEBUG_MANIFEST_FILE:-}" ]; then
+            rm -f "$MAESTRO_DEBUG_MANIFEST_FILE" "$MAESTRO_DEBUG_MANIFEST_FILE.before" || true
           fi
           if [ -n "${FLOW_ENV_SCRATCH_DIR:-}" ]; then
             rm -rf "$FLOW_ENV_SCRATCH_DIR" || true

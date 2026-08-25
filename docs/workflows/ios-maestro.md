@@ -202,17 +202,23 @@ out at its assertion budget. The fix is one workspace-config key —
 
 ## Debug artifacts
 
-When a shard fails, the shard-private `--debug-output` directory (UI hierarchy
-dumps, per-flow screenshots) is copied into the uploaded artifact under
-`maestro-debug/`, unless the bundle exceeds the 200MB cap — an oversized
-bundle is skipped entirely with a `::warning::` and the artifact then holds
-only the final-state capture. Maestro writes that bundle behind a hidden
-`.maestro/tests/<timestamp>/` path, so staging renames any hidden top-level
-entry to a visible `dot-`-prefixed name (suffixed `-1`, `-2`, … if that name
-is already taken, so neither tree is lost) and the upload step sets
-`include-hidden-files: true` — `actions/upload-artifact` skips hidden files by
-default, which previously shipped `final-screen.png` alone and dropped the
-hierarchy dumps the failure message points you at.
+When a shard fails, only the **failing** flows' `--debug-output` (UI hierarchy
+dumps, per-flow screenshots — every attempt of the flow plus the
+recovery-flow runs that followed it) reaches the uploaded artifact, one
+gzipped tarball per flow at `maestro-debug/<flow>.tar.gz`. Bundles are staged
+in flow-execution order for as long as they fit a 200MB *compressed* total;
+one that would exceed the cap is dropped with a `::warning::` naming the flow
+and its compressed size, and the smaller remaining bundles are still tried —
+if none of them fit, a single `::warning::` reports the total and the artifact
+holds only the final-state capture. Output the shard could not attribute to a
+flow (Maestro keys its output by `maestro test` invocation timestamp, not by
+flow name) is bundled last as `maestro-debug/unattributed.tar.gz` instead of
+being discarded, so nothing diagnostic is lost silently. Maestro's hidden
+`.maestro/tests/<timestamp>/` path is preserved *inside* each archive, so no
+hidden entry is staged; the upload step still sets `include-hidden-files:
+true` — `actions/upload-artifact` skips hidden files by default, which
+previously shipped `final-screen.png` alone and dropped the hierarchy dumps
+the failure message points you at.
 
 ## Permissions
 
