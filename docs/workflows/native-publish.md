@@ -5,9 +5,14 @@
 
 Three jobs: **ios-publish** (writes the App Store Connect API key to a temp
 file, `eas build --local --platform ios`, uploads the `.ipa`, `eas submit`,
-removes the key in `always()`) — **android-lint-gate** (optional, runs
-`gradlew :app:lintVitalRelease` and a merged-manifest scan for Play-policy
-restricted permissions on a hosted runner) — **android-publish** (needs
+removes the key in `always()`) — **android-lint-gate** (optional, prebuilds
+the Android project and runs `gradlew :app:lintVitalRelease` plus a
+merged-manifest scan for Play-policy restricted permissions on a hosted
+runner; takes the same `publish-env`/`EAS_EXTRA_ENV` env as the publish jobs
+so its prebuild sees consumer variables like `APP_VARIANT`, and its own
+`android-lint-gate-gradle-args` input so its lint pass can be scoped the same
+way `build-android-app`'s `gradle-args` scopes a build, e.g. to a single ABI
+to avoid an all-ABI lint OOMing D8) — **android-publish** (needs
 `android-lint-gate`; `eas build --local --platform android`, verifies the
 built `.aab` contains the required 64-bit ABI, uploads the artifact, writes
 the Google service account key to `$RUNNER_TEMP`, `eas submit`, removes the
@@ -40,7 +45,8 @@ single required check.
 | `asc-key-path`                     | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`            | no       | `120`                                     | Publish job timeout (both platforms). |
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
-| `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish` and `android-publish`, before `eas build`/`eas submit` and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
+| `android-lint-gate-gradle-args`    | no       | `''`                                      | Extra whitespace-split arguments appended after `:app:lintVitalRelease` in the `android-lint-gate` job, e.g. `-PreactNativeArchitectures=arm64-v8a`. Not shell-quoted. |
+| `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`, before `eas build`/`eas submit` (or, for `android-lint-gate`, `expo prebuild`) and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
 
 ## Secrets
 
@@ -57,7 +63,7 @@ single required check.
 | `ASC_KEY_ID`                        | no*      | App Store Connect API key ID matching `ASC_API_KEY`, exported to the iOS build and submit steps as `EXPO_ASC_KEY_ID`. |
 | `ASC_ISSUER_ID`                     | no*      | App Store Connect API key issuer ID matching `ASC_API_KEY`, exported as `EXPO_ASC_ISSUER_ID`. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. |
-| `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-publish` and `android-publish`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build`/`eas submit` or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
+| `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`. Same fail-closed parser as `publish-env`, but each value is masked (`::add-mask::`) before being written to `$GITHUB_ENV`, so it never appears unredacted in logs (empty values are not masked). Use this for secrets `eas build`/`eas submit`, the `android-lint-gate` prebuild, or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
 
 \* `ASC_KEY_ID` and `ASC_ISSUER_ID` must accompany `ASC_API_KEY`: without them EAS cannot
 resolve the key non-interactively and falls back to an interactive prompt that cannot be
