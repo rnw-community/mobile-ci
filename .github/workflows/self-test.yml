@@ -71,11 +71,12 @@ jobs:
                   set -euo pipefail
                   # AGENTS.md's "Hard conventions" require every third-party uses:
                   # (anything not rnw-community/mobile-ci/...) to be pinned to a full
-                  # commit SHA. zizmor's unpinned-uses rule enforces that everywhere
-                  # except the five self-reference-bearing workflow files it is
-                  # file-scoped-ignored for (see .github/zizmor.yml) - this closes
-                  # that gap for third-party refs living in those same five files
-                  # (#28) without touching the zizmor ignore itself.
+                  # commit SHA. zizmor's unpinned-uses rule enforces that with a
+                  # blanket hash-pin policy exempting only this repo's own
+                  # rnw-community/mobile-ci/* self-references (see
+                  # .github/zizmor.yml) - this job is the independent, tool-agnostic
+                  # restatement of the same rule (#28), so a future zizmor config or
+                  # rule-name change cannot silently stop enforcing it.
                   #
                   # "uses" is matched with an optional surrounding quote
                   # (["']?) so a quoted YAML key ("uses": ...) is not missed
@@ -128,7 +129,7 @@ jobs:
                   echo "All third-party 'uses:' references are pinned to a full commit SHA."
 
     dry-lint-local-refs:
-        name: Dry lint (reusable workflow -> composite action schemas)
+        name: Dry lint (self-referenced composite action schemas)
         runs-on: ubuntu-latest
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -150,13 +151,30 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
+                  self_ref_rewrite='s#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#'
                   scratch="$RUNNER_TEMP/dry-lint"
+                  rm -rf "$scratch"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
                   for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots; do
-                    sed -E 's#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#' \
+                    sed -E "$self_ref_rewrite" \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done
+                  # Composite actions self-reference each other too (action ->
+                  # action, e.g. run-maestro-android-redroid -> redroid-container),
+                  # pinned to the release tag being cut, which does not exist yet on
+                  # the release PR. Apply the identical rewrite to the scratch
+                  # actions so no linted file carries a ref nothing can resolve.
+                  # actionlint as of 1.7.12 resolves a local `uses:` only from a
+                  # WORKFLOW step, never from a step inside an action.yml, so this
+                  # rewrite buys no extra input-schema checking today - it is here so
+                  # the scratch tree is uniformly self-reference-free and picks the
+                  # coverage up for free if actionlint ever recurses.
+                  find "$scratch/actions" -name action.yml -exec sed -E -i "$self_ref_rewrite" {} +
+                  if grep -rn --include='*.yml' 'uses: rnw-community/mobile-ci/' "$scratch"; then
+                    echo "::error::A self-reference survived the scratch-copy rewrite above; the rewrite pattern no longer matches every self-reference form in use."
+                    exit 1
+                  fi
                   cd "$scratch" && git init -q && actionlint -color
 
     fleet-self-test:
