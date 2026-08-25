@@ -65,6 +65,25 @@ on:
                 type: string
                 required: false
                 default: development
+            ios-pre-build-command:
+                description: >-
+                    Optional consumer-owned command (e.g. patching eas.json or asserting a
+                    computed build number) run in app-dir before the iOS EAS build, with the
+                    job's env — including EXPO_TOKEN and DEVELOPMENT_BUILD_NUMBER
+                    (<run_number>.<run_attempt>, already exported to the job env by the
+                    "Compute deterministic build number" step).
+                type: string
+                required: false
+                default: ''
+            android-pre-build-command:
+                description: >-
+                    Optional consumer-owned command run in app-dir before the Android EAS
+                    build, with the job's env — including EXPO_TOKEN and
+                    DEVELOPMENT_BUILD_NUMBER (<run_number>.<run_attempt>, already exported to
+                    the job env by the "Compute deterministic build number" step).
+                type: string
+                required: false
+                default: ''
             tag-prefix:
                 description: >-
                     Release tag prefix. Tags are created as <tag-prefix>-ios-<run_number> and
@@ -273,6 +292,14 @@ jobs:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
               run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS pre-build command
+              if: inputs.ios-pre-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  IOS_PRE_BUILD_COMMAND: ${{ inputs.ios-pre-build-command }}
+              run: eval "$IOS_PRE_BUILD_COMMAND"
 
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
@@ -582,6 +609,14 @@ jobs:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
               run: echo "tag=${TAG_PREFIX}-android-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+            - name: Run Android pre-build command
+              if: inputs.android-pre-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ANDROID_PRE_BUILD_COMMAND: ${{ inputs.android-pre-build-command }}
+              run: eval "$ANDROID_PRE_BUILD_COMMAND"
 
             - name: EAS build (Android, development)
               id: build
