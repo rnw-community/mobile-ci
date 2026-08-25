@@ -88,10 +88,13 @@ Procedure:
 
 1. Push the branch, then pin suuudokuuu's callers to the branch head SHA
    (`...@<sha> # <branch>`) in a scratch branch of that repo.
-2. Run the pipelines the change can affect, **one fleet run at a time**:
-   `mobile-e2e.yml` (push to a `ci/*` branch), and where relevant
-   `seed-native-cache.yml`, `native-dev-release.yml`, `native-publish.yml`
-   via `workflow_dispatch`.
+2. Run the pipelines the change can affect, **one fleet run at a time**, via
+   `workflow_dispatch` (e.g. `gh workflow run mobile-e2e.yml --ref
+   <branch>`): `mobile-e2e.yml` and, where relevant, `seed-native-cache.yml`,
+   `native-dev-release.yml`, `native-publish.yml`. suuudokuuu's
+   `mobile-e2e.yml` push trigger is scoped to `branches: [main]`, so a push
+   to a scratch branch never runs it — `workflow_dispatch` is the only way to
+   exercise it off `main`.
 3. Read the artifacts, not just the check marks. Several defects have shipped
    green: an `aab` no tester could install, an App Store Connect key that was
    written but never exported, a Maestro workspace config silently dropped.
