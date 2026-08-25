@@ -113,6 +113,16 @@ on:
                 type: string
                 required: false
                 default: ''
+            google-key-path:
+                description: >-
+                    Optional path, relative to app-dir, the Google Play service account key
+                    (.json) is written to and removed from — set this only when eas.json or
+                    fastlane requires the key at a specific app-dir-relative location; otherwise
+                    leave empty so the key is written under $RUNNER_TEMP and never enters the
+                    eas build --local archive.
+                type: string
+                required: false
+                default: ''
             build-timeout-minutes:
                 type: number
                 required: false
@@ -739,16 +749,23 @@ jobs:
 
             - name: Write Google service account key
               id: google-key
+              working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+                  GOOGLE_KEY_PATH_INPUT: ${{ inputs.google-key-path }}
               run: |
                   set -euo pipefail
-                  key_path="$RUNNER_TEMP/android-publish/google-service-account.json"
+                  if [ -n "$GOOGLE_KEY_PATH_INPUT" ]; then
+                    key_path="$GOOGLE_KEY_PATH_INPUT"
+                  else
+                    key_path="$RUNNER_TEMP/android-publish/google-service-account.json"
+                  fi
                   mkdir -p "$(dirname "$key_path")"
                   printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > "$key_path"
                   chmod 600 "$key_path"
-                  echo "key-path=$key_path" >> "$GITHUB_OUTPUT"
+                  absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
+                  echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: EAS submit (Android)
               working-directory: ${{ inputs.app-dir }}
