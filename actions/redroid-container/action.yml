@@ -246,7 +246,7 @@ runs:
               echo "Boot completed after $(( now - boot_start ))s."
               break
             fi
-            container_state="$(sudo docker inspect -f '{{.State.Status}}' "$effective_name" 2>/dev/null || echo unknown)"
+            container_state="$(timeout 10 sudo docker inspect -f '{{.State.Status}}' "$effective_name" 2>/dev/null || echo unknown)"
             if [ "$now" -ge "$deadline" ]; then
               echo "::error::Redroid container '$effective_name' did not report sys.boot_completed=1 within ${REDROID_BOOT_TIMEOUT_SECONDS}s (last sys.boot_completed: '${boot_prop:-<empty>}', container state: $container_state)."
               exit 1
