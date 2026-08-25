@@ -9,10 +9,16 @@ screenshot plus full and crash logcat, uploaded as an artifact. Every
 scratch directory private to this shard run — rather than Maestro's shared,
 unscoped `~/.maestro/tests/<timestamp>` default, which a concurrent shard on
 the same persistent self-hosted runner could otherwise also be writing into.
-When any flow in the shard failed, that scratch directory (UI hierarchy
-dumps and per-flow screenshots) is copied into the artifact under a
-`maestro-debug/` subdirectory, capped at 200MB combined — a `::warning::` is
-emitted and the copy skipped if the shard's debug output exceeds that.
+When any flow in the shard failed, only the **failing** flows' debug output
+(UI hierarchy dumps and per-flow screenshots, covering every attempt of the
+flow plus the recovery-flow runs that followed it) is staged, one gzipped
+tarball per flow at `maestro-debug/<flow>.tar.gz`. Bundles are staged in
+flow-execution order for as long as they fit a 200MB *compressed* total; one
+that would exceed the cap is dropped with a `::warning::` naming the flow and
+its compressed size while the smaller remaining bundles are still tried.
+Debug output no flow claims — Maestro keys its output by `maestro test`
+invocation timestamp, not by flow name — is bundled last as
+`maestro-debug/unattributed.tar.gz` rather than discarded.
 Because the explicit `--debug-output` flag takes precedence, a
 caller-exported `MAESTRO_DEBUG_OUTPUT_DIRECTORY` environment variable is
 deliberately **not** honored by the shard's `maestro test` invocations —
@@ -20,17 +26,15 @@ debug output always lands in the uploaded artifact as described above, so
 no fallback "copy `~/.maestro/tests`" step is needed on the caller's side.
 The emulator is always killed at the end (`if: always()`).
 
-**Hidden debug output is un-hidden before upload.** Maestro writes its debug
-bundle into a hidden `.maestro/tests/<timestamp>/` path, and
+**Maestro's hidden debug path lives inside the bundles.** Maestro writes its
+debug output into a hidden `.maestro/tests/<timestamp>/` path, and
 `actions/upload-artifact` skips hidden files by default — which used to ship
 `final-screen.png` alone and drop the very UI hierarchy dumps the failure
-message tells you to inspect. Staging now renames any hidden top-level entry
-to a `dot-`-prefixed visible name (`.maestro/` becomes
-`maestro-debug/dot-maestro/`, suffixed `-1`, `-2`, … if a real `dot-maestro`
-entry already exists, so neither tree is lost) and the upload step sets
-`include-hidden-files: true`, so the hierarchy dumps reach the artifact
-whenever the copy runs at all — the 200MB cap above still skips the whole copy
-(with a `::warning::`) for an oversized debug bundle.
+message tells you to inspect. Each staged `maestro-debug/<flow>.tar.gz` is a
+visible file that keeps that path *inside* the archive, so no hidden entry is
+staged at all; the upload step still sets `include-hidden-files: true` for the
+rest of the artifact. Expand a bundle with
+`tar -xzf maestro-debug/<flow>.tar.gz`.
 
 Uses `reactivecircus/android-emulator-runner`, which owns the emulator
 boot/kill lifecycle; this action supplies the headless flags and a bundled
