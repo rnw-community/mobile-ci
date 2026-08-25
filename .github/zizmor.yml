@@ -7,28 +7,32 @@
 # limited to what is listed here.
 
 rules:
-  # These reusable workflows call this repo's OWN composite actions via the
-  # full `rnw-community/mobile-ci/actions/<name>@vX.Y.Z` form (a relative
-  # `./actions/<name>` reference only resolves against the caller's checkout,
-  # not this repo — see CONTRIBUTING.md#self-references). Self-references
-  # intentionally pin to the current release tag (e.g. `@v1.3.1`) rather than
-  # a commit SHA: the tag is created from the very commit the self-reference
-  # update is part of, so SHA-pinning would be chicken-and-egg, and
-  # RELEASE.md forbids ever moving a release tag once cut, making the tag
-  # effectively as immutable as a SHA for this in-repo, single-release-
-  # procedure use. zizmor's `unpinned-uses` rule still flags a tag ref as
-  # unpinned (it only accepts a full commit SHA), hence this ignore. See
+  # This repo's reusable workflows and composite actions call its OWN
+  # composite actions via the full `rnw-community/mobile-ci/actions/<name>
+  # @vX.Y.Z` form (a relative `./actions/<name>` reference only resolves
+  # against the caller's checkout, not this repo — see
+  # CONTRIBUTING.md#self-references). Self-references intentionally pin to
+  # the current release tag (e.g. `@v1.3.1`) rather than a commit SHA: the
+  # tag is created from the very commit the self-reference update is part
+  # of, so SHA-pinning would be chicken-and-egg, and RELEASE.md forbids ever
+  # moving a release tag once cut, making the tag effectively as immutable
+  # as a SHA for this in-repo, single-release-procedure use. zizmor's
+  # `unpinned-uses` rule still treats a tag ref as unpinned under its
+  # blanket hash-pin policy, hence the `ref-pin` policy below. See
   # RELEASE.md#self-references for the update-on-every-release procedure.
-  # Third-party `uses:` elsewhere in these files ARE SHA-pinned and are not
-  # affected by this ignore.
+  #
+  # A per-owner/subpath policy rather than a file ignore: zizmor matches
+  # local-path ignores by basename only, so ignoring the action.yml that now
+  # carries an action->action self-reference would have exempted EVERY
+  # composite action in this monorepo from hash-pinning. Scoping the
+  # exemption to this repo's own `uses:` prefix keeps every third-party
+  # `uses:` in every workflow and action under the blanket hash-pin policy —
+  # including the six workflow files that previously needed a whole-file
+  # `unpinned-uses` ignore for their self-references.
   unpinned-uses:
-    ignore:
-      - ios-maestro.yml
-      - android-maestro.yml
-      - seed-native-cache.yml
-      - native-publish.yml
-      - native-dev-release.yml
-      - store-screenshots.yml
+    config:
+      policies:
+        rnw-community/mobile-ci/*: ref-pin
 
   # Each finding here is this action's OWN script exporting its OWN
   # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a Maestro

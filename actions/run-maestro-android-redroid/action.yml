@@ -201,176 +201,16 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Verify diagnostic tooling
-      shell: bash
-      run: command -v timeout >/dev/null 2>&1 || { echo "::error::'timeout' (GNU coreutils) is required to bound the docker/adb diagnostic and teardown calls below but is not on PATH."; exit 1; }
-
     - name: Start Redroid container
-      id: redroid
-      shell: bash
-      env:
-        REDROID_IMAGE: ${{ inputs.image }}
-        REDROID_CONTAINER_NAME: ${{ inputs.container-name }}
-        REDROID_MEMORY: ${{ inputs.memory }}
-        REDROID_CPUS: ${{ inputs.cpus }}
-        REDROID_MANIFEST_PATH: ${{ inputs.prewarm-manifest-path }}
-        REDROID_BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
-      run: |
-          set -euo pipefail
-          # container-name reaches sudo rm -rf below by way of $data; unlike
-          # docker (which validates --name itself), our own path construction
-          # has no built-in protection, so a value containing ".." or "/"
-          # could walk $data outside redroid-data entirely. Reject anything
-          # that is not a single safe path segment before it touches the
-          # filesystem at all.
-          case "$REDROID_CONTAINER_NAME" in
-            ''|.|..)
-              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': must be a non-empty single path segment, not '.' or '..'."
-              exit 1
-              ;;
-            *[!A-Za-z0-9_.-]*)
-              echo "::error::Invalid container-name '$REDROID_CONTAINER_NAME': only [A-Za-z0-9_.-] characters are allowed."
-              exit 1
-              ;;
-          esac
-          # A caller-supplied container-name only distinguishes shards within
-          # its own run; two concurrent workflow runs (this repo or a
-          # different one sharing the same runner pool) can compute the
-          # identical base name for the "same" cell. GITHUB_RUN_ID/ATTEMPT
-          # are always present and unique per run, so fold them in here
-          # unconditionally rather than relying on every consumer to
-          # remember to do it themselves.
-          effective_name="${REDROID_CONTAINER_NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          case "$effective_name" in
-            *[!A-Za-z0-9_.-]*)
-              echo "::error::Invalid computed container name '$effective_name'."
-              exit 1
-              ;;
-          esac
-          echo "REDROID_EFFECTIVE_CONTAINER_NAME=$effective_name" >> "$GITHUB_ENV"
-          # Composite action env: values are set directly on the process
-          # environment, never through a shell, so a literal "$HOME" in an
-          # unresolved default (or a caller override) is not expanded by
-          # GitHub Actions. Resolve that one documented case explicitly
-          # rather than relying on the caller to pass an already-expanded path.
-          manifest_path="${REDROID_MANIFEST_PATH/#\$HOME/$HOME}"
-          data_root=$(realpath -m "$RUNNER_TEMP/redroid-data")
-          data=$(realpath -m "$data_root/$effective_name")
-          case "$data" in
-            "$data_root"/*) ;;
-            *)
-              echo "::error::Resolved data directory '$data' escapes '$data_root'; refusing to operate on it."
-              exit 1
-              ;;
-          esac
-          # effective_name is run-scoped, so nothing will ever reuse this
-          # exact path — this rm -rf is defensive cleanup only (e.g. a
-          # directory left by an older, non-run-scoped version of this
-          # action), not load-bearing for correctness the way it was before
-          # run-scoping. Teardown below removes this directory again once
-          # the shard finishes, so this fleet's persistent $RUNNER_TEMP
-          # doesn't accumulate one directory per run forever.
-          sudo rm -rf "$data"
-          mkdir -p "$data"
-          echo "REDROID_DATA_DIR=$data" >> "$GITHUB_ENV"
-          if [ -f "$manifest_path" ]; then
-            # Read the manifest path from the environment rather than
-            # interpolating it into the generated source, so its contents
-            # can never be interpreted as Python.
-            image=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['image'])")
-            prewarm_data=$(REDROID_RESOLVED_MANIFEST="$manifest_path" python3 -c "import os, json; print(json.load(open(os.environ['REDROID_RESOLVED_MANIFEST']))['dataDir'])")
-            # Every concurrent matrix shard shares the one manifest-provided
-            # dataDir; bind-mounting it directly into more than one container
-            # at once corrupts it. Copy into a per-shard directory instead so
-            # concurrent shards each get an isolated, writable seed.
-            sudo cp -a "$prewarm_data/." "$data/"
-            echo "REDROID_PREWARM_OK image=$image dataDir=$prewarm_data (copied into isolated $data)"
-          else
-            image="$REDROID_IMAGE"
-            echo "::warning::No Redroid prewarm manifest at $manifest_path; pulling $image in-workflow and cold-booting a fresh data volume for this shard instead (slower than a prewarmed host)."
-            timeout 900 sudo docker pull "$image"
-          fi
-          sudo modprobe binder_linux devices=binder,hwbinder,vndbinder 2>&1 || true
-          # Presence of the module is the only portable signal. On binderfs
-          # kernels (6.x) no /dev/binder, /dev/vndbinder or /dev/hwbinder ever
-          # appears on the host — the privileged container mounts binderfs and
-          # creates its own devices — so probing for those nodes fails on
-          # exactly the hosts Redroid works best on.
-          if [ ! -d /sys/module/binder_linux ]; then
-            echo '::error::binder_linux is not loaded on this host after modprobe. Redroid cannot run without it, and that is host-kernel provisioning a workflow run cannot self-heal safely.'
-            exit 1
-          fi
-          # A "probe with ss, then docker run" port pick is a TOCTOU race:
-          # nothing stops a concurrent shard from binding the same
-          # observed-free port between the check and the bind. Sidestep the
-          # race entirely by never picking a port ourselves — bind the
-          # container port to loopback with an empty host port
-          # (127.0.0.1::5555) and let the kernel, via Docker, atomically
-          # assign whichever ephemeral port is actually free, then read back
-          # what it picked. This also keeps Redroid's adb port off every
-          # non-loopback interface, unreachable from anywhere but this host.
-          sudo docker rm -f "$effective_name" >/dev/null 2>&1 || true
-          sudo docker run -d --name "$effective_name" --privileged \
-            --memory "$REDROID_MEMORY" --memory-swap "$REDROID_MEMORY" --cpus "$REDROID_CPUS" \
-            -v "$data":/data -p 127.0.0.1::5555 \
-            "$image" androidboot.redroid_gpu_mode=guest
-          port=$(sudo docker port "$effective_name" 5555/tcp | head -n1 | sed -E 's/.*:([0-9]+)$/\1/')
-          case "$port" in
-            ''|*[!0-9]*)
-              echo "::error::Could not determine the host port Docker assigned to container port 5555 on '$effective_name'."
-              exit 1
-              ;;
-          esac
-          # Tolerates failure: Redroid has not necessarily opened 5555 yet
-          # immediately after `docker run -d` returns, and under set -e a
-          # hard failure here would abort the whole step before the
-          # boot-completed loop below (which retries adb connect every 5s)
-          # ever runs.
-          adb connect "localhost:$port" || true
-          # Exported as soon as the container is adb-reachable, not after the
-          # boot-completed wait below succeeds: a timed-out boot still leaves
-          # a running, adb-connected container worth capturing diagnostics
-          # from (screenshot/logcat), and "Capture final device state" takes
-          # adb captures only when this is set. Only a genuine bring-up
-          # failure before this line (e.g. the binder_linux guard above)
-          # leaves it unset, in which case that step still captures the
-          # container's Docker log/inspect dump when the container itself
-          # got far enough to have a name — just no adb-side captures, since
-          # there is no reachable device at all.
-          echo "ANDROID_SERIAL=localhost:$port" >> "$GITHUB_ENV"
-          # Narrated boot wait: a silent poll that times out reads as an adb
-          # or runner failure in the job log, when the real story is almost
-          # always "the container never finished booting" (or never even
-          # stayed running). Report progress with the observed
-          # sys.boot_completed value and the container's Docker state every
-          # 30s, and fail with all of that context on timeout instead of
-          # aborting on a bare test(1).
-          boot_start=$(date +%s)
-          deadline=$(( boot_start + REDROID_BOOT_TIMEOUT_SECONDS ))
-          next_narration=$boot_start
-          echo "Waiting up to ${REDROID_BOOT_TIMEOUT_SECONDS}s for sys.boot_completed=1 on localhost:$port..."
-          while :; do
-            boot_prop="$(adb -s "localhost:$port" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            now=$(date +%s)
-            if [ "$boot_prop" = "1" ]; then
-              echo "Boot completed after $(( now - boot_start ))s."
-              break
-            fi
-            container_state="$(sudo docker inspect -f '{{.State.Status}}' "$effective_name" 2>/dev/null || echo unknown)"
-            if [ "$now" -ge "$deadline" ]; then
-              echo "::error::Redroid container '$effective_name' did not report sys.boot_completed=1 within ${REDROID_BOOT_TIMEOUT_SECONDS}s (last sys.boot_completed: '${boot_prop:-<empty>}', container state: $container_state). Screenshot, logcat, and the container log are captured into the uploaded artifacts."
-              exit 1
-            fi
-            if [ "$now" -ge "$next_narration" ]; then
-              echo "Still waiting ($(( now - boot_start ))s elapsed of ${REDROID_BOOT_TIMEOUT_SECONDS}s): sys.boot_completed='${boot_prop:-<empty>}', container state: $container_state"
-              next_narration=$(( now + 30 ))
-            fi
-            sleep 5
-            adb connect "localhost:$port" >/dev/null 2>&1 || true
-          done
-          for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
-            adb -s "localhost:$port" shell settings put global "$setting" 0
-          done
+      uses: rnw-community/mobile-ci/actions/redroid-container@v1.9.0 # v1.9.0
+      with:
+          mode: start
+          container-name: ${{ inputs.container-name }}
+          image: ${{ inputs.image }}
+          memory: ${{ inputs.memory }}
+          cpus: ${{ inputs.cpus }}
+          prewarm-manifest-path: ${{ inputs.prewarm-manifest-path }}
+          boot-timeout-seconds: ${{ inputs.boot-timeout-seconds }}
 
     - name: Install Maestro
       shell: bash
@@ -1066,18 +906,10 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      shell: bash
-      env:
-        CONTAINER_NAME_INPUT: ${{ inputs.container-name }}
-      run: |
-          if [ -n "${REDROID_EFFECTIVE_CONTAINER_NAME:-}" ]; then
-            timeout 30 sudo docker rm -f "$REDROID_EFFECTIVE_CONTAINER_NAME" || true
-          else
-            timeout 30 sudo docker rm -f "$CONTAINER_NAME_INPUT" || true
-          fi
-          if [ -n "${REDROID_DATA_DIR:-}" ]; then
-            timeout 30 sudo rm -rf "$REDROID_DATA_DIR" || true
-          fi
+      uses: rnw-community/mobile-ci/actions/redroid-container@v1.9.0 # v1.9.0
+      with:
+          mode: teardown
+          container-name: ${{ inputs.container-name }}
 
     - name: Upload Maestro artifacts
       if: always()

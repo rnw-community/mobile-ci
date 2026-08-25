@@ -12,8 +12,9 @@ the device between start and teardown belongs to the caller, e.g.
 [`capture-screenshots-android`](../capture-screenshots-android/README.md),
 which takes an already-booted serial as an input.
 
-Everything documented for `run-maestro-android-redroid`'s container handling
-applies here identically:
+`run-maestro-android-redroid` calls this action for both halves of its own
+container lifecycle, so everything documented there about container handling
+is identical here by construction rather than by convention:
 
 - **Prewarm manifest.** A host-side prewarm step (pulled image + a `/data`
   volume booted once, manifest written to `prewarm-manifest-path`) makes

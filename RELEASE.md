@@ -11,16 +11,35 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
 
 1. **Update internal self-references to the new tag**, as part of the normal
    PR for the release (not a separate step after merge): bump every
-   `rnw-community/mobile-ci/actions/<name>@<previous-tag>` self-reference in
-   `.github/workflows/*.yml` to `@vX.Y.Z` — the tag you are about to cut —
-   with a trailing `# vX.Y.Z` comment. For example, releasing `v1.3.1` after
-   `v1.3.0`:
+   `rnw-community/mobile-ci/actions/<name>@<previous-tag>` self-reference to
+   `@vX.Y.Z` — the tag you are about to cut — with a trailing `# vX.Y.Z`
+   comment. Self-references live in **both** `.github/workflows/*.yml`
+   (reusable workflow → action) and `actions/*/action.yml` (action → action,
+   e.g. `run-maestro-android-redroid` → `redroid-container`); a bump loop
+   that misses the `actions/` half ships a release whose composite actions
+   still call the *previous* release's code. For example, releasing `v1.3.1`
+   after `v1.3.0`:
 
    ```bash
-   for f in .github/workflows/ios-maestro.yml .github/workflows/android-maestro.yml .github/workflows/seed-native-cache.yml; do
+   while IFS= read -r f; do
      perl -pi -e 's{(rnw-community/mobile-ci/actions/[a-z0-9-]+)\@v1\.3\.0(?:\s*#\s*v1\.3\.0)?}{$1\@v1.3.1 # v1.3.1}' "$f"
-   done
+   done < <(grep -rl 'rnw-community/mobile-ci/actions/' \
+     --include='*.yml' .github/workflows actions \
+     | grep -v '^\.github/workflows/self-test\.yml$')
    ```
+
+   Then confirm nothing was left behind — this must print nothing:
+
+   ```bash
+   grep -rn 'rnw-community/mobile-ci/actions/' --include='*.yml' \
+     .github/workflows actions \
+     | grep -v '^\.github/workflows/self-test\.yml:' \
+     | grep -v '@v1\.3\.1 # v1\.3\.1$'
+   ```
+
+   `self-test.yml` is filtered out of both: it matches only because its
+   `dry-lint-local-refs` job names the self-reference pattern in a comment
+   and a `sed` script, and it carries no self-reference of its own.
 
    Get this merged to `main` via the normal PR/review/CI flow (see
    [Self-references](#self-references) below for why the tag can be named in
@@ -66,29 +85,35 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    # both must print the identical SHA
    ```
 
-7. **Verify release self-consistency**: the tagged commit's own
-   self-reference-bearing workflows (`ios-maestro.yml`, `android-maestro.yml`,
-   `seed-native-cache.yml`, `store-screenshots.yml` — `native-publish.yml` and
-   `native-dev-release.yml` have no self-references) must point at that same
-   tag. Fail closed: any reference whose tag or trailing comment does not
-   match the release is a broken release, not a warning.
+7. **Verify release self-consistency**: every self-reference-bearing file in
+   the tagged commit must point at that same tag — the reusable workflows
+   (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
+   `store-screenshots.yml`; `native-publish.yml` and `native-dev-release.yml`
+   have none) **and** the composite actions that call sibling actions
+   (`run-maestro-android-redroid/action.yml` → `redroid-container`). Fail
+   closed: any reference whose tag or trailing comment does not match the
+   release is a broken release, not a warning.
 
    ```bash
    tag=v1.2.3
    tag_re=$(printf '%s' "$tag" | sed 's/[.[\*^$]/\\&/g')
    check_status=0
-   for workflow in ios-maestro android-maestro seed-native-cache store-screenshots; do
-     content="$(gh api "repos/rnw-community/mobile-ci/contents/.github/workflows/${workflow}.yml?ref=${tag}" \
+   for path in .github/workflows/ios-maestro.yml \
+               .github/workflows/android-maestro.yml \
+               .github/workflows/seed-native-cache.yml \
+               .github/workflows/store-screenshots.yml \
+               actions/run-maestro-android-redroid/action.yml; do
+     content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
        --jq '.content' | base64 -d)"
      if ! printf '%s\n' "$content" | grep -q 'rnw-community/mobile-ci/actions/'; then
-       echo "::error::${workflow}.yml: no self-references found at ${tag}"
+       echo "::error::${path}: no self-references found at ${tag}"
        check_status=1
        continue
      fi
      if printf '%s\n' "$content" \
        | grep 'rnw-community/mobile-ci/actions/' \
        | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag_re}( # ${tag_re})?\$"; then
-       echo "::error::${workflow}.yml has a self-reference not pinned to ${tag}"
+       echo "::error::${path} has a self-reference not pinned to ${tag}"
        check_status=1
      fi
    done
@@ -99,6 +124,17 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    would otherwise match any character, letting a typo like `v1x2x3` pass
    as if it matched `v1.2.3`) — do not interpolate `$tag` directly into
    the `grep -vE` pattern.
+
+   The path list is the fail-closed part: a file that gained a
+   self-reference but was never added there would be silently unchecked.
+   Refresh it from the working tree before running the loop, using the same
+   `grep -rl` (minus `self-test.yml`) as step 1:
+
+   ```bash
+   grep -rl 'rnw-community/mobile-ci/actions/' --include='*.yml' \
+     .github/workflows actions \
+     | grep -v '^\.github/workflows/self-test\.yml$'
+   ```
 
 8. **Smoke-check one consumer pipeline** against the new tag before calling
    the release done — re-point a real consumer's workflow (or a scratch
@@ -119,8 +155,9 @@ versioning policy.
 ## Self-references
 
 Every release, self-references in this repo's own `.github/workflows/*.yml`
-must point at the exact `vX.Y.Z` tag being cut, not at `@main` and not at the
-previous release's tag — see step 1 of the checklist above and
+and `actions/*/action.yml` must point at the exact `vX.Y.Z` tag being cut,
+not at `@main` and not at the previous release's tag — see step 1 of the
+checklist above and
 [CONTRIBUTING.md#self-references](CONTRIBUTING.md#self-references). This is
 the "tag name known in advance" pattern: the release tag does not exist yet
 when the self-reference update is committed, but the tag name is fixed by

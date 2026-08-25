@@ -67,6 +67,17 @@ directory (`RUNNER_TEMP/redroid-data/<the run-scoped name>`) are removed in
 the `if: always()` teardown step, so this run-scoping doesn't leak one
 directory per run forever on a persistent self-hosted runner.
 
+The container lifecycle described above — run-scoped naming, the prewarm
+manifest copy, the privileged `docker run` with the kernel-assigned loopback
+port, the narrated boot wait, and the `if: always()` teardown — is not
+implemented here. It is delegated to this repo's
+[`redroid-container`](../redroid-container/README.md) action, the same one
+`store-screenshots.yml` drives directly for Android screenshot capture. This
+action forwards `container-name`, `image`, `memory`, `cpus`,
+`prewarm-manifest-path` and `boot-timeout-seconds` to it unchanged, and reads
+`ANDROID_SERIAL`, `REDROID_EFFECTIVE_CONTAINER_NAME` and `REDROID_DATA_DIR`
+back out of the job environment that action exports them into.
+
 **Maestro's hidden debug path lives inside the bundles.** Maestro writes its
 debug output into a hidden `.maestro/tests/<timestamp>/` path, and
 `actions/upload-artifact` skips hidden files by default — which used to ship
