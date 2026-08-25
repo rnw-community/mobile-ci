@@ -121,14 +121,26 @@ on:
                 type: number
                 required: false
                 default: 30
+            android-lint-gate-gradle-args:
+                description: >-
+                    Extra arguments appended after :app:lintVitalRelease in the
+                    android-lint-gate job, e.g. -PreactNativeArchitectures=arm64-v8a.
+                    Split on any whitespace — spaces, tabs, and newlines (a YAML
+                    block-scalar value works) are all treated as separators — not
+                    shell-quoted, so an argument containing a space cannot be
+                    expressed as a single token.
+                type: string
+                required: false
+                default: ''
             publish-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs of non-secret env appended to
-                    $GITHUB_ENV at the start of ios-publish and android-publish, before
-                    eas build/submit and the pre/post-submit-command hooks. Rejects
-                    (fails closed) any line without '=' or whose name does not match
-                    ^[A-Za-z_][A-Za-z0-9_]*$. For secret values use the EAS_EXTRA_ENV
-                    secret instead — inputs are not masked in logs.
+                    $GITHUB_ENV at the start of ios-publish, android-lint-gate, and
+                    android-publish, before eas build/submit (or, for
+                    android-lint-gate, prebuild) and the pre/post-submit-command
+                    hooks. Rejects (fails closed) any line without '=' or whose name
+                    does not match ^[A-Za-z_][A-Za-z0-9_]*$. For secret values use
+                    the EAS_EXTRA_ENV secret instead — inputs are not masked in logs.
                 type: string
                 required: false
                 default: ''
@@ -160,10 +172,11 @@ on:
             EAS_EXTRA_ENV:
                 description: >-
                     Newline-separated KEY=VALUE pairs of secret env appended to
-                    $GITHUB_ENV at the start of ios-publish and android-publish, with
-                    each value masked in logs before being written. Use this for
-                    secrets eas build/submit or a pre/post-submit-command hook need on
-                    the environment, e.g. EXPO_APPLE_APP_SPECIFIC_PASSWORD.
+                    $GITHUB_ENV at the start of ios-publish, android-lint-gate, and
+                    android-publish, with each value masked in logs before being
+                    written. Use this for secrets eas build/submit, the
+                    android-lint-gate prebuild, or a pre/post-submit-command hook
+                    need on the environment, e.g. EXPO_APPLE_APP_SPECIFIC_PASSWORD.
                 required: false
 
 concurrency:
@@ -396,12 +409,82 @@ jobs:
         if: inputs.enable-android && inputs.android-lint-gate
         runs-on: ${{ fromJSON(inputs.lint-runner-labels) }}
         timeout-minutes: ${{ inputs.lint-timeout-minutes }}
+        env:
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply publish-env
+              if: inputs.publish-env != ''
+              shell: bash
+              env:
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::publish-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$PUBLISH_ENV"
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              shell: bash
+              env:
+                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    value="${line#*=}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    if [ -n "$value" ]; then
+                      echo "::add-mask::$value"
+                    fi
+                    echo "$name=$value" >> "$GITHUB_ENV"
+                  done <<< "$EAS_EXTRA_ENV"
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -436,9 +519,17 @@ jobs:
             - name: Run gradlew :app:lintVitalRelease
               working-directory: ${{ inputs.app-dir }}/android
               shell: bash
+              env:
+                  GRADLE_ARGS: ${{ inputs.android-lint-gate-gradle-args }}
               run: |
                   set -euo pipefail
-                  ./gradlew :app:lintVitalRelease
+                  gradle_args=()
+                  if [ -n "$GRADLE_ARGS" ]; then
+                    normalized_gradle_args="${GRADLE_ARGS//$'\n'/ }"
+                    normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
+                    read -r -a gradle_args <<< "$normalized_gradle_args"
+                  fi
+                  ./gradlew :app:lintVitalRelease ${gradle_args[@]+"${gradle_args[@]}"}
 
             - name: Verify restricted permissions are absent (Google Play policy)
               working-directory: ${{ inputs.app-dir }}/android
