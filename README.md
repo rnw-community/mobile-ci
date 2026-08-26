@@ -112,12 +112,17 @@ is hand-tuned, falling back to modulo when unset.
 
 ### Package manager
 
-Every reusable workflow above resolves the JS package manager once per job,
-after checkout and before `actions/setup-node`, and uses the result for
-setup-node's dependency `cache:` and for provisioning pnpm. Resolution order:
+Every reusable workflow above resolves the JS package manager once per job that
+installs JS dependencies, after checkout and before `actions/setup-node`. The
+result drives pnpm provisioning everywhere, and setup-node's dependency
+`cache:` in the jobs that configure one (the `ios-maestro` /
+`android-maestro` / `store-screenshots` build jobs). Resolution order:
 
 1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;
-2. `package.json`'s `packageManager` field at the repository root;
+2. `package.json` at the repository root —
+   `devEngines.packageManager.name` first, then `packageManager`, matching
+   pnpm's own precedence. Reading it needs `jq` on the runner; without `jq`
+   the step emits a `::warning::` and falls through to step 3;
 3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml` or
    `package-lock.json`.
 
@@ -142,8 +147,13 @@ jobs:
 ```
 
 When the resolved manager is `pnpm`, pnpm is installed by `pnpm/action-setup`
-from `package.json`'s `packageManager` field (so that field must be present),
 and the `enable-corepack` step is skipped so pnpm is never provisioned twice.
+`pnpm/action-setup` takes its version from the repository-root `package.json`
+(`devEngines.packageManager: { name: pnpm, version: … }`, else
+`packageManager: "pnpm@…"`), so a pnpm consumer **must** declare one of those
+and **must** have `jq` on the runner — the resolve step verifies both up front
+and fails with an actionable message rather than letting
+`pnpm/action-setup` abort later with `No pnpm version is specified`.
 
 ### Android driver: Redroid vs AVD
 
