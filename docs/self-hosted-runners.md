@@ -347,7 +347,9 @@ Options for a consumer app that depends on GMS at runtime:
    — x86_64 Linux or macOS `arm64`. This is not an option on this repo's
    default `linux-aarch64` self-hosted pool: Google publishes no
    `linux-aarch64` build of the Android emulator (see above), so `avd`
-   cannot boot there regardless of system image.
+   cannot boot there regardless of system image. See
+   [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-driver) below
+   for that host shape's requirements.
 3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
    or runtime flag that stubs `isReadyToPay()`-style calls under
    Maestro/CI), so the flow under test never depends on GMS being present.
@@ -391,6 +393,79 @@ Options for a consumer app that depends on GMS at runtime:
    invokes a GMS-dependent operation (including ones triggered by app
    lifecycle, not user action) rather than stopping at the first one a
    flow happens to exercise.
+
+## Linux x86_64 KVM hosts (Android, `avd` driver)
+
+The Redroid shape above is not the only supported Android host shape.
+`android-maestro.yml`'s `avd` driver (`reactivecircus/android-emulator-runner`,
+`run-maestro-android`) is fully supported too, on an x86_64 Linux host with
+KVM — no `binder_linux`, no privileged container, no Docker daemon at all.
+This is the shape for a rootless-container runner pool (e.g. rootless
+Podman-backed runners) where `--privileged` and `sudo modprobe` are off the
+table entirely: KVM passthrough needs neither.
+
+Host requirements:
+
+- **`/dev/kvm` exposed to the runner.** The runner process (or its
+  container, if the runner itself runs containerized) needs read/write
+  access to `/dev/kvm` — a KVM-capable instance profile/hypervisor
+  configuration is a prerequisite this doc cannot provision for you; verify
+  it at the virtualization layer before touching the Android SDK.
+- **Android SDK with `emulator` plus a `google_apis` x86_64 system image**
+  matching `android-maestro.yml`'s `emulator-api-level`/`emulator-target`/
+  `emulator-arch` inputs (e.g. `android-34`, `google_apis`, `x86_64`).
+  `reactivecircus/android-emulator-runner` installs and caches these itself
+  via the Android SDK manager. No `binder_linux`, no privileged containers,
+  and no Docker daemon are needed on this shape at all.
+- **Gate on `emulator -accel-check` before trusting the pool.** A host
+  missing `/dev/kvm` access does not necessarily refuse to boot an AVD — it
+  can silently fall back to software emulation, which eventually boots but
+  is far too slow for a CI budget and gives no clear signal that the host is
+  misconfigured. Run `emulator -accel-check` as a host health-check (or a
+  preflight step ahead of the real job) and fail closed on anything other
+  than confirmation that hardware acceleration is available, rather than
+  discovering the problem later as an intermittent timeout in the test job.
+
+Observed characteristics from a real fleet, useful for sizing this pool
+(specific to a headless `google_apis`/x86_64 AVD; expect these to move with
+API level, host CPU, and image build — treat them as a starting point, not a
+guarantee):
+
+- **~23 seconds** cold boot to `sys.boot_completed`.
+- **~4.2GB RSS** at a 4 vCPU / 8GiB host shape.
+
+### Choosing an Android driver
+
+`android-maestro.yml`'s `android-driver` input picks which of these two host
+shapes a run needs, and both are fully supported — the choice is per-fleet,
+not a migration from one to the other:
+
+- **`redroid`** (default) needs the `linux-aarch64` binder/privileged-docker
+  shape documented above, and runs Android natively on arm64 — required if
+  your app ships (or you must test) an arm64-only APK. Stock images carry no
+  Google Play Services (see [GMS](#google-play-services-gms) above).
+- **`avd`** needs the x86_64 KVM shape documented in this section. A
+  `google_apis` system image carries real Google Play Services, at the cost
+  of requiring the app under test to build (or include) an x86_64 ABI.
+
+Set `android-driver` together with `runner-labels` (or the split
+`build-runner-labels`/`test-runner-labels`) from the consumer workflow to
+route a run at the host shape it needs — see
+[docs/workflows/android-maestro.md](workflows/android-maestro.md) for the
+full input reference.
+
+### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
+
+`native-publish.yml`, `seed-native-cache.yml`, and `native-dev-release.yml`
+all default their `android-runner-labels` input to the same macOS pool as
+iOS (`["self-hosted","macOS","ARM64"]`), not because the Android build needs
+a Mac, but because Google's Android NDK build tooling used by `eas build
+--local` is x86_64-only on Linux — there is no `linux-aarch64` NDK to run it
+with, the same gap that rules out the `avd` driver on this repo's default
+Maestro pool. An x86_64 Linux KVM host — the same shape provisioned above
+for the `avd` driver — is x86_64-native and can serve these Android EAS
+build jobs too; point `android-runner-labels` at it instead of accepting the
+macOS default.
 
 ## Maintainer note: fleet self-test repo variables
 
