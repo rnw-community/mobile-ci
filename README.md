@@ -127,7 +127,11 @@ result drives pnpm provisioning everywhere, and setup-node's dependency
    `package-lock.json`.
 
 Nothing to match on, several root lockfiles at once, or an unsupported value
-fails the job with an actionable `::error::` instead of guessing. Existing
+fails the job with an actionable `::error::` instead of guessing. In the jobs
+that do configure setup-node's cache, the resolved manager's own root lockfile
+must exist — `actions/setup-node` has nothing to key the cache on otherwise —
+and its absence is reported by this step rather than by setup-node's generic
+"Dependencies lock file is not found". Existing
 Yarn consumers need no change: a repo with `yarn.lock` (and/or
 `packageManager: yarn@…`) resolves to `yarn`, exactly what these workflows
 hardcoded before.

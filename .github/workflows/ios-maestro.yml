@@ -399,6 +399,7 @@ jobs:
               shell: bash
               env:
                   PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: 'true'
               run: |
                   set -euo pipefail
                   pm=''
@@ -460,6 +461,17 @@ jobs:
                   if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
                     echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
                     exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) lockfile=yarn.lock ;;
+                      pnpm) lockfile=pnpm-lock.yaml ;;
+                      *) lockfile=package-lock.json ;;
+                    esac
+                    if [ ! -f "$lockfile" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and there is no $lockfile at the repository root for it to key on. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
                   fi
                   echo "Resolved package manager: $pm"
                   echo "pm=$pm" >> "$GITHUB_OUTPUT"
