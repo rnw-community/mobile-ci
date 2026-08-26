@@ -141,12 +141,13 @@ Yarn consumers need no change: a repo with `yarn.lock` (and/or
 hardcoded before.
 
 `install-command` is a separate knob and still defaults to
-`yarn install --immutable` — set it to match your manager:
+`yarn install --immutable` — set it to match your manager. Pin to a release
+that actually contains `package-manager`; `v1.9.0` and earlier predate it:
 
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.9.0 # v1.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha>
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
