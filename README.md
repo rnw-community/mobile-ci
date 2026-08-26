@@ -123,8 +123,12 @@ result drives pnpm provisioning everywhere, and setup-node's dependency
    `devEngines.packageManager.name` first, then `packageManager`, matching
    pnpm's own precedence. Reading it needs `jq` on the runner; without `jq`
    the step emits a `::warning::` and falls through to step 3;
-3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml` or
-   `package-lock.json`.
+3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml`, or
+   `package-lock.json` / `npm-shrinkwrap.json` (both mean npm, so having both
+   is not ambiguous).
+
+Those same lockfile names are what the ccache / Pods / Gradle cache keys hash,
+so a dependency change re-keys the native caches whichever manager you use.
 
 Nothing to match on, several root lockfiles at once, or an unsupported value
 fails the job with an actionable `::error::` instead of guessing. In the jobs

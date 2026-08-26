@@ -50,7 +50,8 @@ on:
                     explicit value here, then package.json's
                     devEngines.packageManager / packageManager field (needs jq on
                     the runner), then exactly one root lockfile (yarn.lock,
-                    pnpm-lock.yaml, package-lock.json). No match, an ambiguous
+                    pnpm-lock.yaml, package-lock.json / npm-shrinkwrap.json). No
+                    match, an ambiguous
                     match, or an unsupported value fails the job. install-command
                     must match the resolved manager (e.g. pnpm install
                     --frozen-lockfile). Resolving to pnpm additionally requires a
@@ -327,9 +328,14 @@ jobs:
                     lockfile_count=0
                     if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
                     if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
-                    if [ -f package-lock.json ]; then pm=npm; lockfiles="${lockfiles}package-lock.json "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
                     if [ "$lockfile_count" -eq 0 ]; then
-                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml or package-lock.json at the repository root. Set the package-manager input explicitly."
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
                       exit 1
                     fi
                     if [ "$lockfile_count" -gt 1 ]; then
@@ -343,12 +349,16 @@ jobs:
                   fi
                   if [ -n "$LOCKFILE_REQUIRED" ]; then
                     case "$pm" in
-                      yarn) lockfile=yarn.lock ;;
-                      pnpm) lockfile=pnpm-lock.yaml ;;
-                      *) lockfile=package-lock.json ;;
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
                     esac
-                    if [ ! -f "$lockfile" ]; then
-                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and there is no $lockfile at the repository root for it to key on. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
                       exit 1
                     fi
                   fi
@@ -730,9 +740,14 @@ jobs:
                     lockfile_count=0
                     if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
                     if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
-                    if [ -f package-lock.json ]; then pm=npm; lockfiles="${lockfiles}package-lock.json "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
                     if [ "$lockfile_count" -eq 0 ]; then
-                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml or package-lock.json at the repository root. Set the package-manager input explicitly."
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
                       exit 1
                     fi
                     if [ "$lockfile_count" -gt 1 ]; then
@@ -746,12 +761,16 @@ jobs:
                   fi
                   if [ -n "$LOCKFILE_REQUIRED" ]; then
                     case "$pm" in
-                      yarn) lockfile=yarn.lock ;;
-                      pnpm) lockfile=pnpm-lock.yaml ;;
-                      *) lockfile=package-lock.json ;;
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
                     esac
-                    if [ ! -f "$lockfile" ]; then
-                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and there is no $lockfile at the repository root for it to key on. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
                       exit 1
                     fi
                   fi
