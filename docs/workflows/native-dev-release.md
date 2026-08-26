@@ -119,7 +119,8 @@ backend it controls (private repo) — never ship the token to the browser.
 | `app-dir`                    | **yes**  | —                                        | App directory containing `app.json`/`eas.json`. |
 | `node-version`               | no       | `22`                                     | Node version for `actions/setup-node`. |
 | `install-command`            | no       | `yarn install --immutable`                | JS dependency install command. |
-| `enable-corepack`            | no       | `true`                                    | Run `corepack enable` before install. |
+| `enable-corepack`            | no       | `true`                                    | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
+| `package-manager`            | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `packageManager` in `package.json`, else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json`); no match or an ambiguous match fails the job. Drives `actions/setup-node`'s `cache:` and pnpm provisioning — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). See [Package manager](../../README.md#package-manager). |
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |

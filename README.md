@@ -110,6 +110,41 @@ optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
 overrides the computed index-modulo split for consumers whose shard balance
 is hand-tuned, falling back to modulo when unset.
 
+### Package manager
+
+Every reusable workflow above resolves the JS package manager once per job,
+after checkout and before `actions/setup-node`, and uses the result for
+setup-node's dependency `cache:` and for provisioning pnpm. Resolution order:
+
+1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;
+2. `package.json`'s `packageManager` field at the repository root;
+3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml` or
+   `package-lock.json`.
+
+Nothing to match on, several root lockfiles at once, or an unsupported value
+fails the job with an actionable `::error::` instead of guessing. Existing
+Yarn consumers need no change: a repo with `yarn.lock` (and/or
+`packageManager: yarn@…`) resolves to `yarn`, exactly what these workflows
+hardcoded before.
+
+`install-command` is a separate knob and still defaults to
+`yarn install --immutable` — set it to match your manager:
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.9.0 # v1.9.0
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+```
+
+When the resolved manager is `pnpm`, pnpm is installed by `pnpm/action-setup`
+from `package.json`'s `packageManager` field (so that field must be present),
+and the `enable-corepack` step is skipped so pnpm is never provisioned twice.
+
 ### Android driver: Redroid vs AVD
 
 `android-maestro.yml`'s `android-driver` input picks the Maestro-execution
