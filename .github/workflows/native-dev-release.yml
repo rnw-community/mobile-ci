@@ -42,6 +42,25 @@ on:
                 type: boolean
                 required: false
                 default: true
+            package-manager:
+                description: >-
+                    JS package manager driving pnpm provisioning and, in the jobs
+                    that configure one, actions/setup-node's dependency cache.
+                    Leave empty to auto-detect at the repository root, in order: an
+                    explicit value here, then package.json's
+                    devEngines.packageManager / packageManager field (needs jq on
+                    the runner), then exactly one root lockfile (yarn.lock,
+                    pnpm-lock.yaml, package-lock.json / npm-shrinkwrap.json). No
+                    match, an ambiguous
+                    match, or an unsupported value fails the job. install-command
+                    must match the resolved manager (e.g. pnpm install
+                    --frozen-lockfile). Resolving to pnpm additionally requires a
+                    pnpm version declared in package.json (packageManager or
+                    devEngines.packageManager) because pnpm/action-setup reads it
+                    from there; the corepack step is then skipped.
+                type: string
+                required: false
+                default: ''
             build-command:
                 description: Optional workspace JS build command run at repo root before the dev build.
                 type: string
@@ -255,13 +274,108 @@ jobs:
                     echo "$name=$value" >> "$GITHUB_ENV"
                   done <<< "$EAS_EXTRA_ENV"
 
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: ''
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                    esac
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
             - name: Enable corepack
-              if: inputs.enable-corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
 
@@ -572,13 +686,108 @@ jobs:
                     echo "$name=$value" >> "$GITHUB_ENV"
                   done <<< "$EAS_EXTRA_ENV"
 
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: ''
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                    esac
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
             - name: Enable corepack
-              if: inputs.enable-corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
 

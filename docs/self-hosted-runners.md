@@ -8,6 +8,18 @@ with several versions of but no `.xcconfig`-level pinning guarantee across
 runs). This doc covers provisioning both pool types plus the two variables
 this repo's own maintainer-only fleet self-test job reads.
 
+## Common to every pool: `jq`
+
+Install `jq` on every host in every pool. The reusable workflows' package
+manager resolution reads `package.json`'s `devEngines.packageManager` /
+`packageManager` field with it (see
+[README.md#package-manager](../README.md#package-manager)), and several
+composite actions (`capture-screenshots-ios`, `capture-screenshots-android`,
+`asc-dedupe-screenshots`) already require it outright. Without `jq` the
+resolve step warns and falls back to root-lockfile detection, which is enough
+for Yarn and npm but **fails closed for pnpm** — pnpm's version can only come
+from `package.json`.
+
 ## macOS pools (iOS)
 
 Each macOS runner needs one or more Xcode versions installed side by side at

@@ -110,6 +110,60 @@ optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
 overrides the computed index-modulo split for consumers whose shard balance
 is hand-tuned, falling back to modulo when unset.
 
+### Package manager
+
+Every reusable workflow above resolves the JS package manager once per job that
+installs JS dependencies, after checkout and before `actions/setup-node`. The
+result drives pnpm provisioning everywhere, and setup-node's dependency
+`cache:` in the jobs that configure one (the `ios-maestro` /
+`android-maestro` / `store-screenshots` build jobs). Resolution order:
+
+1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;
+2. `package.json` at the repository root —
+   `devEngines.packageManager.name` first, then `packageManager`, matching
+   pnpm's own precedence. Reading it needs `jq` on the runner; without `jq`
+   the step emits a `::warning::` and falls through to step 3;
+3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml`, or
+   `package-lock.json` / `npm-shrinkwrap.json` (both mean npm, so having both
+   is not ambiguous).
+
+Those same lockfile names are what the ccache / Pods / Gradle cache keys hash,
+so a dependency change re-keys the native caches whichever manager you use.
+
+Nothing to match on, several root lockfiles at once, or an unsupported value
+fails the job with an actionable `::error::` instead of guessing. In the jobs
+that do configure setup-node's cache, the resolved manager's own root lockfile
+must exist — `actions/setup-node` has nothing to key the cache on otherwise —
+and its absence is reported by this step rather than by setup-node's generic
+"Dependencies lock file is not found". Existing
+Yarn consumers need no change: a repo with `yarn.lock` (and/or
+`packageManager: yarn@…`) resolves to `yarn`, exactly what these workflows
+hardcoded before.
+
+`install-command` is a separate knob and still defaults to
+`yarn install --immutable` — set it to match your manager. Pin to a release
+that actually contains `package-manager`; `v1.9.0` and earlier predate it:
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha>
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+```
+
+When the resolved manager is `pnpm`, pnpm is installed by `pnpm/action-setup`
+and the `enable-corepack` step is skipped so pnpm is never provisioned twice.
+`pnpm/action-setup` takes its version from the repository-root `package.json`
+(`devEngines.packageManager: { name: pnpm, version: … }`, else
+`packageManager: "pnpm@…"`), so a pnpm consumer **must** declare one of those
+and **must** have `jq` on the runner — the resolve step verifies both up front
+and fails with an actionable message rather than letting
+`pnpm/action-setup` abort later with `No pnpm version is specified`.
+
 ### Android driver: Redroid vs AVD
 
 `android-maestro.yml`'s `android-driver` input picks the Maestro-execution
