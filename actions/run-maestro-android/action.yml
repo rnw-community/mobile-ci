@@ -158,6 +158,28 @@ inputs:
     description: Android emulator hardware profile.
     required: false
     default: pixel_6
+  ram-size:
+    description: >-
+      Emulator RAM in MB, passed through to android-emulator-runner. Empty
+      keeps the hardware profile's own default. Set this when the runner is
+      memory-bounded: on a container with a cgroup limit the kernel kills
+      qemu rather than reporting an out-of-memory condition, and the job
+      then fails as a lost adb connection ("0 devices connected") minutes
+      into a run that had been passing.
+    required: false
+    default: ''
+  heap-size:
+    description: >-
+      Android VM heap size in MB for the emulated device, passed through to
+      android-emulator-runner. Empty keeps the profile default.
+    required: false
+    default: ''
+  cores:
+    description: >-
+      Emulator CPU cores, passed through to android-emulator-runner. Empty
+      keeps the profile default.
+    required: false
+    default: ''
   artifacts-dir:
     description: Directory final-state capture (screenshot, logcat) is written to.
     required: true
@@ -329,6 +351,9 @@ runs:
           target: ${{ inputs.target }}
           arch: ${{ inputs.arch }}
           profile: ${{ inputs.profile }}
+          ram-size: ${{ inputs.ram-size }}
+          heap-size: ${{ inputs.heap-size }}
+          cores: ${{ inputs.cores }}
           disable-animations: true
           disable-spellchecker: true
           force-avd-creation: false

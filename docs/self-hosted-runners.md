@@ -429,6 +429,20 @@ Host requirements:
   `reactivecircus/android-emulator-runner` installs and caches these itself
   via the Android SDK manager. No `binder_linux`, no privileged containers,
   and no Docker daemon are needed on this shape at all.
+- **Give the emulator room inside the runner's memory limit, and bound it
+  explicitly.** On a container-backed pool the cgroup limit is the ceiling
+  the emulator actually lives under, and exceeding it does not surface as an
+  out-of-memory error: the kernel kills qemu — the largest RSS in the
+  container — and the job continues against a device that has silently
+  vanished. Maestro then reports a refused adb connection and
+  `You have 0 devices connected, which is not enough to run 1 shards`, minutes
+  into a run whose earlier flows passed. Measured on a 4 vCPU / 8 GiB
+  container: the AVD alone sits near 4.2 GiB, and the emulator plus Maestro's
+  JVM plus the runner's own Node processes reached the 8 GiB ceiling partway
+  through a shard. Either give the profile headroom above the AVD's footprint
+  or set `emulator-ram-size` (and `emulator-heap-size`) so the guest cannot
+  grow into the limit. `redroid-memory` is the equivalent knob on the other
+  driver.
 - **Gate on `emulator -accel-check` before trusting the pool.** A host
   missing `/dev/kvm` access does not necessarily refuse to boot an AVD — it
   can silently fall back to software emulation, which eventually boots but
