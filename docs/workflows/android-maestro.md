@@ -57,6 +57,9 @@ silently.
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only) — also used as the native-app-cache `arch` key segment for both drivers. |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
+| `emulator-ram-size`             | no       | `''`                                               | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default. Set it on a memory-bounded runner: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
+| `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
+| `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty keeps the profile default. |
 | `redroid-image`                 | no       | `redroid/redroid:15.0.0_64only-latest`             | Redroid image tag, used on a `redroid-prewarm-manifest-path` miss. Verified against a `6.17` host kernel — older `13.x` tags are known to never finish boot on that kernel, and `14.x` images hard-lock the guest kernel version. |
 | `redroid-memory`                | no       | `3g`                                               | Container memory limit (`docker --memory` / `--memory-swap`). |
 | `redroid-cpus`                  | no       | `2`                                                 | Container CPU limit (`docker --cpus`). |
