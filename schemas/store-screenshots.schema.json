@@ -1,0 +1,270 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/rnw-community/mobile-ci/main/schemas/store-screenshots.schema.json",
+    "title": "rnw-community/mobile-ci store-screenshots.yml consumer config",
+    "description": "Config file loaded by store-screenshots.yml's config-path input. Keys are workflow input names; JSON-blob inputs take the real JSON structure. Editor autocomplete only - CI validation is the workflow's own fail-closed jq allowlist, which is the source of truth.",
+    "type": "object",
+    "additionalProperties": false,
+    "definitions": {
+        "appearance": {
+            "type": "string",
+            "enum": ["light", "dark"]
+        },
+        "platform": {
+            "type": "string",
+            "enum": ["ios", "android"]
+        },
+        "localeName": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "envMap": {
+            "type": "object",
+            "description": "Extra Maestro -e pairs. The reserved names APP_ID, LOCALE and APPEARANCE fail closed.",
+            "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+            "additionalProperties": { "type": "string" }
+        },
+        "localeItem": {
+            "oneOf": [
+                { "$ref": "#/definitions/localeName" },
+                {
+                    "type": "object",
+                    "required": ["id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "id": { "$ref": "#/definitions/localeName" },
+                        "env": { "$ref": "#/definitions/envMap" }
+                    }
+                }
+            ]
+        },
+        "manifestEntry": {
+            "type": "object",
+            "required": ["device", "locales", "appearances"],
+            "additionalProperties": false,
+            "properties": {
+                "platform": {
+                    "$ref": "#/definitions/platform",
+                    "description": "Defaults to \"ios\" when omitted."
+                },
+                "device": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "iOS: the exact simulator name. Android: a free-form slug label matching ^[A-Za-z0-9 ._-]+$."
+                },
+                "locales": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/localeItem" }
+                },
+                "appearances": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/appearance" }
+                },
+                "orientation": {
+                    "type": "string",
+                    "enum": ["portrait", "landscape"],
+                    "description": "Defaults to portrait. Android entries must be portrait."
+                },
+                "width": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Android only, required."
+                },
+                "height": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Android only, required."
+                },
+                "density": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Android only, required."
+                }
+            }
+        },
+        "scene": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "oneOf": [{ "required": ["deepLink"] }, { "required": ["flow"] }],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]+$",
+                    "description": "Unique; becomes the output path segment raw/<platform>/<device-slug>/<locale>/<appearance>/<name>.png."
+                },
+                "deepLink": { "type": "string", "minLength": 1 },
+                "flow": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Path relative to screenshots-dir; absolute paths and '..' segments fail closed."
+                },
+                "settleSeconds": { "type": "integer", "minimum": 0, "maximum": 120 },
+                "platforms": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/platform" }
+                },
+                "locales": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/localeName" }
+                },
+                "appearances": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/definitions/appearance" }
+                }
+            }
+        }
+    },
+    "properties": {
+        "ios-target": {
+            "type": "object",
+            "description": "Single iOS build target. Required when capture-manifest has iOS entries.",
+            "required": ["name", "appDir", "workspace", "scheme", "appId"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "appDir": { "type": "string", "minLength": 1 },
+                "workspace": { "type": "string", "minLength": 1 },
+                "scheme": { "type": "string", "minLength": 1 },
+                "appId": { "type": "string", "minLength": 1 },
+                "prebuildCommand": { "type": "string" }
+            }
+        },
+        "android-target": {
+            "type": "object",
+            "description": "Single Android build target. Required when capture-manifest has Android entries.",
+            "required": ["name", "appDir", "appId"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "appDir": { "type": "string", "minLength": 1 },
+                "appId": { "type": "string", "minLength": 1 },
+                "prebuildCommand": { "type": "string" }
+            }
+        },
+        "capture-manifest": {
+            "type": "array",
+            "description": "One capture job per entry; at most 256 entries per platform.",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/manifestEntry" }
+        },
+        "capture-mode": {
+            "type": "string",
+            "enum": ["flows", "direct"],
+            "default": "flows",
+            "description": "'flows' is iOS-only legacy discovery under screenshots-dir; 'direct' is scene-manifest-driven and required for Android."
+        },
+        "capture-scenes": {
+            "type": "array",
+            "description": "Required in direct mode; fails closed in flows mode.",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/scene" }
+        },
+        "screenshots-dir": {
+            "type": "string",
+            "description": "Scene-discovery root in flows mode; the directory flow-backed scenes resolve against in direct mode."
+        },
+        "seed-command": {
+            "type": "string",
+            "description": "Per-cell seed hook, direct mode only."
+        },
+        "settle-seconds": {
+            "type": ["integer", "string"],
+            "minimum": 0,
+            "maximum": 120,
+            "default": 3,
+            "description": "Seconds between a deep-link launch and its screenshot."
+        },
+        "status-bar-override": {
+            "type": "boolean",
+            "default": true,
+            "description": "Force a store-clean status bar (9:41, full bars, 100% battery)."
+        },
+        "apple-screenshot-slots": {
+            "type": "object",
+            "description": "Maps '<width>x<height>' pixel resolutions to the slot labels your uploader expects. Labels are free-form non-empty strings; only the keys are format-checked.",
+            "propertyNames": { "pattern": "^[0-9]+x[0-9]+$" },
+            "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "maestro-env": {
+            "type": "string",
+            "description": "Newline-separated KEY=VALUE pairs passed as extra -e arguments to every maestro test invocation."
+        },
+        "maestro-config": {
+            "type": "string",
+            "description": "Path to the consumer's Maestro workspace config.yaml, passed as --config."
+        },
+        "build-env": {
+            "type": "string",
+            "description": "Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV at the start of each build job."
+        },
+        "install-command": {
+            "type": "string",
+            "default": "yarn install --immutable",
+            "description": "JS dependency install command; must match the resolved package manager."
+        },
+        "build-command": {
+            "type": "string",
+            "description": "Optional workspace JS build command run at repo root before the native build."
+        },
+        "cache-profile": {
+            "type": "string",
+            "default": "ios-native-v1",
+            "description": "Cache-key prefix distinguishing this consumer/app (iOS build job)."
+        },
+        "android-cache-profile": {
+            "type": "string",
+            "default": "android-native-v1",
+            "description": "Cache-key prefix distinguishing this consumer/app (Android build job)."
+        },
+        "android-gradle-task": {
+            "type": "string",
+            "default": "assembleRelease"
+        },
+        "android-gradle-args": {
+            "type": "string",
+            "description": "Extra whitespace-split arguments appended after android-gradle-task."
+        },
+        "repack-on-hit": {
+            "type": "boolean",
+            "default": false,
+            "description": "On a native-app-cache hit, repack a fresh JS bundle into the cached shell."
+        },
+        "rct-use-prebuilt-rncore": { "type": "boolean", "default": false },
+        "rct-use-rn-dep": { "type": "boolean", "default": false },
+        "upload-screenshots": {
+            "type": "boolean",
+            "default": false,
+            "description": "Run the gated upload job. Requires a working consumer-owned upload-command."
+        },
+        "upload-command": {
+            "type": "string",
+            "description": "Consumer-owned upload command, e.g. 'bundle exec fastlane ios ios_screenshots'. Required when upload-screenshots is true."
+        },
+        "screenshots-download-dir": {
+            "type": "string",
+            "default": "fastlane/screenshots/raw",
+            "description": "Path, relative to the resolved app directory, every capture artifact is merged into before upload-command runs."
+        },
+        "publish-env": {
+            "type": "string",
+            "description": "Newline-separated KEY=VALUE pairs of non-secret env appended to $GITHUB_ENV at the start of the upload job."
+        },
+        "asc-dedupe-screenshots": { "type": "boolean", "default": false },
+        "asc-dedupe-version-state": {
+            "type": "string",
+            "enum": ["PREPARE_FOR_SUBMISSION", "READY_FOR_SALE"],
+            "default": "PREPARE_FOR_SUBMISSION"
+        },
+        "asc-dedupe-app-id": {
+            "type": "string",
+            "description": "Bundle identifier of the App Store Connect app whose listing is deduped. Defaults to ios-target's appId."
+        },
+        "asc-fail-on-duplicates": { "type": "boolean", "default": true }
+    }
+}

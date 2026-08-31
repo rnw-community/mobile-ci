@@ -82,6 +82,7 @@ full input reference, and the same doc's siblings under
 | [`capture-screenshots-android`](actions/capture-screenshots-android/README.md) | Drives an already-booted Android device (Redroid/AVD/physical) through a scene manifest — `wm size`/`wm density` device shaping, per-app locales, demo-mode status bar, per-cell seed hook — into a fixed `raw/android/<device-slug>/...` layout. |
 | [`asc-dedupe-screenshots`](actions/asc-dedupe-screenshots/README.md) | Post-upload App Store Connect duplicate-screenshot verify/repair gate — self-signed ES256 JWT, `curl`/`jq`/`openssl` only; deletes all but the oldest copy of every `deliver` retry duplicate and fails closed so the flaky upload lane gets fixed. |
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
+| [`load-consumer-config`](actions/load-consumer-config/README.md) | Reads a consumer-owned JSON config file out of the checkout and validates it against an allowlist of keys, so a reusable workflow can resolve its inputs from a checked-in file instead of JSON-in-YAML `with:` blobs. |
 
 Each action has its own `README.md` under `actions/<name>/` with the full
 input/output table and a usage example.
@@ -97,6 +98,17 @@ input/output table and a usage example.
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
 | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+
+`store-screenshots.yml` additionally accepts a `config-path` pointing at a
+checked-in JSON file holding its app-shaped configuration (targets, capture
+manifest, scenes, build and upload knobs), so a caller shrinks to `uses:` +
+`config-path` + runner labels + secrets. Precedence is explicit workflow
+input > config file value > built-in default; runner labels and timeouts are
+deliberately not loadable, because `runs-on` is resolved before any step can
+read a file. See
+[docs/workflows/store-screenshots.md#config-file](docs/workflows/store-screenshots.md#config-file)
+and the schema at
+[`schemas/store-screenshots.schema.json`](schemas/store-screenshots.schema.json).
 
 Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
 `build-runner-labels` + `test-runner-labels` (the second defaults to the
