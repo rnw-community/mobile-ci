@@ -701,7 +701,10 @@ jobs:
                     kind="${rest%%|*}"
                     fallback="${rest#*|}"
                     env_name="IN_$(printf '%s' "$key" | tr 'a-z-' 'A-Z_')"
-                    raw="${!env_name}"
+                    if ! raw="$(printenv "$env_name")"; then
+                      echo "::error::resolver has no '$env_name' env mapping for loadable key '$key'; every key in the resolution list needs one."
+                      exit 1
+                    fi
                     if [ "$kind" = 'bool' ]; then declared="$fallback"; else declared=''; fi
                     if [ "$raw" != "$declared" ]; then
                       emit "$key" "$raw"

@@ -14,7 +14,11 @@ run would use defaults nobody asked for.
 
 Fail-closed conditions, each naming the offending path/key:
 
-- `config-path` is empty, or the file does not exist in the checkout.
+- `config-path` is empty, absolute, or contains a `..` segment.
+- The file does not exist in the checkout, or is a symlink.
+- The path resolves outside `$GITHUB_WORKSPACE` (directory components are
+  canonicalized with `pwd -P`, so a symlinked parent directory cannot smuggle
+  the read out of the checkout either).
 - The path is not a regular, readable file.
 - The file is not valid JSON.
 - The top level is not a JSON object.
@@ -42,7 +46,7 @@ the object (types, precedence, defaults) is the calling workflow's job.
 
 ```yaml
 - name: Check out just the config file
-  uses: actions/checkout@v6
+  uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
   with:
       persist-credentials: false
       sparse-checkout: .github/store-screenshots.config.json

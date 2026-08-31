@@ -47,8 +47,24 @@ runs:
                 echo "::error::allowed-keys must contain only non-empty strings."
                 exit 1
               fi
+              case "$CONFIG_PATH" in
+                /*)
+                  echo "::error::config-path '$CONFIG_PATH' is absolute; it must be relative to the checked-out repository root."
+                  exit 1
+                  ;;
+              esac
+              case "/$CONFIG_PATH/" in
+                */../*)
+                  echo "::error::config-path '$CONFIG_PATH' contains a '..' segment; it must stay inside the checked-out repository."
+                  exit 1
+                  ;;
+              esac
               if [ ! -e "$CONFIG_PATH" ]; then
                 echo "::error::config-path '$CONFIG_PATH' does not exist in the checked-out repository. Commit the file, or check the path is repository-relative."
+                exit 1
+              fi
+              if [ -h "$CONFIG_PATH" ]; then
+                echo "::error::config-path '$CONFIG_PATH' is a symlink; point it at a regular file so its target cannot resolve outside the checkout."
                 exit 1
               fi
               if [ ! -f "$CONFIG_PATH" ]; then
@@ -59,6 +75,18 @@ runs:
                 echo "::error::config-path '$CONFIG_PATH' is not readable."
                 exit 1
               fi
+              containment_root="$(pwd -P)"
+              if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+                containment_root="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+              fi
+              resolved_path="$(cd "$(dirname "$CONFIG_PATH")" && pwd -P)/$(basename "$CONFIG_PATH")"
+              case "$resolved_path" in
+                "$containment_root"/*) ;;
+                *)
+                  echo "::error::config-path '$CONFIG_PATH' resolves to '$resolved_path', outside the checkout root '$containment_root'."
+                  exit 1
+                  ;;
+              esac
               if ! jq empty "$CONFIG_PATH" 2>/dev/null; then
                 echo "::error::config-path '$CONFIG_PATH' is not valid JSON."
                 exit 1
