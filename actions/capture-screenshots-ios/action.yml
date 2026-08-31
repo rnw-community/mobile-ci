@@ -58,8 +58,10 @@ inputs:
       default matches an English-language simulator, which is the
       CoreSimulator default; a simulator whose own language is not English
       needs this and deeplink-confirm-button set to that language's strings.
+      The trailing '\?' keeps the default anchored to the sheet's own title
+      rather than to app content that merely starts with 'Open in'.
     required: false
-    default: 'Open in .*'
+    default: 'Open in .*\?'
   deeplink-confirm-button:
     description: >-
       Label of the confirm button on the iOS open-confirmation sheet matched
@@ -899,8 +901,8 @@ runs:
               case "${device_language:-en}" in
                 en|en-*|en_*) ;;
                 *)
-                  if [ "$DEEPLINK_CONFIRM_TITLE" = 'Open in .*' ] && [ "$DEEPLINK_CONFIRM_BUTTON" = 'Open' ]; then
-                    echo "::error::simulator '$SIMULATOR_UDID' runs in language '$device_language', but deeplink-confirm-title/deeplink-confirm-button are still their English defaults. SpringBoard localises the deep-link open-confirmation sheet to the simulator's own language, so the English defaults would neither dismiss nor detect it and every deep-link capture would silently be a screenshot of that sheet. Set both inputs to the '$device_language' strings, or provision this simulator in English."
+                  if [ "$DEEPLINK_CONFIRM_TITLE" = 'Open in .*\?' ]; then
+                    echo "::error::simulator '$SIMULATOR_UDID' runs in language '$device_language', but deeplink-confirm-title is still its English default. SpringBoard localises the deep-link open-confirmation sheet to the simulator's own language, so the English default would neither dismiss nor detect it and every deep-link capture would silently be a screenshot of that sheet. Set deeplink-confirm-title and deeplink-confirm-button to the '$device_language' strings, or provision this simulator in English."
                     exit 1
                   fi
                   ;;
