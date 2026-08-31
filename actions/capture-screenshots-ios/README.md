@@ -54,6 +54,29 @@ with the app installed and terminated, and with `SCENE`, `LOCALE`,
 and `APP_PATH` in its environment. Its failure marks that cell failed with
 no capture and no retry.
 
+## Device resolution
+
+`simulator-device` is matched exactly (no fuzzy matching) against the names in
+`xcrun simctl list -j devices available`, which needs `jq` on the host — see
+[docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#common-to-every-pool-jq).
+
+- **No match** — fails closed, printing the available device listing.
+- **One match** — booted.
+- **Several matches under different runtimes** — the same device model
+  provisioned under two runtimes (what happens when a second Xcode lands on a
+  host) no longer hard-fails: the candidate under the **newest runtime
+  version** is booted, and a `::notice::` names every candidate with its UDID
+  and runtime plus which one was chosen. Runtime versions are compared
+  component-wise as numbers, so `iOS-26-10` beats `iOS-26-9`. The
+  deterministic-device guarantee holds — the ordering is total, not
+  listing-order-dependent.
+- **Several matches under the same runtime** (cloned devices) — still fails
+  closed, now listing each candidate's UDID and runtime so the operator knows
+  exactly which simulator to delete. No runtime ordering can break that tie.
+
+A runtime identifier with no parseable version among several candidates also
+fails closed rather than being ordered arbitrarily.
+
 ## Status bar
 
 `status-bar-override: 'true'` (default) applies
@@ -166,7 +189,7 @@ platform:
 | `screenshots-dir`           | no       | `''`          | Discovery root in flow-discovery mode; the directory flow-backed manifest scenes resolve against in direct mode. Required in flow-discovery mode, and in direct mode when an ios-applicable scene declares a `flow`. |
 | `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. Flow-discovery mode only. |
 | `scenes-exclude-pattern`    | no       | `''`          | Optional `find ! -name` glob excluding matched scenes by basename. Flow-discovery mode only. |
-| `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching; also fails closed if more than one available simulator shares that exact name. Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
+| `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching against `xcrun simctl list -j devices available`; fails closed when nothing matches. Identical-name ties across runtimes resolve to the newest runtime version (reported in a `::notice::` naming every candidate); two same-name simulators under the **same** runtime still fail closed — see [Device resolution](#device-resolution). Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
 | `locales`                   | yes      | —             | Space- or comma-separated locale identifiers, e.g. `en,de,fr`. |
 | `appearances`               | yes      | —             | Space- or comma-separated list of `light` and/or `dark`. |
 | `orientation`               | no       | `portrait`    | `portrait` or `landscape`; see [Orientation](#orientation). |
