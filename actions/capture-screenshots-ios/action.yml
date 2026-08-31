@@ -860,7 +860,7 @@ runs:
                     # are searched; the bundle's screenshots/ dir is NOT - it
                     # holds Maestro's own step captures (final.png) even on a
                     # pass and would double-count.
-                    if (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file_abs"); then
+                    if (cd "$shot_cwd" && maestro --device "$SIMULATOR_UDID" test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file_abs"); then
                       status=passed
                       break
                     fi
@@ -983,7 +983,7 @@ runs:
               local probe_dir="$RUNNER_TEMP/screenshots-deeplink-confirm/${locale}-${appearance}-${scene_name}"
               rm -rf "$probe_dir"
               mkdir -p "$probe_dir/cwd"
-              if (cd "$probe_dir/cwd" && maestro test --test-output-dir "$probe_dir/output" "$deeplink_confirm_flow"); then
+              if (cd "$probe_dir/cwd" && maestro --device "$SIMULATOR_UDID" test --test-output-dir "$probe_dir/output" "$deeplink_confirm_flow"); then
                 return 0
               fi
               echo "The iOS open-confirmation sheet matching '$DEEPLINK_CONFIRM_TITLE' was still on screen for scene '$scene_name' (locale=$locale, appearance=$appearance) after the deep link settled: SpringBoard, not '$APP_ID', owned the screen, so no screenshot was taken."
@@ -1030,7 +1030,7 @@ runs:
               # (absolute flow path; runFlow references resolve against the
               # flow file, not the CWD) and collect from the union of the
               # scratch CWD and the forward-compat takeScreenshot/ layout.
-              (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
+              (cd "$shot_cwd" && maestro --device "$SIMULATOR_UDID" test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
               local shot_count=0 shot_file='' candidate
               while IFS= read -r -d '' candidate; do
                 shot_count=$((shot_count + 1))

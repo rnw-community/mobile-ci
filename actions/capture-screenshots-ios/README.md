@@ -180,6 +180,10 @@ modes; a `seed-command` failure marks its cell failed with no capture and no
 retry. A flow-backed scene is expected to produce exactly one
 `takeScreenshot` output per run; zero or more than one fails that scene
 closed with an explicit error rather than guessing which file was intended.
+Every `maestro` invocation this action makes — flow-backed scenes and the
+open-confirmation probe alike — passes `--device <udid>` for the simulator
+this action booted, so a second booted simulator on a shared runner can never
+be the one Maestro drives while `simctl` targets the pinned one.
 Maestro is run from a fresh per-cell scratch working directory, because it
 writes a relative `takeScreenshot` name into the process CWD (not into
 `--test-output-dir`); the PNG is collected from the union of that scratch
