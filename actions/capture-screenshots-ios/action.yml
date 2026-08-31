@@ -952,8 +952,8 @@ runs:
               case "${device_language:-en}" in
                 en|en-*|en_*) ;;
                 *)
-                  if [ "$DEEPLINK_CONFIRM_TITLE" = 'Open in .*\?' ]; then
-                    echo "::error::simulator '$SIMULATOR_UDID' runs in language '$device_language', but deeplink-confirm-title is still its English default. SpringBoard localises the deep-link open-confirmation sheet to the simulator's own language, so the English default would neither dismiss nor detect it and every deep-link capture would silently be a screenshot of that sheet. Set deeplink-confirm-title and deeplink-confirm-button to the '$device_language' strings, or provision this simulator in English."
+                  if [ "$DEEPLINK_CONFIRM_TITLE" = 'Open in .*\?' ] || [ "$DEEPLINK_CONFIRM_BUTTON" = 'Open' ]; then
+                    echo "::error::simulator '$SIMULATOR_UDID' runs in language '$device_language', but deeplink-confirm-title and/or deeplink-confirm-button are still their English defaults. SpringBoard localises the deep-link open-confirmation sheet to the simulator's own language, so an English default would neither dismiss nor detect it and a deep-link capture could silently be a screenshot of that sheet. A simulator that already carries a persisted approval would not exercise the button at all, so both are rejected up front rather than on first use. Set both inputs to the '$device_language' strings, or provision this simulator in English."
                     exit 1
                   fi
                   ;;

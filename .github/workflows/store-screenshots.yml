@@ -141,8 +141,8 @@ on:
                     while it is up is a screenshot of SpringBoard, not of the app.
                     The default matches an English-language simulator (the
                     CoreSimulator default); a simulator whose own language is not
-                    English must set this and deeplink-confirm-button, or the
-                    capture fails closed. The trailing '\?' keeps the default
+                    English must set both this and deeplink-confirm-button, or
+                    the capture fails closed. The trailing '\?' keeps the default
                     anchored to the sheet's own title rather than to app content
                     that merely starts with 'Open in'. Empty resolves to the
                     config-path value, else 'Open in .*\?'.

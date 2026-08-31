@@ -83,9 +83,11 @@ The sheet is localised to the **simulator's own** language — which this
 action never changes (the `locale` axis writes app-scoped preferences only),
 so it is English on a stock CoreSimulator device. `deeplink-confirm-title`
 and `deeplink-confirm-button` default to the English strings; on a simulator
-provisioned in another language the capture **fails closed** up front rather
-than silently matching nothing, and both inputs must be set to that
-language's strings.
+provisioned in another language the capture **fails closed** up front unless
+**both** have been set to that language's strings. Both are rejected, not just
+the title: a simulator that already carries a persisted approval never shows
+the sheet, so a wrong button label would otherwise go unvalidated until the
+one run that actually needs it.
 
 ## Device resolution
 
@@ -223,8 +225,8 @@ platform:
 | `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. |
 | `seed-command`              | no       | `''`          | Consumer-owned per-cell seed hook, direct mode only (fails closed if set while `scenes` is empty). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`            | no       | `3`           | Seconds (integer 0–120) between a deep-link launch and its screenshot in direct mode; a scene's `settleSeconds` overrides it. |
-| `deeplink-confirm-title`    | no       | `Open in .*\?` | Maestro text pattern matching the title of the iOS open-confirmation sheet, direct mode only. Tapped away and then asserted gone before every deep-link screencap; see [iOS open-confirmation sheet](#ios-open-confirmation-sheet). The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this is still the default. |
-| `deeplink-confirm-button`   | no       | `Open`        | Label of the confirm button on the sheet matched by `deeplink-confirm-title`, direct mode only. |
+| `deeplink-confirm-title`    | no       | `Open in .*\?` | Maestro text pattern matching the title of the iOS open-confirmation sheet, direct mode only. Tapped away and then asserted gone before every deep-link screencap; see [iOS open-confirmation sheet](#ios-open-confirmation-sheet). The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. |
+| `deeplink-confirm-button`   | no       | `Open`        | Label of the confirm button on the sheet matched by `deeplink-confirm-title`, direct mode only. Also fails closed when the simulator's own language is not English and it is still the default. |
 | `status-bar-override`       | no       | `true`        | Apply the `simctl status_bar` 9:41 override once after boot (both modes); fails closed if the call fails. |
 | `screenshots-dir`           | no       | `''`          | Discovery root in flow-discovery mode; the directory flow-backed manifest scenes resolve against in direct mode. Required in flow-discovery mode, and in direct mode when an ios-applicable scene declares a `flow`. |
 | `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. Flow-discovery mode only. |
