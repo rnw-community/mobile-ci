@@ -595,7 +595,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@fcef8ca670aeb7ec947f95381327bf210674f737 # feat/store-screenshots-config-path fleet-validation pin
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
