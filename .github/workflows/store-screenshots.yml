@@ -623,7 +623,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@bb583d4e878385b294ac6d25f8884967ed1e7470 # fix/capture-ios-deeplink-foreground fleet-validation pin
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
