@@ -1496,7 +1496,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@20e344e8839f56f31782d72fee04a85a17de2179 # fix/capture-ios-deeplink-foreground
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@5472736a6d75a4e6b44980fb2faa25adfcbb61c8 # fix/capture-ios-deeplink-foreground
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
