@@ -384,15 +384,31 @@ Every config-loadable input whose old `default:` was a non-empty literal
 effective default is unchanged** — a caller that passes no `config-path` and
 no value for these behaves exactly as before.
 
-**Boolean caveat.** A `workflow_call` boolean input cannot distinguish
-"explicitly passed `true`" from "defaulted to `true`" — the caller's intent
-is simply not observable. So for the boolean keys (`status-bar-override`,
-`repack-on-hit`, `rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
-`upload-screenshots`, `asc-dedupe-screenshots`, `asc-fail-on-duplicates`) the
-rule is: **passing the non-default value wins over the config file; leaving
-the input at its declared default lets the config file decide.** Pass
-`status-bar-override: false` to override a config file that says `true`; to
-override a config file that says `false`, remove the key from the file.
+**"Explicit" means "different from the declared default".** GitHub gives a
+called workflow no signal for *whether* an input was passed — the `inputs`
+context holds only resolved values, and an omitted input is filled in with
+its `default:` before the workflow sees it (there is no `workflow_call`
+equivalent of `github.event.inputs`, which only exists for
+`workflow_dispatch`). So "the caller set this" is necessarily inferred as
+"the value differs from the declared default", which has two consequences:
+
+- **Strings:** `with: {upload-command: ''}` is indistinguishable from
+  omitting `upload-command`, so an explicitly empty string **cannot**
+  override a non-empty config value. To turn a config-file value off, remove
+  its key from the config file rather than blanking it in `with:`.
+- **Booleans:** the seven boolean keys (`status-bar-override`,
+  `repack-on-hit`, `rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
+  `upload-screenshots`, `asc-dedupe-screenshots`, `asc-fail-on-duplicates`)
+  follow the same rule: passing the **non-default** value wins over the
+  config file, leaving the input at its declared default lets the config file
+  decide. Pass `status-bar-override: false` to override a config file that
+  says `true`; to override one that says `false`, remove the key from the
+  file.
+
+Either way the config file is authoritative for a key it declares, and
+`with:` overrides it only by naming a *different* value — which is the
+intended split: `with:` is for per-call deviations, the file is for the
+app's standing configuration.
 
 The `validate-manifest` job logs which inputs were resolved from the
 workflow input, from `config-path`, and from the built-in default — read
