@@ -334,6 +334,13 @@ runs:
             exit 1
           fi
           if [ "${#candidate_udids[@]}" -gt 1 ]; then
+            duplicated_runtimes=$(printf '%s\n' "${candidate_runtimes[@]}" | sort | uniq -d | tr '\n' ' ')
+            if [ -n "${duplicated_runtimes% }" ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' matches more than one available simulator under the same runtime (${duplicated_runtimes% }), which breaks capture-screenshots-ios's deterministic-device guarantee - no runtime ordering can break that tie and whichever one booted would depend on listing order. Matching simulators:"
+              printf '%s\n' "${candidate_descriptions[@]}"
+              echo "::error::Delete the duplicate simulator(s) on this runner pool so at most one simulator per runtime is named '$SIMULATOR_DEVICE'."
+              exit 1
+            fi
             for candidate_version in "${candidate_versions[@]}"; do
               if [ -z "$candidate_version" ]; then
                 echo "::error::simulator-device '$SIMULATOR_DEVICE' matches ${#candidate_udids[@]} available simulators, at least one under a runtime identifier carrying no parseable version, so the newest-runtime tie-break cannot order them. Matching simulators:"
@@ -341,16 +348,15 @@ runs:
                 exit 1
               fi
             done
-            same_runtime_version_count=0
+            newest_version_count=0
             for candidate_version in "${candidate_versions[@]}"; do
               if [ "$candidate_version" = "${candidate_versions[0]}" ]; then
-                same_runtime_version_count=$((same_runtime_version_count + 1))
+                newest_version_count=$((newest_version_count + 1))
               fi
             done
-            if [ "$same_runtime_version_count" -gt 1 ]; then
-              echo "::error::simulator-device '$SIMULATOR_DEVICE' matches $same_runtime_version_count available simulators under the same runtime, which breaks capture-screenshots-ios's deterministic-device guarantee - no runtime ordering can break that tie and whichever one booted would depend on listing order. Matching simulators:"
+            if [ "$newest_version_count" -gt 1 ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' matches $newest_version_count available simulators under distinct runtimes that resolve to the same version, so the newest-runtime tie-break cannot order them. Matching simulators:"
               printf '%s\n' "${candidate_descriptions[@]}"
-              echo "::error::Delete the duplicate simulator(s) on this runner pool so at most one simulator per runtime is named '$SIMULATOR_DEVICE'."
               exit 1
             fi
             candidate_summary=$(printf '%s; ' "${candidate_descriptions[@]}")

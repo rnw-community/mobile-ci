@@ -72,10 +72,13 @@ no capture and no retry.
   listing-order-dependent.
 - **Several matches under the same runtime** (cloned devices) — still fails
   closed, now listing each candidate's UDID and runtime so the operator knows
-  exactly which simulator to delete. No runtime ordering can break that tie.
+  exactly which simulator to delete. No runtime ordering can break that tie,
+  and it fails closed even when the duplicated pair sits under an *older*
+  runtime than the one that would have won the tie-break.
 
-A runtime identifier with no parseable version among several candidates also
-fails closed rather than being ordered arbitrarily.
+Among several candidates, a runtime identifier with no parseable version, or
+two distinct runtime identifiers resolving to the same version, also fail
+closed rather than being ordered arbitrarily.
 
 ## Status bar
 
