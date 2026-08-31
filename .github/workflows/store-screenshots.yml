@@ -111,6 +111,28 @@ on:
                 type: string
                 required: false
                 default: '3'
+            deeplink-confirm-title:
+                description: >-
+                    iOS only, direct mode only. Maestro text pattern (regex)
+                    matching the title of the "Open in <app>?" confirmation sheet
+                    SpringBoard presents for a `simctl openurl` deep link. Every
+                    deep-link capture taps the sheet away when it is on screen and
+                    then asserts, fail-closed, that it is gone - a capture taken
+                    while it is up is a screenshot of SpringBoard, not of the app.
+                    The default matches an English-language simulator (the
+                    CoreSimulator default); a simulator whose own language is not
+                    English must set this and deeplink-confirm-button, or the
+                    capture fails closed.
+                type: string
+                required: false
+                default: 'Open in .*'
+            deeplink-confirm-button:
+                description: >-
+                    iOS only, direct mode only. Label of the confirm button on the
+                    open-confirmation sheet matched by deeplink-confirm-title.
+                type: string
+                required: false
+                default: 'Open'
             status-bar-override:
                 description: >-
                     Force a store-clean status bar in both modes: 9:41, full
@@ -1479,6 +1501,8 @@ jobs:
                   scenes: ${{ inputs.capture-scenes }}
                   seed-command: ${{ inputs.seed-command }}
                   settle-seconds: ${{ inputs.settle-seconds }}
+                  deeplink-confirm-title: ${{ inputs.deeplink-confirm-title }}
+                  deeplink-confirm-button: ${{ inputs.deeplink-confirm-button }}
                   status-bar-override: ${{ inputs.status-bar-override }}
                   screenshots-dir: ${{ inputs.screenshots-dir }}
                   scenes-name-pattern: ${{ inputs.scenes-name-pattern }}

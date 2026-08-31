@@ -36,12 +36,15 @@ one of
   (`seed-command`), launched with
   `simctl launch <udid> <app-id> -AppleLanguages '("<locale>")' -AppleLocale <locale>`,
   sent the deep link via `simctl openurl`, allowed `settle-seconds` (or the
-  scene's own `settleSeconds`) to settle, then captured with
-  `simctl io screenshot`.
+  scene's own `settleSeconds`) to settle, checked against the
+  [open-confirmation sheet](#ios-open-confirmation-sheet), then captured
+  with `simctl io screenshot`.
 - `flow` - a Maestro flow path relative to `screenshots-dir`, run with the
-  same single-`takeScreenshot` contract as flow-discovery mode. Maestro
-  itself is installed lazily in direct mode, only when at least one
-  ios-applicable scene declares a flow.
+  same single-`takeScreenshot` contract as flow-discovery mode.
+
+Maestro is installed lazily in direct mode, only when at least one
+ios-applicable scene declares a `flow` **or** a `deepLink` (deep-link scenes
+need it for the open-confirmation sheet check).
 
 Optional per-scene `platforms`/`locales`/`appearances` filters restrict
 where a scene is captured; scenes whose `platforms` excludes `ios` are
@@ -53,6 +56,36 @@ with the app installed and terminated, and with `SCENE`, `LOCALE`,
 `APPEARANCE`, `APP_ID`, `PLATFORM=ios`, `DEVICE_SLUG`, `SIMULATOR_UDID`,
 and `APP_PATH` in its environment. Its failure marks that cell failed with
 no capture and no retry.
+
+## iOS open-confirmation sheet
+
+On newer iOS runtimes SpringBoard answers a `simctl openurl` deep link with
+an **`Open in "<app>"?` / Cancel / Open** confirmation sheet, drawn over the
+home screen with the target app deactivated behind it. A `simctl io
+screenshot` taken while that sheet is up is a picture of SpringBoard, not of
+the app — and nothing in `simctl` reports which bundle is frontmost, so
+without a check the capture step stays green and ships store-worthless PNGs.
+Pre-launching the app before the `openurl` (which this action already does)
+does **not** avoid the sheet.
+
+So in direct mode every deep-link cell, after its settle and immediately
+before its screencap, runs a generated one-flow Maestro check that
+
+1. taps the confirm button when the sheet is on screen, and
+2. `assertNotVisible`s the sheet afterwards.
+
+A sheet that is still up fails that cell (retried once, then the step fails
+with an error naming the scene, locale and appearance) instead of writing a
+screenshot of it. Approving the sheet is a persistent per-simulator choice,
+so after the first cell the tap is a no-op and only the assertion runs.
+
+The sheet is localised to the **simulator's own** language — which this
+action never changes (the `locale` axis writes app-scoped preferences only),
+so it is English on a stock CoreSimulator device. `deeplink-confirm-title`
+and `deeplink-confirm-button` default to the English strings; on a simulator
+provisioned in another language the capture **fails closed** up front rather
+than silently matching nothing, and both inputs must be set to that
+language's strings.
 
 ## Status bar
 
@@ -95,7 +128,9 @@ global `maestro-env` input is one static list for the whole capture job:
 
 Every flow-backed scene of that locale's cells receives the global
 `maestro-env` pairs followed by the locale's own pairs. Deep-link scenes run
-no Maestro and receive no env. Reserved names (`APP_ID`, `LOCALE`,
+Maestro only for the [open-confirmation sheet](#ios-open-confirmation-sheet)
+check, which is passed neither `maestro-env`/`locale-env` nor
+`maestro-config`. Reserved names (`APP_ID`, `LOCALE`,
 `APPEARANCE`) are rejected in both inputs, fail-closed, because a duplicate
 `-e` would make behavior depend on argument order.
 
@@ -162,6 +197,8 @@ platform:
 | `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. |
 | `seed-command`              | no       | `''`          | Consumer-owned per-cell seed hook, direct mode only (fails closed if set while `scenes` is empty). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`            | no       | `3`           | Seconds (integer 0–120) between a deep-link launch and its screenshot in direct mode; a scene's `settleSeconds` overrides it. |
+| `deeplink-confirm-title`    | no       | `Open in .*`  | Maestro text pattern matching the title of the iOS open-confirmation sheet, direct mode only. Tapped away and then asserted gone before every deep-link screencap; see [iOS open-confirmation sheet](#ios-open-confirmation-sheet). Fails closed when the simulator's own language is not English and this is still the default. |
+| `deeplink-confirm-button`   | no       | `Open`        | Label of the confirm button on the sheet matched by `deeplink-confirm-title`, direct mode only. |
 | `status-bar-override`       | no       | `true`        | Apply the `simctl status_bar` 9:41 override once after boot (both modes); fails closed if the call fails. |
 | `screenshots-dir`           | no       | `''`          | Discovery root in flow-discovery mode; the directory flow-backed manifest scenes resolve against in direct mode. Required in flow-discovery mode, and in direct mode when an ios-applicable scene declares a `flow`. |
 | `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. Flow-discovery mode only. |
@@ -173,7 +210,7 @@ platform:
 | `maestro-env`               | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE`. Rejects (fails closed) any line without `=`, any name not matching `^[A-Za-z_][A-Za-z0-9_]*$`, and any reserved `APP_ID`/`LOCALE`/`APPEARANCE` override (a duplicate `-e` would be order-dependent). |
 | `locale-env`                | no       | `''`          | JSON object mapping a locale from `locales` to extra env pairs applied only to that locale's cells - e.g. `{"de": {"LOCALE_IDENTIFIER": "de-DE"}}`. Precedence: global `maestro-env`, then these (Maestro's last `-e` wins). Fails closed on invalid JSON, an unknown locale key, a reserved name, a non-string value, or a value containing a newline/tab. See [Per-locale flow env](#per-locale-flow-env). |
 | `maestro-config`             | no       | `''`          | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
-| `maestro-version`           | no       | `2.8.0`       | Pinned Maestro CLI version, installed the same way as `run-maestro-ios`'s `maestro-version` — and lazily: in direct mode only when an ios-applicable scene declares a `flow`. |
+| `maestro-version`           | no       | `2.8.0`       | Pinned Maestro CLI version, installed the same way as `run-maestro-ios`'s `maestro-version` — and lazily: in direct mode only when an ios-applicable scene declares a `flow` or a `deepLink`. |
 | `output-dir`                | yes      | —             | Root output directory; see the fixed layout above. |
 
 ## Outputs

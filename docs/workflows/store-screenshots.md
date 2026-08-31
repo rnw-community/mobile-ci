@@ -10,8 +10,9 @@ modes:
 - **`capture-mode: direct`** — scenes come from a `capture-scenes` JSON
   manifest shared across every device entry. Each scene is either a
   **deep link** (app terminated → optional `seed-command` → launch → open
-  URL → settle → OS screenshot; no Maestro involved at all) or a **Maestro
-  flow** (for scenes that need real interaction). Required for Android.
+  URL → settle → [open-confirmation sheet check](#ios-open-confirmation-sheet)
+  on iOS → OS screenshot) or a **Maestro flow** (for scenes that need real
+  interaction). Required for Android.
 
 Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; fails closed on a
 malformed `capture-manifest`/`capture-scenes` or any mode/target
@@ -150,7 +151,30 @@ One shared scene list; per-scene filters narrow where each scene runs.
   cells in the intersection with the device entry's lists.
 
 Maestro is only installed on a capture job when its scene set actually
-contains a flow — an all-deep-link manifest never touches Maestro.
+contains a flow, or — on iOS — a deep link, which needs it for the
+open-confirmation sheet check below. An all-deep-link Android manifest never
+touches Maestro.
+
+## iOS open-confirmation sheet
+
+On newer iOS runtimes SpringBoard answers a `simctl openurl` deep link with
+an **`Open in "<app>"?` / Cancel / Open** confirmation sheet, drawn over the
+home screen with the target app deactivated behind it, so the screencap that
+follows is a picture of SpringBoard rather than of the app. Nothing in
+`simctl` reports which bundle is frontmost, and pre-launching the app before
+the `openurl` does not avoid the sheet, so `capture-screenshots-ios` runs a
+generated one-flow Maestro check on every deep-link cell, after its settle
+and immediately before its screencap: it taps the sheet's confirm button when
+the sheet is on screen, then `assertNotVisible`s it. A sheet still up fails
+that cell (retried once, then the capture job fails naming the scene, locale
+and appearance) instead of writing a screenshot of it.
+
+The sheet is localised to the **simulator's own** language, which this
+workflow never changes — the `locales` axis writes app-scoped preferences
+only — so it is English on a stock CoreSimulator device.
+`deeplink-confirm-title`/`deeplink-confirm-button` default to the English
+strings; a simulator provisioned in another language fails the capture
+closed up front until both are set to that language's strings.
 
 ## Seed hook contract
 
@@ -355,6 +379,8 @@ out at its assertion budget. The fix is one workspace-config key —
 | `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. |
 | `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). |
 | `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. |
+| `deeplink-confirm-title`            | no       | `Open in .*`                              | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. Fails closed when the simulator's own language is not English and this is still the default. |
+| `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. |
 | `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. |
 | `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). |
 | `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). |
