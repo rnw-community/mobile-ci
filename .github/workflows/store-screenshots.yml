@@ -1472,7 +1472,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@74b1a26d7f3ea5dd150e49e875864169e163d63f # fix/capture-ios-runtime-tiebreak fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.10.0 # v1.10.0
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(inputs.ios-target).appId }}
