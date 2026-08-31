@@ -3,6 +3,23 @@ name: store-screenshots
 on:
     workflow_call:
         inputs:
+            config-path:
+                description: >-
+                    Optional repository-relative path to a JSON file in the calling
+                    repository holding this workflow's app-shaped configuration, so a
+                    caller does not have to pass JSON-in-YAML string blobs through
+                    'with:'. The file is a single flat JSON object whose keys are
+                    workflow input names, with the real JSON structure (object/array)
+                    as the value for the inputs that are JSON blobs. Precedence is
+                    explicit workflow input > config file value > built-in default.
+                    Only the keys listed in docs/workflows/store-screenshots.md#config-file
+                    are loadable - plan-time inputs (every *runner-labels and every
+                    *timeout-minutes) are not, because a file read at runtime cannot
+                    feed runs-on/timeout-minutes. A missing/unreadable file, invalid
+                    JSON, a non-object top level, or an unknown key fails closed.
+                type: string
+                required: false
+                default: ''
             runner-labels:
                 description: JSON array of self-hosted runner labels for the iOS build/capture jobs.
                 type: string
@@ -70,18 +87,21 @@ on:
                     appearances x scenes are looped inside each job, reusing one
                     booted simulator/container per entry. See
                     docs/workflows/store-screenshots.md for the full schema and
-                    validation rules.
+                    validation rules. Required, but loadable from config-path
+                    instead of being passed here.
                 type: string
-                required: true
+                required: false
+                default: ''
             capture-mode:
                 description: >-
                     'flows' (default; legacy Maestro flow discovery under
                     screenshots-dir, iOS-only) or 'direct' (scene-manifest-driven via
                     capture-scenes, required for Android entries). Any other value
-                    fails closed.
+                    fails closed. Empty resolves to the config-path value, else
+                    'flows'.
                 type: string
                 required: false
-                default: flows
+                default: ''
             capture-scenes:
                 description: >-
                     JSON array of scene objects shared across all capture-manifest
@@ -107,16 +127,17 @@ on:
                 description: >-
                     Seconds (integer 0-120) between a deep-link launch and its
                     screenshot in direct mode; a scene's own settleSeconds overrides
-                    it per scene.
+                    it per scene. Empty resolves to the config-path value, else '3'.
                 type: string
                 required: false
-                default: '3'
+                default: ''
             status-bar-override:
                 description: >-
                     Force a store-clean status bar in both modes: 9:41, full
                     wifi/cellular, battery 100 (iOS `simctl status_bar` override;
                     Android SystemUI demo mode). Fails closed if the override cannot
-                    be applied; set to false to capture the real status bar.
+                    be applied; set to false to capture the real status bar. Left at
+                    its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: true
@@ -202,10 +223,12 @@ on:
                 required: false
                 default: '17E202'
             cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app (iOS build job).
+                description: >-
+                    Cache-key prefix distinguishing this consumer/app (iOS build job).
+                    Empty resolves to the config-path value, else 'ios-native-v1'.
                 type: string
                 required: false
-                default: ios-native-v1
+                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -215,9 +238,12 @@ on:
                 required: false
                 default: 22.x
             install-command:
+                description: >-
+                    JS dependency install command. Empty resolves to the config-path
+                    value, else 'yarn install --immutable'.
                 type: string
                 required: false
-                default: yarn install --immutable
+                default: ''
             enable-corepack:
                 type: boolean
                 required: false
@@ -247,10 +273,12 @@ on:
                 required: false
                 default: ''
             rct-use-prebuilt-rncore:
+                description: Exports RCT_USE_PREBUILT_RNCORE=1 for the iOS build. Left at its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: false
             rct-use-rn-dep:
+                description: Exports RCT_USE_RN_DEP=1 for the iOS build. Left at its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: false
@@ -276,7 +304,7 @@ on:
                     On a native-app-cache hit (either platform), run repack-app to
                     inject a freshly exported JS bundle into the cached shell instead
                     of reusing it unchanged. Falls back to a full native build if the
-                    repack fails.
+                    repack fails. Left at its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: false
@@ -322,18 +350,24 @@ on:
                 required: false
                 default: '12266719'
             android-gradle-task:
+                description: >-
+                    gradlew task for the Android build. Empty resolves to the
+                    config-path value, else 'assembleRelease'.
                 type: string
                 required: false
-                default: assembleRelease
+                default: ''
             android-gradle-args:
                 type: string
                 required: false
                 default: ''
             android-cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app (Android build job).
+                description: >-
+                    Cache-key prefix distinguishing this consumer/app (Android build
+                    job). Empty resolves to the config-path value, else
+                    'android-native-v1'.
                 type: string
                 required: false
-                default: android-native-v1
+                default: ''
             android-build-tools-version:
                 description: >-
                     Android build-tools version installed via
@@ -387,6 +421,7 @@ on:
                 description: >-
                     Run the gated upload job, which downloads every capture job's raw
                     screenshots and runs upload-command (e.g. a fastlane deliver lane).
+                    Left at its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: false
@@ -411,10 +446,11 @@ on:
                     subdirectory and Android under android/. Defaults to the
                     reference implementation's fastlane/screenshots/raw convention
                     so an unmodified fastlane Deliverfile pointed at that path works
-                    unchanged.
+                    unchanged. Empty resolves to the config-path value, else
+                    'fastlane/screenshots/raw'.
                 type: string
                 required: false
-                default: fastlane/screenshots/raw
+                default: ''
             asc-key-path:
                 description: >-
                     Optional path, relative to the resolved app directory, the App
@@ -445,7 +481,8 @@ on:
                     and an ios-target (App Store Connect is iOS-only). Fails the
                     upload job when any duplicate had to be deleted unless
                     asc-fail-on-duplicates is false - duplicates mean the upload
-                    lane is flaky even though this repaired the listing.
+                    lane is flaky even though this repaired the listing. Left at its
+                    default, a config-path value wins.
                 type: boolean
                 required: false
                 default: false
@@ -453,10 +490,11 @@ on:
                 description: >-
                     App Store Connect appStoreState whose localizations are deduped;
                     PREPARE_FOR_SUBMISSION (the editable version) targets the same
-                    run's upload, READY_FOR_SALE audits the live listing.
+                    run's upload, READY_FOR_SALE audits the live listing. Empty
+                    resolves to the config-path value, else PREPARE_FOR_SUBMISSION.
                 type: string
                 required: false
-                default: PREPARE_FOR_SUBMISSION
+                default: ''
             asc-dedupe-app-id:
                 description: >-
                     Bundle identifier of the App Store Connect app whose listing is
@@ -469,7 +507,8 @@ on:
             asc-fail-on-duplicates:
                 description: >-
                     Set to false to treat asc-dedupe-screenshots repairing
-                    duplicates as success instead of failing the upload job.
+                    duplicates as success instead of failing the upload job. Left at
+                    its default, a config-path value wins.
                 type: boolean
                 required: false
                 default: true
@@ -516,21 +555,228 @@ jobs:
             has-android: ${{ steps.validate.outputs.has-android }}
             ios-entries: ${{ steps.validate.outputs.ios-entries }}
             android-entries: ${{ steps.validate.outputs.android-entries }}
+            ios-target: ${{ steps.resolve.outputs.ios-target }}
+            android-target: ${{ steps.resolve.outputs.android-target }}
+            capture-scenes: ${{ steps.resolve.outputs.capture-scenes }}
+            screenshots-dir: ${{ steps.resolve.outputs.screenshots-dir }}
+            seed-command: ${{ steps.resolve.outputs.seed-command }}
+            settle-seconds: ${{ steps.resolve.outputs.settle-seconds }}
+            status-bar-override: ${{ steps.resolve.outputs.status-bar-override }}
+            apple-screenshot-slots: ${{ steps.resolve.outputs.apple-screenshot-slots }}
+            maestro-env: ${{ steps.resolve.outputs.maestro-env }}
+            maestro-config: ${{ steps.resolve.outputs.maestro-config }}
+            build-env: ${{ steps.resolve.outputs.build-env }}
+            install-command: ${{ steps.resolve.outputs.install-command }}
+            build-command: ${{ steps.resolve.outputs.build-command }}
+            cache-profile: ${{ steps.resolve.outputs.cache-profile }}
+            android-cache-profile: ${{ steps.resolve.outputs.android-cache-profile }}
+            android-gradle-task: ${{ steps.resolve.outputs.android-gradle-task }}
+            android-gradle-args: ${{ steps.resolve.outputs.android-gradle-args }}
+            repack-on-hit: ${{ steps.resolve.outputs.repack-on-hit }}
+            rct-use-prebuilt-rncore: ${{ steps.resolve.outputs.rct-use-prebuilt-rncore }}
+            rct-use-rn-dep: ${{ steps.resolve.outputs.rct-use-rn-dep }}
+            upload-screenshots: ${{ steps.resolve.outputs.upload-screenshots }}
+            upload-command: ${{ steps.resolve.outputs.upload-command }}
+            screenshots-download-dir: ${{ steps.resolve.outputs.screenshots-download-dir }}
+            publish-env: ${{ steps.resolve.outputs.publish-env }}
+            asc-dedupe-screenshots: ${{ steps.resolve.outputs.asc-dedupe-screenshots }}
+            asc-dedupe-version-state: ${{ steps.resolve.outputs.asc-dedupe-version-state }}
+            asc-dedupe-app-id: ${{ steps.resolve.outputs.asc-dedupe-app-id }}
+            asc-fail-on-duplicates: ${{ steps.resolve.outputs.asc-fail-on-duplicates }}
         steps:
+            - name: Check out the consumer config file
+              if: inputs.config-path != ''
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+                  sparse-checkout: ${{ inputs.config-path }}
+                  sparse-checkout-cone-mode: false
+
+            - name: load-consumer-config
+              id: load-config
+              if: inputs.config-path != ''
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v1.11.0 # v1.11.0
+              with:
+                  config-path: ${{ inputs.config-path }}
+                  allowed-keys: >-
+                      ["ios-target","android-target","capture-manifest","capture-mode","capture-scenes",
+                      "screenshots-dir","seed-command","settle-seconds","status-bar-override",
+                      "apple-screenshot-slots","maestro-env","maestro-config","build-env",
+                      "install-command","build-command","cache-profile","android-cache-profile",
+                      "android-gradle-task","android-gradle-args","repack-on-hit",
+                      "rct-use-prebuilt-rncore","rct-use-rn-dep","upload-screenshots","upload-command",
+                      "screenshots-download-dir","publish-env","asc-dedupe-screenshots",
+                      "asc-dedupe-version-state","asc-dedupe-app-id","asc-fail-on-duplicates"]
+
+            - name: Resolve inputs against the consumer config
+              id: resolve
+              shell: bash
+              env:
+                  CONFIG_JSON: ${{ steps.load-config.outputs.json || '{}' }}
+                  IN_IOS_TARGET: ${{ inputs.ios-target }}
+                  IN_ANDROID_TARGET: ${{ inputs.android-target }}
+                  IN_CAPTURE_MANIFEST: ${{ inputs.capture-manifest }}
+                  IN_CAPTURE_MODE: ${{ inputs.capture-mode }}
+                  IN_CAPTURE_SCENES: ${{ inputs.capture-scenes }}
+                  IN_SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
+                  IN_SEED_COMMAND: ${{ inputs.seed-command }}
+                  IN_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+                  IN_STATUS_BAR_OVERRIDE: ${{ inputs.status-bar-override }}
+                  IN_APPLE_SCREENSHOT_SLOTS: ${{ inputs.apple-screenshot-slots }}
+                  IN_MAESTRO_ENV: ${{ inputs.maestro-env }}
+                  IN_MAESTRO_CONFIG: ${{ inputs.maestro-config }}
+                  IN_BUILD_ENV: ${{ inputs.build-env }}
+                  IN_INSTALL_COMMAND: ${{ inputs.install-command }}
+                  IN_BUILD_COMMAND: ${{ inputs.build-command }}
+                  IN_CACHE_PROFILE: ${{ inputs.cache-profile }}
+                  IN_ANDROID_CACHE_PROFILE: ${{ inputs.android-cache-profile }}
+                  IN_ANDROID_GRADLE_TASK: ${{ inputs.android-gradle-task }}
+                  IN_ANDROID_GRADLE_ARGS: ${{ inputs.android-gradle-args }}
+                  IN_REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  IN_RCT_USE_PREBUILT_RNCORE: ${{ inputs.rct-use-prebuilt-rncore }}
+                  IN_RCT_USE_RN_DEP: ${{ inputs.rct-use-rn-dep }}
+                  IN_UPLOAD_SCREENSHOTS: ${{ inputs.upload-screenshots }}
+                  IN_UPLOAD_COMMAND: ${{ inputs.upload-command }}
+                  IN_SCREENSHOTS_DOWNLOAD_DIR: ${{ inputs.screenshots-download-dir }}
+                  IN_PUBLISH_ENV: ${{ inputs.publish-env }}
+                  IN_ASC_DEDUPE_SCREENSHOTS: ${{ inputs.asc-dedupe-screenshots }}
+                  IN_ASC_DEDUPE_VERSION_STATE: ${{ inputs.asc-dedupe-version-state }}
+                  IN_ASC_DEDUPE_APP_ID: ${{ inputs.asc-dedupe-app-id }}
+                  IN_ASC_FAIL_ON_DUPLICATES: ${{ inputs.asc-fail-on-duplicates }}
+              run: |
+                  set -euo pipefail
+                  emit() {
+                    emit_name="$1"
+                    emit_value="$2"
+                    emit_delim="RESOLVED_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+                    case "$emit_value" in
+                      *"$emit_delim"*)
+                        echo "::error::Resolved value for '$emit_name' collides with its generated GITHUB_OUTPUT delimiter."
+                        exit 1
+                        ;;
+                    esac
+                    {
+                      printf '%s<<%s\n' "$emit_name" "$emit_delim"
+                      printf '%s\n' "$emit_value"
+                      printf '%s\n' "$emit_delim"
+                    } >> "$GITHUB_OUTPUT"
+                  }
+                  from_input=''
+                  from_config=''
+                  from_default=''
+                  for spec in \
+                    'ios-target|json|' \
+                    'android-target|json|' \
+                    'capture-manifest|json|' \
+                    'capture-mode|string|flows' \
+                    'capture-scenes|json|' \
+                    'screenshots-dir|string|' \
+                    'seed-command|string|' \
+                    'settle-seconds|string|3' \
+                    'status-bar-override|bool|true' \
+                    'apple-screenshot-slots|json|' \
+                    'maestro-env|string|' \
+                    'maestro-config|string|' \
+                    'build-env|string|' \
+                    'install-command|string|yarn install --immutable' \
+                    'build-command|string|' \
+                    'cache-profile|string|ios-native-v1' \
+                    'android-cache-profile|string|android-native-v1' \
+                    'android-gradle-task|string|assembleRelease' \
+                    'android-gradle-args|string|' \
+                    'repack-on-hit|bool|false' \
+                    'rct-use-prebuilt-rncore|bool|false' \
+                    'rct-use-rn-dep|bool|false' \
+                    'upload-screenshots|bool|false' \
+                    'upload-command|string|' \
+                    'screenshots-download-dir|string|fastlane/screenshots/raw' \
+                    'publish-env|string|' \
+                    'asc-dedupe-screenshots|bool|false' \
+                    'asc-dedupe-version-state|string|PREPARE_FOR_SUBMISSION' \
+                    'asc-dedupe-app-id|string|' \
+                    'asc-fail-on-duplicates|bool|true'
+                  do
+                    key="${spec%%|*}"
+                    rest="${spec#*|}"
+                    kind="${rest%%|*}"
+                    fallback="${rest#*|}"
+                    env_name="IN_$(printf '%s' "$key" | tr 'a-z-' 'A-Z_')"
+                    raw="${!env_name}"
+                    if [ "$kind" = 'bool' ]; then declared="$fallback"; else declared=''; fi
+                    if [ "$raw" != "$declared" ]; then
+                      emit "$key" "$raw"
+                      from_input="$from_input $key"
+                      continue
+                    fi
+                    if [ "$(jq -r --arg k "$key" 'has($k)' <<< "$CONFIG_JSON")" != 'true' ]; then
+                      emit "$key" "$fallback"
+                      from_default="$from_default $key"
+                      continue
+                    fi
+                    value_type="$(jq -r --arg k "$key" '.[$k] | type' <<< "$CONFIG_JSON")"
+                    case "$kind" in
+                      json)
+                        case "$value_type" in
+                          object|array) value="$(jq -c --arg k "$key" '.[$k]' <<< "$CONFIG_JSON")" ;;
+                          string) value="$(jq -r --arg k "$key" '.[$k]' <<< "$CONFIG_JSON")" ;;
+                          *)
+                            echo "::error::config key '$key' must be a JSON object or array (or a pre-serialized JSON string); got $value_type."
+                            exit 1
+                            ;;
+                        esac
+                        ;;
+                      bool)
+                        case "$value_type" in
+                          boolean|string) value="$(jq -r --arg k "$key" '.[$k] | tostring' <<< "$CONFIG_JSON")" ;;
+                          *)
+                            echo "::error::config key '$key' must be a JSON boolean; got $value_type."
+                            exit 1
+                            ;;
+                        esac
+                        case "$value" in
+                          true|false) ;;
+                          *)
+                            echo "::error::config key '$key' must be true or false; got '$value'."
+                            exit 1
+                            ;;
+                        esac
+                        ;;
+                      *)
+                        case "$value_type" in
+                          string) value="$(jq -r --arg k "$key" '.[$k]' <<< "$CONFIG_JSON")" ;;
+                          number|boolean) value="$(jq -r --arg k "$key" '.[$k] | tostring' <<< "$CONFIG_JSON")" ;;
+                          *)
+                            echo "::error::config key '$key' must be a JSON string, number, or boolean; got $value_type."
+                            exit 1
+                            ;;
+                        esac
+                        ;;
+                    esac
+                    emit "$key" "$value"
+                    from_config="$from_config $key"
+                  done
+                  echo "Resolved from the workflow input:${from_input:- (none)}"
+                  echo "Resolved from config-path:${from_config:- (none)}"
+                  echo "Resolved from the built-in default:${from_default:- (none)}"
+
             - name: Validate structure, cross-checks, and matrix limits
               id: validate
               shell: bash
               env:
-                  CAPTURE_MANIFEST: ${{ inputs.capture-manifest }}
-                  CAPTURE_MODE: ${{ inputs.capture-mode }}
-                  CAPTURE_SCENES: ${{ inputs.capture-scenes }}
-                  SEED_COMMAND: ${{ inputs.seed-command }}
-                  SETTLE_SECONDS: ${{ inputs.settle-seconds }}
-                  SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
-                  IOS_TARGET: ${{ inputs.ios-target }}
-                  ANDROID_TARGET: ${{ inputs.android-target }}
+                  CAPTURE_MANIFEST: ${{ steps.resolve.outputs.capture-manifest }}
+                  CAPTURE_MODE: ${{ steps.resolve.outputs.capture-mode }}
+                  CAPTURE_SCENES: ${{ steps.resolve.outputs.capture-scenes }}
+                  SEED_COMMAND: ${{ steps.resolve.outputs.seed-command }}
+                  SETTLE_SECONDS: ${{ steps.resolve.outputs.settle-seconds }}
+                  SCREENSHOTS_DIR: ${{ steps.resolve.outputs.screenshots-dir }}
+                  IOS_TARGET: ${{ steps.resolve.outputs.ios-target }}
+                  ANDROID_TARGET: ${{ steps.resolve.outputs.android-target }}
               run: |
                   set -euo pipefail
+                  if [ -z "$CAPTURE_MANIFEST" ]; then
+                    echo "::error::capture-manifest is required; pass it as a workflow input or set it in the config-path file."
+                    exit 1
+                  fi
                   case "$CAPTURE_MODE" in
                     flows|direct) ;;
                     *)
@@ -806,15 +1052,15 @@ jobs:
                   echo "capture-manifest OK: $ios_count iOS + $android_count Android entries, capture-mode=$CAPTURE_MODE."
 
     build-ios:
-        name: Build iOS (${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).name || 'skipped' }})
+        name: Build iOS (${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).name || 'skipped' }})
         needs: validate-manifest
         if: needs.validate-manifest.outputs.has-ios == 'true'
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         env:
-            APP_DIR: ${{ fromJSON(inputs.ios-target).appDir }}
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(inputs.ios-target).name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(inputs.ios-target).name }}
+            APP_DIR: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
 
         steps:
             - name: Checkout repository
@@ -823,10 +1069,10 @@ jobs:
                   persist-credentials: false
 
             - name: Apply build-env
-              if: inputs.build-env != ''
+              if: needs.validate-manifest.outputs.build-env != ''
               shell: bash
               env:
-                  BUILD_ENV: ${{ inputs.build-env }}
+                  BUILD_ENV: ${{ needs.validate-manifest.outputs.build-env }}
               run: |
                   set -euo pipefail
                   while IFS= read -r line; do
@@ -963,7 +1209,7 @@ jobs:
             - name: Install dependencies
               shell: bash
               env:
-                  INSTALL_COMMAND: ${{ inputs.install-command }}
+                  INSTALL_COMMAND: ${{ needs.validate-manifest.outputs.install-command }}
               run: eval "$INSTALL_COMMAND"
 
             - name: setup-xcode-pinned
@@ -974,20 +1220,20 @@ jobs:
                   build: ${{ inputs.xcode-build }}
 
             - name: Build workspace JS dependencies
-              if: inputs.build-command != ''
+              if: needs.validate-manifest.outputs.build-command != ''
               shell: bash
               env:
-                  BUILD_COMMAND: ${{ inputs.build-command }}
+                  BUILD_COMMAND: ${{ needs.validate-manifest.outputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: fromJSON(inputs.ios-target).prebuildCommand != ''
-              working-directory: ${{ fromJSON(inputs.ios-target).appDir }}
+              if: fromJSON(needs.validate-manifest.outputs.ios-target).prebuildCommand != ''
+              working-directory: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ fromJSON(inputs.ios-target).prebuildCommand }}
-                  RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
-                  RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
+                  PREBUILD_COMMAND: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).prebuildCommand }}
+                  RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
+                  RCT_USE_RN_DEP_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
               run: |
                   if [ "$RCT_USE_PREBUILT_RNCORE_ENABLED" = 'true' ]; then
@@ -1006,7 +1252,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.10.0 # v1.10.0
               with:
                   platform: ios
-                  working-directory: ${{ fromJSON(inputs.ios-target).appDir }}
+                  working-directory: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 
             - name: native-app-cache (restore)
@@ -1014,22 +1260,22 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.10.0 # v1.10.0
               with:
                   mode: restore
-                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
-                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.ios-target).name }}
+                  path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
             - name: Repack fresh JS into cached native app
               id: repack
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
               uses: rnw-community/mobile-ci/actions/repack-app@v1.10.0 # v1.10.0
               with:
                   platform: ios
-                  app-path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}/Base.app
-                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
-                  app-dir: ${{ fromJSON(inputs.ios-target).appDir }}
+                  app-path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
+                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
                   repack-version: ${{ inputs.repack-app-version }}
 
             - name: Determine whether a native build is needed
@@ -1037,7 +1283,7 @@ jobs:
               shell: bash
               env:
                   CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
                   REPACK_OUTCOME: ${{ steps.repack.outcome }}
               run: |
                   set -euo pipefail
@@ -1051,8 +1297,8 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
               run: |
                   {
                     echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
@@ -1067,7 +1313,7 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: |
                   echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1075,7 +1321,7 @@ jobs:
               if: steps.build-decision.outputs.need-build == 'true'
               shell: bash
               env:
-                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}/Base.app
+                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
               run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
@@ -1086,26 +1332,26 @@ jobs:
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
+                  key: ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-
+                      ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-
 
             - name: build-ios-app
               if: steps.build-decision.outputs.need-build == 'true'
               uses: rnw-community/mobile-ci/actions/build-ios-app@v1.10.0 # v1.10.0
               with:
-                  app-dir: ${{ fromJSON(inputs.ios-target).appDir }}
-                  workspace: ${{ fromJSON(inputs.ios-target).workspace }}
-                  scheme: ${{ fromJSON(inputs.ios-target).scheme }}
+                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
+                  workspace: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).workspace }}
+                  scheme: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
-                  pods-cache-key: pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  pods-cache-key: pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-
-                  rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
-                  rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
+                      pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-
+                  rct-use-prebuilt-rncore: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
+                  rct-use-rn-dep: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
@@ -1114,15 +1360,15 @@ jobs:
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ fromJSON(inputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(inputs.ios-target).appDir)) }}
+                  key: ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.10.0 # v1.10.0
               with:
                   mode: save
-                  path: .ci-cache/ios-native-app/${{ fromJSON(inputs.ios-target).name }}
-                  profile: ${{ inputs.cache-profile }}-${{ fromJSON(inputs.ios-target).name }}
+                  path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
@@ -1130,7 +1376,7 @@ jobs:
             - name: Archive app for the capture job
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -1139,18 +1385,18 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}.tar.gz
+                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}.tar.gz
                   retention-days: 1
 
     build-android:
-        name: Build Android (${{ inputs.android-target != '' && fromJSON(inputs.android-target).name || 'skipped' }})
+        name: Build Android (${{ needs.validate-manifest.outputs.android-target != '' && fromJSON(needs.validate-manifest.outputs.android-target).name || 'skipped' }})
         needs: validate-manifest
         if: needs.validate-manifest.outputs.has-android == 'true'
         runs-on: ${{ fromJSON(inputs.android-build-runner-labels != '' && inputs.android-build-runner-labels || (inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.android-build-timeout-minutes }}
         env:
-            APP_DIR: ${{ fromJSON(inputs.android-target).appDir }}
+            APP_DIR: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
 
         steps:
             - name: Checkout repository
@@ -1159,10 +1405,10 @@ jobs:
                   persist-credentials: false
 
             - name: Apply build-env
-              if: inputs.build-env != ''
+              if: needs.validate-manifest.outputs.build-env != ''
               shell: bash
               env:
-                  BUILD_ENV: ${{ inputs.build-env }}
+                  BUILD_ENV: ${{ needs.validate-manifest.outputs.build-env }}
               run: |
                   set -euo pipefail
                   while IFS= read -r line; do
@@ -1299,22 +1545,22 @@ jobs:
             - name: Install dependencies
               shell: bash
               env:
-                  INSTALL_COMMAND: ${{ inputs.install-command }}
+                  INSTALL_COMMAND: ${{ needs.validate-manifest.outputs.install-command }}
               run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
-              if: inputs.build-command != ''
+              if: needs.validate-manifest.outputs.build-command != ''
               shell: bash
               env:
-                  BUILD_COMMAND: ${{ inputs.build-command }}
+                  BUILD_COMMAND: ${{ needs.validate-manifest.outputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: fromJSON(inputs.android-target).prebuildCommand != ''
-              working-directory: ${{ fromJSON(inputs.android-target).appDir }}
+              if: fromJSON(needs.validate-manifest.outputs.android-target).prebuildCommand != ''
+              working-directory: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ fromJSON(inputs.android-target).prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ fromJSON(needs.validate-manifest.outputs.android-target).prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: native-fingerprint
@@ -1322,7 +1568,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.10.0 # v1.10.0
               with:
                   platform: android
-                  working-directory: ${{ fromJSON(inputs.android-target).appDir }}
+                  working-directory: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 
             - name: native-app-cache (restore)
@@ -1330,14 +1576,14 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.10.0 # v1.10.0
               with:
                   mode: restore
-                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ fromJSON(inputs.android-target).name }}-${{ inputs.android-gradle-task }}${{ inputs.android-gradle-args != '' && format('-{0}', inputs.android-gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
                   arch: arm64
                   toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
             - name: Set up Android SDK (for repack-app validation)
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
               uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
               with:
@@ -1346,14 +1592,14 @@ jobs:
 
             - name: Repack fresh JS into cached native app
               id: repack
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
+              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
               continue-on-error: true
               uses: rnw-community/mobile-ci/actions/repack-app@v1.10.0 # v1.10.0
               with:
                   platform: android
-                  app-path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}/app-release.apk
-                  app-id: ${{ fromJSON(inputs.android-target).appId }}
-                  app-dir: ${{ fromJSON(inputs.android-target).appDir }}
+                  app-path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
+                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
+                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
                   repack-version: ${{ inputs.repack-app-version }}
                   android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
 
@@ -1362,7 +1608,7 @@ jobs:
               shell: bash
               env:
                   CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
                   REPACK_OUTCOME: ${{ steps.repack.outcome }}
               run: |
                   set -euo pipefail
@@ -1376,8 +1622,8 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.android-target).name }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
               run: |
                   {
                     echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
@@ -1392,7 +1638,7 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.android-target).name }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
               run: |
                   echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -1400,30 +1646,30 @@ jobs:
               if: steps.build-decision.outputs.need-build == 'true'
               uses: rnw-community/mobile-ci/actions/build-android-app@v1.10.0 # v1.10.0
               with:
-                  app-dir: ${{ fromJSON(inputs.android-target).appDir }}
+                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
-                  gradle-task: ${{ inputs.android-gradle-task }}
-                  gradle-args: ${{ inputs.android-gradle-args }}
-                  output-dir: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
-                  gradle-cache-key: gradle-${{ fromJSON(inputs.android-target).name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', fromJSON(inputs.android-target).appDir), format('{0}/android/**/*.gradle*', fromJSON(inputs.android-target).appDir), format('{0}/package.json', fromJSON(inputs.android-target).appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  gradle-task: ${{ needs.validate-manifest.outputs.android-gradle-task }}
+                  gradle-args: ${{ needs.validate-manifest.outputs.android-gradle-args }}
+                  output-dir: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  gradle-cache-key: gradle-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', fromJSON(needs.validate-manifest.outputs.android-target).appDir), format('{0}/android/**/*.gradle*', fromJSON(needs.validate-manifest.outputs.android-target).appDir), format('{0}/package.json', fromJSON(needs.validate-manifest.outputs.android-target).appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
-                      gradle-${{ fromJSON(inputs.android-target).name }}-${{ runner.os }}-
+                      gradle-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v1.10.0 # v1.10.0
               with:
                   mode: save
-                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ fromJSON(inputs.android-target).name }}-${{ inputs.android-gradle-task }}${{ inputs.android-gradle-args != '' && format('-{0}', inputs.android-gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
                   arch: arm64
                   toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
                   fingerprint: ${{ steps.fingerprint.outputs.hash }}
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
-                  path: .ci-cache/android-native-app/${{ fromJSON(inputs.android-target).name }}/app-release.apk
+                  name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   retention-days: 1
 
     capture-ios:
@@ -1461,35 +1707,35 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}
+                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
 
             - name: Unpack app
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(inputs.ios-target).name }}
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
 
             - name: capture-screenshots-ios
               id: capture
               uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.10.0 # v1.10.0
               with:
-                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(inputs.ios-target).name }}/Base.app
-                  app-id: ${{ fromJSON(inputs.ios-target).appId }}
-                  scenes: ${{ inputs.capture-scenes }}
-                  seed-command: ${{ inputs.seed-command }}
-                  settle-seconds: ${{ inputs.settle-seconds }}
-                  status-bar-override: ${{ inputs.status-bar-override }}
-                  screenshots-dir: ${{ inputs.screenshots-dir }}
+                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
+                  scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
+                  seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
+                  settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
+                  status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
+                  screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
                   scenes-name-pattern: ${{ inputs.scenes-name-pattern }}
                   scenes-exclude-pattern: ${{ inputs.scenes-exclude-pattern }}
                   simulator-device: ${{ matrix.entry.device }}
                   locales: ${{ join(matrix.entry.locales, ',') }}
                   appearances: ${{ join(matrix.entry.appearances, ',') }}
                   orientation: ${{ matrix.entry.orientation || 'portrait' }}
-                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-env: ${{ needs.validate-manifest.outputs.maestro-env }}
                   locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
-                  maestro-config: ${{ inputs.maestro-config }}
+                  maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
 
@@ -1528,8 +1774,8 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
-                  path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}
+                  name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
 
             - name: redroid-container (start)
               id: redroid
@@ -1548,22 +1794,22 @@ jobs:
               uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v1.10.0 # v1.10.0
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
-                  apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(inputs.android-target).name }}/app-release.apk
-                  app-id: ${{ fromJSON(inputs.android-target).appId }}
-                  scenes: ${{ inputs.capture-scenes }}
-                  screenshots-dir: ${{ inputs.screenshots-dir }}
+                  apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
+                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
+                  scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
+                  screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
                   device-name: ${{ matrix.entry.device }}
                   width: ${{ matrix.entry.width }}
                   height: ${{ matrix.entry.height }}
                   density: ${{ matrix.entry.density }}
                   locales: ${{ join(matrix.entry.locales, ',') }}
                   appearances: ${{ join(matrix.entry.appearances, ',') }}
-                  seed-command: ${{ inputs.seed-command }}
-                  settle-seconds: ${{ inputs.settle-seconds }}
-                  status-bar-override: ${{ inputs.status-bar-override }}
-                  maestro-env: ${{ inputs.maestro-env }}
+                  seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
+                  settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
+                  status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
+                  maestro-env: ${{ needs.validate-manifest.outputs.maestro-env }}
                   locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
-                  maestro-config: ${{ inputs.maestro-config }}
+                  maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
 
@@ -1594,7 +1840,7 @@ jobs:
         name: Upload screenshots
         needs: [validate-manifest, capture-ios, capture-android]
         if: >-
-            always() && inputs.upload-screenshots &&
+            always() && needs.validate-manifest.outputs.upload-screenshots == 'true' &&
             needs.validate-manifest.result == 'success' &&
             (needs.capture-ios.result == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
             (needs.capture-android.result == 'success' || needs.validate-manifest.outputs.has-android != 'true')
@@ -1610,11 +1856,11 @@ jobs:
             - name: Validate required inputs and capture results
               shell: bash
               env:
-                  UPLOAD_COMMAND: ${{ inputs.upload-command }}
+                  UPLOAD_COMMAND: ${{ needs.validate-manifest.outputs.upload-command }}
                   CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
-                  ASC_DEDUPE: ${{ inputs.asc-dedupe-screenshots }}
-                  IOS_TARGET: ${{ inputs.ios-target }}
+                  ASC_DEDUPE: ${{ needs.validate-manifest.outputs.asc-dedupe-screenshots }}
+                  IOS_TARGET: ${{ needs.validate-manifest.outputs.ios-target }}
               run: |
                   set -euo pipefail
                   if [ -z "$UPLOAD_COMMAND" ]; then
@@ -1642,10 +1888,10 @@ jobs:
                   persist-credentials: false
 
             - name: Apply publish-env
-              if: inputs.publish-env != ''
+              if: needs.validate-manifest.outputs.publish-env != ''
               shell: bash
               env:
-                  PUBLISH_ENV: ${{ inputs.publish-env }}
+                  PUBLISH_ENV: ${{ needs.validate-manifest.outputs.publish-env }}
               run: |
                   set -euo pipefail
                   while IFS= read -r line; do
@@ -1817,22 +2063,22 @@ jobs:
             - name: Install dependencies
               shell: bash
               env:
-                  INSTALL_COMMAND: ${{ inputs.install-command }}
+                  INSTALL_COMMAND: ${{ needs.validate-manifest.outputs.install-command }}
               run: eval "$INSTALL_COMMAND"
 
             - name: Download raw screenshots
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   pattern: raw-screenshots-*
-                  path: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}/${{ inputs.screenshots-download-dir }}
+                  path: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
                   merge-multiple: true
 
             - name: Validate iOS screenshot resolutions against apple-screenshot-slots
-              if: inputs.apple-screenshot-slots != ''
+              if: needs.validate-manifest.outputs.apple-screenshot-slots != ''
               shell: bash
               env:
-                  APPLE_SCREENSHOT_SLOTS: ${{ inputs.apple-screenshot-slots }}
-                  DOWNLOAD_ROOT: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}/${{ inputs.screenshots-download-dir }}
+                  APPLE_SCREENSHOT_SLOTS: ${{ needs.validate-manifest.outputs.apple-screenshot-slots }}
+                  DOWNLOAD_ROOT: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
               run: |
                   set -euo pipefail
                   command -v python3 >/dev/null 2>&1 || { echo "::error::'python3' is required to read PNG headers for apple-screenshot-slots validation but is not on PATH."; exit 1; }
@@ -1897,7 +2143,7 @@ jobs:
             - name: Write App Store Connect API key
               id: asc-key
               if: env.HAS_ASC_API_KEY == 'true'
-              working-directory: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}
+              working-directory: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
               shell: bash
               env:
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
@@ -1916,26 +2162,27 @@ jobs:
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: Run upload-command
-              working-directory: ${{ inputs.ios-target != '' && fromJSON(inputs.ios-target).appDir || fromJSON(inputs.android-target).appDir }}
+              working-directory: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
               shell: bash
               env:
-                  UPLOAD_COMMAND: ${{ inputs.upload-command }}
-                  SCREENSHOTS_DIR: ${{ inputs.screenshots-download-dir }}
+                  UPLOAD_COMMAND: ${{ needs.validate-manifest.outputs.upload-command }}
+                  SCREENSHOTS_DIR: ${{ needs.validate-manifest.outputs.screenshots-download-dir }}
               run: eval "$UPLOAD_COMMAND"
 
             - name: Dedupe App Store Connect screenshots
               id: asc-dedupe
-              # Boolean input - truthiness, not a string comparison: in an
-              # if: expression `boolean-input == 'true'` is always false.
-              if: inputs.asc-dedupe-screenshots && env.HAS_ASC_API_KEY == 'true'
+              # Job outputs are strings, so every resolved boolean is compared
+              # against 'true' here - unlike a raw boolean input, whose
+              # `== 'true'` comparison is always false and needs truthiness.
+              if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
               uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v1.10.0 # v1.10.0
               with:
-                  app-id: ${{ inputs.asc-dedupe-app-id != '' && inputs.asc-dedupe-app-id || fromJSON(inputs.ios-target).appId }}
+                  app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}
                   asc-key-id: ${{ secrets.ASC_KEY_ID }}
                   asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
-                  version-state: ${{ inputs.asc-dedupe-version-state }}
-                  fail-on-duplicates: ${{ inputs.asc-fail-on-duplicates }}
+                  version-state: ${{ needs.validate-manifest.outputs.asc-dedupe-version-state }}
+                  fail-on-duplicates: ${{ needs.validate-manifest.outputs.asc-fail-on-duplicates }}
 
             - name: Remove App Store Connect API key
               if: always() && steps.asc-key.outputs.key-path != ''
@@ -1960,7 +2207,7 @@ jobs:
                   BUILD_ANDROID_RESULT: ${{ needs.build-android.result }}
                   CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
-                  UPLOAD_ENABLED: ${{ inputs.upload-screenshots }}
+                  UPLOAD_ENABLED: ${{ needs.validate-manifest.outputs.upload-screenshots }}
                   UPLOAD_RESULT: ${{ needs.upload.result }}
               run: |
                   fail() {
