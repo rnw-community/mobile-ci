@@ -14,9 +14,11 @@ modes:
   on iOS → OS screenshot) or a **Maestro flow** (for scenes that need real
   interaction). Required for Android.
 
-Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; fails closed on a
-malformed `capture-manifest`/`capture-scenes` or any mode/target
-cross-check) → **build-ios** (same build-job shape as `ios-maestro.yml`'s
+Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
+the optional [config file](#config-file), then fails closed on a malformed
+`capture-manifest`/`capture-scenes` or any mode/target cross-check — every
+downstream job reads its resolved values from this job's outputs) →
+**build-ios** (same build-job shape as `ios-maestro.yml`'s
 `build` job for the single `ios-target`; runs only when the manifest has iOS
 entries) and **build-android** (same build-job shape as
 `android-maestro.yml`'s `build` job for the single `android-target`; runs
@@ -364,56 +366,301 @@ out at its assertion budget. The fix is one workspace-config key —
 `platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
 `--config` actually reaches the CLI.
 
+## Config file
+
+Everything app-shaped about a caller — targets, manifest, scenes, build and
+upload knobs — can live in a checked-in JSON file instead of being passed as
+JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
+
+```yaml
+jobs:
+    screenshots:
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        with:
+            config-path: .github/store-screenshots.config.json
+            build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
+```
+
+The file is **one flat JSON object** whose keys are workflow input names
+(kebab-case). Inputs that are JSON blobs today (`ios-target`,
+`android-target`, `capture-manifest`, `capture-scenes`,
+`apple-screenshot-slots`) take the **real JSON structure** — an object or an
+array, not a string. Everything else is a JSON scalar; numbers and booleans
+are accepted where the input is a string (`"settle-seconds": 5` works).
+
+A machine-readable schema for editor autocomplete lives at
+[`schemas/store-screenshots.schema.json`](../../schemas/store-screenshots.schema.json).
+Associate it by filename in your editor's `json.schemas` settings — do **not**
+add a `"$schema"` key to the config file itself, because the workflow rejects
+every top-level key that is not loadable (see below) and `$schema` is not one.
+The schema is a convenience only; the workflow's own `jq` allowlist is the
+source of truth and the only thing CI runs.
+
+### Precedence
+
+**explicit workflow input > config file value > built-in default.**
+
+Every config-loadable input whose old `default:` was a non-empty literal
+(`capture-mode`, `settle-seconds`, `deeplink-confirm-title`,
+`deeplink-confirm-button`, `screenshots-dir`, `install-command`,
+`cache-profile`, `android-cache-profile`, `android-gradle-task`,
+`screenshots-download-dir`, `asc-dedupe-version-state`) now declares
+`default: ''` and applies that literal at resolution time instead. **The
+effective default is unchanged** — a caller that passes no `config-path` and
+no value for these behaves exactly as before.
+
+**"Explicit" means "different from the declared default".** GitHub gives a
+called workflow no signal for *whether* an input was passed — the `inputs`
+context holds only resolved values, and an omitted input is filled in with
+its `default:` before the workflow sees it (there is no `workflow_call`
+equivalent of `github.event.inputs`, which only exists for
+`workflow_dispatch`). So "the caller set this" is necessarily inferred as
+"the value differs from the declared default", which has two consequences:
+
+- **Strings:** `with: {upload-command: ''}` is indistinguishable from
+  omitting `upload-command`, so an explicitly empty string **cannot**
+  override a non-empty config value. To turn a config-file value off, remove
+  its key from the config file rather than blanking it in `with:`.
+- **Booleans:** the seven boolean keys (`status-bar-override`,
+  `repack-on-hit`, `rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
+  `upload-screenshots`, `asc-dedupe-screenshots`, `asc-fail-on-duplicates`)
+  follow the same rule: passing the **non-default** value wins over the
+  config file, leaving the input at its declared default lets the config file
+  decide. Pass `status-bar-override: false` to override a config file that
+  says `true`; to override one that says `false`, remove the key from the
+  file.
+
+Either way the config file is authoritative for a key it declares, and
+`with:` overrides it only by naming a *different* value — which is the
+intended split: `with:` is for per-call deviations, the file is for the
+app's standing configuration.
+
+The `validate-manifest` job logs which inputs were resolved from the
+workflow input, from `config-path`, and from the built-in default — read
+that line first when a value is not what you expected.
+
+### Loadable keys
+
+Exactly these 32 keys may appear in the config file. Anything else fails
+closed:
+
+`ios-target`, `android-target`, `capture-manifest`, `capture-mode`,
+`capture-scenes`, `screenshots-dir`, `seed-command`, `settle-seconds`,
+`deeplink-confirm-title`, `deeplink-confirm-button`,
+`status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
+`maestro-config`, `build-env`, `install-command`, `build-command`,
+`cache-profile`, `android-cache-profile`, `android-gradle-task`,
+`android-gradle-args`, `repack-on-hit`, `rct-use-prebuilt-rncore`,
+`rct-use-rn-dep`, `upload-screenshots`, `upload-command`,
+`screenshots-download-dir`, `publish-env`, `asc-dedupe-screenshots`,
+`asc-dedupe-version-state`, `asc-dedupe-app-id`, `asc-fail-on-duplicates`.
+
+**Why runner labels and timeouts are excluded.** Every `*-runner-labels` and
+`*-timeout-minutes` input is *plan-time*: GitHub evaluates `runs-on` and
+`timeout-minutes` when it schedules the job, before any step of any job has
+run, so a file that can only be read by a step on an already-scheduled runner
+can never feed them. They stay in `with:` — which is also where they belong,
+since the pool a repository's jobs may target is infrastructure, not app
+configuration. The same reasoning excludes every other input not in the list
+above; nothing is silently ignored, an unlisted key is an error.
+
+### Fail-closed behavior
+
+With a non-empty `config-path`, the run fails — naming the path and the
+offending key — when:
+
+- the file does not exist in the checkout, or is not a regular readable file;
+- the file is not valid JSON;
+- the top level is not a JSON object;
+- a top-level key is not in the loadable list (this is what catches typos —
+  a silently ignored `capture-scene` key would otherwise leave the run using
+  defaults nobody asked for);
+- a value has the wrong shape for its key (a scalar where an object/array is
+  expected, a non-`true`/`false` boolean, an array where a string is
+  expected).
+
+With `config-path` left empty (the default) none of this runs: no extra
+checkout, no config step, and every input resolves to exactly what it
+resolved to before this feature existed.
+
+### Notes and limits
+
+- `upload-command` assumes a working consumer-owned uploader (fastlane or
+  otherwise) already exists in the app directory — the config file can supply
+  the command string, never the lane itself; if you have no uploader, keep
+  `upload-screenshots: false` and consume the `raw-screenshots-*` artifacts.
+- `capture-mode: direct` on Android assumes you already have a working
+  Android build target (`android-target`); this workflow builds it, it does
+  not create one.
+- `apple-screenshot-slots` **keys** must match `^[0-9]+x[0-9]+$`; the
+  **values** are free-form non-empty label strings passed to nothing but your
+  own coverage table, so both `{"1320x2868":"IPHONE_69"}` and
+  `{"1320x2868":"iPhone 6.9\""}` are conformant. Use whatever label your
+  uploader (e.g. a fastlane `Deliverfile`) expects.
+
+### Full example
+
+`.github/store-screenshots.config.json` (suuudokuuu's real configuration):
+
+```json
+{
+    "ios-target": {
+        "name": "production",
+        "appDir": "packages/app",
+        "workspace": "suuudokuuu.xcworkspace",
+        "scheme": "suuudokuuu",
+        "appId": "com.vitalyiegorov.suuudokuuu",
+        "prebuildCommand": "npx expo prebuild -p ios --clean --no-install"
+    },
+    "capture-manifest": [
+        {
+            "platform": "ios",
+            "device": "iPhone 17 Pro Max",
+            "locales": [
+                { "id": "en", "env": { "LOCALE_IDENTIFIER": "en-US", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "de", "env": { "LOCALE_IDENTIFIER": "de-DE", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "es", "env": { "LOCALE_IDENTIFIER": "es-ES", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "fr", "env": { "LOCALE_IDENTIFIER": "fr-FR", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "pt", "env": { "LOCALE_IDENTIFIER": "pt-BR", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "sv", "env": { "LOCALE_IDENTIFIER": "sv-SE", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "hi", "env": { "LOCALE_IDENTIFIER": "hi-IN", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "ar", "env": { "LOCALE_IDENTIFIER": "ar-SA", "OS_LANGUAGE_MODE": "true" } },
+                { "id": "id", "env": { "LOCALE_IDENTIFIER": "id-ID", "OS_LANGUAGE_MODE": "true" } }
+            ],
+            "appearances": ["light"]
+        }
+    ],
+    "capture-mode": "direct",
+    "capture-scenes": [
+        { "name": "home", "deepLink": "suuudokuuu://" },
+        { "name": "game", "deepLink": "suuudokuuu://game" },
+        { "name": "stats", "deepLink": "suuudokuuu://history" }
+    ],
+    "screenshots-dir": "tests/app-tests/flows/screenshots",
+    "seed-command": "node tests/app-tests/scripts/ci-seed-scene.ts",
+    "settle-seconds": 5,
+    "status-bar-override": true,
+    "cache-profile": "suuudokuuu-ios-prod-v1",
+    "repack-on-hit": true,
+    "rct-use-prebuilt-rncore": true,
+    "rct-use-rn-dep": true,
+    "build-env": "APP_VARIANT=production\n",
+    "maestro-env": "OS_LANGUAGE_MODE=true\n",
+    "apple-screenshot-slots": {
+        "1320x2868": "iPhone 6.9\"",
+        "1290x2796": "iPhone 6.9\"",
+        "1284x2778": "iPhone 6.5\"",
+        "1242x2688": "iPhone 6.5\"",
+        "1206x2622": "iPhone 6.3\"",
+        "1179x2556": "iPhone 6.1\"",
+        "2064x2752": "iPad 13\"",
+        "2752x2064": "iPad 13\"",
+        "2048x2732": "iPad 12.9\"",
+        "2732x2048": "iPad 12.9\""
+    },
+    "upload-screenshots": true,
+    "upload-command": "export PATH=\"$HOME/.rbenv/shims:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH\"\nexport SCREENSHOT_VARIANT=ci\nfastlane ios ios_screenshots\n",
+    "screenshots-download-dir": "fastlane/screenshots/variants/ci",
+    "asc-dedupe-screenshots": true,
+    "asc-dedupe-app-id": "com.vitalyiegorov.suuudokuuu"
+}
+```
+
+### Caller before and after
+
+The caller that carries the config above shrinks from a 49-line `with:`
+block to five lines — only the plan-time runner pools stay:
+
+```yaml
+# before: 72-line caller, 49 lines of `with:`
+jobs:
+    screenshots:
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.8.0 # v1.8.0
+        with:
+            ios-target: >-
+                {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
+            capture-manifest: >-
+                [ ...40 lines of JSON-in-YAML... ]
+            # ...24 more inputs...
+        secrets:
+            ASC_API_KEY: ${{ secrets.EXPO_IOS_ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.EXPO_IOS_ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.EXPO_IOS_ASC_ISSUER_ID }}
+```
+
+```yaml
+# after: 28-line caller, 5 lines of `with:`
+jobs:
+    screenshots:
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        with:
+            config-path: .github/store-screenshots.config.json
+            build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
+            capture-runner-labels: '["self-hosted","macOS","ARM64","macos-maestro"]'
+            upload-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
+        secrets:
+            ASC_API_KEY: ${{ secrets.EXPO_IOS_ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.EXPO_IOS_ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.EXPO_IOS_ASC_ISSUER_ID }}
+```
+
 ## Inputs
+
+The **Default** column is the *effective* default — what the input resolves
+to with no `config-path` and no explicit value. Inputs marked **cfg** are
+loadable from `config-path`; for those, the declared `default:` in
+`workflow_call` is `''` and the literal below is applied at resolution time
+(see [Precedence](#precedence)).
 
 | Name                          | Required | Default                             | Description |
 | -------------------------------- | -------- | -------------------------------------- | -------------- |
+| `config-path`                      | no       | `''`                                     | Repository-relative path to a JSON config file holding this workflow's app-shaped configuration; see [Config file](#config-file). Empty (the default) changes nothing. |
 | `runner-labels`                    | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS build/capture jobs. |
 | `build-runner-labels`               | no       | `''`                                     | JSON array of runner labels for the iOS build job (and the Android build job, unless `android-build-runner-labels` is set). Falls back to `runner-labels`. |
 | `capture-runner-labels`             | no       | `''`                                     | JSON array of runner labels for the **iOS** capture job only (Android uses `android-capture-runner-labels` — a deliberate asymmetry, the pools can never overlap). Falls back to `runner-labels`. Must be an arm64 macOS pool. |
 | `upload-runner-labels`              | no       | `''`                                     | JSON array of runner labels for the gated upload job. Falls back to `runner-labels`. |
-| `ios-target`                        | when the manifest has iOS entries | `''`   | Single iOS build target JSON object: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. Renamed from `target` in v1.6.0. |
-| `android-target`                    | when the manifest has Android entries | `''` | Single Android build target JSON object: `{name, appDir, appId, prebuildCommand}` — the same per-target shape as `android-maestro.yml`'s `targets` entries. |
-| `capture-manifest`                  | **yes**  | —                                        | JSON array of capture matrix entries, one job per entry; see [capture-manifest](#capture-manifest). |
-| `capture-mode`                      | no       | `flows`                                   | `flows` (legacy discovery, iOS-only) or `direct` (scene-manifest-driven). Anything else fails closed. |
-| `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. |
-| `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). |
-| `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. |
-| `deeplink-confirm-title`            | no       | `Open in .*\?`                            | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this is still the default. |
-| `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. |
-| `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. |
-| `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). |
-| `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). |
+| `ios-target`                        | when the manifest has iOS entries | `''`   | Single iOS build target JSON object: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. Renamed from `target` in v1.6.0. **cfg** |
+| `android-target`                    | when the manifest has Android entries | `''` | Single Android build target JSON object: `{name, appDir, appId, prebuildCommand}` — the same per-target shape as `android-maestro.yml`'s `targets` entries. **cfg** |
+| `capture-manifest`                  | **yes**, as the input or a `config-path` key | — | JSON array of capture matrix entries, one job per entry; see [capture-manifest](#capture-manifest). Declared `required: false` since v1.11.0 so it can come from `config-path` instead; an empty resolved value still fails closed. **cfg** |
+| `capture-mode`                      | no       | `flows`                                   | `flows` (legacy discovery, iOS-only) or `direct` (scene-manifest-driven). Anything else fails closed. **cfg** |
+| `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. **cfg** |
+| `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). **cfg** |
+| `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. **cfg** |
+| `deeplink-confirm-title`            | no       | `Open in .*\?`                            | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this is still the default. **cfg** |
+| `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. **cfg** |
+| `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. **cfg** |
+| `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). **cfg** |
+| `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). **cfg** |
 | `scenes-name-pattern`               | no       | `*.flow.yaml`                             | Space-separated `find -name` globs selecting scenes directly inside `screenshots-dir` (`flows` mode only). |
 | `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` glob excluding matched scenes by basename (`flows` mode only). |
-| `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. |
-| `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. |
-| `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode. |
+| `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. **cfg** |
+| `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. **cfg** |
+| `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode — on iOS also for deep-link scenes, which need it for the [open-confirmation sheet](#ios-open-confirmation-sheet) check. |
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
 | `xcode-version`                     | no       | `26.4.1`                                  | Xcode version string. |
 | `xcode-build`                       | no       | `17E202`                                  | Xcode build number. |
-| `cache-profile`                     | no       | `ios-native-v1`                           | Cache-key prefix distinguishing this consumer/app (iOS build). |
+| `cache-profile`                     | no       | `ios-native-v1`                           | Cache-key prefix distinguishing this consumer/app (iOS build). **cfg** |
 | `expo-fingerprint-version`          | no       | `0.20.6`                                  | Pinned `@expo/fingerprint` npm version. |
 | `node-version`                      | no       | `22.x`                                    | Node version for `actions/setup-node`. |
-| `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. |
+| `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. **cfg** |
 | `enable-corepack`                   | no       | `true`                                    | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
 | `package-manager`                   | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
-| `build-command`                     | no       | `''`                                     | Optional workspace JS build command run at repo root before the native build (both build jobs). |
-| `rct-use-prebuilt-rncore`           | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
-| `rct-use-rn-dep`                    | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
+| `build-command`                     | no       | `''`                                     | Optional workspace JS build command run at repo root before the native build (both build jobs). **cfg** |
+| `rct-use-prebuilt-rncore`           | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). **cfg** |
+| `rct-use-rn-dep`                    | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). **cfg** |
 | `expo-use-precompiled-modules`      | no       | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`                   | no       | `2G`                                     | Bounded, compressed ccache maximum size (iOS build). |
-| `build-env`                         | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each build job. Fails closed on a malformed line. |
-| `repack-on-hit`                     | no       | `false`                                    | On a native-app-cache hit (either platform), run `repack-app` instead of reusing the cached shell unchanged. |
+| `build-env`                         | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each build job. Fails closed on a malformed line. **cfg** |
+| `repack-on-hit`                     | no       | `false`                                    | On a native-app-cache hit (either platform), run `repack-app` instead of reusing the cached shell unchanged. **cfg** |
 | `repack-app-version`                | no       | `0.7.2`                                    | Pinned `@expo/repack-app` npm version, used only when `repack-on-hit` is true. |
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
 | `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job (the Redroid pool). No fallback to `runner-labels`. |
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
-| `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. |
-| `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. |
-| `android-cache-profile`             | no       | `android-native-v1`                       | Cache-key prefix for the Android build (`cache-profile` stays iOS-only). |
+| `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
+| `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
+| `android-cache-profile`             | no       | `android-native-v1`                       | Cache-key prefix for the Android build (`cache-profile` stays iOS-only). **cfg** |
 | `android-build-tools-version`       | no       | `35.0.0`                                  | Build-tools installed on a cache hit for repack-app's aapt2 validation; used only when `repack-on-hit` is true. |
 | `android-build-tools-dir`           | no       | `''`                                     | Explicit build-tools dir for repack-app; used only when `repack-on-hit` is true. |
 | `android-build-timeout-minutes`     | no       | `60`                                      | Android build job timeout. |
@@ -423,15 +670,15 @@ out at its assertion budget. The fix is one workspace-config key —
 | `redroid-cpus`                      | no       | `2`                                       | Container CPU limit. |
 | `redroid-prewarm-manifest-path`     | no       | `$HOME/.rnw-ci/android-emulator.json`     | Host-side prewarm manifest path; see [docs/self-hosted-runners.md](../self-hosted-runners.md). |
 | `redroid-boot-timeout-seconds`      | no       | `600`                                     | Seconds to wait for `sys.boot_completed`. |
-| `upload-screenshots`                | no       | `false`                                    | Run the gated upload job. |
-| `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in the resolved app dir (`ios-target`'s `appDir` when set, `android-target`'s otherwise) with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its environment. |
-| `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to the resolved app dir, every capture job's artifact is merged into before `upload-command` runs — iOS under its `ios/` subdirectory, Android under `android/`. |
+| `upload-screenshots`                | no       | `false`                                    | Run the gated upload job. **cfg** |
+| `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in the resolved app dir (`ios-target`'s `appDir` when set, `android-target`'s otherwise) with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its environment. **cfg** |
+| `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to the resolved app dir, every capture job's artifact is merged into before `upload-command` runs — iOS under its `ios/` subdirectory, Android under `android/`. **cfg** |
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to the resolved app dir, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
-| `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. |
-| `asc-dedupe-screenshots`            | no       | `false`                                   | Post-upload App Store Connect duplicate-screenshot verification/repair gate; see [App Store Connect dedupe gate](#app-store-connect-dedupe-gate). Requires `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` secrets and an `ios-target`. |
-| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). |
-| `asc-dedupe-app-id`                 | no       | `''` (→ `ios-target.appId`)               | Bundle id of the ASC app whose listing is deduped; set it when the capture build uses a suffixed/e2e bundle id. |
-| `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. |
+| `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. **cfg** |
+| `asc-dedupe-screenshots`            | no       | `false`                                   | Post-upload App Store Connect duplicate-screenshot verification/repair gate; see [App Store Connect dedupe gate](#app-store-connect-dedupe-gate). Requires `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` secrets and an `ios-target`. **cfg** |
+| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). **cfg** |
+| `asc-dedupe-app-id`                 | no       | `''` (→ `ios-target.appId`)               | Bundle id of the ASC app whose listing is deduped; set it when the capture build uses a suffixed/e2e bundle id. **cfg** |
+| `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. **cfg** |
 
 ## Secrets
 

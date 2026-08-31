@@ -104,12 +104,14 @@ inputs:
   simulator-device:
     description: >-
       Exact simulator device name to boot, e.g. 'iPhone 17 Pro Max', matched
-      against `xcrun simctl list devices available` with no fuzzy matching -
-      fails closed, listing the available devices, when no exact match
-      exists, and also fails closed when more than one available simulator
-      shares that exact name (e.g. the same device model provisioned under
-      two runtimes) rather than booting whichever one a listing-order
-      heuristic picks. Required (unlike run-maestro-ios's optional simulator-device):
+      against `xcrun simctl list -j devices available` with no fuzzy matching
+      - fails closed, listing the available devices, when no exact match
+      exists. When more than one available simulator shares that exact name
+      because the same device model is provisioned under several runtimes,
+      the one under the newest runtime version is booted and every candidate
+      is reported in a notice; two simulators sharing the name under the same
+      runtime stay a fail-closed error, since no runtime ordering can break
+      that tie. Required (unlike run-maestro-ios's optional simulator-device):
       store screenshots are shipped to a listing, so the exact device shape
       they were captured on must be deterministic across runs.
     required: true
@@ -308,37 +310,86 @@ runs:
         SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
       run: |
           set -euo pipefail
-          available_devices=$(xcrun simctl list devices available)
-          device_name_of() {
-            printf '%s\n' "$1" \
-              | sed -E 's/^[[:space:]]+//' \
-              | sed -E 's/[[:space:]]+$//' \
-              | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
-          }
-          matching_device_lines=()
-          while IFS= read -r line; do
-            udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)
-            [ -n "$udid" ] || continue
-            if [ "$(device_name_of "$line")" = "$SIMULATOR_DEVICE" ]; then
-              matching_device_lines+=("$line")
+          command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to resolve simulator-device from 'xcrun simctl list -j devices available' but is not on PATH; install it on every host in the macOS pool (see docs/self-hosted-runners.md)."; exit 1; }
+          devices_json=$(xcrun simctl list -j devices available)
+          if ! jq -e 'type == "object" and ((.devices | type) == "object")' >/dev/null 2>&1 <<< "$devices_json"; then
+            echo "::error::'xcrun simctl list -j devices available' did not return a JSON object with a 'devices' map, so simulator-device '$SIMULATOR_DEVICE' cannot be resolved."
+            exit 1
+          fi
+          if ! candidates=$(jq -r --arg name "$SIMULATOR_DEVICE" '
+              [ .devices
+                | to_entries[]
+                | (.key | sub("^com\\.apple\\.CoreSimulator\\.SimRuntime\\."; "")) as $runtime
+                | .value[]
+                | select(.name == $name)
+                | {
+                    runtime: $runtime,
+                    udid: (.udid // ""),
+                    version: (($runtime | capture("(?<v>[0-9]+(?:-[0-9]+)*)$") | .v | split("-") | map(tonumber)) // [])
+                  }
+              ]
+              | sort_by(.version)
+              | reverse
+              | .[]
+              | [.runtime, .udid, (.version | join("."))]
+              | @tsv
+          ' <<< "$devices_json"); then
+            echo "::error::Could not parse 'xcrun simctl list -j devices available' while resolving simulator-device '$SIMULATOR_DEVICE'."
+            exit 1
+          fi
+          candidate_runtimes=()
+          candidate_udids=()
+          candidate_versions=()
+          candidate_descriptions=()
+          while IFS="$(printf '\t')" read -r runtime udid version; do
+            [ -n "$runtime" ] || continue
+            if [ -z "$udid" ]; then
+              echo "::error::'xcrun simctl list -j devices available' reported a simulator named '$SIMULATOR_DEVICE' under runtime '$runtime' with no udid."
+              exit 1
             fi
-          done <<< "$available_devices"
-          if [ "${#matching_device_lines[@]}" -eq 0 ]; then
+            candidate_runtimes+=("$runtime")
+            candidate_udids+=("$udid")
+            candidate_versions+=("$version")
+            candidate_descriptions+=("'$SIMULATOR_DEVICE' udid=$udid runtime=$runtime")
+          done <<< "$candidates"
+          if [ "${#candidate_udids[@]}" -eq 0 ]; then
             echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
-            echo "$available_devices"
+            xcrun simctl list devices available
             exit 1
           fi
-          if [ "${#matching_device_lines[@]}" -gt 1 ]; then
-            echo "::error::simulator-device '$SIMULATOR_DEVICE' matches ${#matching_device_lines[@]} available simulators (e.g. the same device model provisioned under more than one runtime), which breaks capture-screenshots-ios's deterministic-device guarantee - whichever one boots would depend on listing order. Matching devices:"
-            printf '%s\n' "${matching_device_lines[@]}"
-            echo "::error::Delete the extra runtime/device pairing on this runner pool so exactly one simulator is named '$SIMULATOR_DEVICE', or pin a more specific name."
-            exit 1
+          if [ "${#candidate_udids[@]}" -gt 1 ]; then
+            duplicated_runtimes=$(printf '%s\n' "${candidate_runtimes[@]}" | sort | uniq -d | tr '\n' ' ')
+            if [ -n "${duplicated_runtimes% }" ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' matches more than one available simulator under the same runtime (${duplicated_runtimes% }), which breaks capture-screenshots-ios's deterministic-device guarantee - no runtime ordering can break that tie and whichever one booted would depend on listing order. Matching simulators:"
+              printf '%s\n' "${candidate_descriptions[@]}"
+              echo "::error::Delete the duplicate simulator(s) on this runner pool so at most one simulator per runtime is named '$SIMULATOR_DEVICE'."
+              exit 1
+            fi
+            for candidate_version in "${candidate_versions[@]}"; do
+              if [ -z "$candidate_version" ]; then
+                echo "::error::simulator-device '$SIMULATOR_DEVICE' matches ${#candidate_udids[@]} available simulators, at least one under a runtime identifier carrying no parseable version, so the newest-runtime tie-break cannot order them. Matching simulators:"
+                printf '%s\n' "${candidate_descriptions[@]}"
+                exit 1
+              fi
+            done
+            newest_version_count=0
+            for candidate_version in "${candidate_versions[@]}"; do
+              if [ "$candidate_version" = "${candidate_versions[0]}" ]; then
+                newest_version_count=$((newest_version_count + 1))
+              fi
+            done
+            if [ "$newest_version_count" -gt 1 ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' matches $newest_version_count available simulators under distinct runtimes that resolve to the same version, so the newest-runtime tie-break cannot order them. Matching simulators:"
+              printf '%s\n' "${candidate_descriptions[@]}"
+              exit 1
+            fi
+            candidate_summary=$(printf '%s; ' "${candidate_descriptions[@]}")
+            echo "::notice::simulator-device '$SIMULATOR_DEVICE' matches ${#candidate_udids[@]} available simulators (${candidate_summary%; }); booting udid=${candidate_udids[0]} because runtime ${candidate_runtimes[0]} is the newest runtime version among them."
           fi
-          device_line="${matching_device_lines[0]}"
-          device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
-          test -n "$device_udid"
+          device_udid="${candidate_udids[0]}"
+          device_runtime="${candidate_runtimes[0]}"
           command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
-          echo "Booting simulator: $device_line"
+          echo "Booting simulator: '$SIMULATOR_DEVICE' udid=$device_udid runtime=$device_runtime"
           xcrun simctl boot "$device_udid" || true
           bootstatus_timeout_seconds=300
           if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$device_udid" -b; then
@@ -1081,6 +1132,9 @@ runs:
       if: always()
       shell: bash
       run: |
+          if [ -z "${SIMULATOR_UDID:-}" ]; then
+            exit 0
+          fi
           if command -v perl >/dev/null 2>&1; then
             perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl shutdown "$SIMULATOR_UDID" || echo "::warning::xcrun simctl shutdown timed out or failed for simulator '$SIMULATOR_UDID'."
           else
