@@ -1,0 +1,106 @@
+name: load-consumer-config
+description: >-
+    Read a consumer-owned JSON config file from the checked-out repository and
+    validate it against an allowlist of keys, emitting the compact object for a
+    reusable workflow to resolve its inputs against.
+
+inputs:
+    config-path:
+        description: Repository-relative path to the consumer's JSON config file.
+        required: true
+    allowed-keys:
+        description: >-
+            JSON array of the key names the config file is allowed to contain.
+            Any other top-level key fails closed.
+        required: true
+
+outputs:
+    json:
+        description: The validated config object, compact single-line JSON.
+        value: ${{ steps.load.outputs.json }}
+
+runs:
+    using: composite
+    steps:
+        - name: Read and validate the consumer config
+          id: load
+          shell: bash
+          env:
+              CONFIG_PATH: ${{ inputs.config-path }}
+              ALLOWED_KEYS: ${{ inputs.allowed-keys }}
+          run: |
+              set -euo pipefail
+              command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required by load-consumer-config but is not on PATH."; exit 1; }
+              if [ -z "$CONFIG_PATH" ]; then
+                echo "::error::config-path is empty; load-consumer-config must be called with the path of a JSON file."
+                exit 1
+              fi
+              if ! jq empty <<< "$ALLOWED_KEYS" 2>/dev/null; then
+                echo "::error::allowed-keys is not valid JSON; expected a JSON array of key names."
+                exit 1
+              fi
+              if [ "$(jq -r 'type' <<< "$ALLOWED_KEYS")" != 'array' ]; then
+                echo "::error::allowed-keys must be a JSON array of key names."
+                exit 1
+              fi
+              if [ "$(jq -r '[.[] | select((type != "string") or . == "")] | length' <<< "$ALLOWED_KEYS")" != '0' ]; then
+                echo "::error::allowed-keys must contain only non-empty strings."
+                exit 1
+              fi
+              case "$CONFIG_PATH" in
+                /*)
+                  echo "::error::config-path '$CONFIG_PATH' is absolute; it must be relative to the checked-out repository root."
+                  exit 1
+                  ;;
+              esac
+              case "/$CONFIG_PATH/" in
+                */../*)
+                  echo "::error::config-path '$CONFIG_PATH' contains a '..' segment; it must stay inside the checked-out repository."
+                  exit 1
+                  ;;
+              esac
+              if [ ! -e "$CONFIG_PATH" ]; then
+                echo "::error::config-path '$CONFIG_PATH' does not exist in the checked-out repository. Commit the file, or check the path is repository-relative."
+                exit 1
+              fi
+              if [ -h "$CONFIG_PATH" ]; then
+                echo "::error::config-path '$CONFIG_PATH' is a symlink; point it at a regular file so its target cannot resolve outside the checkout."
+                exit 1
+              fi
+              if [ ! -f "$CONFIG_PATH" ]; then
+                echo "::error::config-path '$CONFIG_PATH' is not a regular file."
+                exit 1
+              fi
+              if [ ! -r "$CONFIG_PATH" ]; then
+                echo "::error::config-path '$CONFIG_PATH' is not readable."
+                exit 1
+              fi
+              containment_root="$(pwd -P)"
+              if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+                containment_root="$(cd "$GITHUB_WORKSPACE" && pwd -P)"
+              fi
+              resolved_path="$(cd "$(dirname "$CONFIG_PATH")" && pwd -P)/$(basename "$CONFIG_PATH")"
+              case "$resolved_path" in
+                "$containment_root"/*) ;;
+                *)
+                  echo "::error::config-path '$CONFIG_PATH' resolves to '$resolved_path', outside the checkout root '$containment_root'."
+                  exit 1
+                  ;;
+              esac
+              if ! jq empty "$CONFIG_PATH" 2>/dev/null; then
+                echo "::error::config-path '$CONFIG_PATH' is not valid JSON."
+                exit 1
+              fi
+              config_type="$(jq -r 'type' "$CONFIG_PATH")"
+              if [ "$config_type" != 'object' ]; then
+                echo "::error::config-path '$CONFIG_PATH' must hold a single flat JSON object at the top level; got $config_type."
+                exit 1
+              fi
+              unknown_keys="$(jq -r --argjson allowed "$ALLOWED_KEYS" '[keys_unsorted[] | select(IN($allowed[]) | not)] | join(", ")' "$CONFIG_PATH")"
+              if [ -n "$unknown_keys" ]; then
+                echo "::error::config-path '$CONFIG_PATH' has key(s) this workflow cannot load from a config file: $unknown_keys. Loadable keys: $(jq -r 'join(", ")' <<< "$ALLOWED_KEYS")."
+                exit 1
+              fi
+              config_json="$(jq -c '.' "$CONFIG_PATH")"
+              echo "json=$config_json" >> "$GITHUB_OUTPUT"
+              echo "Loaded $(jq -r 'keys_unsorted | length' "$CONFIG_PATH") key(s) from '$CONFIG_PATH': $(jq -r 'keys_unsorted | join(", ")' "$CONFIG_PATH")."
