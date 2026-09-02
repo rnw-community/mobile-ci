@@ -12,6 +12,14 @@ action fails closed on anything outside it. Rejecting unknown keys is the
 point — a typo in a config file would otherwise be silently ignored and the
 run would use defaults nobody asked for.
 
+A top-level `"$schema"` key is the one exception: it is stripped before the
+allowlist check (and from the emitted `json` output), never counted as
+unknown, and never needs to be added to `allowed-keys`. This lets a config
+file point editors at a JSON Schema for autocomplete
+(`"$schema": "https://…/store-screenshots.schema.json"`) without the
+runtime allowlist rejecting the file for a key no workflow input is named
+after.
+
 Fail-closed conditions, each naming the offending path/key:
 
 - `config-path` is empty, absolute, or contains a `..` segment.

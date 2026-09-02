@@ -35,8 +35,9 @@ one of
 - `deepLink` - per cell, the app is `simctl terminate`d, optionally seeded
   (`seed-command`), launched with
   `simctl launch <udid> <app-id> -AppleLanguages '("<locale>")' -AppleLocale <locale>`,
-  sent the deep link via `simctl openurl`, allowed `settle-seconds` (or the
-  scene's own `settleSeconds`) to settle, checked against the
+  allowed `launch-settle-seconds` to settle, sent the deep link via
+  `simctl openurl`, allowed `settle-seconds` (or the scene's own
+  `settleSeconds`) to settle, checked against the
   [open-confirmation sheet](#ios-open-confirmation-sheet) and against the
   scene's required `readySelector`, then captured with
   `simctl io screenshot`.
@@ -248,6 +249,7 @@ platform:
 | `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. Every `deepLink` scene requires a `readySelector`. |
 | `seed-command`              | no       | `''`          | Consumer-owned per-cell seed hook, direct mode only (fails closed if set while `scenes` is empty). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`            | no       | `3`           | Seconds (integer 0–120) between a deep-link launch and its screenshot in direct mode; a scene's `settleSeconds` overrides it. |
+| `launch-settle-seconds`     | no       | `0`           | Seconds (integer 0–120) between `simctl launch` and the deep-link `simctl openurl` in direct mode, distinct from `settle-seconds` (the openurl-to-screenshot wait). |
 | `deeplink-confirm-title`    | no       | `Open in .*\?` | Maestro text pattern matching the title of the iOS open-confirmation sheet, direct mode only. Tapped away and then asserted gone before every deep-link screencap; see [iOS open-confirmation sheet](#ios-open-confirmation-sheet). The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. |
 | `deeplink-confirm-button`   | no       | `Open`        | Label of the confirm button on the sheet matched by `deeplink-confirm-title`, direct mode only. Also fails closed when the simulator's own language is not English and it is still the default. |
 | `status-bar-override`       | no       | `true`        | Apply the `simctl status_bar` 9:41 override once after boot (both modes); fails closed if the call fails. |

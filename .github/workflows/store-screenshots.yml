@@ -136,6 +136,15 @@ on:
                 type: string
                 required: false
                 default: ''
+            launch-settle-seconds:
+                description: >-
+                    iOS only. Seconds (integer 0-120) between simctl launch and the
+                    deep-link simctl openurl in direct mode, distinct from
+                    settle-seconds (the openurl-to-screenshot wait). Empty resolves
+                    to the config-path value, else '0'.
+                type: string
+                required: false
+                default: ''
             deeplink-confirm-title:
                 description: >-
                     iOS only, direct mode only. Maestro text pattern (regex)
@@ -592,6 +601,7 @@ jobs:
             screenshots-dir: ${{ steps.resolve.outputs.screenshots-dir }}
             seed-command: ${{ steps.resolve.outputs.seed-command }}
             settle-seconds: ${{ steps.resolve.outputs.settle-seconds }}
+            launch-settle-seconds: ${{ steps.resolve.outputs.launch-settle-seconds }}
             deeplink-confirm-title: ${{ steps.resolve.outputs.deeplink-confirm-title }}
             deeplink-confirm-button: ${{ steps.resolve.outputs.deeplink-confirm-button }}
             status-bar-override: ${{ steps.resolve.outputs.status-bar-override }}
@@ -633,7 +643,8 @@ jobs:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
                       ["ios-target","android-target","capture-manifest","capture-mode","capture-scenes",
-                      "screenshots-dir","seed-command","settle-seconds","deeplink-confirm-title",
+                      "screenshots-dir","seed-command","settle-seconds","launch-settle-seconds",
+                      "deeplink-confirm-title",
                       "deeplink-confirm-button","status-bar-override",
                       "apple-screenshot-slots","maestro-env","maestro-config","build-env",
                       "install-command","build-command","cache-profile","android-cache-profile",
@@ -655,6 +666,7 @@ jobs:
                   IN_SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
                   IN_SEED_COMMAND: ${{ inputs.seed-command }}
                   IN_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+                  IN_LAUNCH_SETTLE_SECONDS: ${{ inputs.launch-settle-seconds }}
                   IN_DEEPLINK_CONFIRM_TITLE: ${{ inputs.deeplink-confirm-title }}
                   IN_DEEPLINK_CONFIRM_BUTTON: ${{ inputs.deeplink-confirm-button }}
                   IN_STATUS_BAR_OVERRIDE: ${{ inputs.status-bar-override }}
@@ -709,6 +721,7 @@ jobs:
                     'screenshots-dir|string|' \
                     'seed-command|string|' \
                     'settle-seconds|string|3' \
+                    'launch-settle-seconds|string|0' \
                     'deeplink-confirm-title|string|Open in .*\?' \
                     'deeplink-confirm-button|string|Open' \
                     'status-bar-override|bool|true' \
@@ -809,6 +822,7 @@ jobs:
                   CAPTURE_SCENES: ${{ steps.resolve.outputs.capture-scenes }}
                   SEED_COMMAND: ${{ steps.resolve.outputs.seed-command }}
                   SETTLE_SECONDS: ${{ steps.resolve.outputs.settle-seconds }}
+                  LAUNCH_SETTLE_SECONDS: ${{ steps.resolve.outputs.launch-settle-seconds }}
                   SCREENSHOTS_DIR: ${{ steps.resolve.outputs.screenshots-dir }}
                   IOS_TARGET: ${{ steps.resolve.outputs.ios-target }}
                   ANDROID_TARGET: ${{ steps.resolve.outputs.android-target }}
@@ -852,6 +866,16 @@ jobs:
                   esac
                   if [ "$SETTLE_SECONDS" -gt 120 ]; then
                     echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
+                    exit 1
+                  fi
+                  case "$LAUNCH_SETTLE_SECONDS" in
+                    ''|*[!0-9]*)
+                      echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be a non-negative integer."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$LAUNCH_SETTLE_SECONDS" -gt 120 ]; then
+                    echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be at most 120."
                     exit 1
                   fi
                   if ! jq empty <<< "$CAPTURE_MANIFEST" 2>/dev/null; then
@@ -1766,13 +1790,14 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@fade644dae19865cbf3200a40747d2f6718372e3 # feat/capture-ios-launch-settle fleet-validation pin
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
                   seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
                   settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
+                  launch-settle-seconds: ${{ needs.validate-manifest.outputs.launch-settle-seconds }}
                   deeplink-confirm-title: ${{ needs.validate-manifest.outputs.deeplink-confirm-title }}
                   deeplink-confirm-button: ${{ needs.validate-manifest.outputs.deeplink-confirm-button }}
                   status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
