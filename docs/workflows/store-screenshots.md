@@ -154,6 +154,12 @@ One shared scene list; per-scene filters narrow where each scene runs.
   never appears. Pick an element the scene renders unconditionally: a screen
   root is a better anchor than a value that a setting can hide.
 
+  When a cell fails this check the job fails, but the
+  `raw-screenshots-<platform>-<device-slug>` artifact is still uploaded with
+  whatever cells did succeed (`if: always()`), so a failed capture can be
+  diagnosed from the pixels that were produced rather than from the log
+  alone.
+
   Android capture does not consume `readySelector` yet, so it is required
   only of scenes that apply to `ios`; an `android`-only deep-link scene may
   omit it, and a shared scene's selector is simply ignored on the Android

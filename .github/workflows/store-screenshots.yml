@@ -1798,11 +1798,13 @@ jobs:
                   POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
               run: eval "$POST_CAPTURE_COMMAND"
 
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+            - name: Upload raw screenshots (including partial results from a failed capture)
+              if: always() && steps.capture.outputs.device-slug != ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
-                  if-no-files-found: error
+                  if-no-files-found: warn
                   retention-days: 14
 
     capture-android:
@@ -1872,11 +1874,13 @@ jobs:
                   POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
               run: eval "$POST_CAPTURE_COMMAND"
 
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+            - name: Upload raw screenshots (including partial results from a failed capture)
+              if: always() && steps.capture.outputs.device-slug != ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: raw-screenshots-android-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
-                  if-no-files-found: error
+                  if-no-files-found: warn
                   retention-days: 14
 
             - name: redroid-container (teardown)
