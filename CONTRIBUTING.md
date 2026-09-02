@@ -76,6 +76,15 @@ after the commit exists), and RELEASE.md forbids ever moving a release tag
 once cut — making the tag effectively as immutable as a SHA for this
 in-repo, single-release-procedure use.
 
+A not-yet-tagged self-reference cannot be exercised on the fleet as-is:
+GitHub resolves every `uses:` in a job during job setup, before any
+step-level `if:` runs, so a consumer job fails to even start with
+`Unable to resolve action rnw-community/mobile-ci@vX.Y.Z` — invisible to
+`actionlint`/`zizmor`/`dry-lint-local-refs`, which never resolve a ref
+against GitHub. See
+[RELEASE.md#validating-a-not-yet-tagged-self-reference-on-the-fleet](RELEASE.md#validating-a-not-yet-tagged-self-reference-on-the-fleet)
+for the SHA-pin-then-restore workaround used on #103 and #105/#107.
+
 ## Validating changes locally
 
 ```bash
