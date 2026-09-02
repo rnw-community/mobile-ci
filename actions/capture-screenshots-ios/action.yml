@@ -296,9 +296,9 @@ runs:
             echo "::error::scenes has duplicate scene names ($duplicate_names); each name is an output path segment and must be unique."
             exit 1
           fi
-          missing_ready=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not)) | .name] | join(", ")' <<< "$SCENES_JSON")
+          missing_ready=$(jq -r '[.[] | select(has("deepLink") and (if has("platforms") then (.platforms | index("ios")) != null else true end) and (has("readySelector") | not)) | .name] | join(", ")' <<< "$SCENES_JSON")
           if [ -n "$missing_ready" ]; then
-            echo "::error::deep-link scenes ($missing_ready) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
+            echo "::error::ios-applicable deep-link scenes ($missing_ready) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
             exit 1
           fi
           selected=$(jq -c '[.[] | select(if has("platforms") then (.platforms | index("ios")) != null else true end)]' <<< "$SCENES_JSON")
@@ -1034,7 +1034,7 @@ runs:
                 return 1
               fi
               sleep "$settle"
-              local ready_timeout_ms=$((settle * 1000))
+              local ready_timeout_ms=$((10#$settle * 1000))
               if [ "$ready_timeout_ms" -lt 5000 ]; then
                 ready_timeout_ms=5000
               fi
