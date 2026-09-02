@@ -9,10 +9,11 @@ modes:
   `screenshots-dir`. iOS-only; Android entries in the manifest fail closed.
 - **`capture-mode: direct`** — scenes come from a `capture-scenes` JSON
   manifest shared across every device entry. Each scene is either a
-  **deep link** (app terminated → optional `seed-command` → launch → open
-  URL → settle → [open-confirmation sheet check](#ios-open-confirmation-sheet)
-  on iOS → OS screenshot) or a **Maestro flow** (for scenes that need real
-  interaction). Required for Android.
+  **deep link** (app terminated → optional `seed-command` → launch →
+  `launch-settle-seconds` (iOS only) → open URL → settle →
+  [open-confirmation sheet check](#ios-open-confirmation-sheet) on iOS → OS
+  screenshot) or a **Maestro flow** (for scenes that need real interaction).
+  Required for Android.
 
 Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
 the optional [config file](#config-file), then fails closed on a malformed
@@ -242,6 +243,20 @@ _not_ run adbd as root** — `adb pull`/`push` into
 connection), retry `adb connect "$ANDROID_SERIAL"` and probe
 `adb shell id` until it reports `uid=0` before touching app data.
 
+**Persisted-state migration pitfall.** If the fixture the seed hook writes
+carries a state-management library's own persisted-version marker (e.g.
+redux-persist), do not stamp it with the *live* app's current persist
+version — that skips every migration between the fixture's actual shape and
+what the running app expects, so the seeded state silently lacks fields a
+later migration would have backfilled. suuudokuuu#388 hit this as a
+`SpringBoard` capture: a screen crashed at render on every locale/appearance
+cell because a field a migration normally adds was simply absent. Stamp the
+fixture with a baseline version *below* its own state instead, so the
+persistence library runs the newer migrations against it on the app's first
+launch after seeding — the same path a real upgrading user goes through —
+and verify those migrations are safe no-ops against the fixture's actual
+values before relying on this.
+
 ## Android capture
 
 - Runs on the `android-capture-runner-labels` pool (default
@@ -416,11 +431,13 @@ are accepted where the input is a string (`"settle-seconds": 5` works).
 
 A machine-readable schema for editor autocomplete lives at
 [`schemas/store-screenshots.schema.json`](../../schemas/store-screenshots.schema.json).
-Associate it by filename in your editor's `json.schemas` settings — do **not**
-add a `"$schema"` key to the config file itself, because the workflow rejects
-every top-level key that is not loadable (see below) and `$schema` is not one.
-The schema is a convenience only; the workflow's own `jq` allowlist is the
-source of truth and the only thing CI runs.
+Either associate it by filename in your editor's `json.schemas` settings, or
+add a top-level `"$schema"` key pointing at it directly in the config file —
+`load-consumer-config` strips `$schema` before checking the file against the
+loadable-key allowlist (see below), so it is tolerated without needing to be
+(and must not be) added to that list. The schema is a convenience only; the
+workflow's own `jq` allowlist is the source of truth and the only thing CI
+runs.
 
 ### Precedence
 
@@ -467,11 +484,13 @@ that line first when a value is not what you expected.
 
 ### Loadable keys
 
-Exactly these 32 keys may appear in the config file. Anything else fails
-closed:
+Exactly these 33 keys may appear in the config file (plus the tolerated
+`$schema` key described above, which is not a workflow input and is stripped
+before this list is checked). Anything else fails closed:
 
 `ios-target`, `android-target`, `capture-manifest`, `capture-mode`,
 `capture-scenes`, `screenshots-dir`, `seed-command`, `settle-seconds`,
+`launch-settle-seconds`,
 `deeplink-confirm-title`, `deeplink-confirm-button`,
 `status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
 `maestro-config`, `build-env`, `install-command`, `build-command`,
@@ -652,6 +671,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. **cfg** |
 | `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). **cfg** |
 | `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. **cfg** |
+| `launch-settle-seconds`             | no       | `0`                                       | iOS only. Seconds (integer 0–120) between `simctl launch` and the deep-link `simctl openurl`, distinct from `settle-seconds` (the openurl-to-screenshot wait). Added after a fleet session needed both settles independently tunable under host load (suuudokuuu#388). **cfg** |
 | `deeplink-confirm-title`            | no       | `Open in .*\?`                            | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. **cfg** |
 | `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. Also fails closed when the simulator's own language is not English and it is still the default. **cfg** |
 | `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. **cfg** |

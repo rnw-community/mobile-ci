@@ -96,11 +96,11 @@ runs:
                 echo "::error::config-path '$CONFIG_PATH' must hold a single flat JSON object at the top level; got $config_type."
                 exit 1
               fi
-              unknown_keys="$(jq -r --argjson allowed "$ALLOWED_KEYS" '[keys_unsorted[] | select(IN($allowed[]) | not)] | join(", ")' "$CONFIG_PATH")"
+              config_json="$(jq -c 'del(."$schema")' "$CONFIG_PATH")"
+              unknown_keys="$(jq -r --argjson allowed "$ALLOWED_KEYS" '[keys_unsorted[] | select(IN($allowed[]) | not)] | join(", ")' <<< "$config_json")"
               if [ -n "$unknown_keys" ]; then
                 echo "::error::config-path '$CONFIG_PATH' has key(s) this workflow cannot load from a config file: $unknown_keys. Loadable keys: $(jq -r 'join(", ")' <<< "$ALLOWED_KEYS")."
                 exit 1
               fi
-              config_json="$(jq -c '.' "$CONFIG_PATH")"
               echo "json=$config_json" >> "$GITHUB_OUTPUT"
-              echo "Loaded $(jq -r 'keys_unsorted | length' "$CONFIG_PATH") key(s) from '$CONFIG_PATH': $(jq -r 'keys_unsorted | join(", ")' "$CONFIG_PATH")."
+              echo "Loaded $(jq -r 'keys_unsorted | length' <<< "$config_json") key(s) from '$CONFIG_PATH': $(jq -r 'keys_unsorted | join(", ")' <<< "$config_json")."

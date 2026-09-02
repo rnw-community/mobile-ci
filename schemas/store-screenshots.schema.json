@@ -121,6 +121,10 @@
         }
     },
     "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Optional editor-autocomplete pointer to this schema file, e.g. this file's own raw GitHub URL. Not a workflow input - load-consumer-config strips this key before checking the config file against its allowed-keys list, so it never needs to be (and must not be) added to that list."
+        },
         "ios-target": {
             "type": "object",
             "description": "Single iOS build target. Required when capture-manifest has iOS entries.",
@@ -179,6 +183,13 @@
             "maximum": 120,
             "default": 3,
             "description": "Seconds between a deep-link launch and its screenshot."
+        },
+        "launch-settle-seconds": {
+            "type": ["integer", "string"],
+            "minimum": 0,
+            "maximum": 120,
+            "default": 0,
+            "description": "iOS only. Seconds between simctl launch and the deep-link simctl openurl, distinct from settle-seconds (the openurl-to-screenshot wait)."
         },
         "deeplink-confirm-title": {
             "type": "string",

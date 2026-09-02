@@ -51,6 +51,14 @@ inputs:
       Flow-backed scenes control their own timing instead.
     required: false
     default: '3'
+  launch-settle-seconds:
+    description: >-
+      Seconds (integer 0-120) to wait after `simctl launch` and before the
+      deep-link `simctl openurl` in direct mode, distinct from
+      settle-seconds (the wait between the openurl and the screenshot).
+      Flow-backed scenes control their own timing instead.
+    required: false
+    default: '0'
   deeplink-confirm-title:
     description: >-
       Maestro text pattern (regex) matching the title of the iOS
@@ -232,6 +240,7 @@ runs:
         SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
         SEED_COMMAND: ${{ inputs.seed-command }}
         SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+        LAUNCH_SETTLE_SECONDS: ${{ inputs.launch-settle-seconds }}
       run: |
           set -euo pipefail
           case "$SETTLE_SECONDS" in
@@ -242,6 +251,16 @@ runs:
           esac
           if [ "$SETTLE_SECONDS" -gt 120 ]; then
             echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
+            exit 1
+          fi
+          case "$LAUNCH_SETTLE_SECONDS" in
+            ''|*[!0-9]*)
+              echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be a non-negative integer."
+              exit 1
+              ;;
+          esac
+          if [ "$LAUNCH_SETTLE_SECONDS" -gt 120 ]; then
+            echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be at most 120."
             exit 1
           fi
           if [ -z "$SCENES_JSON" ]; then
@@ -569,6 +588,7 @@ runs:
         SCENES_JSON: ${{ inputs.scenes }}
         SEED_COMMAND: ${{ inputs.seed-command }}
         SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+        LAUNCH_SETTLE_SECONDS: ${{ inputs.launch-settle-seconds }}
         HAS_DEEPLINK: ${{ steps.scenes.outputs.has-deeplink }}
         DEEPLINK_CONFIRM_TITLE: ${{ inputs.deeplink-confirm-title }}
         DEEPLINK_CONFIRM_BUTTON: ${{ inputs.deeplink-confirm-button }}
@@ -1029,6 +1049,7 @@ runs:
                 echo "'simctl launch' failed for '$APP_ID' (locale=$locale)."
                 return 1
               fi
+              sleep "$((10#$LAUNCH_SETTLE_SECONDS))"
               if ! xcrun simctl openurl "$SIMULATOR_UDID" "$deep_link"; then
                 echo "'simctl openurl' failed for deep link '$deep_link'."
                 return 1
