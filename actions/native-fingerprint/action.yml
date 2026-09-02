@@ -31,7 +31,39 @@ runs:
       run: |
         set -euo pipefail
         out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-$$.json"
-        npx --yes "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file"
+        error_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-$$.err"
+        # npx has been observed exiting 0 with empty stdout on self-hosted Linux
+        # containers, which used to surface later as a bare "Unexpected end of
+        # JSON input". Fail closed on empty output, always surface stderr, and
+        # give the generate one retry that bypasses any local/cached resolution
+        # with a fresh npm cache and --prefer-online.
+        generate() {
+          npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file" 2> "$error_file"
+        }
+        report_stderr() {
+          if [ -s "$error_file" ]; then
+            echo "::group::@expo/fingerprint stderr"
+            cat "$error_file"
+            echo "::endgroup::"
+          fi
+        }
+        status=0
+        generate || status=$?
+        report_stderr
+        if [ "$status" -ne 0 ] || [ ! -s "$out_file" ]; then
+          echo "::warning::@expo/fingerprint produced ${status}/empty output; retrying with a fresh npm cache and --prefer-online."
+          status=0
+          npm_config_cache="$(mktemp -d)" generate --prefer-online || status=$?
+          report_stderr
+        fi
+        if [ "$status" -ne 0 ]; then
+          echo "::error::@expo/fingerprint exited with status $status."
+          exit "$status"
+        fi
+        if [ ! -s "$out_file" ]; then
+          echo "::error::@expo/fingerprint exited 0 but wrote no output."
+          exit 1
+        fi
         hash=$(node -e "process.stdout.write(require('$out_file').hash)")
         test -n "$hash"
         echo "hash=$hash" >> "$GITHUB_OUTPUT"
