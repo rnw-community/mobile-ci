@@ -202,7 +202,7 @@ runs:
   using: composite
   steps:
     - name: Start Redroid container
-      uses: rnw-community/mobile-ci/actions/redroid-container@v1.11.0 # v1.11.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v1.12.0 # v1.12.0
       with:
           mode: start
           container-name: ${{ inputs.container-name }}
@@ -906,7 +906,7 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      uses: rnw-community/mobile-ci/actions/redroid-container@v1.11.0 # v1.11.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v1.12.0 # v1.12.0
       with:
           mode: teardown
           container-name: ${{ inputs.container-name }}
