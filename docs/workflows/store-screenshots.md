@@ -10,8 +10,9 @@ modes:
 - **`capture-mode: direct`** — scenes come from a `capture-scenes` JSON
   manifest shared across every device entry. Each scene is either a
   **deep link** (app terminated → optional `seed-command` → launch → open
-  URL → settle → OS screenshot; no Maestro involved at all) or a **Maestro
-  flow** (for scenes that need real interaction). Required for Android.
+  URL → settle → [open-confirmation sheet check](#ios-open-confirmation-sheet)
+  on iOS → OS screenshot) or a **Maestro flow** (for scenes that need real
+  interaction). Required for Android.
 
 Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
 the optional [config file](#config-file), then fails closed on a malformed
@@ -124,10 +125,10 @@ One shared scene list; per-scene filters narrow where each scene runs.
 
 ```json
 [
-  {"name":"home","deepLink":"sudoku://home"},
-  {"name":"game","deepLink":"sudoku://game/continue","settleSeconds":5},
+  {"name":"home","deepLink":"sudoku://home","readySelector":{"id":"HomeScreenSelectors.Root"}},
+  {"name":"game","deepLink":"sudoku://game/continue","readySelector":{"id":"GameScreenSelectors.Root"},"settleSeconds":5},
   {"name":"win","flow":"14.win.flow.yaml"},
-  {"name":"stats","deepLink":"sudoku://stats","platforms":["ios"],"appearances":["dark"],"locales":["en"]}
+  {"name":"stats","deepLink":"sudoku://stats","readySelector":{"id":"StatsScreenSelectors.Root"},"platforms":["ios"],"appearances":["dark"],"locales":["en"]}
 ]
 ```
 
@@ -143,6 +144,29 @@ One shared scene list; per-scene filters narrow where each scene runs.
   store `takeScreenshot` output in a layout the collector does not search,
   so a downgraded `maestro-version` fails closed with the zero-screenshot
   error rather than silently capturing nothing.
+- `readySelector` — **required on every `deepLink` scene that applies to
+  `ios`, rejected on `flow` scenes** (a flow asserts its own readiness).
+  Either a non-empty string, matched by Maestro as text/regex, or an object
+  `{"id": "<testID>"}` matched by accessibility id. iOS capture asserts it
+  visible — via `extendedWaitUntil`, bounded by the cell's effective settle
+  seconds with a 5s floor — after the open-confirmation sheet is dismissed
+  and immediately before `simctl io screenshot`; the cell fails closed if it
+  never appears. Pick an element the scene renders unconditionally: a screen
+  root is a better anchor than a value that a setting can hide.
+
+  When a cell fails this check the job fails, but the
+  `raw-screenshots-<platform>-<device-slug>` artifact is still uploaded with
+  whatever cells did succeed (`if: always()`), so a failed capture can be
+  diagnosed from the pixels that were produced rather than from the log
+  alone.
+
+  Android capture does not consume `readySelector` yet, so it is required
+  only of scenes that apply to `ios`; an `android`-only deep-link scene may
+  omit it, and a shared scene's selector is simply ignored on the Android
+  leg. The Android driver has no equivalent of the SpringBoard
+  open-confirmation sheet, but it has the same blind spot about which
+  activity is actually resumed — extending the probe there is tracked
+  separately.
 - Optional `settleSeconds` — integer 0–120, overriding the workflow-level
   `settle-seconds` for deep-link scenes.
 - Optional `platforms` — non-empty subset of `["ios","android"]`; default
@@ -152,7 +176,33 @@ One shared scene list; per-scene filters narrow where each scene runs.
   cells in the intersection with the device entry's lists.
 
 Maestro is only installed on a capture job when its scene set actually
-contains a flow — an all-deep-link manifest never touches Maestro.
+contains a flow, or — on iOS — a deep link, which needs it for the
+open-confirmation sheet check below. An all-deep-link Android manifest never
+touches Maestro.
+
+## iOS open-confirmation sheet
+
+On newer iOS runtimes SpringBoard answers a `simctl openurl` deep link with
+an **`Open in "<app>"?` / Cancel / Open** confirmation sheet, drawn over the
+home screen with the target app deactivated behind it, so the screencap that
+follows is a picture of SpringBoard rather than of the app. Nothing in
+`simctl` reports which bundle is frontmost, and pre-launching the app before
+the `openurl` does not avoid the sheet, so `capture-screenshots-ios` runs a
+generated one-flow Maestro check on every deep-link cell, after its settle
+and immediately before its screencap: it taps the sheet's confirm button when
+the sheet is on screen, then `assertNotVisible`s it. A sheet still up fails
+that cell (retried once, then the capture job fails naming the scene, locale
+and appearance) instead of writing a screenshot of it.
+
+The sheet is localised to the **simulator's own** language, which this
+workflow never changes — the `locales` axis writes app-scoped preferences
+only — so it is English on a stock CoreSimulator device.
+`deeplink-confirm-title`/`deeplink-confirm-button` default to the English
+strings; a simulator provisioned in another language fails the capture
+closed up front until **both** are set to that language's strings. Both are
+rejected, not just the title, because a simulator that already carries a
+persisted approval never shows the sheet and would leave a wrong button label
+unvalidated.
 
 ## Seed hook contract
 
@@ -377,7 +427,8 @@ source of truth and the only thing CI runs.
 **explicit workflow input > config file value > built-in default.**
 
 Every config-loadable input whose old `default:` was a non-empty literal
-(`capture-mode`, `settle-seconds`, `screenshots-dir`, `install-command`,
+(`capture-mode`, `settle-seconds`, `deeplink-confirm-title`,
+`deeplink-confirm-button`, `screenshots-dir`, `install-command`,
 `cache-profile`, `android-cache-profile`, `android-gradle-task`,
 `screenshots-download-dir`, `asc-dedupe-version-state`) now declares
 `default: ''` and applies that literal at resolution time instead. **The
@@ -416,11 +467,12 @@ that line first when a value is not what you expected.
 
 ### Loadable keys
 
-Exactly these 30 keys may appear in the config file. Anything else fails
+Exactly these 32 keys may appear in the config file. Anything else fails
 closed:
 
 `ios-target`, `android-target`, `capture-manifest`, `capture-mode`,
 `capture-scenes`, `screenshots-dir`, `seed-command`, `settle-seconds`,
+`deeplink-confirm-title`, `deeplink-confirm-button`,
 `status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
 `maestro-config`, `build-env`, `install-command`, `build-command`,
 `cache-profile`, `android-cache-profile`, `android-gradle-task`,
@@ -506,9 +558,9 @@ resolved to before this feature existed.
     ],
     "capture-mode": "direct",
     "capture-scenes": [
-        { "name": "home", "deepLink": "suuudokuuu://" },
-        { "name": "game", "deepLink": "suuudokuuu://game" },
-        { "name": "stats", "deepLink": "suuudokuuu://history" }
+        { "name": "home", "deepLink": "suuudokuuu://", "readySelector": { "id": "HomeScreenSelectors.Root" } },
+        { "name": "game", "deepLink": "suuudokuuu://game", "readySelector": { "id": "GameScreenSelectors.Root" } },
+        { "name": "stats", "deepLink": "suuudokuuu://history", "readySelector": { "id": "HistoryScreenSelectors.Root" } }
     ],
     "screenshots-dir": "tests/app-tests/flows/screenshots",
     "seed-command": "node tests/app-tests/scripts/ci-seed-scene.ts",
@@ -600,6 +652,8 @@ loadable from `config-path`; for those, the declared `default:` in
 | `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. **cfg** |
 | `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). **cfg** |
 | `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. **cfg** |
+| `deeplink-confirm-title`            | no       | `Open in .*\?`                            | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. **cfg** |
+| `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. Also fails closed when the simulator's own language is not English and it is still the default. **cfg** |
 | `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. **cfg** |
 | `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). **cfg** |
 | `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). **cfg** |
@@ -607,7 +661,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` glob excluding matched scenes by basename (`flows` mode only). |
 | `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. **cfg** |
 | `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. **cfg** |
-| `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode. |
+| `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode — on iOS also for deep-link scenes, which need it for the [open-confirmation sheet](#ios-open-confirmation-sheet) check. |
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
 | `xcode-version`                     | no       | `26.4.1`                                  | Xcode version string. |
 | `xcode-build`                       | no       | `17E202`                                  | Xcode build number. |
@@ -702,8 +756,8 @@ jobs:
             capture-mode: direct
             capture-scenes: >-
                 [
-                  {"name":"home","deepLink":"myapp://home"},
-                  {"name":"stats","deepLink":"myapp://stats","settleSeconds":5},
+                  {"name":"home","deepLink":"myapp://home","readySelector":{"id":"HomeScreen.Root"}},
+                  {"name":"stats","deepLink":"myapp://stats","readySelector":{"id":"StatsScreen.Root"},"settleSeconds":5},
                   {"name":"win","flow":"14.win.flow.yaml","platforms":["ios"]}
                 ]
             screenshots-dir: apps/mobile/e2e/flows/screenshots

@@ -180,6 +180,18 @@
             "default": 3,
             "description": "Seconds between a deep-link launch and its screenshot."
         },
+        "deeplink-confirm-title": {
+            "type": "string",
+            "minLength": 1,
+            "default": "Open in .*\\?",
+            "description": "iOS direct mode only. Maestro text pattern matching the title of the 'Open in <app>?' sheet SpringBoard shows for a simctl openurl deep link; tapped away and then asserted gone before every deep-link screencap. The default matches an English-language simulator."
+        },
+        "deeplink-confirm-button": {
+            "type": "string",
+            "minLength": 1,
+            "default": "Open",
+            "description": "iOS direct mode only. Label of the confirm button on the sheet matched by deeplink-confirm-title."
+        },
         "status-bar-override": {
             "type": "boolean",
             "default": true,

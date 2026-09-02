@@ -106,9 +106,14 @@ on:
                 description: >-
                     JSON array of scene objects shared across all capture-manifest
                     entries, each {"name", and exactly one of "deepLink" or "flow",
-                    optional "settleSeconds", "platforms", "locales", "appearances"}.
-                    Required when capture-mode is 'direct'; fails closed if set in
-                    'flows' mode.
+                    "readySelector" (required alongside "deepLink" for any scene that
+                    applies to ios, rejected alongside "flow"), optional
+                    "settleSeconds", "platforms", "locales", "appearances"}.
+                    readySelector is a Maestro selector - a non-empty string matched
+                    as text/regex, or {"id": "<testID>"} - that must become visible
+                    before a deep-link cell is captured, proving the app rather than
+                    SpringBoard owns the screen. Required when capture-mode is
+                    'direct'; fails closed if set in 'flows' mode.
                 type: string
                 required: false
                 default: ''
@@ -128,6 +133,32 @@ on:
                     Seconds (integer 0-120) between a deep-link launch and its
                     screenshot in direct mode; a scene's own settleSeconds overrides
                     it per scene. Empty resolves to the config-path value, else '3'.
+                type: string
+                required: false
+                default: ''
+            deeplink-confirm-title:
+                description: >-
+                    iOS only, direct mode only. Maestro text pattern (regex)
+                    matching the title of the "Open in <app>?" confirmation sheet
+                    SpringBoard presents for a `simctl openurl` deep link. Every
+                    deep-link capture taps the sheet away when it is on screen and
+                    then asserts, fail-closed, that it is gone - a capture taken
+                    while it is up is a screenshot of SpringBoard, not of the app.
+                    The default matches an English-language simulator (the
+                    CoreSimulator default); a simulator whose own language is not
+                    English must set both this and deeplink-confirm-button, or
+                    the capture fails closed. The trailing '\?' keeps the default
+                    anchored to the sheet's own title rather than to app content
+                    that merely starts with 'Open in'. Empty resolves to the
+                    config-path value, else 'Open in .*\?'.
+                type: string
+                required: false
+                default: ''
+            deeplink-confirm-button:
+                description: >-
+                    iOS only, direct mode only. Label of the confirm button on the
+                    open-confirmation sheet matched by deeplink-confirm-title.
+                    Empty resolves to the config-path value, else 'Open'.
                 type: string
                 required: false
                 default: ''
@@ -561,6 +592,8 @@ jobs:
             screenshots-dir: ${{ steps.resolve.outputs.screenshots-dir }}
             seed-command: ${{ steps.resolve.outputs.seed-command }}
             settle-seconds: ${{ steps.resolve.outputs.settle-seconds }}
+            deeplink-confirm-title: ${{ steps.resolve.outputs.deeplink-confirm-title }}
+            deeplink-confirm-button: ${{ steps.resolve.outputs.deeplink-confirm-button }}
             status-bar-override: ${{ steps.resolve.outputs.status-bar-override }}
             apple-screenshot-slots: ${{ steps.resolve.outputs.apple-screenshot-slots }}
             maestro-env: ${{ steps.resolve.outputs.maestro-env }}
@@ -600,7 +633,8 @@ jobs:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
                       ["ios-target","android-target","capture-manifest","capture-mode","capture-scenes",
-                      "screenshots-dir","seed-command","settle-seconds","status-bar-override",
+                      "screenshots-dir","seed-command","settle-seconds","deeplink-confirm-title",
+                      "deeplink-confirm-button","status-bar-override",
                       "apple-screenshot-slots","maestro-env","maestro-config","build-env",
                       "install-command","build-command","cache-profile","android-cache-profile",
                       "android-gradle-task","android-gradle-args","repack-on-hit",
@@ -621,6 +655,8 @@ jobs:
                   IN_SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
                   IN_SEED_COMMAND: ${{ inputs.seed-command }}
                   IN_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+                  IN_DEEPLINK_CONFIRM_TITLE: ${{ inputs.deeplink-confirm-title }}
+                  IN_DEEPLINK_CONFIRM_BUTTON: ${{ inputs.deeplink-confirm-button }}
                   IN_STATUS_BAR_OVERRIDE: ${{ inputs.status-bar-override }}
                   IN_APPLE_SCREENSHOT_SLOTS: ${{ inputs.apple-screenshot-slots }}
                   IN_MAESTRO_ENV: ${{ inputs.maestro-env }}
@@ -673,6 +709,8 @@ jobs:
                     'screenshots-dir|string|' \
                     'seed-command|string|' \
                     'settle-seconds|string|3' \
+                    'deeplink-confirm-title|string|Open in .*\?' \
+                    'deeplink-confirm-button|string|Open' \
                     'status-bar-override|bool|true' \
                     'apple-screenshot-slots|json|' \
                     'maestro-env|string|' \
@@ -1006,6 +1044,8 @@ jobs:
                             (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
                             (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
                             (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                            (has("flow") and has("readySelector")) or
+                            (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
                             (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
                             (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
                             (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
@@ -1013,12 +1053,17 @@ jobs:
                         )]
                     ' <<< "$CAPTURE_SCENES")
                     if [ "$invalid_scenes" != '[]' ]; then
-                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
+                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
                       exit 1
                     fi
                     duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
                     if [ -n "$duplicate_scene_names" ]; then
                       echo "::error::capture-scenes has duplicate scene names ($duplicate_scene_names); each name is an output path segment and must be unique."
+                      exit 1
+                    fi
+                    missing_ready_scenes=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not) and ((has("platforms") | not) or ((.platforms | index("ios")) != null))) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                    if [ -n "$missing_ready_scenes" ]; then
+                      echo "::error::deep-link capture-scenes entries that apply to ios ($missing_ready_scenes) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
                       exit 1
                     fi
                     for pair in "ios:$ios_count" "android:$android_count"; do
@@ -1728,6 +1773,8 @@ jobs:
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
                   seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
                   settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
+                  deeplink-confirm-title: ${{ needs.validate-manifest.outputs.deeplink-confirm-title }}
+                  deeplink-confirm-button: ${{ needs.validate-manifest.outputs.deeplink-confirm-button }}
                   status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
                   screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
                   scenes-name-pattern: ${{ inputs.scenes-name-pattern }}
@@ -1751,11 +1798,13 @@ jobs:
                   POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
               run: eval "$POST_CAPTURE_COMMAND"
 
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+            - name: Upload raw screenshots (including partial results from a failed capture)
+              if: always() && steps.capture.outputs.device-slug != ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
-                  if-no-files-found: error
+                  if-no-files-found: warn
                   retention-days: 14
 
     capture-android:
@@ -1825,11 +1874,13 @@ jobs:
                   POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
               run: eval "$POST_CAPTURE_COMMAND"
 
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+            - name: Upload raw screenshots (including partial results from a failed capture)
+              if: always() && steps.capture.outputs.device-slug != ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: raw-screenshots-android-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
-                  if-no-files-found: error
+                  if-no-files-found: warn
                   retention-days: 14
 
             - name: redroid-container (teardown)

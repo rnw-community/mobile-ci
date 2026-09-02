@@ -17,8 +17,12 @@ inputs:
   scenes:
     description: >-
       Optional JSON array of scene objects, each {"name", and exactly one of
-      "deepLink" or "flow", optional "settleSeconds", "platforms",
-      "locales", "appearances"}. Empty (default) keeps the legacy
+      "deepLink" or "flow", "readySelector" (required with "deepLink",
+      rejected with "flow"), optional "settleSeconds", "platforms",
+      "locales", "appearances"}. readySelector is a Maestro selector - a
+      non-empty string matched as text/regex, or {"id": "<testID>"} - that
+      must become visible before a deep-link cell is captured; it is what
+      proves the app, not SpringBoard, owns the screen. Empty (default) keeps the legacy
       flow-discovery mode below byte-for-byte; non-empty switches to
       manifest-driven direct mode, in which the '<number>.<name>.flow.yaml'
       naming convention is NOT required - the scene name comes from the
@@ -47,6 +51,27 @@ inputs:
       Flow-backed scenes control their own timing instead.
     required: false
     default: '3'
+  deeplink-confirm-title:
+    description: >-
+      Maestro text pattern (regex) matching the title of the iOS
+      "Open in <app>?" confirmation sheet SpringBoard presents for a
+      `simctl openurl` deep link. Direct mode only. Every deep-link capture
+      taps the sheet's confirm button when this pattern is on screen and
+      then asserts, fail-closed, that it is gone - a capture taken while the
+      sheet is up is a screenshot of SpringBoard, not of the app. The
+      default matches an English-language simulator, which is the
+      CoreSimulator default; a simulator whose own language is not English
+      needs this and deeplink-confirm-button set to that language's strings.
+      The trailing '\?' keeps the default anchored to the sheet's own title
+      rather than to app content that merely starts with 'Open in'.
+    required: false
+    default: 'Open in .*\?'
+  deeplink-confirm-button:
+    description: >-
+      Label of the confirm button on the iOS open-confirmation sheet matched
+      by deeplink-confirm-title, tapped through Maestro. Direct mode only.
+    required: false
+    default: 'Open'
   status-bar-override:
     description: >-
       When 'true', applies `xcrun simctl status_bar override` once after
@@ -156,7 +181,8 @@ inputs:
       Pinned Maestro CLI version, installed the same way as
       run-maestro-ios's maestro-version - and only lazily: always in legacy
       flow-discovery mode, but in direct mode only when at least one
-      ios-applicable scene declares a flow.
+      ios-applicable scene declares a flow or a deepLink (deep-link scenes
+      need Maestro for the open-confirmation sheet check below).
     required: false
     default: '2.8.0'
   output-dir:
@@ -253,6 +279,8 @@ runs:
                   (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
                   (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
                   (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                  (has("flow") and has("readySelector")) or
+                  (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
                   (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
                   (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
                   (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
@@ -260,7 +288,7 @@ runs:
               )]
           ' <<< "$SCENES_JSON")
           if [ "$invalid" != '[]' ]; then
-            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
+            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
             exit 1
           fi
           duplicate_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$SCENES_JSON")
@@ -268,16 +296,23 @@ runs:
             echo "::error::scenes has duplicate scene names ($duplicate_names); each name is an output path segment and must be unique."
             exit 1
           fi
+          missing_ready=$(jq -r '[.[] | select(has("deepLink") and (if has("platforms") then (.platforms | index("ios")) != null else true end) and (has("readySelector") | not)) | .name] | join(", ")' <<< "$SCENES_JSON")
+          if [ -n "$missing_ready" ]; then
+            echo "::error::ios-applicable deep-link scenes ($missing_ready) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
+            exit 1
+          fi
           selected=$(jq -c '[.[] | select(if has("platforms") then (.platforms | index("ios")) != null else true end)]' <<< "$SCENES_JSON")
           if [ "$(jq 'length' <<< "$selected")" -lt 1 ]; then
             echo "::error::no scene in scenes applies to platform 'ios' - every scene's platforms filter excludes it."
             exit 1
           fi
-          needs_maestro=$(jq -r 'any(.[]; has("flow"))' <<< "$selected")
-          if [ "$needs_maestro" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
+          if [ "$(jq -r 'any(.[]; has("flow"))' <<< "$selected")" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
             echo "::error::screenshots-dir is required because at least one ios-applicable scene declares a flow."
             exit 1
           fi
+          has_deeplink=$(jq -r 'any(.[]; has("deepLink"))' <<< "$selected")
+          needs_maestro=$(jq -r 'any(.[]; has("flow") or has("deepLink"))' <<< "$selected")
+          echo "has-deeplink=$has_deeplink" >> "$GITHUB_OUTPUT"
           echo "needs-maestro=$needs_maestro" >> "$GITHUB_OUTPUT"
 
     - name: Boot iOS Simulator
@@ -534,6 +569,9 @@ runs:
         SCENES_JSON: ${{ inputs.scenes }}
         SEED_COMMAND: ${{ inputs.seed-command }}
         SETTLE_SECONDS: ${{ inputs.settle-seconds }}
+        HAS_DEEPLINK: ${{ steps.scenes.outputs.has-deeplink }}
+        DEEPLINK_CONFIRM_TITLE: ${{ inputs.deeplink-confirm-title }}
+        DEEPLINK_CONFIRM_BUTTON: ${{ inputs.deeplink-confirm-button }}
         CAPTURE_LOCALES: ${{ inputs.locales }}
         CAPTURE_APPEARANCES: ${{ inputs.appearances }}
         ORIENTATION: ${{ inputs.orientation }}
@@ -833,7 +871,7 @@ runs:
                     # are searched; the bundle's screenshots/ dir is NOT - it
                     # holds Maestro's own step captures (final.png) even on a
                     # pass and would double-count.
-                    if (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file_abs"); then
+                    if (cd "$shot_cwd" && maestro --device "$SIMULATOR_UDID" test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file_abs"); then
                       status=passed
                       break
                     fi
@@ -877,6 +915,7 @@ runs:
             sel_deeplinks=()
             sel_flows=()
             sel_settles=()
+            sel_ready_selectors=()
             sel_locale_filters=()
             sel_appearance_filters=()
             i=0
@@ -887,6 +926,7 @@ runs:
                 sel_deeplinks+=("$(jq -r '.deepLink // ""' <<< "$scene")")
                 sel_flows+=("$(jq -r '.flow // ""' <<< "$scene")")
                 sel_settles+=("$(jq -r 'if has("settleSeconds") then .settleSeconds else -1 end' <<< "$scene")")
+                sel_ready_selectors+=("$(jq -c '.readySelector // ""' <<< "$scene")")
                 sel_locale_filters+=("$(jq -r '(.locales // []) | join(",")' <<< "$scene")")
                 sel_appearance_filters+=("$(jq -r '(.appearances // []) | join(",")' <<< "$scene")")
               fi
@@ -906,8 +946,85 @@ runs:
               esac
             }
 
+            # SpringBoard answers a `simctl openurl` deep link with an
+            # "Open in <app>?" confirmation sheet on newer iOS runtimes, drawn
+            # over the home screen with the target app deactivated behind it -
+            # so a screencap taken while it is up is a picture of SpringBoard,
+            # not of the app, and nothing in `simctl` reports which bundle is
+            # frontmost. Maestro (already this action's e2e driver) taps the
+            # sheet away; approving it is a persistent per-simulator choice,
+            # so after the first cell that tap is a no-op.
+            #
+            # Dismissing the sheet is necessary but not sufficient: the sheet
+            # being absent is also true of a bare home screen, so
+            # assertNotVisible alone passes on a cell where the app never came
+            # forward at all and a SpringBoard PNG ships as a store
+            # screenshot. Each deep-link scene therefore names a readySelector
+            # that must become visible before the screencap, which is the only
+            # positive evidence available that the app, and the right scene
+            # inside it, owns the screen.
+            yaml_single_quote() {
+              printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+            }
+
+            if [ "$HAS_DEEPLINK" = 'true' ]; then
+              test -n "$DEEPLINK_CONFIRM_TITLE" || { echo "::error::deeplink-confirm-title is empty; deep-link scenes need a pattern matching the iOS open-confirmation sheet title to dismiss and assert against."; exit 1; }
+              test -n "$DEEPLINK_CONFIRM_BUTTON" || { echo "::error::deeplink-confirm-button is empty; deep-link scenes need the confirm button label of the iOS open-confirmation sheet."; exit 1; }
+              command -v maestro >/dev/null 2>&1 || { echo "::error::'maestro' is required to dismiss and assert the iOS open-confirmation sheet for deep-link scenes but is not on PATH."; exit 1; }
+              device_language=$(xcrun simctl spawn "$SIMULATOR_UDID" defaults read -g AppleLanguages 2>/dev/null | tr -d '[:space:]"()' | cut -d, -f1 || true)
+              case "${device_language:-en}" in
+                en|en-*|en_*) ;;
+                *)
+                  if [ "$DEEPLINK_CONFIRM_TITLE" = 'Open in .*\?' ] || [ "$DEEPLINK_CONFIRM_BUTTON" = 'Open' ]; then
+                    echo "::error::simulator '$SIMULATOR_UDID' runs in language '$device_language', but deeplink-confirm-title and/or deeplink-confirm-button are still their English defaults. SpringBoard localises the deep-link open-confirmation sheet to the simulator's own language, so an English default would neither dismiss nor detect it and a deep-link capture could silently be a screenshot of that sheet. A simulator that already carries a persisted approval would not exercise the button at all, so both are rejected up front rather than on first use. Set both inputs to the '$device_language' strings, or provision this simulator in English."
+                    exit 1
+                  fi
+                  ;;
+              esac
+            fi
+
+            write_deeplink_ready_flow() {
+              local ready_json="$1" timeout_ms="$2" out_file="$3"
+              mkdir -p "$(dirname "$out_file")"
+              {
+                printf 'appId: %s\n' "$(yaml_single_quote "$APP_ID")"
+                printf -- '---\n'
+                printf -- '- runFlow:\n'
+                printf '    when:\n'
+                printf '      visible: %s\n' "$(yaml_single_quote "$DEEPLINK_CONFIRM_TITLE")"
+                printf '    commands:\n'
+                printf -- '      - tapOn: %s\n' "$(yaml_single_quote "$DEEPLINK_CONFIRM_BUTTON")"
+                printf -- '      - waitForAnimationToEnd\n'
+                printf -- '- assertNotVisible: %s\n' "$(yaml_single_quote "$DEEPLINK_CONFIRM_TITLE")"
+                printf -- '- extendedWaitUntil:\n'
+                if [ "$(jq -r 'type' <<< "$ready_json")" = 'object' ]; then
+                  printf '    visible:\n'
+                  printf '      id: %s\n' "$(yaml_single_quote "$(jq -r '.id' <<< "$ready_json")")"
+                else
+                  printf '    visible: %s\n' "$(yaml_single_quote "$(jq -r '.' <<< "$ready_json")")"
+                fi
+                printf '    timeout: %s\n' "$timeout_ms"
+              } > "$out_file"
+            }
+
+            assert_app_foreground_ready() {
+              local scene_name="$1" locale="$2" appearance="$3" ready_json="$4" timeout_ms="$5"
+              local probe_dir="$RUNNER_TEMP/screenshots-deeplink-confirm/${locale}-${appearance}-${scene_name}"
+              local ready_flow="$probe_dir/confirm.flow.yaml"
+              rm -rf "$probe_dir"
+              mkdir -p "$probe_dir/cwd"
+              write_deeplink_ready_flow "$ready_json" "$timeout_ms" "$ready_flow"
+              printf 'Generated iOS foreground-readiness flow for scene %s (locale=%s, appearance=%s):\n' "$scene_name" "$locale" "$appearance"
+              cat "$ready_flow"
+              if (cd "$probe_dir/cwd" && maestro --device "$SIMULATOR_UDID" test --test-output-dir "$probe_dir/output" "$ready_flow"); then
+                return 0
+              fi
+              echo "Scene '$scene_name' (locale=$locale, appearance=$appearance) was not ready to capture after the deep link settled: either the iOS open-confirmation sheet matching '$DEEPLINK_CONFIRM_TITLE' was still up, or the scene's readySelector never became visible within ${timeout_ms}ms - the app was not foreground or the scene did not render. No screenshot was taken."
+              return 1
+            }
+
             capture_deeplink_cell() {
-              local deep_link="$1" settle="$2" locale="$3" final_path="$4"
+              local deep_link="$1" settle="$2" locale="$3" appearance="$4" scene_name="$5" final_path="$6" ready_json="$7"
               if ! xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID" -AppleLanguages "(\"$locale\")" -AppleLocale "$locale"; then
                 echo "'simctl launch' failed for '$APP_ID' (locale=$locale)."
                 return 1
@@ -917,6 +1034,11 @@ runs:
                 return 1
               fi
               sleep "$settle"
+              local ready_timeout_ms=$((10#$settle * 1000))
+              if [ "$ready_timeout_ms" -lt 5000 ]; then
+                ready_timeout_ms=5000
+              fi
+              assert_app_foreground_ready "$scene_name" "$locale" "$appearance" "$ready_json" "$ready_timeout_ms" || return 1
               if ! xcrun simctl io "$SIMULATOR_UDID" screenshot "$final_path"; then
                 echo "'simctl io screenshot' failed for '$final_path'."
                 return 1
@@ -945,7 +1067,7 @@ runs:
               # (absolute flow path; runFlow references resolve against the
               # flow file, not the CWD) and collect from the union of the
               # scratch CWD and the forward-compat takeScreenshot/ layout.
-              (cd "$shot_cwd" && maestro test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
+              (cd "$shot_cwd" && maestro --device "$SIMULATOR_UDID" test -e "APP_ID=$APP_ID" -e "LOCALE=$locale" -e "APPEARANCE=$appearance" ${cell_env_args[@]+"${cell_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} --test-output-dir "$test_output_dir" "$scene_file") || return 1
               local shot_count=0 shot_file='' candidate
               while IFS= read -r -d '' candidate; do
                 shot_count=$((shot_count + 1))
@@ -1005,7 +1127,7 @@ runs:
                         xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" 2>/dev/null || true
                       fi
                       if [ -n "$deep_link" ]; then
-                        capture_deeplink_cell "$deep_link" "$settle" "$locale" "$final_path" && cell_rc=0 || cell_rc=$?
+                        capture_deeplink_cell "$deep_link" "$settle" "$locale" "$appearance" "$scene_name" "$final_path" "${sel_ready_selectors[$idx]}" && cell_rc=0 || cell_rc=$?
                       else
                         capture_flow_cell "$flow_rel" "$scene_name" "$locale" "$appearance" "$final_path" && cell_rc=0 || cell_rc=$?
                       fi
@@ -1021,6 +1143,7 @@ runs:
                   end=$(date +%s)
                   duration=$((end - start))
                   if [ "$status" != 'passed' ]; then
+                    echo "::error::capture cell failed (status '$status') for scene '$scene_name' (locale=$locale, appearance=$appearance) after $attempts attempt(s); see the failing command's output above. No screenshot was written to '$final_path'."
                     overall_status=1
                   fi
                   summary_rows+=("| $locale | $appearance | $scene_name | ${duration}s | $status | $attempts |")
