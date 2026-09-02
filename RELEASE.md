@@ -185,8 +185,8 @@ evaluated, so the fleet run fails at "Prepare all required actions" with
 consumer job that never reaches the guarded step, and even for a consumer
 that doesn't use the new feature at all. `actionlint`, `zizmor`, and
 `dry-lint-local-refs` all pass on this, because none of them resolve a
-`uses:` ref against GitHub; only an actual fleet run surfaces it. This bit
-both #103 and #105/#107 (2026-08-31).
+`uses:` ref against GitHub; only an actual fleet run surfaces it. This
+affected both #103 and #105/#107 (2026-08-31).
 
 Workaround, used successfully on both:
 
