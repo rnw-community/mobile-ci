@@ -1790,7 +1790,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@fade644dae19865cbf3200a40747d2f6718372e3 # feat/capture-ios-launch-settle fleet-validation pin
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
