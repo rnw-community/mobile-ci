@@ -170,3 +170,47 @@ the release PR.
 The floating major tag (`v1`) is a separate, deliberately mutable pointer
 used only by *consumers* who choose to float — it is force-moved in step 5
 above and is never what the self-references in this repo point at.
+
+### Validating a not-yet-tagged self-reference on the fleet
+
+The "tag known in advance" pattern above breaks fleet validation
+([AGENTS.md#consumer-validation-on-the-fleet](AGENTS.md#consumer-validation-on-the-fleet))
+whenever a branch's self-references include one pinned to a `vX.Y.Z` that
+does not exist as a tag yet — either because the PR itself introduces a
+brand-new self-referenced action, or because the branch was cut from `main`
+after `main` already picked up a not-yet-tagged bump. GitHub resolves every
+`uses:` in a job during job setup, *before* any step-level `if:` is
+evaluated, so the fleet run fails at "Prepare all required actions" with
+`Unable to resolve action rnw-community/mobile-ci@vX.Y.Z` — even for a
+consumer job that never reaches the guarded step, and even for a consumer
+that doesn't use the new feature at all. `actionlint`, `zizmor`, and
+`dry-lint-local-refs` all pass on this, because none of them resolve a
+`uses:` ref against GitHub; only an actual fleet run surfaces it. This
+affected both #103 and #105/#107 (2026-08-31).
+
+Workaround, used successfully on both:
+
+1. Before pushing the branch for fleet validation, push a commit that
+   temporarily repoints every not-yet-tagged self-reference on the branch to
+   the branch head's full 40-character commit SHA, with a trailing comment
+   like `# <branch-name> fleet-validation pin` in place of the `# vX.Y.Z`
+   comment (`zizmor`'s ref-pin policy accepts a full SHA, and
+   `dry-lint-local-refs`'s `sed` substitution matches SHA-pinned
+   self-references the same as tag-pinned ones, so `self-test` stays green).
+   **Check for more than one such reference** — #107 correctly re-pinned the
+   self-reference its own PR introduced but missed `load-consumer-config`,
+   which the branch had inherited from `main` still pinned at the
+   not-yet-cut `v1.11.0`.
+2. Point the consumer's scratch caller (`suuudokuuu`) at this new head SHA
+   and run fleet validation per
+   [AGENTS.md#consumer-validation-on-the-fleet](AGENTS.md#consumer-validation-on-the-fleet).
+3. Once validation passes, push a further commit restoring every
+   SHA-pinned self-reference to its original tag-form pin, byte-identical to
+   what it was before step 1, before this PR merges.
+
+Consequence for the release window: once a PR merges to `main` with
+tag-form self-references pointing at a tag that does not exist yet, every
+affected reusable workflow on `main` is uninvokable by any consumer —
+including one floating on `@v1` or `@main` — until that tag is cut. Do not
+leave `main` in that state; cut the tag (checklist steps 2–3 above) promptly
+after the last PR of a release merges.
