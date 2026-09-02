@@ -153,6 +153,14 @@ One shared scene list; per-scene filters narrow where each scene runs.
   and immediately before `simctl io screenshot`; the cell fails closed if it
   never appears. Pick an element the scene renders unconditionally: a screen
   root is a better anchor than a value that a setting can hide.
+
+  Android capture does not consume `readySelector` yet, so it is required
+  only of scenes that apply to `ios`; an `android`-only deep-link scene may
+  omit it, and a shared scene's selector is simply ignored on the Android
+  leg. The Android driver has no equivalent of the SpringBoard
+  open-confirmation sheet, but it has the same blind spot about which
+  activity is actually resumed — extending the probe there is tracked
+  separately.
 - Optional `settleSeconds` — integer 0–120, overriding the workflow-level
   `settle-seconds` for deep-link scenes.
 - Optional `platforms` — non-empty subset of `["ios","android"]`; default
