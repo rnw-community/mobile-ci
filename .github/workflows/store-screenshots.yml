@@ -106,9 +106,14 @@ on:
                 description: >-
                     JSON array of scene objects shared across all capture-manifest
                     entries, each {"name", and exactly one of "deepLink" or "flow",
-                    optional "settleSeconds", "platforms", "locales", "appearances"}.
-                    Required when capture-mode is 'direct'; fails closed if set in
-                    'flows' mode.
+                    "readySelector" (required alongside "deepLink" for any scene that
+                    applies to ios, rejected alongside "flow"), optional
+                    "settleSeconds", "platforms", "locales", "appearances"}.
+                    readySelector is a Maestro selector - a non-empty string matched
+                    as text/regex, or {"id": "<testID>"} - that must become visible
+                    before a deep-link cell is captured, proving the app rather than
+                    SpringBoard owns the screen. Required when capture-mode is
+                    'direct'; fails closed if set in 'flows' mode.
                 type: string
                 required: false
                 default: ''
@@ -1039,6 +1044,8 @@ jobs:
                             (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
                             (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
                             (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                            (has("flow") and has("readySelector")) or
+                            (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
                             (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
                             (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
                             (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
@@ -1046,12 +1053,17 @@ jobs:
                         )]
                     ' <<< "$CAPTURE_SCENES")
                     if [ "$invalid_scenes" != '[]' ]; then
-                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
+                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
                       exit 1
                     fi
                     duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
                     if [ -n "$duplicate_scene_names" ]; then
                       echo "::error::capture-scenes has duplicate scene names ($duplicate_scene_names); each name is an output path segment and must be unique."
+                      exit 1
+                    fi
+                    missing_ready_scenes=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not) and ((has("platforms") | not) or ((.platforms | index("ios")) != null))) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                    if [ -n "$missing_ready_scenes" ]; then
+                      echo "::error::deep-link capture-scenes entries that apply to ios ($missing_ready_scenes) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
                       exit 1
                     fi
                     for pair in "ios:$ios_count" "android:$android_count"; do

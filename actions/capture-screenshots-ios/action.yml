@@ -17,8 +17,12 @@ inputs:
   scenes:
     description: >-
       Optional JSON array of scene objects, each {"name", and exactly one of
-      "deepLink" or "flow", optional "settleSeconds", "platforms",
-      "locales", "appearances"}. Empty (default) keeps the legacy
+      "deepLink" or "flow", "readySelector" (required with "deepLink",
+      rejected with "flow"), optional "settleSeconds", "platforms",
+      "locales", "appearances"}. readySelector is a Maestro selector - a
+      non-empty string matched as text/regex, or {"id": "<testID>"} - that
+      must become visible before a deep-link cell is captured; it is what
+      proves the app, not SpringBoard, owns the screen. Empty (default) keeps the legacy
       flow-discovery mode below byte-for-byte; non-empty switches to
       manifest-driven direct mode, in which the '<number>.<name>.flow.yaml'
       naming convention is NOT required - the scene name comes from the
@@ -275,6 +279,8 @@ runs:
                   (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
                   (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
                   (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
+                  (has("flow") and has("readySelector")) or
+                  (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
                   (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
                   (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
                   (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
@@ -282,12 +288,17 @@ runs:
               )]
           ' <<< "$SCENES_JSON")
           if [ "$invalid" != '[]' ]; then
-            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
+            echo "::error::scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid"
             exit 1
           fi
           duplicate_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$SCENES_JSON")
           if [ -n "$duplicate_names" ]; then
             echo "::error::scenes has duplicate scene names ($duplicate_names); each name is an output path segment and must be unique."
+            exit 1
+          fi
+          missing_ready=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not)) | .name] | join(", ")' <<< "$SCENES_JSON")
+          if [ -n "$missing_ready" ]; then
+            echo "::error::deep-link scenes ($missing_ready) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
             exit 1
           fi
           selected=$(jq -c '[.[] | select(if has("platforms") then (.platforms | index("ios")) != null else true end)]' <<< "$SCENES_JSON")
@@ -904,6 +915,7 @@ runs:
             sel_deeplinks=()
             sel_flows=()
             sel_settles=()
+            sel_ready_selectors=()
             sel_locale_filters=()
             sel_appearance_filters=()
             i=0
@@ -914,6 +926,7 @@ runs:
                 sel_deeplinks+=("$(jq -r '.deepLink // ""' <<< "$scene")")
                 sel_flows+=("$(jq -r '.flow // ""' <<< "$scene")")
                 sel_settles+=("$(jq -r 'if has("settleSeconds") then .settleSeconds else -1 end' <<< "$scene")")
+                sel_ready_selectors+=("$(jq -c '.readySelector // ""' <<< "$scene")")
                 sel_locale_filters+=("$(jq -r '(.locales // []) | join(",")' <<< "$scene")")
                 sel_appearance_filters+=("$(jq -r '(.appearances // []) | join(",")' <<< "$scene")")
               fi
@@ -938,12 +951,22 @@ runs:
             # over the home screen with the target app deactivated behind it -
             # so a screencap taken while it is up is a picture of SpringBoard,
             # not of the app, and nothing in `simctl` reports which bundle is
-            # frontmost. Maestro (already this action's e2e driver) both taps
-            # the sheet away and, through assertNotVisible, makes a sheet that
-            # is still up fail the cell instead of writing a store-worthless
-            # PNG. Approving it is a persistent per-simulator choice, so after
-            # the first cell the tap is a no-op and only the assertion runs.
-            deeplink_confirm_flow=''
+            # frontmost. Maestro (already this action's e2e driver) taps the
+            # sheet away; approving it is a persistent per-simulator choice,
+            # so after the first cell that tap is a no-op.
+            #
+            # Dismissing the sheet is necessary but not sufficient: the sheet
+            # being absent is also true of a bare home screen, so
+            # assertNotVisible alone passes on a cell where the app never came
+            # forward at all and a SpringBoard PNG ships as a store
+            # screenshot. Each deep-link scene therefore names a readySelector
+            # that must become visible before the screencap, which is the only
+            # positive evidence available that the app, and the right scene
+            # inside it, owns the screen.
+            yaml_single_quote() {
+              printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+            }
+
             if [ "$HAS_DEEPLINK" = 'true' ]; then
               test -n "$DEEPLINK_CONFIRM_TITLE" || { echo "::error::deeplink-confirm-title is empty; deep-link scenes need a pattern matching the iOS open-confirmation sheet title to dismiss and assert against."; exit 1; }
               test -n "$DEEPLINK_CONFIRM_BUTTON" || { echo "::error::deeplink-confirm-button is empty; deep-link scenes need the confirm button label of the iOS open-confirmation sheet."; exit 1; }
@@ -958,11 +981,11 @@ runs:
                   fi
                   ;;
               esac
-              yaml_single_quote() {
-                printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
-              }
-              deeplink_confirm_flow="$RUNNER_TEMP/screenshots-deeplink-confirm/confirm.flow.yaml"
-              mkdir -p "$(dirname "$deeplink_confirm_flow")"
+            fi
+
+            write_deeplink_ready_flow() {
+              local ready_json="$1" timeout_ms="$2" out_file="$3"
+              mkdir -p "$(dirname "$out_file")"
               {
                 printf 'appId: %s\n' "$(yaml_single_quote "$APP_ID")"
                 printf -- '---\n'
@@ -973,25 +996,35 @@ runs:
                 printf -- '      - tapOn: %s\n' "$(yaml_single_quote "$DEEPLINK_CONFIRM_BUTTON")"
                 printf -- '      - waitForAnimationToEnd\n'
                 printf -- '- assertNotVisible: %s\n' "$(yaml_single_quote "$DEEPLINK_CONFIRM_TITLE")"
-              } > "$deeplink_confirm_flow"
-              printf 'Generated iOS open-confirmation sheet flow %s:\n' "$deeplink_confirm_flow"
-              cat "$deeplink_confirm_flow"
-            fi
+                printf -- '- extendedWaitUntil:\n'
+                if [ "$(jq -r 'type' <<< "$ready_json")" = 'object' ]; then
+                  printf '    visible:\n'
+                  printf '      id: %s\n' "$(yaml_single_quote "$(jq -r '.id' <<< "$ready_json")")"
+                else
+                  printf '    visible: %s\n' "$(yaml_single_quote "$(jq -r '.' <<< "$ready_json")")"
+                fi
+                printf '    timeout: %s\n' "$timeout_ms"
+              } > "$out_file"
+            }
 
-            assert_open_confirmation_dismissed() {
-              local scene_name="$1" locale="$2" appearance="$3"
+            assert_app_foreground_ready() {
+              local scene_name="$1" locale="$2" appearance="$3" ready_json="$4" timeout_ms="$5"
               local probe_dir="$RUNNER_TEMP/screenshots-deeplink-confirm/${locale}-${appearance}-${scene_name}"
+              local ready_flow="$probe_dir/confirm.flow.yaml"
               rm -rf "$probe_dir"
               mkdir -p "$probe_dir/cwd"
-              if (cd "$probe_dir/cwd" && maestro --device "$SIMULATOR_UDID" test --test-output-dir "$probe_dir/output" "$deeplink_confirm_flow"); then
+              write_deeplink_ready_flow "$ready_json" "$timeout_ms" "$ready_flow"
+              printf 'Generated iOS foreground-readiness flow for scene %s (locale=%s, appearance=%s):\n' "$scene_name" "$locale" "$appearance"
+              cat "$ready_flow"
+              if (cd "$probe_dir/cwd" && maestro --device "$SIMULATOR_UDID" test --test-output-dir "$probe_dir/output" "$ready_flow"); then
                 return 0
               fi
-              echo "The iOS open-confirmation sheet matching '$DEEPLINK_CONFIRM_TITLE' was still on screen for scene '$scene_name' (locale=$locale, appearance=$appearance) after the deep link settled: SpringBoard, not '$APP_ID', owned the screen, so no screenshot was taken."
+              echo "Scene '$scene_name' (locale=$locale, appearance=$appearance) was not ready to capture after the deep link settled: either the iOS open-confirmation sheet matching '$DEEPLINK_CONFIRM_TITLE' was still up, or the scene's readySelector never became visible within ${timeout_ms}ms - the app was not foreground or the scene did not render. No screenshot was taken."
               return 1
             }
 
             capture_deeplink_cell() {
-              local deep_link="$1" settle="$2" locale="$3" appearance="$4" scene_name="$5" final_path="$6"
+              local deep_link="$1" settle="$2" locale="$3" appearance="$4" scene_name="$5" final_path="$6" ready_json="$7"
               if ! xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID" -AppleLanguages "(\"$locale\")" -AppleLocale "$locale"; then
                 echo "'simctl launch' failed for '$APP_ID' (locale=$locale)."
                 return 1
@@ -1001,7 +1034,11 @@ runs:
                 return 1
               fi
               sleep "$settle"
-              assert_open_confirmation_dismissed "$scene_name" "$locale" "$appearance" || return 1
+              local ready_timeout_ms=$((settle * 1000))
+              if [ "$ready_timeout_ms" -lt 5000 ]; then
+                ready_timeout_ms=5000
+              fi
+              assert_app_foreground_ready "$scene_name" "$locale" "$appearance" "$ready_json" "$ready_timeout_ms" || return 1
               if ! xcrun simctl io "$SIMULATOR_UDID" screenshot "$final_path"; then
                 echo "'simctl io screenshot' failed for '$final_path'."
                 return 1
@@ -1090,7 +1127,7 @@ runs:
                         xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID" 2>/dev/null || true
                       fi
                       if [ -n "$deep_link" ]; then
-                        capture_deeplink_cell "$deep_link" "$settle" "$locale" "$appearance" "$scene_name" "$final_path" && cell_rc=0 || cell_rc=$?
+                        capture_deeplink_cell "$deep_link" "$settle" "$locale" "$appearance" "$scene_name" "$final_path" "${sel_ready_selectors[$idx]}" && cell_rc=0 || cell_rc=$?
                       else
                         capture_flow_cell "$flow_rel" "$scene_name" "$locale" "$appearance" "$final_path" && cell_rc=0 || cell_rc=$?
                       fi

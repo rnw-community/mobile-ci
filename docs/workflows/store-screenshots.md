@@ -125,10 +125,10 @@ One shared scene list; per-scene filters narrow where each scene runs.
 
 ```json
 [
-  {"name":"home","deepLink":"sudoku://home"},
-  {"name":"game","deepLink":"sudoku://game/continue","settleSeconds":5},
+  {"name":"home","deepLink":"sudoku://home","readySelector":{"id":"HomeScreenSelectors.Root"}},
+  {"name":"game","deepLink":"sudoku://game/continue","readySelector":{"id":"GameScreenSelectors.Root"},"settleSeconds":5},
   {"name":"win","flow":"14.win.flow.yaml"},
-  {"name":"stats","deepLink":"sudoku://stats","platforms":["ios"],"appearances":["dark"],"locales":["en"]}
+  {"name":"stats","deepLink":"sudoku://stats","readySelector":{"id":"StatsScreenSelectors.Root"},"platforms":["ios"],"appearances":["dark"],"locales":["en"]}
 ]
 ```
 
@@ -144,6 +144,15 @@ One shared scene list; per-scene filters narrow where each scene runs.
   store `takeScreenshot` output in a layout the collector does not search,
   so a downgraded `maestro-version` fails closed with the zero-screenshot
   error rather than silently capturing nothing.
+- `readySelector` — **required on every `deepLink` scene that applies to
+  `ios`, rejected on `flow` scenes** (a flow asserts its own readiness).
+  Either a non-empty string, matched by Maestro as text/regex, or an object
+  `{"id": "<testID>"}` matched by accessibility id. iOS capture asserts it
+  visible — via `extendedWaitUntil`, bounded by the cell's effective settle
+  seconds with a 5s floor — after the open-confirmation sheet is dismissed
+  and immediately before `simctl io screenshot`; the cell fails closed if it
+  never appears. Pick an element the scene renders unconditionally: a screen
+  root is a better anchor than a value that a setting can hide.
 - Optional `settleSeconds` — integer 0–120, overriding the workflow-level
   `settle-seconds` for deep-link scenes.
 - Optional `platforms` — non-empty subset of `["ios","android"]`; default
@@ -535,9 +544,9 @@ resolved to before this feature existed.
     ],
     "capture-mode": "direct",
     "capture-scenes": [
-        { "name": "home", "deepLink": "suuudokuuu://" },
-        { "name": "game", "deepLink": "suuudokuuu://game" },
-        { "name": "stats", "deepLink": "suuudokuuu://history" }
+        { "name": "home", "deepLink": "suuudokuuu://", "readySelector": { "id": "HomeScreenSelectors.Root" } },
+        { "name": "game", "deepLink": "suuudokuuu://game", "readySelector": { "id": "GameScreenSelectors.Root" } },
+        { "name": "stats", "deepLink": "suuudokuuu://history", "readySelector": { "id": "HistoryScreenSelectors.Root" } }
     ],
     "screenshots-dir": "tests/app-tests/flows/screenshots",
     "seed-command": "node tests/app-tests/scripts/ci-seed-scene.ts",
@@ -733,8 +742,8 @@ jobs:
             capture-mode: direct
             capture-scenes: >-
                 [
-                  {"name":"home","deepLink":"myapp://home"},
-                  {"name":"stats","deepLink":"myapp://stats","settleSeconds":5},
+                  {"name":"home","deepLink":"myapp://home","readySelector":{"id":"HomeScreen.Root"}},
+                  {"name":"stats","deepLink":"myapp://stats","readySelector":{"id":"StatsScreen.Root"},"settleSeconds":5},
                   {"name":"win","flow":"14.win.flow.yaml","platforms":["ios"]}
                 ]
             screenshots-dir: apps/mobile/e2e/flows/screenshots

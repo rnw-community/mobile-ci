@@ -37,14 +37,22 @@ one of
   `simctl launch <udid> <app-id> -AppleLanguages '("<locale>")' -AppleLocale <locale>`,
   sent the deep link via `simctl openurl`, allowed `settle-seconds` (or the
   scene's own `settleSeconds`) to settle, checked against the
-  [open-confirmation sheet](#ios-open-confirmation-sheet), then captured
-  with `simctl io screenshot`.
+  [open-confirmation sheet](#ios-open-confirmation-sheet) and against the
+  scene's required `readySelector`, then captured with
+  `simctl io screenshot`.
 - `flow` - a Maestro flow path relative to `screenshots-dir`, run with the
   same single-`takeScreenshot` contract as flow-discovery mode.
 
+Every deep-link scene must also carry a `readySelector` - a Maestro selector,
+either a non-empty string matched as text/regex or a `{"id": "<testID>"}`
+object - naming an element the scene always renders. It is asserted visible
+before the screencap; see
+[iOS open-confirmation sheet](#ios-open-confirmation-sheet). A deep-link
+scene without one fails manifest validation.
+
 Maestro is installed lazily in direct mode, only when at least one
 ios-applicable scene declares a `flow` **or** a `deepLink` (deep-link scenes
-need it for the open-confirmation sheet check).
+need it for the open-confirmation sheet and readiness checks).
 
 Optional per-scene `platforms`/`locales`/`appearances` filters restrict
 where a scene is captured; scenes whose `platforms` excludes `ios` are
@@ -71,13 +79,24 @@ does **not** avoid the sheet.
 So in direct mode every deep-link cell, after its settle and immediately
 before its screencap, runs a generated one-flow Maestro check that
 
-1. taps the confirm button when the sheet is on screen, and
-2. `assertNotVisible`s the sheet afterwards.
+1. taps the confirm button when the sheet is on screen,
+2. `assertNotVisible`s the sheet afterwards, and
+3. waits, with `extendedWaitUntil`, for the scene's `readySelector` to be
+   visible.
 
-A sheet that is still up fails that cell (retried once, then the step fails
-with an error naming the scene, locale and appearance) instead of writing a
+Any of those failing fails that cell (retried once, then the step fails with
+an error naming the scene, locale and appearance) instead of writing a
 screenshot of it. Approving the sheet is a persistent per-simulator choice,
-so after the first cell the tap is a no-op and only the assertion runs.
+so after the first cell the tap is a no-op and only the assertions run.
+
+Step 3 is not redundant with step 2. The sheet being absent is equally true
+of a bare home screen, so up to v1.11.0 — when the check stopped at
+`assertNotVisible` — a cell whose app never came forward at all passed and
+shipped a SpringBoard screenshot as a store asset. `readySelector` is the
+only positive evidence available that the app, and the right scene within
+it, owns the screen; it is therefore required on every deep-link scene
+rather than optional. Its wait is bounded by the cell's effective settle
+seconds with a 5-second floor.
 
 The sheet is localised to the **simulator's own** language — which this
 action never changes (the `locale` axis writes app-scoped preferences only),
@@ -226,7 +245,7 @@ platform:
 | -------------------------- | -------- | ------------- | -------------- |
 | `app-path`                  | yes      | —             | Path to a packaged `.app` directory to install. |
 | `app-id`                    | yes      | —             | Bundle identifier passed to Maestro as `APP_ID`. |
-| `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. |
+| `scenes`                    | no       | `''`          | JSON array of scene objects switching the action into [direct mode](#direct-mode-scene-manifest); empty keeps flow-discovery mode byte-for-byte. Every `deepLink` scene requires a `readySelector`. |
 | `seed-command`              | no       | `''`          | Consumer-owned per-cell seed hook, direct mode only (fails closed if set while `scenes` is empty). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`            | no       | `3`           | Seconds (integer 0–120) between a deep-link launch and its screenshot in direct mode; a scene's `settleSeconds` overrides it. |
 | `deeplink-confirm-title`    | no       | `Open in .*\?` | Maestro text pattern matching the title of the iOS open-confirmation sheet, direct mode only. Tapped away and then asserted gone before every deep-link screencap; see [iOS open-confirmation sheet](#ios-open-confirmation-sheet). The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. |
