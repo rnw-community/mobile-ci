@@ -638,7 +638,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@93356e236270cf7434c05f554210ba53edc1ccd9 # main RC v1.12.0 fleet-validation pin
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
@@ -1790,7 +1790,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@fade644dae19865cbf3200a40747d2f6718372e3 # feat/capture-ios-launch-settle fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@93356e236270cf7434c05f554210ba53edc1ccd9 # main RC v1.12.0 fleet-validation pin
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
