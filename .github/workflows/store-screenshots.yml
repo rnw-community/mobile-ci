@@ -1766,7 +1766,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1.11.0 # v1.11.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@a998ac3e93fc40333c04084c20b0260d1c79443c # fix/capture-ios-deeplink-foreground fleet-validation pin
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
