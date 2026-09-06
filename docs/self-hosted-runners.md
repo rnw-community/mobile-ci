@@ -152,8 +152,10 @@ instead of as a flaky assertion.
 the overrides across a reboot; older runtimes accept them and silently come
 back stock. The actions reuse a `simslim` already on `PATH` when its
 `simslim version` matches the pinned `simslim-version` exactly, and otherwise
-download the `macos-arm64` release asset into `$HOME/.simslim-pinned/<version>`
-after checking its SHA-256 against the `simslim-sha256` input. MobAI-App/simslim
+download the `macos-arm64` release tarball into `$HOME/.simslim-pinned`,
+check its SHA-256 against the `simslim-sha256` input, and extract the binary
+into a job-private directory; the cached tarball is re-hashed on every later
+job, so a tampered file on disk is refused rather than reused. MobAI-App/simslim
 publishes no checksum file, so that digest is maintained in this repo next to
 the default `simslim-version` and must be bumped with it; an empty
 `simslim-sha256` refuses to download at all. Preinstalling via Homebrew as

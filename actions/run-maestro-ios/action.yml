@@ -161,9 +161,8 @@ inputs:
       simulator-slim-profile or simulator-requires is set. A `simslim`
       already on PATH is reused when its `simslim version` output matches
       exactly; otherwise the matching `simslim-v<version>-macos-arm64.tar.gz`
-      release asset is downloaded from MobAI-App/simslim and extracted to
-      $HOME/.simslim-pinned/<version> after its SHA-256 is checked against
-      simslim-sha256. Preinstall simslim on the host
+      release asset is downloaded into $HOME/.simslim-pinned, checked against
+      simslim-sha256, and extracted into a job-private directory. Preinstall simslim on the host
       (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
     default: '0.8.0'
@@ -173,10 +172,11 @@ inputs:
       release asset, maintained in this repo alongside simslim-version
       because MobAI-App/simslim publishes no checksum file. A download is
       verified against it before extraction, and a cached copy under
-      $HOME/.simslim-pinned is reused only when its recorded digest matches.
-      Empty refuses to download at all, so only a preinstalled `simslim` on
-      PATH with the exact version can satisfy the job. Bump it together
-      with simslim-version.
+      $HOME/.simslim-pinned is re-hashed against it on every job before the
+      binary is extracted into a job-private directory, so no previously
+      extracted executable is ever reused. Empty refuses to download at all,
+      so only a preinstalled `simslim` on PATH with the exact version can
+      satisfy the job. Bump it together with simslim-version.
     required: false
     default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
   simulator-slim-profile:
@@ -317,21 +317,25 @@ runs:
             exit 1
           fi
 
+          sha256_of() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              shasum -a 256 "$1" | awk '{print $1}'
+            fi
+          }
+
+          asset_name="simslim-v${SIMSLIM_VERSION}-macos-arm64.tar.gz"
           pinned_root="$HOME/.simslim-pinned"
-          pinned_dir="$pinned_root/$SIMSLIM_VERSION"
-          pinned_bin="$pinned_dir/simslim"
-          pinned_digest_marker="$pinned_dir/.sha256"
+          pinned_tarball="$pinned_root/$asset_name"
           lock_dir="$pinned_root/.lock-$SIMSLIM_VERSION"
           mkdir -p "$pinned_root"
 
-          version_matches() {
-            [ -x "$pinned_bin" ] \
-              && [ -f "$pinned_digest_marker" ] \
-              && [ "$(tr -d '[:space:]' < "$pinned_digest_marker")" = "$SIMSLIM_SHA256" ] \
-              && [ "$("$pinned_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]
+          cached_tarball_verified() {
+            [ -f "$pinned_tarball" ] && [ "$(sha256_of "$pinned_tarball")" = "$SIMSLIM_SHA256" ]
           }
 
-          if ! version_matches; then
+          if ! cached_tarball_verified; then
             lock_acquired=''
             lock_deadline=$((SECONDS + 300))
             while :; do
@@ -339,11 +343,11 @@ runs:
                 lock_acquired=1
                 break
               fi
-              if version_matches; then
+              if cached_tarball_verified; then
                 break
               fi
               if [ "$SECONDS" -ge "$lock_deadline" ]; then
-                echo "::error::Timed out waiting for the simslim install lock '$lock_dir'; a concurrent install on this host may be stuck."
+                echo "::error::Timed out waiting for the simslim download lock '$lock_dir'; a concurrent download on this host may be stuck."
                 exit 1
               fi
               sleep 2
@@ -356,47 +360,47 @@ runs:
               }
               trap cleanup EXIT
 
-              if ! version_matches; then
-                download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/simslim-v${SIMSLIM_VERSION}-macos-arm64.tar.gz"
-                scratch_dir="$(mktemp -d)"
-                tarball_path="$scratch_dir/simslim.tar.gz"
+              if ! cached_tarball_verified; then
+                download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/${asset_name}"
+                scratch_dir="$(mktemp -d "$pinned_root/.download-XXXXXX")"
+                tarball_path="$scratch_dir/$asset_name"
                 http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")"
                 curl_exit=$?
                 if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
-                  echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz asset exists at https://github.com/MobAI-App/simslim/releases."
+                  echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a $asset_name asset exists at https://github.com/MobAI-App/simslim/releases."
                   exit 1
                 fi
-                if command -v sha256sum >/dev/null 2>&1; then
-                  actual_sha="$(sha256sum "$tarball_path" | awk '{print $1}')"
-                else
-                  actual_sha="$(shasum -a 256 "$tarball_path" | awk '{print $1}')"
-                fi
+                actual_sha="$(sha256_of "$tarball_path")"
                 if [ "$actual_sha" != "$SIMSLIM_SHA256" ]; then
-                  echo "::error::SHA-256 mismatch for simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to extract. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
+                  echo "::error::SHA-256 mismatch for $asset_name: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to install. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
                   exit 1
                 fi
-                echo "Verified simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz against simslim-sha256 $SIMSLIM_SHA256."
-                rm -rf "$pinned_dir"
-                mkdir -p "$scratch_dir/extract"
-                tar -xzf "$tarball_path" -C "$scratch_dir/extract"
-                if [ ! -f "$scratch_dir/extract/simslim" ]; then
-                  echo "::error::simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz did not contain a top-level 'simslim' binary; refusing to install."
-                  exit 1
-                fi
-                mkdir -p "$pinned_dir"
-                mv "$scratch_dir/extract/simslim" "$pinned_bin"
-                chmod +x "$pinned_bin"
-                printf '%s\n' "$SIMSLIM_SHA256" > "$pinned_digest_marker"
-                if ! version_matches; then
-                  echo "::error::Installed simslim at '$pinned_bin' reports '$("$pinned_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
-                  exit 1
-                fi
+                mv -f "$tarball_path" "$pinned_tarball"
+                echo "Downloaded and verified $asset_name against simslim-sha256 $SIMSLIM_SHA256."
               fi
+              trap - EXIT
+              cleanup
             fi
           fi
 
-          echo "$pinned_dir" >> "$GITHUB_PATH"
-          echo "Installed simslim $SIMSLIM_VERSION at $pinned_bin"
+          job_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/simslim-${SIMSLIM_VERSION}-XXXXXX")"
+          if ! cached_tarball_verified; then
+            echo "::error::Cached $pinned_tarball no longer matches simslim-sha256 $SIMSLIM_SHA256; refusing to extract from it. Delete it and re-run."
+            exit 1
+          fi
+          tar -xzf "$pinned_tarball" -C "$job_dir"
+          job_bin="$job_dir/simslim"
+          if [ ! -f "$job_bin" ]; then
+            echo "::error::$asset_name did not contain a top-level 'simslim' binary; refusing to install."
+            exit 1
+          fi
+          chmod +x "$job_bin"
+          if [ "$("$job_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$expected_version_line" ]; then
+            echo "::error::Extracted simslim at '$job_bin' reports '$("$job_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
+            exit 1
+          fi
+          echo "$job_dir" >> "$GITHUB_PATH"
+          echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
 
     - name: Verify simulator slim profile and required features
       if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''

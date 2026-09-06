@@ -256,8 +256,9 @@ on:
             simslim-sha256:
                 description: >-
                     SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
-                    asset, verified before extraction and on cache reuse (upstream
-                    publishes no checksum file). Empty refuses to download; only a
+                    asset (upstream publishes no checksum file). The cached tarball is
+                    re-hashed against it on every job before the binary is extracted
+                    into a job-private directory. Empty refuses to download; only a
                     preinstalled `simslim` of the exact version then satisfies the job.
                     Bump together with simslim-version.
                 type: string
