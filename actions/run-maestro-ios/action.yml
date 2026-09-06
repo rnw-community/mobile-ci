@@ -199,7 +199,10 @@ inputs:
       the missing delta, reboots the simulator) and verifies again; a second
       mismatch still fails. Defaults to 'false' so drift surfaces as a
       provisioning defect instead of being silently paid for on every shard.
-      Honors SIMSLIM_BOOT_TIMEOUT / SIMSLIM_SPAWN_TIMEOUT from the job env.
+      `simslim on` itself reads SIMSLIM_BOOT_TIMEOUT / SIMSLIM_SPAWN_TIMEOUT
+      from the job env for its own boot-and-reconfigure deadlines; the
+      action's follow-up `simctl bootstatus` check after the repair reboot
+      uses the same fixed 300-second bound as the initial boot.
     required: false
     default: 'false'
   simulator-requires:
@@ -338,13 +341,28 @@ runs:
           if ! cached_tarball_verified; then
             lock_acquired=''
             lock_deadline=$((SECONDS + 300))
+            lock_is_stale() {
+              lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+              if [ -n "$lock_pid" ]; then
+                if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
+                return 0
+              else
+                [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+              fi
+            }
             while :; do
               if mkdir "$lock_dir" 2>/dev/null; then
+                echo "$$" > "$lock_dir/pid"
                 lock_acquired=1
                 break
               fi
               if cached_tarball_verified; then
                 break
+              fi
+              if lock_is_stale; then
+                echo "::warning::Removing stale simslim download lock '$lock_dir' left behind by a terminated job."
+                rm -rf "$lock_dir"
+                continue
               fi
               if [ "$SECONDS" -ge "$lock_deadline" ]; then
                 echo "::error::Timed out waiting for the simslim download lock '$lock_dir'; a concurrent download on this host may be stuck."
@@ -356,7 +374,7 @@ runs:
             if [ -n "$lock_acquired" ]; then
               cleanup() {
                 [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
-                rmdir "$lock_dir" 2>/dev/null || true
+                rm -rf "$lock_dir"
               }
               trap cleanup EXIT
 
@@ -364,8 +382,8 @@ runs:
                 download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/${asset_name}"
                 scratch_dir="$(mktemp -d "$pinned_root/.download-XXXXXX")"
                 tarball_path="$scratch_dir/$asset_name"
-                http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")"
-                curl_exit=$?
+                curl_exit=0
+                http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")" || curl_exit=$?
                 if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
                   echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a $asset_name asset exists at https://github.com/MobAI-App/simslim/releases."
                   exit 1

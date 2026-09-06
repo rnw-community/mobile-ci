@@ -266,8 +266,11 @@ when the simulator it booted is not in the state the consumer committed to.
   `simslim on --profile` (idempotent, applies only the missing delta, reboots
   the simulator, then waits for `bootstatus` again) followed by a second
   `verify`. It is off by default so a drifted host is noticed instead of
-  being repaired on every capture job; raise `SIMSLIM_BOOT_TIMEOUT` /
-  `SIMSLIM_SPAWN_TIMEOUT` in the job `env:` on slow hosts.
+  being repaired on every capture job. `simslim on` itself reads
+  `SIMSLIM_BOOT_TIMEOUT` / `SIMSLIM_SPAWN_TIMEOUT` from the job `env:` for
+  its own boot-and-reconfigure deadlines on slow hosts; the action's
+  follow-up `simctl bootstatus` check after the repair reboot uses the same
+  fixed 300-second bound as the initial boot.
 - **`simulator-requires`** is independent of the profile: `simslim doctor
   --requires push,universal-links,...` checks that the daemons behind each
   named feature are still enabled and fails closed otherwise. Declare every
