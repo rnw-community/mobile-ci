@@ -788,7 +788,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@6efe0d6de8cc6c99cd80abcf9b30e8cd0d20a54e # feat/simslim-simulator-verify fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@b027cba527e11f0109500496882f4d8467393d26 # feat/simslim-simulator-verify fleet-validation pin
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
