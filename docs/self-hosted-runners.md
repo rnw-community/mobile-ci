@@ -93,6 +93,78 @@ favor of its own pinned copy — no `brew uninstall`/`brew upgrade` is
 required, and a host is free to keep whatever Homebrew-managed `maestro` it
 already has.
 
+### Slim simulators with simslim
+
+A stock simulator sits at roughly 4 GB of `phys_footprint` once booted, and
+that figure - not CPU - is what caps how many `run-maestro-ios` shards or
+`capture-screenshots-ios` jobs a macOS host can run at once before it starts
+swapping. [simslim](https://github.com/MobAI-App/simslim) (MIT, Go, macOS
+only) disables ~170 launchd daemons a CI simulator never needs by writing
+persistent `launchctl disable` overrides into that one simulator's launchd
+database, cutting a booted simulator to roughly a quarter of the memory. The
+host itself is never touched, and `simslim off` restores stock.
+
+Slimming belongs in host provisioning, not in the job. The overrides persist
+across reboots, so pay for `simslim on` once per device and let the actions'
+`simulator-slim-profile` input only *verify* on every run:
+
+```bash
+brew install mobai-app/tap/simslim
+
+# One committed profile per purpose, e.g. <app-repo>/e2e/simslim.ci.json:
+#   { "name": "ci", "except": ["store", "web"], "keep": [] }
+for udid in $(xcrun simctl list -j devices available \
+        | jq -r '.devices[][] | select(.name == "iPhone 17 Pro") | .udid'); do
+    simslim on "$udid" --profile /path/to/simslim.ci.json --boot-timeout 15m
+    simslim verify "$udid" --profile /path/to/simslim.ci.json
+    simslim measure "$udid"
+done
+```
+
+Then, in the caller:
+
+```yaml
+with:
+    simulator-device: iPhone 17 Pro
+    simulator-slim-profile: e2e/simslim.ci.json
+    simulator-requires: push,universal-links
+```
+
+**What resets a simulator to stock.** `xcrun simctl erase`, delete-and-recreate,
+"Erase All Content and Settings", and every device created from a newly
+installed runtime come up stock with no error anywhere - the simulator just
+runs heavy again, and a pool that was sized for slim simulators starts
+swapping. `simslim verify` in the job catches exactly this and fails the shard
+naming the drift; re-run the loop above on that host. Set
+`simulator-slim-repair: 'true'` only if you would rather have the shard repair
+itself with an in-job `simslim on` (one extra reboot) than fail.
+
+**What slimming breaks, and `simulator-requires`.** Spotlight (`search`),
+push notifications (`apsd` in `store`), StoreKit testing (`storekitd`),
+universal links (`swcd` in `web`), and the Contacts/Photos/Calendar pickers
+stop working when their category is disabled. Keep a whole category with the
+profile's `except` array or one daemon with `keep`, and declare the features
+the flows depend on in `simulator-requires` (`simslim doctor --list` prints the
+IDs) so a profile edit that drops one fails the job before the first flow
+instead of as a flaky assertion.
+
+**Runtime floor and the pinned binary.** Only iOS 18.5 and newer runtimes keep
+the overrides across a reboot; older runtimes accept them and silently come
+back stock. The actions reuse a `simslim` already on `PATH` when its
+`simslim version` matches the pinned `simslim-version` exactly, and otherwise
+download the `macos-arm64` release asset into `$HOME/.simslim-pinned/<version>`
+- with a `::warning::`, because MobAI-App/simslim publishes no checksum file.
+Preinstalling via Homebrew as above keeps the job off the network and the
+supply chain in the host's hands. Intel hosts must preinstall (`go install
+github.com/mobai-app/simslim/cmd/simslim@v<version>`); no x86_64 release
+asset exists and the install step fails closed on `uname -m != arm64`.
+
+**Optional disk hygiene.** `simslim disk-plan <udid>` reports reclaimable
+per-device caches, logs, and temporary files read-only; `simslim disk-clean
+--categories caches,logs,temporary --confirm <udid>` deletes them. Neither is
+run by any action; schedule it alongside runtime cleanup if simulator disk
+growth is a problem on a pool.
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,

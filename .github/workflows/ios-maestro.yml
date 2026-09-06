@@ -202,6 +202,47 @@ on:
                 type: string
                 required: false
                 default: ''
+            simslim-version:
+                description: >-
+                    Pinned simslim CLI version, consulted only when
+                    simulator-slim-profile or simulator-requires is set. A matching
+                    `simslim` already on PATH is reused; otherwise the macos-arm64
+                    release asset is downloaded from MobAI-App/simslim (no published
+                    checksum, TLS only - preinstall on the host to avoid it).
+                type: string
+                required: false
+                default: '0.8.0'
+            simulator-slim-profile:
+                description: >-
+                    Repository-relative path to a committed simslim JSON profile. When
+                    set, every booted simulator is checked with `simslim verify
+                    --profile` before the app is installed and any drift fails the
+                    shard - an erased, recreated, or new-runtime device comes up stock
+                    and quietly heavy. Apply the profile on the host at provisioning
+                    time (`simslim on <udid> --profile <path>`, see
+                    docs/self-hosted-runners.md). Empty (default) skips the check.
+                type: string
+                required: false
+                default: ''
+            simulator-slim-repair:
+                description: >-
+                    'true' re-applies the profile in-job with `simslim on` (reboots the
+                    simulator) when simulator-slim-profile reports drift, then verifies
+                    again. Defaults to 'false' so drift surfaces as a provisioning
+                    defect instead of being paid for on every shard.
+                type: string
+                required: false
+                default: 'false'
+            simulator-requires:
+                description: >-
+                    Comma-separated simslim feature IDs the flows depend on (e.g.
+                    'push,universal-links'; `simslim doctor --list`). When set,
+                    `simslim doctor --requires` runs against the booted simulator and
+                    fails the shard if slimming disabled a daemon behind any of them.
+                    Empty (default) skips the check.
+                type: string
+                required: false
+                default: ''
             node-version:
                 type: string
                 required: false
@@ -758,6 +799,10 @@ jobs:
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   simulator-device: ${{ inputs.simulator-device }}
+                  simslim-version: ${{ inputs.simslim-version }}
+                  simulator-slim-profile: ${{ inputs.simulator-slim-profile }}
+                  simulator-slim-repair: ${{ inputs.simulator-slim-repair }}
+                  simulator-requires: ${{ inputs.simulator-requires }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
 
