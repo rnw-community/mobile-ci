@@ -155,6 +155,66 @@ inputs:
       host in the pool.
     required: false
     default: ''
+  simslim-version:
+    description: >-
+      Pinned simslim CLI version (plain X.Y.Z), consulted only when
+      simulator-slim-profile or simulator-requires is set. A `simslim`
+      already on PATH is reused when its `simslim version` output matches
+      exactly; otherwise the matching `simslim-v<version>-macos-arm64.tar.gz`
+      release asset is downloaded into $HOME/.simslim-pinned, checked against
+      simslim-sha256, and extracted into a job-private directory. Preinstall simslim on the host
+      (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
+    required: false
+    default: '0.8.0'
+  simslim-sha256:
+    description: >-
+      SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
+      release asset, maintained in this repo alongside simslim-version
+      because MobAI-App/simslim publishes no checksum file. A download is
+      verified against it before extraction, and a cached copy under
+      $HOME/.simslim-pinned is re-hashed against it on every job before the
+      binary is extracted into a job-private directory, so no previously
+      extracted executable is ever reused. Empty refuses to download at all,
+      so only a preinstalled `simslim` on PATH with the exact version can
+      satisfy the job. Bump it together with simslim-version.
+    required: false
+    default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
+  simulator-slim-profile:
+    description: >-
+      Repository-relative path to a committed simslim JSON profile
+      (`{"name": "ci", "except": [...], "keep": [...]}`). When set, the
+      booted simulator's launchd disable overrides are checked against the
+      profile with `simslim verify --profile` before the app is installed,
+      and any drift fails the step. A simulator only stays slim per device:
+      an erased, recreated, or new-runtime device comes up stock and quietly
+      heavy, which is exactly what this catches. Apply the profile on the
+      host at provisioning time with `simslim on <udid> --profile <path>`;
+      see docs/self-hosted-runners.md. Leave empty (default) to skip.
+    required: false
+    default: ''
+  simulator-slim-repair:
+    description: >-
+      When 'true' and simulator-slim-profile reports drift, re-applies the
+      profile in-job with `simslim on --profile` (idempotent, applies only
+      the missing delta, reboots the simulator) and verifies again; a second
+      mismatch still fails. Defaults to 'false' so drift surfaces as a
+      provisioning defect instead of being silently paid for on every shard.
+      `simslim on` itself reads SIMSLIM_BOOT_TIMEOUT / SIMSLIM_SPAWN_TIMEOUT
+      from the job env for its own boot-and-reconfigure deadlines; the
+      action's follow-up `simctl bootstatus` check after the repair reboot
+      uses the same fixed 300-second bound as the initial boot.
+    required: false
+    default: 'false'
+  simulator-requires:
+    description: >-
+      Comma-separated simslim feature IDs the flows depend on, e.g.
+      'push,universal-links,storekit' (`simslim doctor --list` prints them
+      all). When set, `simslim doctor --requires` runs against the booted
+      simulator after the profile check and fails the step if slimming has
+      disabled a daemon behind any listed feature. Usable without a profile
+      to guard against a mis-slimmed host. Leave empty (default) to skip.
+    required: false
+    default: ''
   artifacts-dir:
     description: Directory Maestro debug output and final-state capture is written to.
     required: true
@@ -227,6 +287,195 @@ runs:
             exit 1
           fi
           echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
+
+    - name: Install simslim
+      if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''
+      shell: bash
+      env:
+        SIMSLIM_VERSION: ${{ inputs.simslim-version }}
+        SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
+      run: |
+          set -euo pipefail
+          if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+            exit 1
+          fi
+          if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
+            exit 1
+          fi
+          expected_version_line="simslim $SIMSLIM_VERSION"
+          existing_bin="$(command -v simslim || true)"
+          if [ -n "$existing_bin" ] && [ "$("$existing_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]; then
+            echo "Using existing simslim $SIMSLIM_VERSION already on PATH: $existing_bin"
+            exit 0
+          fi
+          if [ -z "$SIMSLIM_SHA256" ]; then
+            echo "::error::No simslim $SIMSLIM_VERSION on PATH and simslim-sha256 is empty, so the release asset cannot be integrity-checked; refusing to download. Preinstall simslim $SIMSLIM_VERSION on the host or set simslim-sha256 to the asset's digest."
+            exit 1
+          fi
+          host_arch="$(uname -m)"
+          if [ "$host_arch" != "arm64" ]; then
+            echo "::error::MobAI-App/simslim only publishes macos-arm64 release binaries and this host reports '$host_arch'; preinstall simslim $SIMSLIM_VERSION on PATH (e.g. 'go install github.com/mobai-app/simslim/cmd/simslim@v$SIMSLIM_VERSION') instead."
+            exit 1
+          fi
+
+          sha256_of() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              shasum -a 256 "$1" | awk '{print $1}'
+            fi
+          }
+
+          asset_name="simslim-v${SIMSLIM_VERSION}-macos-arm64.tar.gz"
+          pinned_root="$HOME/.simslim-pinned"
+          pinned_tarball="$pinned_root/$asset_name"
+          lock_dir="$pinned_root/.lock-$SIMSLIM_VERSION"
+          mkdir -p "$pinned_root"
+
+          cached_tarball_verified() {
+            [ -f "$pinned_tarball" ] && [ "$(sha256_of "$pinned_tarball")" = "$SIMSLIM_SHA256" ]
+          }
+
+          if ! cached_tarball_verified; then
+            lock_acquired=''
+            lock_deadline=$((SECONDS + 300))
+            lock_is_stale() {
+              lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+              if [ -n "$lock_pid" ]; then
+                if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
+                return 0
+              else
+                [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+              fi
+            }
+            while :; do
+              if mkdir "$lock_dir" 2>/dev/null; then
+                echo "$$" > "$lock_dir/pid"
+                lock_acquired=1
+                break
+              fi
+              if cached_tarball_verified; then
+                break
+              fi
+              if lock_is_stale; then
+                echo "::warning::Removing stale simslim download lock '$lock_dir' left behind by a terminated job."
+                rm -rf "$lock_dir"
+                continue
+              fi
+              if [ "$SECONDS" -ge "$lock_deadline" ]; then
+                echo "::error::Timed out waiting for the simslim download lock '$lock_dir'; a concurrent download on this host may be stuck."
+                exit 1
+              fi
+              sleep 2
+            done
+
+            if [ -n "$lock_acquired" ]; then
+              cleanup() {
+                [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
+                rm -rf "$lock_dir"
+              }
+              trap cleanup EXIT
+
+              if ! cached_tarball_verified; then
+                download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/${asset_name}"
+                scratch_dir="$(mktemp -d "$pinned_root/.download-XXXXXX")"
+                tarball_path="$scratch_dir/$asset_name"
+                curl_exit=0
+                http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")" || curl_exit=$?
+                if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
+                  echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a $asset_name asset exists at https://github.com/MobAI-App/simslim/releases."
+                  exit 1
+                fi
+                actual_sha="$(sha256_of "$tarball_path")"
+                if [ "$actual_sha" != "$SIMSLIM_SHA256" ]; then
+                  echo "::error::SHA-256 mismatch for $asset_name: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to install. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
+                  exit 1
+                fi
+                mv -f "$tarball_path" "$pinned_tarball"
+                echo "Downloaded and verified $asset_name against simslim-sha256 $SIMSLIM_SHA256."
+              fi
+              trap - EXIT
+              cleanup
+            fi
+          fi
+
+          job_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/simslim-${SIMSLIM_VERSION}-XXXXXX")"
+          if ! cached_tarball_verified; then
+            echo "::error::Cached $pinned_tarball no longer matches simslim-sha256 $SIMSLIM_SHA256; refusing to extract from it. Delete it and re-run."
+            exit 1
+          fi
+          tar -xzf "$pinned_tarball" -C "$job_dir"
+          job_bin="$job_dir/simslim"
+          if [ ! -f "$job_bin" ]; then
+            echo "::error::$asset_name did not contain a top-level 'simslim' binary; refusing to install."
+            exit 1
+          fi
+          chmod +x "$job_bin"
+          if [ "$("$job_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$expected_version_line" ]; then
+            echo "::error::Extracted simslim at '$job_bin' reports '$("$job_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
+            exit 1
+          fi
+          echo "$job_dir" >> "$GITHUB_PATH"
+          echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
+
+    - name: Verify simulator slim profile and required features
+      if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''
+      shell: bash
+      env:
+        SIMULATOR_SLIM_PROFILE: ${{ inputs.simulator-slim-profile }}
+        SIMULATOR_SLIM_REPAIR: ${{ inputs.simulator-slim-repair }}
+        SIMULATOR_REQUIRES: ${{ inputs.simulator-requires }}
+      run: |
+          set -euo pipefail
+          test -n "${SIMULATOR_UDID:-}" || { echo "::error::SIMULATOR_UDID is not set; the simulator boot step must run before the slim check."; exit 1; }
+          case "$SIMULATOR_SLIM_REPAIR" in
+            true|false) ;;
+            *)
+              echo "::error::simulator-slim-repair '$SIMULATOR_SLIM_REPAIR' must be 'true' or 'false'."
+              exit 1
+              ;;
+          esac
+          if [ -n "$SIMULATOR_REQUIRES" ] && ! printf '%s' "$SIMULATOR_REQUIRES" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+            echo "::error::simulator-requires '$SIMULATOR_REQUIRES' must be a comma-separated list of simslim feature IDs (letters, digits, '-', '_'); run 'simslim doctor --list' for the IDs."
+            exit 1
+          fi
+          if [ -n "$SIMULATOR_SLIM_PROFILE" ]; then
+            if [ ! -f "$SIMULATOR_SLIM_PROFILE" ]; then
+              echo "::error::simulator-slim-profile '$SIMULATOR_SLIM_PROFILE' does not exist or is not a file (paths resolve against the workspace)."
+              exit 1
+            fi
+            echo "Verifying simulator $SIMULATOR_UDID against slim profile '$SIMULATOR_SLIM_PROFILE'."
+            if simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+              :
+            elif [ "$SIMULATOR_SLIM_REPAIR" != "true" ]; then
+              echo "::error::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE' (see the drift listed above). Re-run 'simslim on $SIMULATOR_UDID --profile $SIMULATOR_SLIM_PROFILE' on the host, or set simulator-slim-repair: 'true' to repair in-job."
+              exit 1
+            else
+              echo "::warning::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE'; repairing in-job with 'simslim on' (this reboots the simulator). Fix the host's provisioning so every shard stops paying for this."
+              if ! simslim on "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+                echo "::error::'simslim on' failed to repair simulator '$SIMULATOR_UDID' against profile '$SIMULATOR_SLIM_PROFILE'."
+                exit 1
+              fi
+              command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
+              if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+                echo "::error::Simulator '$SIMULATOR_UDID' did not report booted within 300s after the slim repair reboot."
+                exit 1
+              fi
+              if ! simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+                echo "::error::Simulator '$SIMULATOR_UDID' still does not match slim profile '$SIMULATOR_SLIM_PROFILE' after 'simslim on'; the runtime may predate iOS 18.5 (the earliest with persistent overrides) or the profile may be invalid."
+                exit 1
+              fi
+            fi
+          fi
+          if [ -n "$SIMULATOR_REQUIRES" ]; then
+            echo "Checking required simulator features: $SIMULATOR_REQUIRES"
+            if ! simslim doctor "$SIMULATOR_UDID" --requires "$SIMULATOR_REQUIRES"; then
+              echo "::error::Simulator '$SIMULATOR_UDID' cannot serve required features '$SIMULATOR_REQUIRES' (see the BROKEN lines above); keep the backing daemons with the profile's 'keep'/'except' and re-run 'simslim on' on the host."
+              exit 1
+            fi
+          fi
 
     - name: Install app on simulator
       shell: bash

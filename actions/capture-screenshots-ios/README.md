@@ -240,6 +240,57 @@ platform:
 
 — and is inert unless `--config` actually reaches the CLI.
 
+## Slim simulators (simslim)
+
+A stock iOS simulator boots ~180 background daemons (Siri, Spotlight,
+photo analysis, iCloud sync, ...) and sits at roughly 4 GB of
+`phys_footprint`; how many capture jobs a macOS host can run concurrently is
+bounded by that number. [simslim](https://github.com/MobAI-App/simslim)
+writes persistent `launchctl disable` overrides into one simulator's launchd
+database so it boots with ~70 processes at roughly a quarter of the memory,
+which raises the per-host concurrency ceiling without touching the host
+itself. The overrides are per-device state that survives reboots but is
+silently lost when the device is erased, deleted and recreated, or provisioned
+from a new runtime - nothing else fails when that happens, the simulator just
+runs heavy again. This action does not slim anything itself; it fails closed
+when the simulator it booted is not in the state the consumer committed to.
+
+- **Provision on the host, verify in the job.** Apply the profile once per
+  device at provisioning time (`simslim on <udid> --profile ci.json`; see
+  [docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#slim-simulators-with-simslim))
+  and set `simulator-slim-profile` to the committed profile's path. After
+  `simctl bootstatus` and before the app install, `simslim verify --profile`
+  compares the booted simulator's overrides against the profile and fails the
+  step listing the drift.
+- **`simulator-slim-repair: 'true'`** turns that failure into an in-job
+  `simslim on --profile` (idempotent, applies only the missing delta, reboots
+  the simulator, then waits for `bootstatus` again) followed by a second
+  `verify`. It is off by default so a drifted host is noticed instead of
+  being repaired on every capture job. `simslim on` itself reads
+  `SIMSLIM_BOOT_TIMEOUT` / `SIMSLIM_SPAWN_TIMEOUT` from the job `env:` for
+  its own boot-and-reconfigure deadlines on slow hosts; the action's
+  follow-up `simctl bootstatus` check after the repair reboot uses the same
+  fixed 300-second bound as the initial boot.
+- **`simulator-requires`** is independent of the profile: `simslim doctor
+  --requires push,universal-links,...` checks that the daemons behind each
+  named feature are still enabled and fails closed otherwise. Declare every
+  feature the flows touch - push (`apsd`), StoreKit testing (`storekitd`),
+  universal links (`swcd`), and the Contacts/Photos/Calendar pickers are the
+  usual casualties of an over-aggressive profile - and keep them enabled via
+  the profile's `except`/`keep` arrays.
+- **Runtime floor.** iOS 18.5 is the earliest runtime with verified
+  persistence; older runtimes accept the overrides and come back stock after
+  a reboot, which `verify` then reports as drift on every run.
+
+```json
+{
+  "name": "ci",
+  "description": "store screenshot capture",
+  "except": ["store", "web"],
+  "keep": []
+}
+```
+
 ## Inputs
 
 | Name                     | Required | Default       | Description |
@@ -257,6 +308,11 @@ platform:
 | `scenes-name-pattern`       | no       | `*.flow.yaml` | Space-separated `find -name` globs (OR'd together) selecting scenes directly inside `screenshots-dir`. Flow-discovery mode only. |
 | `scenes-exclude-pattern`    | no       | `''`          | Optional `find ! -name` glob excluding matched scenes by basename. Flow-discovery mode only. |
 | `simulator-device`          | **yes**  | —             | Exact simulator device name to boot, matched with no fuzzy matching against `xcrun simctl list -j devices available`; fails closed when nothing matches. Identical-name ties across runtimes resolve to the newest runtime version (reported in a `::notice::` naming every candidate); two same-name simulators under the **same** runtime still fail closed — see [Device resolution](#device-resolution). Required here (unlike `run-maestro-ios`'s optional input) - deterministic capture needs a pinned device. |
+| `simslim-version` | no | `0.8.0` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
+| `simslim-sha256` | no | `c7d33ba03348...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.8.0 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
+| `simulator-slim-profile` | no | `''` | Repository-relative path to a committed simslim JSON profile. When set, the booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed. See [Slim simulators](#slim-simulators-simslim). |
+| `simulator-slim-repair` | no | `false` | `true` re-applies the profile in-job with `simslim on` (reboots the simulator) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. |
+| `simulator-requires` | no | `''` | Comma-separated simslim feature IDs the run depends on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
 | `locales`                   | yes      | —             | Space- or comma-separated locale identifiers, e.g. `en,de,fr`. |
 | `appearances`               | yes      | —             | Space- or comma-separated list of `light` and/or `dark`. |
 | `orientation`               | no       | `portrait`    | `portrait` or `landscape`; see [Orientation](#orientation). |
