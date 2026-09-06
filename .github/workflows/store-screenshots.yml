@@ -1842,7 +1842,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@c1e6176277fec9e3d913d9200e8f787b1d47b14f # feat/simslim-simulator-verify fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@d1c4134fec35762905796f079cca53fc82e5c07b # feat/simslim-simulator-verify fleet-validation pin
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
