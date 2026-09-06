@@ -162,12 +162,23 @@ inputs:
       already on PATH is reused when its `simslim version` output matches
       exactly; otherwise the matching `simslim-v<version>-macos-arm64.tar.gz`
       release asset is downloaded from MobAI-App/simslim and extracted to
-      $HOME/.simslim-pinned/<version>. The release publishes no checksum
-      file, so a download is trusted on TLS alone - preinstall simslim on
-      the host (`brew install mobai-app/tap/simslim`) to avoid the download
-      entirely.
+      $HOME/.simslim-pinned/<version> after its SHA-256 is checked against
+      simslim-sha256. Preinstall simslim on the host
+      (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
     default: '0.8.0'
+  simslim-sha256:
+    description: >-
+      SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
+      release asset, maintained in this repo alongside simslim-version
+      because MobAI-App/simslim publishes no checksum file. A download is
+      verified against it before extraction, and a cached copy under
+      $HOME/.simslim-pinned is reused only when its recorded digest matches.
+      Empty refuses to download at all, so only a preinstalled `simslim` on
+      PATH with the exact version can satisfy the job. Bump it together
+      with simslim-version.
+    required: false
+    default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
   simulator-slim-profile:
     description: >-
       Repository-relative path to a committed simslim JSON profile
@@ -279,10 +290,15 @@ runs:
       shell: bash
       env:
         SIMSLIM_VERSION: ${{ inputs.simslim-version }}
+        SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
       run: |
           set -euo pipefail
           if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+            exit 1
+          fi
+          if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+            echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
             exit 1
           fi
           expected_version_line="simslim $SIMSLIM_VERSION"
@@ -290,6 +306,10 @@ runs:
           if [ -n "$existing_bin" ] && [ "$("$existing_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]; then
             echo "Using existing simslim $SIMSLIM_VERSION already on PATH: $existing_bin"
             exit 0
+          fi
+          if [ -z "$SIMSLIM_SHA256" ]; then
+            echo "::error::No simslim $SIMSLIM_VERSION on PATH and simslim-sha256 is empty, so the release asset cannot be integrity-checked; refusing to download. Preinstall simslim $SIMSLIM_VERSION on the host or set simslim-sha256 to the asset's digest."
+            exit 1
           fi
           host_arch="$(uname -m)"
           if [ "$host_arch" != "arm64" ]; then
@@ -300,11 +320,15 @@ runs:
           pinned_root="$HOME/.simslim-pinned"
           pinned_dir="$pinned_root/$SIMSLIM_VERSION"
           pinned_bin="$pinned_dir/simslim"
+          pinned_digest_marker="$pinned_dir/.sha256"
           lock_dir="$pinned_root/.lock-$SIMSLIM_VERSION"
           mkdir -p "$pinned_root"
 
           version_matches() {
-            [ -x "$pinned_bin" ] && [ "$("$pinned_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]
+            [ -x "$pinned_bin" ] \
+              && [ -f "$pinned_digest_marker" ] \
+              && [ "$(tr -d '[:space:]' < "$pinned_digest_marker")" = "$SIMSLIM_SHA256" ] \
+              && [ "$("$pinned_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]
           }
 
           if ! version_matches; then
@@ -342,7 +366,16 @@ runs:
                   echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz asset exists at https://github.com/MobAI-App/simslim/releases."
                   exit 1
                 fi
-                echo "::warning::MobAI-App/simslim v$SIMSLIM_VERSION publishes no checksum file; proceeding on the TLS-verified download from the official GitHub release only. Preinstall simslim on the host to avoid this download."
+                if command -v sha256sum >/dev/null 2>&1; then
+                  actual_sha="$(sha256sum "$tarball_path" | awk '{print $1}')"
+                else
+                  actual_sha="$(shasum -a 256 "$tarball_path" | awk '{print $1}')"
+                fi
+                if [ "$actual_sha" != "$SIMSLIM_SHA256" ]; then
+                  echo "::error::SHA-256 mismatch for simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to extract. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
+                  exit 1
+                fi
+                echo "Verified simslim-v$SIMSLIM_VERSION-macos-arm64.tar.gz against simslim-sha256 $SIMSLIM_SHA256."
                 rm -rf "$pinned_dir"
                 mkdir -p "$scratch_dir/extract"
                 tar -xzf "$tarball_path" -C "$scratch_dir/extract"
@@ -353,6 +386,7 @@ runs:
                 mkdir -p "$pinned_dir"
                 mv "$scratch_dir/extract/simslim" "$pinned_bin"
                 chmod +x "$pinned_bin"
+                printf '%s\n' "$SIMSLIM_SHA256" > "$pinned_digest_marker"
                 if ! version_matches; then
                   echo "::error::Installed simslim at '$pinned_bin' reports '$("$pinned_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
                   exit 1

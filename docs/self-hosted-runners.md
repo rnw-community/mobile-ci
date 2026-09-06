@@ -153,9 +153,11 @@ the overrides across a reboot; older runtimes accept them and silently come
 back stock. The actions reuse a `simslim` already on `PATH` when its
 `simslim version` matches the pinned `simslim-version` exactly, and otherwise
 download the `macos-arm64` release asset into `$HOME/.simslim-pinned/<version>`
-- with a `::warning::`, because MobAI-App/simslim publishes no checksum file.
-Preinstalling via Homebrew as above keeps the job off the network and the
-supply chain in the host's hands. Intel hosts must preinstall (`go install
+after checking its SHA-256 against the `simslim-sha256` input. MobAI-App/simslim
+publishes no checksum file, so that digest is maintained in this repo next to
+the default `simslim-version` and must be bumped with it; an empty
+`simslim-sha256` refuses to download at all. Preinstalling via Homebrew as
+above keeps the job off the network and the supply chain in the host's hands. Intel hosts must preinstall (`go install
 github.com/mobai-app/simslim/cmd/simslim@v<version>`); no x86_64 release
 asset exists and the install step fails closed on `uname -m != arm64`.
 

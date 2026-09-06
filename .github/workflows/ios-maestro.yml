@@ -207,11 +207,21 @@ on:
                     Pinned simslim CLI version, consulted only when
                     simulator-slim-profile or simulator-requires is set. A matching
                     `simslim` already on PATH is reused; otherwise the macos-arm64
-                    release asset is downloaded from MobAI-App/simslim (no published
-                    checksum, TLS only - preinstall on the host to avoid it).
+                    release asset is downloaded from MobAI-App/simslim and checked
+                    against simslim-sha256 (preinstall on the host to avoid it).
                 type: string
                 required: false
                 default: '0.8.0'
+            simslim-sha256:
+                description: >-
+                    SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
+                    asset, verified before extraction and on cache reuse (upstream
+                    publishes no checksum file). Empty refuses to download; only a
+                    preinstalled `simslim` of the exact version then satisfies the job.
+                    Bump together with simslim-version.
+                type: string
+                required: false
+                default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
             simulator-slim-profile:
                 description: >-
                     Repository-relative path to a committed simslim JSON profile. When
@@ -800,6 +810,7 @@ jobs:
                   maestro-version: ${{ inputs.maestro-version }}
                   simulator-device: ${{ inputs.simulator-device }}
                   simslim-version: ${{ inputs.simslim-version }}
+                  simslim-sha256: ${{ inputs.simslim-sha256 }}
                   simulator-slim-profile: ${{ inputs.simulator-slim-profile }}
                   simulator-slim-repair: ${{ inputs.simulator-slim-repair }}
                   simulator-requires: ${{ inputs.simulator-requires }}
