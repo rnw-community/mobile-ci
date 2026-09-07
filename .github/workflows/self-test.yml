@@ -200,10 +200,12 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  refs="$(grep -rl 'rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions \
-                      | grep -v '^\.github/workflows/self-test\.yml$' \
-                      | xargs grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._-]+' \
-                      | sed -E 's/^.*@//' | sort -u)"
+                  refs="$(
+                      { grep -rl 'rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions || true; } \
+                      | { grep -v '^\.github/workflows/self-test\.yml$' || true; } \
+                      | { xargs -r grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._-]+' || true; } \
+                      | sed -E 's/^.*@//' | sort -u
+                  )"
                   if [ -z "$refs" ]; then
                       echo "No self-references found."
                       exit 0
