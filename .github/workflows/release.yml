@@ -1,0 +1,139 @@
+name: release
+
+on:
+    push:
+        branches: [main]
+
+permissions:
+    contents: write
+
+concurrency:
+    group: release-main
+    cancel-in-progress: false
+
+env:
+    CHECKOUT_SHA: d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+jobs:
+    auto-tag-release:
+        name: Auto-tag and release
+        runs-on: ubuntu-latest
+        outputs:
+            tag: ${{ steps.detect.outputs.tag }}
+            tagged: ${{ steps.publish.outputs.tagged }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  fetch-depth: 0
+                  persist-credentials: true
+
+            # RELEASE.md's checklist has no automation past step 1 (bumping
+            # self-references in the release PR itself): steps 2-8 - verify
+            # self-test, tag, publish the GitHub Release, float v1, and
+            # self-check consistency - are run by hand after the release PR
+            # merges. A merged "release: vX.Y.Z" PR that nobody follows up on
+            # leaves every self-reference in this repo pointed at a tag that
+            # does not exist, breaking every consumer (see #117). This job
+            # runs steps 2-8 automatically on every push to main and is a
+            # no-op unless the head commit is a release-PR merge.
+            - name: Detect release version from the head commit
+              id: detect
+              shell: bash
+              env:
+                  HEAD_SHA: ${{ github.sha }}
+              run: |
+                  set -euo pipefail
+                  message="$(git log -1 --format=%B "$HEAD_SHA")"
+                  version="$(printf '%s\n' "$message" | grep -oE '(^|[^[:alnum:]])release: v[0-9]+\.[0-9]+\.[0-9]+([^[:alnum:].]|$)' | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
+                  if [ -z "$version" ]; then
+                      echo "HEAD commit is not a release-PR merge; nothing to tag."
+                      {
+                          echo "tag="
+                      } >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  echo "Detected release version: ${version}"
+                  {
+                      echo "tag=${version}"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Skip if the tag already exists (idempotent)
+              if: steps.detect.outputs.tag != ''
+              id: existing
+              shell: bash
+              env:
+                  TAG: ${{ steps.detect.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+                      echo "Tag ${TAG} already exists; nothing to do."
+                      {
+                          echo "exists=true"
+                      } >> "$GITHUB_OUTPUT"
+                  else
+                      {
+                          echo "exists=false"
+                      } >> "$GITHUB_OUTPUT"
+                  fi
+
+            # RELEASE.md step 7's self-consistency check, run before tagging
+            # rather than after: refuse to cut a tag whose self-references
+            # are not fully bumped to it, which is exactly the gap #115
+            # merged into main.
+            - name: Verify self-reference consistency before tagging
+              if: steps.detect.outputs.tag != '' && steps.existing.outputs.exists == 'false'
+              shell: bash
+              env:
+                  TAG: ${{ steps.detect.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  tag_re=$(printf '%s' "$TAG" | sed 's/[.[\*^$]/\\&/g')
+                  mismatch=0
+                  while IFS= read -r file; do
+                      if grep -n 'rnw-community/mobile-ci/actions/' "$file" \
+                          | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag_re}( # ${tag_re})?\$"; then
+                          echo "::error file=${file}::Self-reference not pinned to ${TAG}"
+                          mismatch=1
+                      fi
+                  done < <(grep -rl 'rnw-community/mobile-ci/actions/' --include='*.yml' .github/workflows actions \
+                      | grep -v '^\.github/workflows/self-test\.yml$')
+                  if [ "$mismatch" -ne 0 ]; then
+                      echo "::error::Self-references are not fully bumped to ${TAG}; refusing to cut a broken release. See RELEASE.md step 1."
+                      exit 1
+                  fi
+
+            - name: Tag and publish the GitHub Release
+              if: steps.detect.outputs.tag != '' && steps.existing.outputs.exists == 'false'
+              id: publish
+              shell: bash
+              env:
+                  TAG: ${{ steps.detect.outputs.tag }}
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+              run: |
+                  set -euo pipefail
+                  git config user.name 'github-actions[bot]'
+                  git config user.email 'github-actions[bot]@users.noreply.github.com'
+                  git tag -a "${TAG}" -m "${TAG}"
+                  git push origin "${TAG}"
+                  gh release create "${TAG}" --generate-notes --title "${TAG}"
+                  git tag -f v1 "${TAG}"
+                  git push -f origin v1
+                  {
+                      echo "tagged=true"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Verify v1 and the exact tag peel to the same commit
+              if: steps.detect.outputs.tag != '' && steps.existing.outputs.exists == 'false'
+              shell: bash
+              env:
+                  TAG: ${{ steps.detect.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  exact="$(git rev-parse "${TAG}^{commit}")"
+                  floating="$(git rev-parse "v1^{commit}")"
+                  if [ "$exact" != "$floating" ]; then
+                      echo "::error::${TAG} (${exact}) and v1 (${floating}) do not point at the same commit."
+                      exit 1
+                  fi
+                  echo "${TAG} and v1 both point at ${exact}."

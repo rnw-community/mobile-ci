@@ -177,6 +177,77 @@ jobs:
                   fi
                   cd "$scratch" && git init -q && actionlint -color
 
+    self-reference-resolution:
+        name: Self-references resolve to a real tag
+        if: github.event_name == 'push'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            # Only runs on push to main, never on pull_request: RELEASE.md's
+            # "tag known in advance" pattern requires a release PR to bump
+            # self-references to a tag that does not exist yet, so checking
+            # resolution on the PR itself would fail every legitimate release
+            # PR. On main it is unconditional - main must never carry a
+            # self-reference to a non-existent tag or a raw commit SHA (see
+            # #117: both happened here, undetected for 5 days). release.yml
+            # runs concurrently on the same push and may still be creating
+            # the tag, so the resolution check is retried with a bounded
+            # backoff before failing.
+            - name: Every self-reference is tag-form and resolves
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  refs="$(grep -rl 'rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions \
+                      | grep -v '^\.github/workflows/self-test\.yml$' \
+                      | xargs grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._-]+' \
+                      | sed -E 's/^.*@//' | sort -u)"
+                  if [ -z "$refs" ]; then
+                      echo "No self-references found."
+                      exit 0
+                  fi
+
+                  non_tag_form=0
+                  while IFS= read -r ref; do
+                      if ! printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                          echo "::error::Self-reference '@${ref}' on main is not in vX.Y.Z tag form (commit-SHA and branch self-references must be restored to a tag before merge; see RELEASE.md's fleet-validation workaround step 3)."
+                          non_tag_form=1
+                      fi
+                  done <<< "$refs"
+                  if [ "$non_tag_form" -ne 0 ]; then
+                      exit 1
+                  fi
+
+                  attempts=12
+                  delay_seconds=10
+                  unresolved="$refs"
+                  attempt=1
+                  while [ "$attempt" -le "$attempts" ]; do
+                      still_unresolved=""
+                      while IFS= read -r ref; do
+                          [ -n "$ref" ] || continue
+                          if ! git ls-remote --tags origin "refs/tags/${ref}" | grep -q .; then
+                              still_unresolved="${still_unresolved}${ref}$(printf '\n')"
+                          fi
+                      done <<< "$unresolved"
+                      unresolved="$(printf '%s' "$still_unresolved" | sed '/^$/d')"
+                      if [ -z "$unresolved" ]; then
+                          echo "All self-references resolve to an existing tag."
+                          exit 0
+                      fi
+                      echo "Attempt ${attempt}/${attempts}: still unresolved: $(printf '%s' "$unresolved" | tr '\n' ' ')"
+                      attempt=$((attempt + 1))
+                      [ "$attempt" -le "$attempts" ] && sleep "$delay_seconds"
+                  done
+
+                  while IFS= read -r ref; do
+                      [ -n "$ref" ] || continue
+                      echo "::error::Self-reference '@${ref}' does not resolve to any tag in this repository after ${attempts} attempts."
+                  done <<< "$unresolved"
+                  exit 1
+
     fleet-self-test:
         name: Fleet self-test (manual only)
         if: github.event_name == 'workflow_dispatch'
