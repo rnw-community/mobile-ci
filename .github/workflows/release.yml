@@ -44,7 +44,7 @@ jobs:
               run: |
                   set -euo pipefail
                   message="$(git log -1 --format=%B "$HEAD_SHA")"
-                  version="$(printf '%s\n' "$message" | grep -oE '(^|[^[:alnum:]])release: v[0-9]+\.[0-9]+\.[0-9]+([^[:alnum:].]|$)' | head -n1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
+                  version="$(printf '%s\n' "$message" | { grep -oE '(^|[^[:alnum:]])release: v[0-9]+\.[0-9]+\.[0-9]+([^[:alnum:].]|$)' || true; } | head -n1 | { grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || true; })"
                   if [ -z "$version" ]; then
                       echo "HEAD commit is not a release-PR merge; nothing to tag."
                       {
