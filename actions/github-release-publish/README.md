@@ -14,18 +14,21 @@ names. `github.com/.../releases/download/...` responds with a redirect; the
 `expo-updates` client and `expo-dev-client` both follow it and parse the JSON
 body regardless of the intermediary's content type.
 
-The release is created as a **draft**, assets are uploaded (non-manifest assets
-are content-addressed and uploaded only when absent; `manifest.json` files are
-uploaded last with `--clobber`), and the release is then **published**. This
-supports repositories with **immutable releases**: a published immutable release
-cannot accept new assets, so when an existing tag's release is already published
-and immutable it is recreated as a draft before the upload. With `clean: true`,
-assets absent from the upload are removed while the release is still a draft,
-before it is published. `clean` defaults to `false` so two concurrent publishes
-for the same tag cannot delete each other's assets — enable it when publishes for
-a tag are serialized (the `expo-ota-preview` workflow does, via its concurrency
-group). Releases are public for public repositories; a private repository would
-require an authenticated download, so this action is intended for public repos.
+The release is created with **all assets in a single atomic `gh release create`
+call**, and an existing tag is treated as already published and skipped. That is
+required because:
+- GitHub repositories with **immutable releases** reject uploading assets to a
+  published release (`HTTP 422`), and
+- repositories that **restrict tag creation** reject re-creating a deleted tag
+  (`pre_receive ... Cannot create ref`), so each publish must use a **fresh
+  tag** — pass a unique tag (the `expo-ota-preview` workflow includes the short
+  commit SHA).
+
+Zero-byte files (e.g. `expo export`'s empty `_global.css`) are skipped, because
+GitHub Releases cannot store 0-byte assets. Releases are public for public
+repositories; a private repository would require an authenticated download, so
+this action is intended for public repos. The `clean` input is retained for
+compatibility and has no effect.
 Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**,
 not creation, so a republished preview — whose assets were just clobbered — is
 not pruned as if it were old. `expo-ota-preview` scopes the prefix to the app so
