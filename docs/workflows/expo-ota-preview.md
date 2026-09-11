@@ -40,11 +40,12 @@ sanitized `app-dir` plus an 8-hex hash of it (so two Expo apps in one repository
 never share a tag), and `slug` is `pr-<number>` for pull requests or the
 sanitized ref plus an 8-hex ref hash for other runs (so refs that sanitize
 alike — `feature/foo` and `feature-foo`, even at the same commit — stay
-separate). The release
-is kept across runs: assets are uploaded with `--clobber`, manifests upload
-last, and with `clean` enabled assets not in the new upload are removed only
-after the new manifest is live, so the stable manifest URL is never left
-pointing at a deleted release. Older preview releases are pruned to
+separate). The release is created as a draft, assets are uploaded (manifests
+last), and it is then published. On a repository with **immutable releases**
+(budgie enables this), a published release cannot accept new assets, so
+republishing an existing preview recreates it as a draft first; the manifest URL
+is briefly unavailable during that republish. With `clean` enabled, stale assets
+are removed while the release is still a draft. Older preview releases are pruned to
 `prune-keep`, scoped to this app's tag prefix (`<prefix>-<app-scope>-`) and
 ordered by last update, so republishing a preview keeps it current rather than
 letting it age out, and never deletes a release updated within the grace

@@ -3,11 +3,12 @@ description: >-
   Publishes a directory to a GitHub Release under a stable tag, flattening
   nested paths to `__`-joined asset names so every file gets an immutable
   download URL. This is the same channel the native development .ipa/.apk uses.
-  The release is updated in place: assets are uploaded with `--clobber` and
-  manifest files last, and with clean enabled assets absent from the new upload
-  are removed only after the manifest switch. Releases sharing a tag prefix are
-  pruned to keep the release list small. Fails closed on a missing source
-  directory or a flattened-name collision.
+  The release is created as a draft, assets are uploaded (manifests last), and
+  it is then published, so repositories with immutable releases are supported: a
+  published immutable release cannot accept new assets, so it is recreated as a
+  draft. Releases sharing a tag prefix are pruned to keep the release list
+  small. Fails closed on a missing source directory or a flattened-name
+  collision.
 inputs:
   source-dir:
     description: Directory whose files are uploaded as release assets.
@@ -176,15 +177,29 @@ runs:
         }
         base_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}"
         if [ "$DRY_RUN" != 'true' ]; then
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          exists=false
+          is_draft=false
+          immutable=false
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            exists=true
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            immutable="$(gh api "repos/${REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.immutable // false' 2>/dev/null || echo false)"
+          fi
+          if [ "$exists" = 'true' ] && [ "$is_draft" != 'true' ] && [ "$immutable" = 'true' ]; then
+            echo "::notice::Release '$RELEASE_TAG' is immutable; recreating it as a draft to replace its assets."
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+            exists=false
+          fi
+          if [ "$exists" = 'false' ]; then
             title="${RELEASE_TITLE:-$RELEASE_TAG}"
-            if ! gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"; then
+            if ! gh release create "$RELEASE_TAG" --draft --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"; then
               if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-                echo "::error::Failed to create release '$RELEASE_TAG' and it does not exist."
+                echo "::error::Failed to create draft release '$RELEASE_TAG' and it does not exist."
                 exit 1
               fi
               echo "::warning::Release '$RELEASE_TAG' was created concurrently; continuing."
             fi
+            is_draft=true
           fi
           existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
           upload_assets
@@ -197,6 +212,9 @@ runs:
                 gh release delete-asset "$RELEASE_TAG" "$existing" --yes
               fi
             done <<< "$existing_assets"
+          fi
+          if [ "$is_draft" = 'true' ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
           fi
           if [ -n "$PRUNE_PREFIX" ]; then
             releases_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100")"
