@@ -1,0 +1,122 @@
+name: github-release-publish
+description: >-
+  Publishes a directory to a GitHub Release under a stable tag, flattening
+  nested paths to `__`-joined asset names so every file gets an immutable
+  download URL. This is the same channel the native development .ipa/.apk uses.
+  The release is recreated on every run so only the current preview's assets
+  exist, and releases sharing a tag prefix are pruned to keep the release list
+  small. Fails closed on a missing source directory or a flattened-name
+  collision.
+inputs:
+  source-dir:
+    description: Directory whose files are uploaded as release assets.
+    required: true
+  tag:
+    description: Release tag to publish under, e.g. ota-pr-42.
+    required: true
+  token:
+    description: Token with contents:write on the repository.
+    required: true
+  title:
+    description: Release title; defaults to the tag.
+    required: false
+    default: ''
+  prune-prefix:
+    description: Delete older releases whose tag starts with this prefix, keeping the most recent prune-keep. Empty disables pruning.
+    required: false
+    default: ''
+  prune-keep:
+    description: Number of prefix-matching releases to keep, including the current one.
+    required: false
+    default: '5'
+  dry-run:
+    description: Stage and validate assets without creating, uploading, or pruning.
+    required: false
+    default: 'false'
+outputs:
+  tag:
+    description: The release tag published under.
+    value: ${{ steps.publish.outputs.tag }}
+  base-url:
+    description: URL prefix for this release's assets, https://github.com/<repo>/releases/download/<tag>.
+    value: ${{ steps.publish.outputs.base-url }}
+  uploaded:
+    description: Number of assets staged for upload.
+    value: ${{ steps.publish.outputs.uploaded }}
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        SOURCE_DIR: ${{ inputs.source-dir }}
+        RELEASE_TAG: ${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        if [ ! -d "$SOURCE_DIR" ]; then
+          echo "::error::source-dir '$SOURCE_DIR' does not exist or is not a directory."
+          exit 1
+        fi
+        case "$RELEASE_TAG" in
+          ''|*/*)
+            echo "::error::tag must be a non-empty release tag without '/'; got '$RELEASE_TAG'."
+            exit 1
+            ;;
+        esac
+
+    - name: Stage and publish release
+      id: publish
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        GH_REPO: ${{ github.repository }}
+        SOURCE_DIR: ${{ inputs.source-dir }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_TITLE: ${{ inputs.title }}
+        PRUNE_PREFIX: ${{ inputs.prune-prefix }}
+        PRUNE_KEEP: ${{ inputs.prune-keep }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        source_dir="$(cd "$SOURCE_DIR" && pwd)"
+        staging="$RUNNER_TEMP/github-release-publish-$$"
+        rm -rf "$staging"
+        mkdir -p "$staging"
+        uploaded=0
+        while IFS= read -r -d '' file; do
+          relative="${file#"$source_dir"/}"
+          asset_name="${relative//\//__}"
+          if [ -e "$staging/$asset_name" ]; then
+            echo "::error::Flattened asset name collision at '$asset_name' (from '$relative'). Rename the source files."
+            exit 1
+          fi
+          cp "$file" "$staging/$asset_name"
+          uploaded=$((uploaded + 1))
+        done < <(find "$source_dir" -type f -print0)
+        if [ "$uploaded" -eq 0 ]; then
+          echo "::error::source-dir '$SOURCE_DIR' contains no files."
+          exit 1
+        fi
+        base_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}"
+        if [ "$DRY_RUN" != 'true' ]; then
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+          fi
+          title="${RELEASE_TITLE:-$RELEASE_TAG}"
+          gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"
+          find "$staging" -type f -print0 | xargs -0 gh release upload "$RELEASE_TAG" --clobber
+          if [ -n "$PRUNE_PREFIX" ]; then
+            while IFS= read -r stale; do
+              [ -n "$stale" ] || continue
+              [ "$stale" = "$RELEASE_TAG" ] && continue
+              gh release delete "$stale" --yes --cleanup-tag
+            done < <(gh release list --limit 100 --json tagName,createdAt --jq "[.[] | select(.tagName | startswith(\"${PRUNE_PREFIX}\"))] | sort_by(.createdAt) | reverse | .[${PRUNE_KEEP}:] | .[].tagName")
+          fi
+        fi
+        {
+          echo "tag=$RELEASE_TAG"
+          echo "base-url=$base_url"
+          echo "uploaded=$uploaded"
+        } >> "$GITHUB_OUTPUT"
+        echo "Staged $uploaded asset(s) for '$RELEASE_TAG' at $base_url (dry-run=$DRY_RUN)"

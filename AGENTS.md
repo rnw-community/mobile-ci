@@ -139,6 +139,13 @@ carte tier — see [README.md](README.md#pick-your-tier)):
 - `seed-native-cache.yml` — proactively warms the native-app cache.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.
+- `expo-ota-preview.yml` — EAS-free, tokenless OTA JS preview for development
+  builds: exports the app, generates Expo Updates v1 manifests
+  (`expo-ota-manifest`), publishes to a GitHub Release
+  (`github-release-publish`, the same channel the native dev `.ipa`/`.apk` uses),
+  and posts deep links + QR on the PR. Needs no `EXPO_TOKEN`; only
+  `contents: write` (and `pull-requests: write` for the comment) on the calling
+  job, and a public repository.
 - `store-screenshots.yml` — fleet-native store screenshot capture matrix
   (iOS simulators + Android Redroid containers) driven either by a Maestro
   flow-per-scene convention (`capture-mode: flows`, iOS-only) or by a
