@@ -86,7 +86,7 @@ on:
             install-command:
                 description: >-
                     Dependency install command. Leave empty to derive it from the resolved package
-                    manager (pnpm install --frozen-lockfile, yarn install --immutable, npm ci).
+                    manager (pnpm install --frozen-lockfile, yarn install --frozen-lockfile, npm ci).
                 type: string
                 required: false
                 default: ''
@@ -130,7 +130,7 @@ on:
                 value: ${{ jobs.preview.outputs.release-tag }}
 
 concurrency:
-    group: expo-ota-preview-${{ github.workflow }}-${{ github.ref }}
+    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ github.event.pull_request.number || github.ref }}
     cancel-in-progress: true
 
 permissions:
@@ -276,7 +276,7 @@ jobs:
                   else
                     case "$PACKAGE_MANAGER" in
                       pnpm) install_command='pnpm install --frozen-lockfile' ;;
-                      yarn) install_command='yarn install --immutable' ;;
+                      yarn) install_command='yarn install --frozen-lockfile' ;;
                       npm) install_command='npm ci' ;;
                       *)
                         echo "::error::Cannot derive an install command for package manager '$PACKAGE_MANAGER'."

@@ -153,7 +153,13 @@ runs:
         if [ "$DRY_RUN" != 'true' ]; then
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             title="${RELEASE_TITLE:-$RELEASE_TAG}"
-            gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"
+            if ! gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"; then
+              if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+                echo "::error::Failed to create release '$RELEASE_TAG' and it does not exist."
+                exit 1
+              fi
+              echo "::warning::Release '$RELEASE_TAG' was created concurrently; continuing."
+            fi
           fi
           upload_names "$assets_file"
           upload_names "$manifests_file"
