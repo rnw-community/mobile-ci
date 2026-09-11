@@ -37,20 +37,19 @@ regardless of the intermediate content type.
 
 Tags are `<release-tag-prefix>-<app-scope>-<slug>`, where `app-scope` is the
 sanitized `app-dir` plus an 8-hex hash of it (so two Expo apps in one repository
-never share a tag), and `slug` is `pr-<number>` for pull requests or the
-sanitized ref plus an 8-hex ref hash for other runs (so refs that sanitize
-alike — `feature/foo` and `feature-foo`, even at the same commit — stay
-separate). The release is created as a draft, assets are uploaded (manifests
-last), and it is then published. On a repository with **immutable releases**
-(budgie enables this), a published release cannot accept new assets, so
-republishing an existing preview recreates it as a draft first; the manifest URL
-is briefly unavailable during that republish. With `clean` enabled, stale assets
-are removed while the release is still a draft. Older preview releases are pruned to
-`prune-keep`, scoped to this app's tag prefix (`<prefix>-<app-scope>-`) and
-ordered by last update, so republishing a preview keeps it current rather than
-letting it age out, and never deletes a release updated within the grace
-window. Assets are hash-named and immutable; only the manifest is
-replaced.
+never share a tag), and `slug` is `pr-<number>-<sha8>` for pull requests or the
+sanitized ref plus an 8-hex ref hash plus the short commit SHA for other runs.
+The short commit SHA makes each publish a **fresh tag**, which is required
+because repositories with **immutable releases** (budgie enables this) reject
+uploads to a published release, and repositories that **restrict tag creation**
+reject re-creating a deleted tag. Each publish creates the release with all
+assets in one atomic `gh release create`; an existing tag is treated as already
+published and skipped. Zero-byte files (for example `expo export`'s empty
+`_global.css`) are skipped, because GitHub Releases cannot store 0-byte assets.
+Older preview releases are pruned to `prune-keep`, scoped to this app's tag
+prefix (`<prefix>-<app-scope>-`) and ordered by last update, and never deletes a
+release updated within the grace window. Assets are hash-named and immutable;
+the manifest referenced by the comment is the one published with that commit.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
 forces `url-style: release`, because the release host stores assets flat. Set

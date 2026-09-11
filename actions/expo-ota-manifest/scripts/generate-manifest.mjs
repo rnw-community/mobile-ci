@@ -159,7 +159,16 @@ for (const platform of platforms) {
 
     const assets = [];
     for (const asset of platformMetadata.assets ?? []) {
+        const assetAbsolute = path.join(distDir, asset.path);
+        if (existsSync(assetAbsolute) && (await stat(assetAbsolute)).size === 0) {
+            console.warn(`::warning::Skipping empty asset '${asset.path}'; GitHub Releases cannot store 0-byte assets.`);
+            continue;
+        }
         assets.push(await assetMetadata(asset.path, asset.ext, false));
+    }
+    const launchAbsolute = path.join(distDir, platformMetadata.bundle);
+    if (existsSync(launchAbsolute) && (await stat(launchAbsolute)).size === 0) {
+        fail(`Launch asset '${platformMetadata.bundle}' is empty.`);
     }
     const launchAsset = await assetMetadata(platformMetadata.bundle, null, true);
 

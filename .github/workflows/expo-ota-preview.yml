@@ -355,13 +355,14 @@ jobs:
                   app_slug="$(printf '%s' "$APP_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
                   app_hash="$(printf '%s' "$APP_DIR" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
                   app_scope="${app_slug:-app}-${app_hash}"
+                  short_sha="$(printf '%s' "${GITHUB_SHA:-unknown}" | cut -c1-8)"
                   if [ -n "${PR_NUMBER:-}" ]; then
-                    slug="pr-${PR_NUMBER}"
+                    slug="pr-${PR_NUMBER}-${short_sha}"
                   else
                     raw="${HEAD_REF:-$REF_NAME}"
                     ref_hash="$(printf '%s' "${raw:-${GITHUB_REF:-unknown}}" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
                     slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
-                    slug="${slug:-ref}-${ref_hash}"
+                    slug="${slug:-ref}-${ref_hash}-${short_sha}"
                   fi
                   case "$RELEASE_TAG_PREFIX" in
                     ''|*[!A-Za-z0-9._-]*)
@@ -466,6 +467,13 @@ jobs:
                     echo "No platform deep links were produced; skipping comment."
                     exit 0
                   fi
+                  qr_dir="$RUNNER_TEMP/ota-qr"
+                  mkdir -p "$qr_dir"
+                  if (cd "$qr_dir" && npm init -y >/dev/null 2>&1 && npm install --silent qrcode@1.5.4 >/dev/null 2>&1); then
+                    qr_ready=true
+                  else
+                    qr_ready=false
+                  fi
                   body="$RUNNER_TEMP/ota-preview-comment.md"
                   {
                     echo "## OTA preview (no EAS Update)"
@@ -477,6 +485,10 @@ jobs:
                     platform="${entry%%:*}"
                     link="${entry#*:}"
                     [ -n "$link" ] || continue
+                    qr_code=''
+                    if [ "$qr_ready" = 'true' ]; then
+                      qr_code="$(cd "$qr_dir" && { node -e 'const QR=require("qrcode");QR.toString(process.argv[1],{type:"terminal",small:true},(e,s)=>{if(e){process.exit(1);}process.stdout.write(s);});' "$link" 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g'; })" || qr_code=''
+                    fi
                     {
                       echo "### ${platform}"
                       echo
@@ -485,7 +497,11 @@ jobs:
                       echo "<details><summary>QR code</summary>"
                       echo
                       echo '```'
-                      npx --yes qrcode-terminal@0.12.0 "$link" 2>/dev/null || echo "(QR generation unavailable; scan the link above)"
+                      if [ -n "$qr_code" ]; then
+                        printf '%s\n' "$qr_code"
+                      else
+                        echo "(QR generation unavailable; scan the link above)"
+                      fi
                       echo '```'
                       echo
                       echo "</details>"
