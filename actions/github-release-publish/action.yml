@@ -137,8 +137,8 @@ runs:
           relative="${file#"$source_dir"/}"
           asset_name="${relative//\//__}"
           case "$asset_name" in
-            *$'\n'*|*$'\r'*)
-              echo "::error::source file '$relative' contains a newline or carriage return, which cannot be a release asset name."
+            *$'\n'*|*$'\r'*|*'#'*)
+              echo "::error::source file '$relative' contains a newline, carriage return, or '#', which cannot be a release asset name."
               exit 1
               ;;
           esac
