@@ -355,7 +355,7 @@ jobs:
                     raw="${HEAD_REF:-$REF_NAME}"
                     slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
                     short_sha="$(printf '%s' "${GITHUB_SHA:-}" | cut -c1-7)"
-                    slug="${slug:-sha-${short_sha}}"
+                    slug="${slug:-branch}-${short_sha}"
                   fi
                   tag="${RELEASE_TAG_PREFIX}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
