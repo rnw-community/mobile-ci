@@ -313,6 +313,7 @@ jobs:
               env:
                   PUBLIC_BASE_URL: ${{ inputs.public-base-url }}
                   RELEASE_TAG_PREFIX: ${{ inputs.release-tag-prefix }}
+                  PUBLISH: ${{ inputs.publish }}
                   REPOSITORY: ${{ github.repository }}
                   HEAD_REF: ${{ github.head_ref }}
                   REF_NAME: ${{ github.ref_name }}
@@ -329,6 +330,10 @@ jobs:
                   tag="${RELEASE_TAG_PREFIX}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
                   if [ -z "$base_url" ]; then
+                    if [ "$PUBLISH" != 'true' ]; then
+                      echo "::error::public-base-url is required when publish is false; the derived GitHub Releases URL would not be created."
+                      exit 1
+                    fi
                     base_url="https://github.com/${REPOSITORY}/releases/download/${tag}"
                   fi
                   {
@@ -343,7 +348,7 @@ jobs:
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
-                  url-style: ${{ inputs.url-style }}
+                  url-style: ${{ inputs.public-base-url == '' && 'release' || inputs.url-style }}
                   platforms: ${{ inputs.platforms }}
                   runtime-version-ios: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.fingerprint-ios.outputs.hash }}
                   runtime-version-android: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.fingerprint-android.outputs.hash }}
@@ -364,7 +369,8 @@ jobs:
                     platform="${entry%%:*}"
                     manifest_url="${entry#*:}"
                     [ -n "$manifest_url" ] || continue
-                    link="${SCHEME}://expo-development-client/?url=$(jq -rn --arg value "$manifest_url" '$value|@uri')"
+                    encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$manifest_url")"
+                    link="${SCHEME}://expo-development-client/?url=${encoded}"
                     printf 'link-%s=%s\n' "$platform" "$link" >> "$GITHUB_OUTPUT"
                   done
 

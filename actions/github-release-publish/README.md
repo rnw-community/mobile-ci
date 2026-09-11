@@ -14,11 +14,12 @@ names. `github.com/.../releases/download/...` responds with a redirect; the
 `expo-updates` client and `expo-dev-client` both follow it and parse the JSON
 body regardless of the intermediary's content type.
 
-The release is deleted and recreated on every run, so only the current
-preview's assets exist and its manifest URL stays stable while assets are
-hash-named and never change. Releases are public for public repositories; a
-private repository would require an authenticated download, so this action is
-intended for public repos.
+The release is kept across runs and its assets are uploaded with `--clobber`;
+assets that are not part of the new upload are removed only **after** the new
+assets (including the manifest) are live, so the stable manifest URL is never
+left pointing at a deleted release. Releases are public for public
+repositories; a private repository would require an authenticated download, so
+this action is intended for public repos.
 
 ## Inputs
 
