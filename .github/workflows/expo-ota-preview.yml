@@ -373,6 +373,7 @@ jobs:
                   {
                     printf 'slug=%s\n' "$slug"
                     printf 'tag=%s\n' "$tag"
+                    printf 'app-scope=%s\n' "$app_scope"
                     printf 'base-url=%s\n' "$base_url"
                   } >> "$GITHUB_OUTPUT"
 
@@ -415,7 +416,7 @@ jobs:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
                   title: ${{ steps.paths.outputs.tag }}
-                  prune-prefix: ${{ inputs.release-tag-prefix }}-
+                  prune-prefix: ${{ inputs.release-tag-prefix }}-${{ steps.paths.outputs.app-scope }}-
                   prune-keep: ${{ inputs.prune-keep }}
                   clean: 'true'
                   token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}

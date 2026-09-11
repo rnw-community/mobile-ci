@@ -174,7 +174,7 @@ runs:
             done <<< "$existing_assets"
           fi
           if [ -n "$PRUNE_PREFIX" ]; then
-            releases_json="$(gh release list --limit 100 --json tagName,createdAt)"
+            releases_json="$(gh api "repos/${REPOSITORY}/releases?per_page=100")"
             stale_releases="$(printf '%s' "$releases_json" | node -e '
               const fs = require("fs");
               const prefix = process.argv[1];
@@ -182,10 +182,10 @@ runs:
               const releases = JSON.parse(fs.readFileSync(0, "utf8"));
               process.stdout.write(
                 releases
-                  .filter(release => release.tagName.startsWith(prefix))
-                  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                  .filter(release => release.tag_name.startsWith(prefix))
+                  .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
                   .slice(keep)
-                  .map(release => release.tagName)
+                  .map(release => release.tag_name)
                   .join("\n"),
               );
             ' "$PRUNE_PREFIX" "$PRUNE_KEEP")"

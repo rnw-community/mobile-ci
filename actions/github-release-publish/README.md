@@ -24,6 +24,10 @@ tag cannot delete each other's assets — enable it when publishes for a tag are
 serialized (the `expo-ota-preview` workflow does, via its concurrency group).
 Releases are public for public repositories; a private repository would require
 an authenticated download, so this action is intended for public repos.
+Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**,
+not creation, so a republished preview — whose assets were just clobbered — is
+not pruned as if it were old. `expo-ota-preview` scopes the prefix to the app so
+one app never prunes another's previews.
 
 ## Inputs
 

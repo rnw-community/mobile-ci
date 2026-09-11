@@ -45,7 +45,9 @@ is kept across runs: assets are uploaded with `--clobber`, manifests upload
 last, and with `clean` enabled assets not in the new upload are removed only
 after the new manifest is live, so the stable manifest URL is never left
 pointing at a deleted release. Older preview releases are pruned to
-`prune-keep`. Assets are hash-named and immutable; only the manifest is
+`prune-keep`, scoped to this app's tag prefix (`<prefix>-<app-scope>-`) and
+ordered by last update, so republishing a preview keeps it current rather than
+letting it age out. Assets are hash-named and immutable; only the manifest is
 replaced.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
