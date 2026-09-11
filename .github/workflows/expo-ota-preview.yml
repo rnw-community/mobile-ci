@@ -45,7 +45,9 @@ on:
                 required: false
                 default: release
             release-tag-prefix:
-                description: Release tag prefix; the tag is `<prefix>-<slug>` (e.g. ota-pr-42).
+                description: >-
+                    Release tag prefix; the tag is `<prefix>-<app-scope>-<slug>` (e.g.
+                    ota-packages-app-f5d9f195-pr-42), where app-scope is derived from app-dir.
                 type: string
                 required: false
                 default: ota
@@ -369,6 +371,16 @@ jobs:
                   esac
                   tag="${RELEASE_TAG_PREFIX}-${app_scope}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
+                  if [ -n "$base_url" ]; then
+                    case "$base_url" in
+                      https://*) ;;
+                      http://localhost*|http://127.0.0.1*) ;;
+                      *)
+                        echo "::error::public-base-url must be an https:// URL (http:// is allowed only for localhost)."
+                        exit 1
+                        ;;
+                    esac
+                  fi
                   if [ -z "$base_url" ]; then
                     if [ "$PUBLISH" != 'true' ]; then
                       echo "::error::public-base-url is required when publish is false; the derived GitHub Releases URL would not be created."

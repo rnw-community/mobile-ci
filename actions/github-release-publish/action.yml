@@ -199,14 +199,15 @@ runs:
             done <<< "$existing_assets"
           fi
           if [ -n "$PRUNE_PREFIX" ]; then
-            releases_json="$(gh api "repos/${REPOSITORY}/releases?per_page=100")"
+            releases_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100")"
+            grace_cutoff_epoch="$(node -e 'process.stdout.write(String(Math.floor((Date.now() - Number(process.argv[1]) * 60000) / 1000)))' "$PRUNE_GRACE_MINUTES")"
             stale_releases="$(printf '%s' "$releases_json" | node -e '
               const fs = require("fs");
               const prefix = process.argv[1];
               const keep = Number.parseInt(process.argv[2], 10);
               const graceMinutes = Number.parseInt(process.argv[3], 10);
               const cutoff = Date.now() - graceMinutes * 60000;
-              const releases = JSON.parse(fs.readFileSync(0, "utf8"));
+              const releases = JSON.parse(fs.readFileSync(0, "utf8")).flat();
               process.stdout.write(
                 releases
                   .filter(release => release.tag_name.startsWith(prefix))
@@ -220,6 +221,16 @@ runs:
             while IFS= read -r stale; do
               [ -n "$stale" ] || continue
               [ "$stale" = "$RELEASE_TAG" ] && continue
+              stale_updated="$(gh api "repos/${REPOSITORY}/releases/tags/${stale}" --jq '.updated_at' 2>/dev/null || true)"
+              if [ -z "$stale_updated" ]; then
+                echo "::warning::Could not re-read release '$stale'; skipping deletion."
+                continue
+              fi
+              stale_epoch="$(node -e 'process.stdout.write(String(Math.floor(new Date(process.argv[1]).getTime() / 1000)))' "$stale_updated")"
+              if [ "$stale_epoch" -ge "$grace_cutoff_epoch" ]; then
+                echo "Skipping '$stale': updated within the prune grace window."
+                continue
+              fi
               gh release delete "$stale" --yes --cleanup-tag
             done <<< "$stale_releases"
           fi

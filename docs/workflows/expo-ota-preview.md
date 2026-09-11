@@ -93,9 +93,9 @@ itself never publishes outside GitHub Releases.
 | `platforms`              | no       | `ios,android`                  | Platforms to export and manifest.                                                               |
 | `runtime-version-ios`    | no       | `''`                           | iOS runtime version; empty computes it with `native-fingerprint`.                               |
 | `runtime-version-android`| no       | `''`                           | Android runtime version; empty computes it with `native-fingerprint`.                           |
-| `public-base-url`        | no       | `''`                           | Asset URL prefix; empty derives the GitHub Releases download prefix for the tag. Required (fail closed) when `publish` is `false`. |
+| `public-base-url`        | no       | `''`                           | Asset URL prefix; empty derives the GitHub Releases download prefix for the tag. Must be `https://` (`http://` only for localhost). Required when `publish` is `false`. |
 | `url-style`              | no       | `release`                      | `release` flattens `/` to `__`; `path` keeps export-relative paths for a directory host. Forced to `release` when `public-base-url` is empty. |
-| `release-tag-prefix`     | no       | `ota`                          | Release tag prefix; the tag is `<prefix>-<slug>`.                                               |
+| `release-tag-prefix`     | no       | `ota`                          | Release tag prefix; the tag is `<prefix>-<app-scope>-<slug>`.                                   |
 | `prune-keep`             | no       | `5`                            | Number of preview releases to keep, including the current one.                                   |
 | `publish`                | no       | `true`                         | Upload the exported dist to a GitHub Release.                                                    |
 | `post-comment`           | no       | `true`                         | Post deep links and an ASCII QR code on the pull request.                                        |
