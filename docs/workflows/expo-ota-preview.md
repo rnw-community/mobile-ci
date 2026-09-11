@@ -76,6 +76,10 @@ itself never publishes outside GitHub Releases.
   `github.repository`, so untrusted fork code never runs on a self-hosted
   runner and the release token is never exposed to it. Run previews from
   branches in this repository.
+- **Previews for one `release-tag-prefix` + `app-dir` are serialized**
+  (concurrency with `cancel-in-progress: false`), so two runs can never race on
+  the shared release-pruning prefix. A new push queues behind the running
+  preview rather than cancelling it.
 - The release is retained across runs, so the stable manifest URL stays up while
   assets are replaced. An in-flight download of a superseded preview can still
   404 because `clean` removes assets no longer referenced; previews are

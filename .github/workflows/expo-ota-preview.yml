@@ -132,8 +132,8 @@ on:
                 value: ${{ jobs.preview.outputs.release-tag }}
 
 concurrency:
-    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: true
+    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}
+    cancel-in-progress: false
 
 permissions:
     contents: read
@@ -372,14 +372,23 @@ jobs:
                   tag="${RELEASE_TAG_PREFIX}-${app_scope}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
                   if [ -n "$base_url" ]; then
-                    case "$base_url" in
-                      https://*) ;;
-                      http://localhost*|http://127.0.0.1*) ;;
-                      *)
-                        echo "::error::public-base-url must be an https:// URL (http:// is allowed only for localhost)."
-                        exit 1
-                        ;;
-                    esac
+                    if ! node -e '
+                      const raw = process.argv[1];
+                      let parsed;
+                      try {
+                        parsed = new URL(raw);
+                      } catch {
+                        process.exit(1);
+                      }
+                      const isHttps = parsed.protocol === "https:";
+                      const isLocal =
+                        parsed.protocol === "http:" &&
+                        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+                      process.exit(isHttps || isLocal ? 0 : 1);
+                    ' "$base_url"; then
+                      echo "::error::public-base-url must be an https:// URL (http:// is allowed only for localhost or 127.0.0.1)."
+                      exit 1
+                    fi
                   fi
                   if [ -z "$base_url" ]; then
                     if [ "$PUBLISH" != 'true' ]; then
