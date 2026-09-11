@@ -33,13 +33,15 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    ```bash
    grep -rn 'rnw-community/mobile-ci/actions/' --include='*.yml' \
      .github/workflows actions \
-     | grep -v '^\.github/workflows/self-test\.yml:' \
+     | grep -v -e '^\.github/workflows/self-test\.yml:' -e '^\.github/workflows/release\.yml:' \
      | grep -v '@v1\.3\.1 # v1\.3\.1$'
    ```
 
-   `self-test.yml` is filtered out of both: it matches only because its
-   `dry-lint-local-refs` job names the self-reference pattern in a comment
-   and a `sed` script, and it carries no self-reference of its own.
+   `self-test.yml` and `release.yml` are filtered out: `self-test.yml`
+   matches only because its `dry-lint-local-refs` job names the
+   self-reference pattern in a comment and a `sed` script, and `release.yml`
+   only because its tagging job names the pattern in a `grep`; neither
+   carries a self-reference of its own.
 
    Get this merged to `main` via the normal PR/review/CI flow (see
    [Self-references](#self-references) below for why the tag can be named in
