@@ -84,9 +84,12 @@ on:
                 required: false
                 default: '22'
             install-command:
+                description: >-
+                    Dependency install command. Leave empty to derive it from the resolved package
+                    manager (pnpm install --frozen-lockfile, yarn install --immutable, npm ci).
                 type: string
                 required: false
-                default: pnpm install --frozen-lockfile
+                default: ''
             enable-corepack:
                 type: boolean
                 required: false
@@ -260,10 +263,33 @@ jobs:
               shell: bash
               run: corepack enable
 
+            - name: Resolve install command
+              id: install
+              shell: bash
+              env:
+                  INSTALL_COMMAND_INPUT: ${{ inputs.install-command }}
+                  PACKAGE_MANAGER: ${{ steps.package-manager.outputs.pm }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$INSTALL_COMMAND_INPUT" ]; then
+                    install_command="$INSTALL_COMMAND_INPUT"
+                  else
+                    case "$PACKAGE_MANAGER" in
+                      pnpm) install_command='pnpm install --frozen-lockfile' ;;
+                      yarn) install_command='yarn install --immutable' ;;
+                      npm) install_command='npm ci' ;;
+                      *)
+                        echo "::error::Cannot derive an install command for package manager '$PACKAGE_MANAGER'."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  printf 'command=%s\n' "$install_command" >> "$GITHUB_OUTPUT"
+
             - name: Install dependencies
               shell: bash
               env:
-                  INSTALL_COMMAND: ${{ inputs.install-command }}
+                  INSTALL_COMMAND: ${{ steps.install.outputs.command }}
               run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies

@@ -122,15 +122,21 @@ runs:
         while IFS= read -r -d '' file; do
           relative="${file#"$source_dir"/}"
           asset_name="${relative//\//__}"
+          case "$asset_name" in
+            *$'\n'*|*$'\r'*)
+              echo "::error::source file '$relative' contains a newline or carriage return, which cannot be a release asset name."
+              exit 1
+              ;;
+          esac
           if [ -e "$staging/$asset_name" ]; then
             echo "::error::Flattened asset name collision at '$asset_name' (from '$relative'). Rename the source files."
             exit 1
           fi
           cp "$file" "$staging/$asset_name"
           if [ "${file##*/}" = 'manifest.json' ]; then
-            printf '%s\n' "$asset_name" >> "$manifests_file"
+            printf '%s\0' "$asset_name" >> "$manifests_file"
           else
-            printf '%s\n' "$asset_name" >> "$assets_file"
+            printf '%s\0' "$asset_name" >> "$assets_file"
           fi
           uploaded=$((uploaded + 1))
         done < <(find "$source_dir" -type f -print0)
@@ -141,7 +147,7 @@ runs:
         upload_names() {
           local list_file="$1"
           [ -s "$list_file" ] || return 0
-          while IFS= read -r name; do printf '%s\0' "$staging/$name"; done < "$list_file" | xargs -0 gh release upload "$RELEASE_TAG" --clobber
+          while IFS= read -r -d '' name; do printf '%s\0' "$staging/$name"; done < "$list_file" | xargs -0 gh release upload "$RELEASE_TAG" --clobber
         }
         base_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}"
         if [ "$DRY_RUN" != 'true' ]; then
@@ -152,7 +158,7 @@ runs:
           upload_names "$assets_file"
           upload_names "$manifests_file"
           if [ "$CLEAN" = 'true' ]; then
-            current_assets="$(cat "$assets_file" "$manifests_file" | sort)"
+            current_assets="$(cat "$assets_file" "$manifests_file" | tr '\0' '\n' | sort)"
             existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
             while IFS= read -r existing; do
               [ -n "$existing" ] || continue

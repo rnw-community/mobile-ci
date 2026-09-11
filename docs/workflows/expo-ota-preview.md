@@ -45,8 +45,9 @@ replaced.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
 forces `url-style: release`, because the release host stores assets flat. Set
-`public-base-url` to a directory-preserving host (and `url-style: path`) to
-publish elsewhere.
+`public-base-url` only when an **external deployment step** uploads the export
+to that directory-preserving host (with `url-style: path`); this workflow
+itself never publishes outside GitHub Releases.
 
 ## Preconditions
 
@@ -94,7 +95,7 @@ publish elsewhere.
 | `project-id`             | no       | `''`                           | Optional EAS project id exposed as `extra.eas.projectId`.                                        |
 | `runner-labels`          | no       | `["self-hosted","linux","x64"]`| JSON array of self-hosted runner labels.                                                        |
 | `node-version`           | no       | `22`                           | Node version.                                                                                   |
-| `install-command`        | no       | `pnpm install --frozen-lockfile`| Dependency install command; must match the resolved package manager.                           |
+| `install-command`        | no       | `''`                           | Dependency install command; empty derives pnpm/yarn/npm from the resolved package manager.     |
 | `enable-corepack`        | no       | `true`                         | Run `corepack enable` when the manager is not pnpm.                                             |
 | `package-manager`        | no       | `''`                           | `pnpm`, `yarn`, `npm`, or empty to auto-detect.                                                 |
 | `build-command`          | no       | `''`                           | Optional workspace JS build command run before `expo export`.                                   |
