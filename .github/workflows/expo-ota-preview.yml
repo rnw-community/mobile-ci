@@ -361,6 +361,12 @@ jobs:
                     slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
                     slug="${slug:-ref}-${ref_hash}"
                   fi
+                  case "$RELEASE_TAG_PREFIX" in
+                    ''|*[!A-Za-z0-9._-]*)
+                      echo "::error::release-tag-prefix must be non-empty and only [A-Za-z0-9._-]; got '$RELEASE_TAG_PREFIX'."
+                      exit 1
+                      ;;
+                  esac
                   tag="${RELEASE_TAG_PREFIX}-${app_scope}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
                   if [ -z "$base_url" ]; then

@@ -38,6 +38,12 @@ inputs:
       are serialized (expo-ota-preview does, via its concurrency group).
     required: false
     default: 'false'
+  prune-grace-minutes:
+    description: >-
+      Never delete a release updated within this many minutes, so a concurrently
+      published preview is not pruned by another run sharing the prune prefix.
+    required: false
+    default: '10'
   dry-run:
     description: Stage and validate assets without creating, uploading, or pruning.
     required: false
@@ -62,6 +68,7 @@ runs:
         RELEASE_TAG: ${{ inputs.tag }}
         PRUNE_PREFIX: ${{ inputs.prune-prefix }}
         PRUNE_KEEP: ${{ inputs.prune-keep }}
+        PRUNE_GRACE_MINUTES: ${{ inputs.prune-grace-minutes }}
       run: |
         set -euo pipefail
         if [ ! -d "$SOURCE_DIR" ]; then
@@ -86,6 +93,12 @@ runs:
             exit 1
             ;;
         esac
+        case "$PRUNE_GRACE_MINUTES" in
+          ''|*[!0-9]*)
+            echo "::error::prune-grace-minutes must be a non-negative integer; got '$PRUNE_GRACE_MINUTES'."
+            exit 1
+            ;;
+        esac
         for tool in node gh; do
           if ! command -v "$tool" >/dev/null 2>&1; then
             echo "::error::$tool is required but was not found on PATH."
@@ -104,6 +117,7 @@ runs:
         RELEASE_TITLE: ${{ inputs.title }}
         PRUNE_PREFIX: ${{ inputs.prune-prefix }}
         PRUNE_KEEP: ${{ inputs.prune-keep }}
+        PRUNE_GRACE_MINUTES: ${{ inputs.prune-grace-minutes }}
         CLEAN: ${{ inputs.clean }}
         DRY_RUN: ${{ inputs.dry-run }}
         REPOSITORY: ${{ github.repository }}
@@ -144,10 +158,21 @@ runs:
           echo "::error::source-dir '$SOURCE_DIR' contains no files."
           exit 1
         fi
-        upload_names() {
-          local list_file="$1"
-          [ -s "$list_file" ] || return 0
-          while IFS= read -r -d '' name; do printf '%s\0' "$staging/$name"; done < "$list_file" | xargs -0 gh release upload "$RELEASE_TAG" --clobber
+        upload_assets() {
+          [ -s "$assets_file" ] || return 0
+          local filtered="$work/assets-to-upload.txt"
+          : > "$filtered"
+          while IFS= read -r -d '' name; do
+            if ! printf '%s\n' "$existing_assets" | grep -qxF "$name"; then
+              printf '%s\0' "$name" >> "$filtered"
+            fi
+          done < "$assets_file"
+          [ -s "$filtered" ] || return 0
+          while IFS= read -r -d '' name; do printf '%s\0' "$staging/$name"; done < "$filtered" | xargs -0 gh release upload "$RELEASE_TAG"
+        }
+        upload_manifests() {
+          [ -s "$manifests_file" ] || return 0
+          while IFS= read -r -d '' name; do printf '%s\0' "$staging/$name"; done < "$manifests_file" | xargs -0 gh release upload "$RELEASE_TAG" --clobber
         }
         base_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}"
         if [ "$DRY_RUN" != 'true' ]; then
@@ -161,11 +186,11 @@ runs:
               echo "::warning::Release '$RELEASE_TAG' was created concurrently; continuing."
             fi
           fi
-          upload_names "$assets_file"
-          upload_names "$manifests_file"
+          existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+          upload_assets
+          upload_manifests
           if [ "$CLEAN" = 'true' ]; then
             current_assets="$(cat "$assets_file" "$manifests_file" | tr '\0' '\n' | sort)"
-            existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
             while IFS= read -r existing; do
               [ -n "$existing" ] || continue
               if ! printf '%s\n' "$current_assets" | grep -qxF "$existing"; then
@@ -179,16 +204,19 @@ runs:
               const fs = require("fs");
               const prefix = process.argv[1];
               const keep = Number.parseInt(process.argv[2], 10);
+              const graceMinutes = Number.parseInt(process.argv[3], 10);
+              const cutoff = Date.now() - graceMinutes * 60000;
               const releases = JSON.parse(fs.readFileSync(0, "utf8"));
               process.stdout.write(
                 releases
                   .filter(release => release.tag_name.startsWith(prefix))
                   .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
                   .slice(keep)
+                  .filter(release => new Date(release.updated_at).getTime() < cutoff)
                   .map(release => release.tag_name)
                   .join("\n"),
               );
-            ' "$PRUNE_PREFIX" "$PRUNE_KEEP")"
+            ' "$PRUNE_PREFIX" "$PRUNE_KEEP" "$PRUNE_GRACE_MINUTES")"
             while IFS= read -r stale; do
               [ -n "$stale" ] || continue
               [ "$stale" = "$RELEASE_TAG" ] && continue
