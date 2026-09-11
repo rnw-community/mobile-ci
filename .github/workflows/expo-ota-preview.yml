@@ -130,7 +130,7 @@ on:
                 value: ${{ jobs.preview.outputs.release-tag }}
 
 concurrency:
-    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ github.event.pull_request.number || github.ref }}
+    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}-${{ github.event.pull_request.number || github.ref }}
     cancel-in-progress: true
 
 permissions:
@@ -344,20 +344,24 @@ jobs:
                   PUBLIC_BASE_URL: ${{ inputs.public-base-url }}
                   RELEASE_TAG_PREFIX: ${{ inputs.release-tag-prefix }}
                   PUBLISH: ${{ inputs.publish }}
+                  APP_DIR: ${{ inputs.app-dir }}
                   REPOSITORY: ${{ github.repository }}
                   HEAD_REF: ${{ github.head_ref }}
                   REF_NAME: ${{ github.ref_name }}
               run: |
                   set -euo pipefail
+                  app_slug="$(printf '%s' "$APP_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+                  app_hash="$(printf '%s' "$APP_DIR" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
+                  app_scope="${app_slug:-app}-${app_hash}"
                   if [ -n "${PR_NUMBER:-}" ]; then
                     slug="pr-${PR_NUMBER}"
                   else
                     raw="${HEAD_REF:-$REF_NAME}"
+                    ref_hash="$(printf '%s' "${raw:-${GITHUB_REF:-unknown}}" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
                     slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
-                    short_sha="$(printf '%s' "${GITHUB_SHA:-}" | cut -c1-7)"
-                    slug="${slug:-branch}-${short_sha}"
+                    slug="${slug:-ref}-${ref_hash}"
                   fi
-                  tag="${RELEASE_TAG_PREFIX}-${slug}"
+                  tag="${RELEASE_TAG_PREFIX}-${app_scope}-${slug}"
                   base_url="${PUBLIC_BASE_URL%/}"
                   if [ -z "$base_url" ]; then
                     if [ "$PUBLISH" != 'true' ]; then

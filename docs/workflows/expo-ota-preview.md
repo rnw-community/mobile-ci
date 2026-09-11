@@ -35,9 +35,12 @@ link points at
 `expo-dev-client` and `expo-updates` follow the redirect and parse the JSON body
 regardless of the intermediate content type.
 
-Tags are `<release-tag-prefix>-<slug>` (default `ota-pr-<number>`; for non-PR
-runs the slug is the sanitized ref plus the short commit SHA, so refs that
-sanitize alike — `feature/foo` and `feature-foo` — stay separate). The release
+Tags are `<release-tag-prefix>-<app-scope>-<slug>`, where `app-scope` is the
+sanitized `app-dir` plus an 8-hex hash of it (so two Expo apps in one repository
+never share a tag), and `slug` is `pr-<number>` for pull requests or the
+sanitized ref plus an 8-hex ref hash for other runs (so refs that sanitize
+alike — `feature/foo` and `feature-foo`, even at the same commit — stay
+separate). The release
 is kept across runs: assets are uploaded with `--clobber`, manifests upload
 last, and with `clean` enabled assets not in the new upload are removed only
 after the new manifest is live, so the stable manifest URL is never left
