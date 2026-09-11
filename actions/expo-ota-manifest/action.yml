@@ -1,0 +1,97 @@
+name: expo-ota-manifest
+description: >-
+  Generates an Expo Updates protocol v1 manifest per platform from an existing
+  `expo export` output directory, so the bundle can be served by any static
+  host (GitHub Pages, a self-hosted file server) with no EAS Update and no
+  EXPO_TOKEN. Hashes every referenced file (base64url SHA-256) and emits the
+  launch asset + assets array the `expo-updates` client expects. Fails closed
+  when metadata, a referenced file, a platform, or a runtime version is
+  missing.
+inputs:
+  dist-dir:
+    description: Directory produced by `expo export` (contains metadata.json, assets/, _expo/).
+    required: false
+    default: dist
+  public-base-url:
+    description: >-
+      URL prefix the published dist will be served from, with no trailing slash.
+      Every manifest asset URL is `${public-base-url}/<relative path>`, or the
+      flattened name when url-style is release.
+    required: true
+  url-style:
+    description: >-
+      How asset names map to URLs. `path` keeps the export-relative path
+      (`assets/<md5>`); `release` flattens it to the GitHub Release asset name
+      by replacing `/` with `__`, which is how github-release-publish uploads.
+    required: false
+    default: path
+  platforms:
+    description: Comma-separated platforms to emit manifests for; ios, android, or both.
+    required: false
+    default: ios,android
+  runtime-version-ios:
+    description: Runtime version of the iOS build the update targets (for fingerprint policy, its fingerprint).
+    required: false
+    default: ''
+  runtime-version-android:
+    description: Runtime version of the Android build the update targets (for fingerprint policy, its fingerprint).
+    required: false
+    default: ''
+  created-at:
+    description: ISO-8601 creation timestamp recorded in the manifest; defaults to metadata.json's mtime.
+    required: false
+    default: ''
+  expo-config-path:
+    description: >-
+      Path to `expo config --json` output used as `extra.expoClient`, which many
+      Expo modules read. Defaults to `${dist-dir}/expoConfig.json`.
+    required: false
+    default: ''
+  include-expo-config:
+    description: When false, omit extra.expoClient even if the config file exists.
+    required: false
+    default: 'true'
+  project-id:
+    description: Optional EAS project id to expose as extra.eas.projectId; not required for a custom host.
+    required: false
+    default: ''
+outputs:
+  manifest-ios:
+    description: Absolute path to the generated iOS manifest, when iOS is requested.
+    value: ${{ steps.generate.outputs.manifest-ios }}
+  manifest-android:
+    description: Absolute path to the generated Android manifest, when Android is requested.
+    value: ${{ steps.generate.outputs.manifest-android }}
+  url-ios:
+    description: Public URL of the iOS manifest, when iOS is requested.
+    value: ${{ steps.generate.outputs.url-ios }}
+  url-android:
+    description: Public URL of the Android manifest, when Android is requested.
+    value: ${{ steps.generate.outputs.url-android }}
+runs:
+  using: composite
+  steps:
+    - name: Validate tooling
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v node >/dev/null 2>&1; then
+          echo "::error::node is required to generate the Expo Updates manifest but was not found on PATH."
+          exit 1
+        fi
+
+    - name: Generate Expo Updates manifests
+      id: generate
+      shell: bash
+      env:
+        DIST_DIR: ${{ inputs.dist-dir }}
+        PUBLIC_BASE_URL: ${{ inputs.public-base-url }}
+        URL_STYLE: ${{ inputs.url-style }}
+        PLATFORMS: ${{ inputs.platforms }}
+        RUNTIME_VERSION_IOS: ${{ inputs.runtime-version-ios }}
+        RUNTIME_VERSION_ANDROID: ${{ inputs.runtime-version-android }}
+        CREATED_AT: ${{ inputs.created-at }}
+        EXPO_CONFIG_PATH: ${{ inputs.expo-config-path }}
+        INCLUDE_EXPO_CONFIG: ${{ inputs.include-expo-config }}
+        PROJECT_ID: ${{ inputs.project-id }}
+      run: node "$GITHUB_ACTION_PATH/scripts/generate-manifest.mjs"

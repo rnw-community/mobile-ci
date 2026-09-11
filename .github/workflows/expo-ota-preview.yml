@@ -1,0 +1,495 @@
+name: expo-ota-preview
+
+on:
+    workflow_call:
+        inputs:
+            app-dir:
+                description: App directory containing app.json / app.config.js and the expo dependency.
+                type: string
+                required: true
+            scheme:
+                description: >-
+                    App URL scheme registered by the development build (expo.scheme), used to build the
+                    `scheme://expo-development-client/?url=...` deep links.
+                type: string
+                required: true
+            platforms:
+                description: Comma-separated platforms to export and manifest; ios, android, or both.
+                type: string
+                required: false
+                default: ios,android
+            runtime-version-ios:
+                description: >-
+                    iOS runtime version (fingerprint) the update targets. Leave empty to compute it
+                    tokenlessly with @expo/fingerprint — the same hash a fingerprint-policy dev build baked in.
+                type: string
+                required: false
+                default: ''
+            runtime-version-android:
+                description: Android runtime version (fingerprint) the update targets. Leave empty to compute it.
+                type: string
+                required: false
+                default: ''
+            public-base-url:
+                description: >-
+                    URL prefix the published dist is served from, no trailing slash. Leave empty to
+                    derive the GitHub Releases download prefix for the generated tag.
+                type: string
+                required: false
+                default: ''
+            url-style:
+                description: >-
+                    How manifest asset URLs map to storage names. `release` (default) flattens `/` to `__`
+                    for GitHub Releases; `path` keeps export-relative paths for a directory-preserving host.
+                type: string
+                required: false
+                default: release
+            release-tag-prefix:
+                description: >-
+                    Release tag prefix; the tag is `<prefix>-<app-scope>-<slug>` (e.g.
+                    ota-packages-app-f5d9f195-pr-42), where app-scope is derived from app-dir.
+                type: string
+                required: false
+                default: ota
+            prune-keep:
+                description: Number of released previews to keep, including the current one.
+                type: string
+                required: false
+                default: '5'
+            publish:
+                description: Upload the exported dist to a GitHub Release.
+                type: boolean
+                required: false
+                default: true
+            post-comment:
+                description: Post the deep links and an ASCII QR code as a pull-request comment.
+                type: boolean
+                required: false
+                default: true
+            include-expo-config:
+                description: Include extra.expoClient from `expo config --json`. Set false to omit app config.
+                type: boolean
+                required: false
+                default: true
+            project-id:
+                description: Optional EAS project id exposed as extra.eas.projectId.
+                type: string
+                required: false
+                default: ''
+            runner-labels:
+                description: JSON array of self-hosted runner labels for the preview job.
+                type: string
+                required: false
+                default: '["self-hosted","linux","x64"]'
+            node-version:
+                type: string
+                required: false
+                default: '22'
+            install-command:
+                description: >-
+                    Dependency install command. Leave empty to derive it from the resolved package
+                    manager (pnpm install --frozen-lockfile, yarn install --frozen-lockfile, npm ci).
+                type: string
+                required: false
+                default: ''
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            package-manager:
+                description: >-
+                    JS package manager. Leave empty to auto-detect from package.json (devEngines.packageManager
+                    or packageManager, needs jq) and then the single root lockfile. install-command must match
+                    the resolved manager.
+                type: string
+                required: false
+                default: ''
+            build-command:
+                description: Optional workspace JS build command run at the repository root before `expo export`.
+                type: string
+                required: false
+                default: ''
+            timeout-minutes:
+                type: number
+                required: false
+                default: 30
+        secrets:
+            RELEASE_TOKEN:
+                description: >-
+                    Token with contents:write used to create the preview release and push assets; defaults
+                    to the automatic github.token. Fork pull requests never run this job, so the token is
+                    never exposed to fork code.
+                required: false
+        outputs:
+            url-ios:
+                description: Public URL of the generated iOS manifest.
+                value: ${{ jobs.preview.outputs.url-ios }}
+            url-android:
+                description: Public URL of the generated Android manifest.
+                value: ${{ jobs.preview.outputs.url-android }}
+            release-tag:
+                description: The GitHub Release tag the preview was published to.
+                value: ${{ jobs.preview.outputs.release-tag }}
+
+concurrency:
+    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    preview:
+        name: Export, manifest, release
+        if: >-
+            github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        permissions:
+            contents: write
+            pull-requests: write
+        outputs:
+            url-ios: ${{ steps.manifest.outputs.url-ios }}
+            url-android: ${{ steps.manifest.outputs.url-android }}
+            release-tag: ${{ steps.paths.outputs.tag }}
+        env:
+            PR_NUMBER: ${{ github.event.pull_request.number }}
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: 'true'
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  case "$pm" in
+                    yarn) wanted='yarn.lock' ;;
+                    pnpm) wanted='pnpm-lock.yaml' ;;
+                    *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                  esac
+                  found=''
+                  for candidate in $wanted; do
+                    if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                  done
+                  if [ -z "$found" ]; then
+                    echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                    exit 1
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              shell: bash
+              run: corepack enable
+
+            - name: Resolve install command
+              id: install
+              shell: bash
+              env:
+                  INSTALL_COMMAND_INPUT: ${{ inputs.install-command }}
+                  PACKAGE_MANAGER: ${{ steps.package-manager.outputs.pm }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$INSTALL_COMMAND_INPUT" ]; then
+                    install_command="$INSTALL_COMMAND_INPUT"
+                  else
+                    case "$PACKAGE_MANAGER" in
+                      pnpm) install_command='pnpm install --frozen-lockfile' ;;
+                      yarn) install_command='yarn install --frozen-lockfile' ;;
+                      npm) install_command='npm ci' ;;
+                      *)
+                        echo "::error::Cannot derive an install command for package manager '$PACKAGE_MANAGER'."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  printf 'command=%s\n' "$install_command" >> "$GITHUB_OUTPUT"
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ steps.install.outputs.command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Compute iOS runtime version
+              if: contains(inputs.platforms, 'ios') && inputs.runtime-version-ios == ''
+              id: fingerprint-ios
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.13.0 # v1.13.0
+              with:
+                  platform: ios
+                  working-directory: ${{ inputs.app-dir }}
+
+            - name: Compute Android runtime version
+              if: contains(inputs.platforms, 'android') && inputs.runtime-version-android == ''
+              id: fingerprint-android
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.13.0 # v1.13.0
+              with:
+                  platform: android
+                  working-directory: ${{ inputs.app-dir }}
+
+            - name: Export JS bundle
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  PLATFORMS: ${{ inputs.platforms }}
+                  EXPO_CONFIG_FILE: ${{ runner.temp }}/expoConfig.json
+              run: |
+                  set -euo pipefail
+                  export_args=()
+                  IFS=',' read -r -a platform_array <<< "$PLATFORMS"
+                  for platform in "${platform_array[@]}"; do
+                    platform="$(printf '%s' "$platform" | tr -d '[:space:]')"
+                    [ -n "$platform" ] || continue
+                    export_args+=(--platform "$platform")
+                  done
+                  if [ "${#export_args[@]}" -eq 0 ]; then
+                    echo "::error::platforms resolved to an empty list."
+                    exit 1
+                  fi
+                  npx expo export --output-dir dist "${export_args[@]}"
+                  npx expo config --json --type public > "$EXPO_CONFIG_FILE"
+
+            - name: Compute preview tag and base URL
+              id: paths
+              shell: bash
+              env:
+                  PUBLIC_BASE_URL: ${{ inputs.public-base-url }}
+                  RELEASE_TAG_PREFIX: ${{ inputs.release-tag-prefix }}
+                  PUBLISH: ${{ inputs.publish }}
+                  APP_DIR: ${{ inputs.app-dir }}
+                  REPOSITORY: ${{ github.repository }}
+                  HEAD_REF: ${{ github.head_ref }}
+                  REF_NAME: ${{ github.ref_name }}
+              run: |
+                  set -euo pipefail
+                  app_slug="$(printf '%s' "$APP_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+                  app_hash="$(printf '%s' "$APP_DIR" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
+                  app_scope="${app_slug:-app}-${app_hash}"
+                  if [ -n "${PR_NUMBER:-}" ]; then
+                    slug="pr-${PR_NUMBER}"
+                  else
+                    raw="${HEAD_REF:-$REF_NAME}"
+                    ref_hash="$(printf '%s' "${raw:-${GITHUB_REF:-unknown}}" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
+                    slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+                    slug="${slug:-ref}-${ref_hash}"
+                  fi
+                  case "$RELEASE_TAG_PREFIX" in
+                    ''|*[!A-Za-z0-9._-]*)
+                      echo "::error::release-tag-prefix must be non-empty and only [A-Za-z0-9._-]; got '$RELEASE_TAG_PREFIX'."
+                      exit 1
+                      ;;
+                  esac
+                  tag="${RELEASE_TAG_PREFIX}-${app_scope}-${slug}"
+                  base_url="${PUBLIC_BASE_URL%/}"
+                  if [ -n "$base_url" ]; then
+                    if ! node -e '
+                      const raw = process.argv[1];
+                      let parsed;
+                      try {
+                        parsed = new URL(raw);
+                      } catch {
+                        process.exit(1);
+                      }
+                      const isHttps = parsed.protocol === "https:";
+                      const isLocal =
+                        parsed.protocol === "http:" &&
+                        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+                      const isBare =
+                        parsed.username === "" &&
+                        parsed.password === "" &&
+                        parsed.search === "" &&
+                        parsed.hash === "";
+                      process.exit((isHttps || isLocal) && isBare ? 0 : 1);
+                    ' "$base_url"; then
+                      echo "::error::public-base-url must be an https:// URL (http:// only for localhost or 127.0.0.1) with no credentials, query, or fragment."
+                      exit 1
+                    fi
+                  fi
+                  if [ -z "$base_url" ]; then
+                    if [ "$PUBLISH" != 'true' ]; then
+                      echo "::error::public-base-url is required when publish is false; the derived GitHub Releases URL would not be created."
+                      exit 1
+                    fi
+                    base_url="https://github.com/${REPOSITORY}/releases/download/${tag}"
+                  fi
+                  {
+                    printf 'slug=%s\n' "$slug"
+                    printf 'tag=%s\n' "$tag"
+                    printf 'app-scope=%s\n' "$app_scope"
+                    printf 'base-url=%s\n' "$base_url"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Generate Expo Updates manifests
+              id: manifest
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v1.13.0 # v1.13.0
+              with:
+                  dist-dir: ${{ inputs.app-dir }}/dist
+                  public-base-url: ${{ steps.paths.outputs.base-url }}
+                  url-style: ${{ inputs.public-base-url == '' && 'release' || inputs.url-style }}
+                  platforms: ${{ inputs.platforms }}
+                  runtime-version-ios: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.fingerprint-ios.outputs.hash }}
+                  runtime-version-android: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.fingerprint-android.outputs.hash }}
+                  expo-config-path: ${{ runner.temp }}/expoConfig.json
+                  include-expo-config: ${{ inputs.include-expo-config }}
+                  project-id: ${{ inputs.project-id }}
+
+            - name: Build deep links
+              id: links
+              shell: bash
+              env:
+                  SCHEME: ${{ inputs.scheme }}
+                  MANIFEST_URL_IOS: ${{ steps.manifest.outputs.url-ios }}
+                  MANIFEST_URL_ANDROID: ${{ steps.manifest.outputs.url-android }}
+              run: |
+                  set -euo pipefail
+                  for entry in "ios:$MANIFEST_URL_IOS" "android:$MANIFEST_URL_ANDROID"; do
+                    platform="${entry%%:*}"
+                    manifest_url="${entry#*:}"
+                    [ -n "$manifest_url" ] || continue
+                    encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$manifest_url")"
+                    link="${SCHEME}://expo-development-client/?url=${encoded}"
+                    printf 'link-%s=%s\n' "$platform" "$link" >> "$GITHUB_OUTPUT"
+                  done
+
+            - name: Publish to GitHub Release
+              if: inputs.publish
+              uses: rnw-community/mobile-ci/actions/github-release-publish@v1.13.0 # v1.13.0
+              with:
+                  source-dir: ${{ inputs.app-dir }}/dist
+                  tag: ${{ steps.paths.outputs.tag }}
+                  title: ${{ steps.paths.outputs.tag }}
+                  prune-prefix: ${{ inputs.release-tag-prefix }}-${{ steps.paths.outputs.app-scope }}-
+                  prune-keep: ${{ inputs.prune-keep }}
+                  clean: 'true'
+                  token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
+
+            - name: Post preview comment
+              if: inputs.post-comment && github.event_name == 'pull_request'
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  LINK_IOS: ${{ steps.links.outputs.link-ios }}
+                  LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "${LINK_IOS:-}" ] && [ -z "${LINK_ANDROID:-}" ]; then
+                    echo "No platform deep links were produced; skipping comment."
+                    exit 0
+                  fi
+                  body="$RUNNER_TEMP/ota-preview-comment.md"
+                  {
+                    echo "## OTA preview (no EAS Update)"
+                    echo
+                    echo "Open one of these links on a device with the development build installed."
+                    echo
+                  } > "$body"
+                  for entry in "iOS:$LINK_IOS" "Android:$LINK_ANDROID"; do
+                    platform="${entry%%:*}"
+                    link="${entry#*:}"
+                    [ -n "$link" ] || continue
+                    {
+                      echo "### ${platform}"
+                      echo
+                      echo '`'"${link}"'`'
+                      echo
+                      echo "<details><summary>QR code</summary>"
+                      echo
+                      echo '```'
+                      npx --yes qrcode-terminal@0.12.0 "$link" 2>/dev/null || echo "(QR generation unavailable; scan the link above)"
+                      echo '```'
+                      echo
+                      echo "</details>"
+                      echo
+                    } >> "$body"
+                  done
+                  gh pr comment "$PR_NUMBER" --body-file "$body"

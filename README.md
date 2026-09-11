@@ -58,10 +58,10 @@ full input reference, and the same doc's siblings under
   want to adopt one piece at a time (e.g. just the simulator lifecycle, or
   just the native-app cache).
 - **Whole pipeline** — consume `ios-maestro.yml` / `android-maestro.yml` /
-  `seed-native-cache.yml` / `native-publish.yml` / `native-dev-release.yml`
-  via `workflow_call` and collapse your own workflow to a thin `uses:`
-  wrapper with inputs. Use this for a new pipeline or when migrating a
-  pipeline that already matches this shape closely.
+  `seed-native-cache.yml` / `native-publish.yml` / `native-dev-release.yml` /
+  `expo-ota-preview.yml` via `workflow_call` and collapse your own workflow to
+  a thin `uses:` wrapper with inputs. Use this for a new pipeline or when
+  migrating a pipeline that already matches this shape closely.
 
 ## Action catalog
 
@@ -83,6 +83,8 @@ full input reference, and the same doc's siblings under
 | [`asc-dedupe-screenshots`](actions/asc-dedupe-screenshots/README.md) | Post-upload App Store Connect duplicate-screenshot verify/repair gate — self-signed ES256 JWT, `curl`/`jq`/`openssl` only; deletes all but the oldest copy of every `deliver` retry duplicate and fails closed so the flaky upload lane gets fixed. |
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 | [`load-consumer-config`](actions/load-consumer-config/README.md) | Reads a consumer-owned JSON config file out of the checkout and validates it against an allowlist of keys, so a reusable workflow can resolve its inputs from a checked-in file instead of JSON-in-YAML `with:` blobs. |
+| [`expo-ota-manifest`](actions/expo-ota-manifest/README.md)       | Generate Expo Updates protocol v1 manifests per platform from an `expo export` output — EAS-free, tokenless OTA hosting. |
+| [`github-release-publish`](actions/github-release-publish/README.md) | Publish a directory to a GitHub Release as flat-named assets under a stable tag, pruning older previews. |
 
 Each action has its own `README.md` under `actions/<name>/` with the full
 input/output table and a usage example.
@@ -97,6 +99,7 @@ input/output table and a usage example.
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
 | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
+| [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `native-fingerprint` → `expo export` → `expo-ota-manifest` → `github-release-publish` → pull-request deep-link + QR comment. EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`. |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 `store-screenshots.yml` additionally accepts a `config-path` pointing at a
