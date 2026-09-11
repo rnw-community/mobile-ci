@@ -15,13 +15,15 @@ names. `github.com/.../releases/download/...` responds with a redirect; the
 body regardless of the intermediary's content type.
 
 The release is kept across runs and its assets are uploaded with `--clobber`;
-assets that are not part of the new upload are removed only **after** the new
-assets (including the manifest) are live, so the stable manifest URL is never
-left pointing at a deleted release. Files named `manifest.json` are uploaded
-**after** every other asset, so a client can never fetch a manifest before the
-files it references exist. Releases are public for public repositories; a
-private repository would require an authenticated download, so this action is
-intended for public repos.
+files named `manifest.json` are uploaded **after** every other asset, so a
+client can never fetch a manifest before the files it references exist. With
+`clean: true`, assets absent from the new upload are removed **after** the
+manifest switch, so the stable manifest URL is never left pointing at a deleted
+release. `clean` defaults to `false` so two concurrent publishes for the same
+tag cannot delete each other's assets — enable it when publishes for a tag are
+serialized (the `expo-ota-preview` workflow does, via its concurrency group).
+Releases are public for public repositories; a private repository would require
+an authenticated download, so this action is intended for public repos.
 
 ## Inputs
 
@@ -33,6 +35,7 @@ intended for public repos.
 | `title`         | no       | `''`    | Release title; defaults to the tag.                                               |
 | `prune-prefix`  | no       | `''`    | Delete older releases whose tag starts with this prefix. Empty disables pruning.  |
 | `prune-keep`    | no       | `5`     | Number of prefix-matching releases to keep, including the current one.            |
+| `clean`         | no       | `false` | Delete assets absent from this upload after the manifest switch. Only enable when publishes for the tag are serialized. |
 | `dry-run`       | no       | `false` | Stage and validate without creating, uploading, or pruning.                       |
 
 ## Outputs

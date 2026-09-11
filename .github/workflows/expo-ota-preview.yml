@@ -387,6 +387,7 @@ jobs:
                   title: ${{ steps.paths.outputs.tag }}
                   prune-prefix: ${{ inputs.release-tag-prefix }}-
                   prune-keep: ${{ inputs.prune-keep }}
+                  clean: 'true'
                   token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
 
             - name: Post preview comment

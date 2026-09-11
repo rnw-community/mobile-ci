@@ -3,10 +3,11 @@ description: >-
   Publishes a directory to a GitHub Release under a stable tag, flattening
   nested paths to `__`-joined asset names so every file gets an immutable
   download URL. This is the same channel the native development .ipa/.apk uses.
-  The release is recreated on every run so only the current preview's assets
-  exist, and releases sharing a tag prefix are pruned to keep the release list
-  small. Fails closed on a missing source directory or a flattened-name
-  collision.
+  The release is updated in place: assets are uploaded with `--clobber` and
+  manifest files last, and with clean enabled assets absent from the new upload
+  are removed only after the manifest switch. Releases sharing a tag prefix are
+  pruned to keep the release list small. Fails closed on a missing source
+  directory or a flattened-name collision.
 inputs:
   source-dir:
     description: Directory whose files are uploaded as release assets.
@@ -29,6 +30,14 @@ inputs:
     description: Number of prefix-matching releases to keep, including the current one.
     required: false
     default: '5'
+  clean:
+    description: >-
+      Delete release assets that are not part of this upload, after the new
+      manifest is live. Defaults to false so concurrent publishes for the same
+      tag cannot delete each other's assets; enable it when publishes for a tag
+      are serialized (expo-ota-preview does, via its concurrency group).
+    required: false
+    default: 'false'
   dry-run:
     description: Stage and validate assets without creating, uploading, or pruning.
     required: false
@@ -95,6 +104,7 @@ runs:
         RELEASE_TITLE: ${{ inputs.title }}
         PRUNE_PREFIX: ${{ inputs.prune-prefix }}
         PRUNE_KEEP: ${{ inputs.prune-keep }}
+        CLEAN: ${{ inputs.clean }}
         DRY_RUN: ${{ inputs.dry-run }}
         REPOSITORY: ${{ github.repository }}
       run: |
@@ -141,14 +151,16 @@ runs:
           fi
           upload_names "$assets_file"
           upload_names "$manifests_file"
-          current_assets="$(cat "$assets_file" "$manifests_file" | sort)"
-          existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
-          while IFS= read -r existing; do
-            [ -n "$existing" ] || continue
-            if ! printf '%s\n' "$current_assets" | grep -qxF "$existing"; then
-              gh release delete-asset "$RELEASE_TAG" "$existing" --yes
-            fi
-          done <<< "$existing_assets"
+          if [ "$CLEAN" = 'true' ]; then
+            current_assets="$(cat "$assets_file" "$manifests_file" | sort)"
+            existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+            while IFS= read -r existing; do
+              [ -n "$existing" ] || continue
+              if ! printf '%s\n' "$current_assets" | grep -qxF "$existing"; then
+                gh release delete-asset "$RELEASE_TAG" "$existing" --yes
+              fi
+            done <<< "$existing_assets"
+          fi
           if [ -n "$PRUNE_PREFIX" ]; then
             releases_json="$(gh release list --limit 100 --json tagName,createdAt)"
             stale_releases="$(printf '%s' "$releases_json" | node -e '

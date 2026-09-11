@@ -36,11 +36,12 @@ link points at
 regardless of the intermediate content type.
 
 Tags are `<release-tag-prefix>-<slug>` (default `ota-pr-<number>`). The release
-is kept across runs: assets are uploaded with `--clobber`, and assets not in
-the new upload are removed only after the new manifest is live, so the stable
-manifest URL is never left pointing at a deleted release. Older preview
-releases are pruned to `prune-keep`. Assets are hash-named and immutable; only
-the manifest is replaced.
+is kept across runs: assets are uploaded with `--clobber`, manifests upload
+last, and with `clean` enabled assets not in the new upload are removed only
+after the new manifest is live, so the stable manifest URL is never left
+pointing at a deleted release. Older preview releases are pruned to
+`prune-keep`. Assets are hash-named and immutable; only the manifest is
+replaced.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
 forces `url-style: release`, because the release host stores assets flat. Set
@@ -66,9 +67,10 @@ publish elsewhere.
   `github.repository`, so untrusted fork code never runs on a self-hosted
   runner and the release token is never exposed to it. Run previews from
   branches in this repository.
-- Recreating the release each run means an in-flight download of a superseded
-  preview can 404. Previews are transient, so this is acceptable; long-lived
-  previews should not rely on a stale manifest.
+- The release is retained across runs, so the stable manifest URL stays up while
+  assets are replaced. An in-flight download of a superseded preview can still
+  404 because `clean` removes assets no longer referenced; previews are
+  transient, so long-lived consumers should not rely on stale assets.
 - The manifest omits the protocol's optional response headers
   (`expo-protocol-version`, `expo-manifest-filters`, …). The current
   `expo-updates` client tolerates their absence for a JSON manifest.
