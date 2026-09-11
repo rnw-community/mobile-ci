@@ -339,7 +339,7 @@ jobs:
 
             - name: Generate Expo Updates manifests
               id: manifest
-              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@e6a69cb9dfdf81295d9a4dbec1f3cd24b0e83eb1 # feat/expo-ota-preview fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v1.13.0 # v1.13.0
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
@@ -372,7 +372,7 @@ jobs:
               if: >-
                   inputs.publish && (github.event_name != 'pull_request' ||
                   github.event.pull_request.head.repo.full_name == github.repository)
-              uses: rnw-community/mobile-ci/actions/github-release-publish@e6a69cb9dfdf81295d9a4dbec1f3cd24b0e83eb1 # feat/expo-ota-preview fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/github-release-publish@v1.13.0 # v1.13.0
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
