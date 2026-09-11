@@ -14,17 +14,18 @@ names. `github.com/.../releases/download/...` responds with a redirect; the
 `expo-updates` client and `expo-dev-client` both follow it and parse the JSON
 body regardless of the intermediary's content type.
 
-The release is kept across runs. Non-manifest assets are content-addressed (the
-name derives from the bytes) and uploaded only when absent, so they are
-effectively immutable; only `manifest.json` files are uploaded with
-`--clobber`, **after** every other asset, so a client can never fetch a
-manifest before the files it references exist. With `clean: true`, assets absent from the new upload are removed **after** the
-manifest switch, so the stable manifest URL is never left pointing at a deleted
-release. `clean` defaults to `false` so two concurrent publishes for the same
-tag cannot delete each other's assets — enable it when publishes for a tag are
-serialized (the `expo-ota-preview` workflow does, via its concurrency group).
-Releases are public for public repositories; a private repository would require
-an authenticated download, so this action is intended for public repos.
+The release is created as a **draft**, assets are uploaded (non-manifest assets
+are content-addressed and uploaded only when absent; `manifest.json` files are
+uploaded last with `--clobber`), and the release is then **published**. This
+supports repositories with **immutable releases**: a published immutable release
+cannot accept new assets, so when an existing tag's release is already published
+and immutable it is recreated as a draft before the upload. With `clean: true`,
+assets absent from the upload are removed while the release is still a draft,
+before it is published. `clean` defaults to `false` so two concurrent publishes
+for the same tag cannot delete each other's assets — enable it when publishes for
+a tag are serialized (the `expo-ota-preview` workflow does, via its concurrency
+group). Releases are public for public repositories; a private repository would
+require an authenticated download, so this action is intended for public repos.
 Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**,
 not creation, so a republished preview — whose assets were just clobbered — is
 not pruned as if it were old. `expo-ota-preview` scopes the prefix to the app so
