@@ -384,9 +384,14 @@ jobs:
                       const isLocal =
                         parsed.protocol === "http:" &&
                         (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
-                      process.exit(isHttps || isLocal ? 0 : 1);
+                      const isBare =
+                        parsed.username === "" &&
+                        parsed.password === "" &&
+                        parsed.search === "" &&
+                        parsed.hash === "";
+                      process.exit((isHttps || isLocal) && isBare ? 0 : 1);
                     ' "$base_url"; then
-                      echo "::error::public-base-url must be an https:// URL (http:// is allowed only for localhost or 127.0.0.1)."
+                      echo "::error::public-base-url must be an https:// URL (http:// only for localhost or 127.0.0.1) with no credentials, query, or fragment."
                       exit 1
                     fi
                   fi
