@@ -96,7 +96,7 @@ jobs:
                           mismatch=1
                       fi
                   done < <(grep -rl 'rnw-community/mobile-ci/actions/' --include='*.yml' .github/workflows actions \
-                      | grep -v '^\.github/workflows/self-test\.yml$')
+                      | grep -v -e '^\.github/workflows/self-test\.yml$' -e '^\.github/workflows/release\.yml$')
                   if [ "$mismatch" -ne 0 ]; then
                       echo "::error::Self-references are not fully bumped to ${TAG}; refusing to cut a broken release. See RELEASE.md step 1."
                       exit 1
