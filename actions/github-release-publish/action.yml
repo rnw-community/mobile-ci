@@ -51,6 +51,8 @@ runs:
       env:
         SOURCE_DIR: ${{ inputs.source-dir }}
         RELEASE_TAG: ${{ inputs.tag }}
+        PRUNE_PREFIX: ${{ inputs.prune-prefix }}
+        PRUNE_KEEP: ${{ inputs.prune-keep }}
       run: |
         set -euo pipefail
         if [ ! -d "$SOURCE_DIR" ]; then
@@ -63,6 +65,24 @@ runs:
             exit 1
             ;;
         esac
+        case "$PRUNE_PREFIX" in
+          ''|*[!A-Za-z0-9._-]*)
+            echo "::error::prune-prefix must be empty or only [A-Za-z0-9._-]; got '$PRUNE_PREFIX'."
+            exit 1
+            ;;
+        esac
+        case "$PRUNE_KEEP" in
+          ''|*[!0-9]*)
+            echo "::error::prune-keep must be a non-negative integer; got '$PRUNE_KEEP'."
+            exit 1
+            ;;
+        esac
+        for tool in node gh; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "::error::$tool is required but was not found on PATH."
+            exit 1
+          fi
+        done
 
     - name: Stage and publish release
       id: publish
@@ -82,10 +102,12 @@ runs:
         source_dir="$(cd "$SOURCE_DIR" && pwd)"
         work="$RUNNER_TEMP/github-release-publish-$$"
         staging="$work/staging"
-        names_file="$work/names.txt"
+        assets_file="$work/assets.txt"
+        manifests_file="$work/manifests.txt"
         rm -rf "$work"
         mkdir -p "$staging"
-        : > "$names_file"
+        : > "$assets_file"
+        : > "$manifests_file"
         uploaded=0
         while IFS= read -r -d '' file; do
           relative="${file#"$source_dir"/}"
@@ -95,21 +117,31 @@ runs:
             exit 1
           fi
           cp "$file" "$staging/$asset_name"
-          printf '%s\n' "$asset_name" >> "$names_file"
+          if [ "${file##*/}" = 'manifest.json' ]; then
+            printf '%s\n' "$asset_name" >> "$manifests_file"
+          else
+            printf '%s\n' "$asset_name" >> "$assets_file"
+          fi
           uploaded=$((uploaded + 1))
         done < <(find "$source_dir" -type f -print0)
         if [ "$uploaded" -eq 0 ]; then
           echo "::error::source-dir '$SOURCE_DIR' contains no files."
           exit 1
         fi
+        upload_names() {
+          local list_file="$1"
+          [ -s "$list_file" ] || return 0
+          while IFS= read -r name; do printf '%s\0' "$staging/$name"; done < "$list_file" | xargs -0 gh release upload "$RELEASE_TAG" --clobber
+        }
         base_url="https://github.com/${REPOSITORY}/releases/download/${RELEASE_TAG}"
         if [ "$DRY_RUN" != 'true' ]; then
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             title="${RELEASE_TITLE:-$RELEASE_TAG}"
             gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}"
           fi
-          find "$staging" -type f -print0 | xargs -0 gh release upload "$RELEASE_TAG" --clobber
-          current_assets="$(sort "$names_file")"
+          upload_names "$assets_file"
+          upload_names "$manifests_file"
+          current_assets="$(cat "$assets_file" "$manifests_file" | sort)"
           existing_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
           while IFS= read -r existing; do
             [ -n "$existing" ] || continue
@@ -118,7 +150,21 @@ runs:
             fi
           done <<< "$existing_assets"
           if [ -n "$PRUNE_PREFIX" ]; then
-            stale_releases="$(gh release list --limit 100 --json tagName,createdAt --jq "[.[] | select(.tagName | startswith(\"${PRUNE_PREFIX}\"))] | sort_by(.createdAt) | reverse | .[${PRUNE_KEEP}:] | .[].tagName")"
+            releases_json="$(gh release list --limit 100 --json tagName,createdAt)"
+            stale_releases="$(printf '%s' "$releases_json" | node -e '
+              const fs = require("fs");
+              const prefix = process.argv[1];
+              const keep = Number.parseInt(process.argv[2], 10);
+              const releases = JSON.parse(fs.readFileSync(0, "utf8"));
+              process.stdout.write(
+                releases
+                  .filter(release => release.tagName.startsWith(prefix))
+                  .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                  .slice(keep)
+                  .map(release => release.tagName)
+                  .join("\n"),
+              );
+            ' "$PRUNE_PREFIX" "$PRUNE_KEEP")"
             while IFS= read -r stale; do
               [ -n "$stale" ] || continue
               [ "$stale" = "$RELEASE_TAG" ] && continue

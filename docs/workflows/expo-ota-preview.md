@@ -61,10 +61,11 @@ publish elsewhere.
 
 ## Caveats
 
-- Publishing is skipped on fork pull requests: the publish step requires the
-  head repository to match `github.repository`, because the automatic
-  `github.token` is read-only and a `RELEASE_TOKEN` must not be exposed to
-  untrusted fork code. Run previews from branches in this repository.
+- **Fork pull requests are not previewed at all.** The whole `preview` job is
+  skipped before checkout when the head repository differs from
+  `github.repository`, so untrusted fork code never runs on a self-hosted
+  runner and the release token is never exposed to it. Run previews from
+  branches in this repository.
 - Recreating the release each run means an in-flight download of a superseded
   preview can 404. Previews are transient, so this is acceptable; long-lived
   previews should not rely on a stale manifest.
@@ -101,7 +102,7 @@ publish elsewhere.
 
 | Name            | Required | Description                                                              |
 | --------------- | -------- | ------------------------------------------------------------------------ |
-| `RELEASE_TOKEN` | no       | Token with `contents: write` for the release; defaults to `github.token`. |
+| `RELEASE_TOKEN` | no       | Token with `contents: write` for the release; defaults to `github.token`. Never exposed to fork code (the job is skipped for forks). |
 
 ## Outputs
 

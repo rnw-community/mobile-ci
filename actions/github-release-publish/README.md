@@ -17,9 +17,11 @@ body regardless of the intermediary's content type.
 The release is kept across runs and its assets are uploaded with `--clobber`;
 assets that are not part of the new upload are removed only **after** the new
 assets (including the manifest) are live, so the stable manifest URL is never
-left pointing at a deleted release. Releases are public for public
-repositories; a private repository would require an authenticated download, so
-this action is intended for public repos.
+left pointing at a deleted release. Files named `manifest.json` are uploaded
+**after** every other asset, so a client can never fetch a manifest before the
+files it references exist. Releases are public for public repositories; a
+private repository would require an authenticated download, so this action is
+intended for public repos.
 
 ## Inputs
 

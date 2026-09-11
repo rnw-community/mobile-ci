@@ -93,7 +93,17 @@ if (metadata?.fileMetadata === undefined || metadata.fileMetadata === null) {
 
 const updateId = toUuid(sha256Hex(metadataBuffer));
 const metadataStat = await stat(metadataPath);
-const createdAt = process.env.CREATED_AT || metadataStat.mtime.toISOString();
+const rawCreatedAt = process.env.CREATED_AT || '';
+const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+let createdAt;
+if (rawCreatedAt !== '') {
+    if (!ISO_8601.test(rawCreatedAt) || Number.isNaN(Date.parse(rawCreatedAt))) {
+        fail(`created-at '${rawCreatedAt}' is not a valid ISO-8601 timestamp.`);
+    }
+    createdAt = new Date(rawCreatedAt).toISOString();
+} else {
+    createdAt = metadataStat.mtime.toISOString();
+}
 
 const expoConfigPath = process.env.EXPO_CONFIG_PATH || path.join(distDir, 'expoConfig.json');
 let expoClient;

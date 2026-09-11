@@ -111,8 +111,9 @@ on:
         secrets:
             RELEASE_TOKEN:
                 description: >-
-                    Token with contents:write used to create the preview release and push assets. Defaults to
-                    the automatic github.token, which is read-only on fork pull requests — those skip publishing.
+                    Token with contents:write used to create the preview release and push assets; defaults
+                    to the automatic github.token. Fork pull requests never run this job, so the token is
+                    never exposed to fork code.
                 required: false
         outputs:
             url-ios:
@@ -135,6 +136,9 @@ permissions:
 jobs:
     preview:
         name: Export, manifest, release
+        if: >-
+            github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ${{ fromJSON(inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.timeout-minutes }}
         permissions:
@@ -375,9 +379,7 @@ jobs:
                   done
 
             - name: Publish to GitHub Release
-              if: >-
-                  inputs.publish && (github.event_name != 'pull_request' ||
-                  github.event.pull_request.head.repo.full_name == github.repository)
+              if: inputs.publish
               uses: rnw-community/mobile-ci/actions/github-release-publish@v1.13.0 # v1.13.0
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
@@ -388,9 +390,7 @@ jobs:
                   token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
 
             - name: Post preview comment
-              if: >-
-                  inputs.post-comment && github.event_name == 'pull_request' &&
-                  github.event.pull_request.head.repo.full_name == github.repository
+              if: inputs.post-comment && github.event_name == 'pull_request'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
