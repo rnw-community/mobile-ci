@@ -207,9 +207,12 @@ runs:
           echo "::notice::Release '$RELEASE_TAG' is published with all ${#release_paths[@]} asset(s)."
           if [ -n "$PRUNE_PREFIX" ]; then
             if ! prune_output="$({
-              releases_json="$(gh api --paginate --jq '.[] | {tagName: .tag_name, updatedAt: .updated_at}' "repos/${REPOSITORY}/releases")"
+              if ! releases_json="$(gh api --paginate --jq '.[] | {tagName: .tag_name, updatedAt: .updated_at}' "repos/${REPOSITORY}/releases")"; then
+                echo "Failed to list releases for pruning."
+                exit 1
+              fi
               grace_cutoff_epoch="$(node -e 'process.stdout.write(String(Math.floor((Date.now() - Number(process.argv[1]) * 60000) / 1000)))' "$PRUNE_GRACE_MINUTES")"
-              stale_releases="$(printf '%s' "$releases_json" | node -e '
+              if ! stale_releases="$(printf '%s' "$releases_json" | node -e '
                 const fs = require("fs");
                 const prefix = process.argv[1];
                 const keep = Number.parseInt(process.argv[2], 10);
@@ -229,7 +232,10 @@ runs:
                     .map(release => release.tagName)
                     .join("\n"),
                 );
-              ' "$PRUNE_PREFIX" "$PRUNE_KEEP" "$PRUNE_GRACE_MINUTES")"
+              ' "$PRUNE_PREFIX" "$PRUNE_KEEP" "$PRUNE_GRACE_MINUTES")"; then
+                echo "Failed to compute stale releases."
+                exit 1
+              fi
               prune_failed=0
               while IFS= read -r stale; do
                 [ -n "$stale" ] || continue
@@ -252,7 +258,9 @@ runs:
                   prune_failed=1
                 fi
               done <<< "$stale_releases"
-              [ "$prune_failed" -eq 0 ]
+              if [ "$prune_failed" -ne 0 ]; then
+                exit 1
+              fi
             } 2>&1)"; then
               echo "::warning::Release pruning failed; stale previews will be retried on the next publish: ${prune_output}"
             else
