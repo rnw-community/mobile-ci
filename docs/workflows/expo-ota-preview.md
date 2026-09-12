@@ -28,7 +28,9 @@ The workflow composes three pieces:
 
 GitHub Releases store assets flat, so nested paths are flattened by replacing
 `/` with `__`: `assets/<md5>` → `assets__<md5>`, `ios/manifest.json` →
-`ios__manifest.json`. The manifest references exactly those names, and the deep
+`ios__manifest.json`. A flattened name that would start with `.` (e.g.
+`.well-known/...`) is prefixed with `_`, because GitHub renames leading-dot
+asset names. The manifest references exactly those names, and the deep
 link points at
 `https://github.com/<owner>/<repo>/releases/download/<tag>/ios__manifest.json`.
 `github.com/.../releases/download/...` redirects to the asset CDN; both

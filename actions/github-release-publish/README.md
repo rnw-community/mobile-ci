@@ -8,7 +8,9 @@ hosting surface and no `EXPO_TOKEN`.
 
 GitHub Releases store assets flat, so this action flattens nested paths by
 replacing `/` with `__`: `assets/<md5>` becomes `assets__<md5>`, and
-`ios/manifest.json` becomes `ios__manifest.json`. Pair it with
+`ios/manifest.json` becomes `ios__manifest.json`. A flattened name that would
+start with `.` (e.g. `.well-known/...`) is prefixed with `_`, because GitHub
+renames leading-dot asset names. Pair it with
 `expo-ota-manifest`'s `url-style: release` so the manifest references the same
 names. `github.com/.../releases/download/...` responds with a redirect; the
 `expo-updates` client and `expo-dev-client` both follow it and parse the JSON

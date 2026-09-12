@@ -145,6 +145,9 @@ runs:
           fi
           asset_name="${relative//\//__}"
           case "$asset_name" in
+            .*) asset_name="_${asset_name}" ;;
+          esac
+          case "$asset_name" in
             *$'\n'*|*$'\r'*|*'#'*)
               echo "::error::source file '$relative' contains a newline, carriage return, or '#', which cannot be a release asset name."
               exit 1
