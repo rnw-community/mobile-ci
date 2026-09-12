@@ -39,9 +39,9 @@ regardless of the intermediate content type.
 
 Tags are `<release-tag-prefix>-<app-scope>-<slug>`, where `app-scope` is the
 sanitized `app-dir` plus an 8-hex hash of it (so two Expo apps in one repository
-never share a tag), and `slug` is `pr-<number>-<sha8>` for pull requests or the
-sanitized ref plus an 8-hex ref hash plus the short commit SHA for other runs.
-The short commit SHA makes each publish a **fresh tag**, which is required
+never share a tag), and `slug` is `pr-<number>-<full-sha>` for pull requests or
+the sanitized ref plus an 8-hex ref hash plus the full commit SHA for other
+runs. The full commit SHA makes each publish a **fresh tag**, which is required
 because repositories with **immutable releases** (budgie enables this) reject
 uploads to a published release, and repositories that **restrict tag creation**
 reject re-creating a deleted tag. Each publish creates the release with all

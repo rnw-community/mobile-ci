@@ -355,14 +355,14 @@ jobs:
                   app_slug="$(printf '%s' "$APP_DIR" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
                   app_hash="$(printf '%s' "$APP_DIR" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
                   app_scope="${app_slug:-app}-${app_hash}"
-                  short_sha="$(printf '%s' "${GITHUB_SHA:-unknown}" | cut -c1-8)"
+                  full_sha="${GITHUB_SHA:-unknown}"
                   if [ -n "${PR_NUMBER:-}" ]; then
-                    slug="pr-${PR_NUMBER}-${short_sha}"
+                    slug="pr-${PR_NUMBER}-${full_sha}"
                   else
                     raw="${HEAD_REF:-$REF_NAME}"
                     ref_hash="$(printf '%s' "${raw:-${GITHUB_REF:-unknown}}" | node -e 'const fs=require("fs"),crypto=require("crypto");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(0)).digest("hex").slice(0,8))')"
                     slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
-                    slug="${slug:-ref}-${ref_hash}-${short_sha}"
+                    slug="${slug:-ref}-${ref_hash}-${full_sha}"
                   fi
                   case "$RELEASE_TAG_PREFIX" in
                     ''|*[!A-Za-z0-9._-]*)
