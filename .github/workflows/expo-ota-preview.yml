@@ -304,7 +304,7 @@ jobs:
             - name: Compute iOS runtime version
               if: contains(inputs.platforms, 'ios') && inputs.runtime-version-ios == ''
               id: fingerprint-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.16.0 # v1.16.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.17.0 # v1.17.0
               with:
                   platform: ios
                   working-directory: ${{ inputs.app-dir }}
@@ -312,7 +312,7 @@ jobs:
             - name: Compute Android runtime version
               if: contains(inputs.platforms, 'android') && inputs.runtime-version-android == ''
               id: fingerprint-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.16.0 # v1.16.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.17.0 # v1.17.0
               with:
                   platform: android
                   working-directory: ${{ inputs.app-dir }}
@@ -412,7 +412,7 @@ jobs:
 
             - name: Generate Expo Updates manifests
               id: manifest
-              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v1.16.0 # v1.16.0
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v1.17.0 # v1.17.0
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
@@ -444,7 +444,7 @@ jobs:
 
             - name: Publish to GitHub Release
               if: inputs.publish
-              uses: rnw-community/mobile-ci/actions/github-release-publish@v1.16.0 # v1.16.0
+              uses: rnw-community/mobile-ci/actions/github-release-publish@v1.17.0 # v1.17.0
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
