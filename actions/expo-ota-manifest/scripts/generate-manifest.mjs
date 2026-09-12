@@ -77,7 +77,11 @@ for (const platform of platforms) {
     }
 }
 
-const flatten = relativePath => (urlStyle === 'release' ? relativePath.split('/').join('__') : relativePath);
+const flatten = relativePath => {
+    const flattened = relativePath.split('/').join('__');
+
+    return urlStyle === 'release' && flattened.startsWith('.') ? `_${flattened}` : flattened;
+};
 const assetUrl = relativePath => `${publicBaseUrl}/${flatten(relativePath)}`;
 
 const metadataPath = path.join(distDir, 'metadata.json');
