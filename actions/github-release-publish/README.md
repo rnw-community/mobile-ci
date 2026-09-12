@@ -1,7 +1,7 @@
 # github-release-publish
 
-Publishes a directory to a **GitHub Release** as assets under a stable tag,
-giving every file an immutable public download URL:
+Publishes a directory to a **GitHub Release** as assets under a tag, giving
+every file an immutable public download URL:
 `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`. This is the
 same channel the native development `.ipa`/`.apk` uses, so it needs no separate
 hosting surface and no `EXPO_TOKEN`.
@@ -29,22 +29,21 @@ GitHub Releases cannot store 0-byte assets. Releases are public for public
 repositories; a private repository would require an authenticated download, so
 this action is intended for public repos. The `clean` input is retained for
 compatibility and has no effect.
-Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**,
-not creation, so a republished preview — whose assets were just clobbered — is
-not pruned as if it were old. `expo-ota-preview` scopes the prefix to the app so
-one app never prunes another's previews.
+Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**.
+`expo-ota-preview` scopes the prefix to the app so one app never prunes another's
+previews.
 
 ## Inputs
 
 | Name            | Required | Default | Description                                                                       |
 | --------------- | -------- | ------- | --------------------------------------------------------------------------------- |
 | `source-dir`    | yes      | —       | Directory whose files are uploaded as release assets.                             |
-| `tag`           | yes      | —       | Release tag, e.g. `ota-pr-42`.                                                    |
+| `tag`           | yes      | —       | Release tag; use a **fresh** one per publish (an existing tag is skipped).         |
 | `token`         | yes      | —       | Token with `contents: write`.                                                     |
 | `title`         | no       | `''`    | Release title; defaults to the tag.                                               |
 | `prune-prefix`  | no       | `''`    | Delete older releases whose tag starts with this prefix. Empty disables pruning.  |
 | `prune-keep`    | no       | `5`     | Number of prefix-matching releases to keep, including the current one.            |
-| `clean`         | no       | `false` | Delete assets absent from this upload after the manifest switch. Only enable when publishes for the tag are serialized. |
+| `clean`         | no       | `false` | Retained for compatibility; has no effect.                                        |
 | `prune-grace-minutes` | no | `10`    | Never delete a release updated within this many minutes, protecting a concurrently published preview. |
 | `dry-run`       | no       | `false` | Stage and validate without creating, uploading, or pruning.                       |
 

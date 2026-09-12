@@ -451,8 +451,30 @@ jobs:
                   title: ${{ steps.paths.outputs.tag }}
                   prune-prefix: ${{ inputs.release-tag-prefix }}-${{ steps.paths.outputs.app-scope }}-
                   prune-keep: ${{ inputs.prune-keep }}
-                  clean: 'true'
                   token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
+
+            - name: Generate QR codes
+              if: inputs.post-comment && github.event_name == 'pull_request'
+              shell: bash
+              env:
+                  LINK_IOS: ${{ steps.links.outputs.link-ios }}
+                  LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+              run: |
+                  set -euo pipefail
+                  qr_dir="$RUNNER_TEMP/ota-qr"
+                  mkdir -p "$qr_dir"
+                  if ! (cd "$qr_dir" && npm init -y >/dev/null 2>&1 && npm install --silent --ignore-scripts qrcode@1.5.4 >/dev/null 2>&1); then
+                    echo "::warning::Could not install the qrcode renderer; QR codes will be omitted."
+                    exit 0
+                  fi
+                  for entry in "ios:$LINK_IOS" "android:$LINK_ANDROID"; do
+                    platform="${entry%%:*}"
+                    link="${entry#*:}"
+                    [ -n "$link" ] || continue
+                    if ! (cd "$qr_dir" && { node -e 'const QR=require("qrcode");QR.toString(process.argv[1],{type:"terminal",small:true},(e,s)=>{if(e){process.exit(1);}process.stdout.write(s);});' "$link" 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g'; }) > "$qr_dir/$platform.txt"; then
+                      : > "$qr_dir/$platform.txt"
+                    fi
+                  done
 
             - name: Post preview comment
               if: inputs.post-comment && github.event_name == 'pull_request'
@@ -461,18 +483,12 @@ jobs:
                   GH_TOKEN: ${{ github.token }}
                   LINK_IOS: ${{ steps.links.outputs.link-ios }}
                   LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+                  QR_DIR: ${{ runner.temp }}/ota-qr
               run: |
                   set -euo pipefail
                   if [ -z "${LINK_IOS:-}" ] && [ -z "${LINK_ANDROID:-}" ]; then
                     echo "No platform deep links were produced; skipping comment."
                     exit 0
-                  fi
-                  qr_dir="$RUNNER_TEMP/ota-qr"
-                  mkdir -p "$qr_dir"
-                  if (cd "$qr_dir" && npm init -y >/dev/null 2>&1 && npm install --silent qrcode@1.5.4 >/dev/null 2>&1); then
-                    qr_ready=true
-                  else
-                    qr_ready=false
                   fi
                   body="$RUNNER_TEMP/ota-preview-comment.md"
                   {
@@ -485,10 +501,7 @@ jobs:
                     platform="${entry%%:*}"
                     link="${entry#*:}"
                     [ -n "$link" ] || continue
-                    qr_code=''
-                    if [ "$qr_ready" = 'true' ]; then
-                      qr_code="$(cd "$qr_dir" && { node -e 'const QR=require("qrcode");QR.toString(process.argv[1],{type:"terminal",small:true},(e,s)=>{if(e){process.exit(1);}process.stdout.write(s);});' "$link" 2>/dev/null | sed -e 's/\x1b\[[0-9;]*m//g'; })" || qr_code=''
-                    fi
+                    qr_code="$(cat "$QR_DIR/$(printf '%s' "$platform" | tr '[:upper:]' '[:lower:]').txt" 2>/dev/null || true)"
                     {
                       echo "### ${platform}"
                       echo
