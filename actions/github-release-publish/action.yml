@@ -206,41 +206,48 @@ runs:
           fi
           echo "::notice::Release '$RELEASE_TAG' is published with all ${#release_paths[@]} asset(s)."
           if [ -n "$PRUNE_PREFIX" ]; then
-            releases_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100")"
-            grace_cutoff_epoch="$(node -e 'process.stdout.write(String(Math.floor((Date.now() - Number(process.argv[1]) * 60000) / 1000)))' "$PRUNE_GRACE_MINUTES")"
-            stale_releases="$(printf '%s' "$releases_json" | node -e '
-              const fs = require("fs");
-              const prefix = process.argv[1];
-              const keep = Number.parseInt(process.argv[2], 10);
-              const graceMinutes = Number.parseInt(process.argv[3], 10);
-              const cutoff = Date.now() - graceMinutes * 60000;
-              const releases = JSON.parse(fs.readFileSync(0, "utf8")).flat();
-              process.stdout.write(
-                releases
-                  .filter(release => release.tag_name.startsWith(prefix))
-                  .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
-                  .slice(keep)
-                  .filter(release => new Date(release.updated_at).getTime() < cutoff)
-                  .map(release => release.tag_name)
-                  .join("\n"),
-              );
-            ' "$PRUNE_PREFIX" "$PRUNE_KEEP" "$PRUNE_GRACE_MINUTES")"
-            while IFS= read -r stale; do
-              [ -n "$stale" ] || continue
-              [ "$stale" = "$RELEASE_TAG" ] && continue
-              stale_updated="$(gh api "repos/${REPOSITORY}/releases/tags/${stale}" --jq '.updated_at' 2>/dev/null || true)"
-              if [ -z "$stale_updated" ]; then
-                echo "::warning::Could not re-read release '$stale'; skipping deletion."
-                continue
-              fi
-              stale_epoch="$(node -e 'process.stdout.write(String(Math.floor(new Date(process.argv[1]).getTime() / 1000)))' "$stale_updated")"
-              if [ "$stale_epoch" -ge "$grace_cutoff_epoch" ]; then
-                echo "Skipping '$stale': updated within the prune grace window."
-                continue
-              fi
-              gh release delete "$stale" --yes --cleanup-tag || gh release delete "$stale" --yes || echo "::warning::Could not prune release '$stale'; leaving it."
-            done <<< "$stale_releases"
-            echo "::notice::Release pruning complete."
+            if ! prune_output="$({
+              releases_json="$(gh api "repos/${REPOSITORY}/releases?per_page=100")"
+              grace_cutoff_epoch="$(node -e 'process.stdout.write(String(Math.floor((Date.now() - Number(process.argv[1]) * 60000) / 1000)))' "$PRUNE_GRACE_MINUTES")"
+              stale_releases="$(printf '%s' "$releases_json" | node -e '
+                const fs = require("fs");
+                const prefix = process.argv[1];
+                const keep = Number.parseInt(process.argv[2], 10);
+                const graceMinutes = Number.parseInt(process.argv[3], 10);
+                const cutoff = Date.now() - graceMinutes * 60000;
+                const parsed = JSON.parse(fs.readFileSync(0, "utf8"));
+                const releases = Array.isArray(parsed) ? parsed : [];
+                process.stdout.write(
+                  releases
+                    .filter(release => release.tag_name.startsWith(prefix))
+                    .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
+                    .slice(keep)
+                    .filter(release => new Date(release.updated_at).getTime() < cutoff)
+                    .map(release => release.tag_name)
+                    .join("\n"),
+                );
+              ' "$PRUNE_PREFIX" "$PRUNE_KEEP" "$PRUNE_GRACE_MINUTES")"
+              while IFS= read -r stale; do
+                [ -n "$stale" ] || continue
+                [ "$stale" = "$RELEASE_TAG" ] && continue
+                stale_updated="$(gh api "repos/${REPOSITORY}/releases/tags/${stale}" --jq '.updated_at' 2>/dev/null || true)"
+                if [ -z "$stale_updated" ]; then
+                  echo "Could not re-read release '$stale'; skipping deletion."
+                  continue
+                fi
+                stale_epoch="$(node -e 'process.stdout.write(String(Math.floor(new Date(process.argv[1]).getTime() / 1000)))' "$stale_updated")"
+                if [ "$stale_epoch" -ge "$grace_cutoff_epoch" ]; then
+                  echo "Skipping '$stale': updated within the prune grace window."
+                  continue
+                fi
+                gh release delete "$stale" --yes --cleanup-tag || gh release delete "$stale" --yes || echo "Could not prune release '$stale'; leaving it."
+              done <<< "$stale_releases"
+            } 2>&1)"; then
+              echo "::warning::Release pruning failed; stale previews will be retried on the next publish: ${prune_output}"
+            else
+              printf '%s\n' "$prune_output"
+              echo "::notice::Release pruning complete."
+            fi
           fi
         fi
         echo "::notice::Publish step complete for '$RELEASE_TAG'."
