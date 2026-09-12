@@ -38,8 +38,9 @@ inputs:
     default: '5'
   clean:
     description: >-
-      Retained for compatibility. The release is always recreated with exactly
-      the staged assets, so stale assets never persist regardless of this value.
+      Retained for compatibility and has no effect: an existing tag is skipped,
+      and a new release is created with exactly the staged assets, so stale
+      assets never persist.
     required: false
     default: 'false'
   prune-grace-minutes:
@@ -176,7 +177,7 @@ runs:
           fi
           title="${RELEASE_TITLE:-$RELEASE_TAG}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release '$RELEASE_TAG' already exists; skipping (idempotent)."
+            echo "Release '$RELEASE_TAG' already exists; treating as published (idempotent)."
           else
             echo "Publishing ${#release_paths[@]} asset(s) to release '$RELEASE_TAG'."
             create_output=''
@@ -185,12 +186,23 @@ runs:
                 echo "::error::Failed to create release '$RELEASE_TAG' with ${#release_paths[@]} asset(s): ${create_output}"
                 exit 1
               fi
-              echo "::warning::Release '$RELEASE_TAG' exists after a failed create; leaving it as-is: ${create_output}"
+              echo "::warning::Release '$RELEASE_TAG' exists after a failed create; verifying its assets: ${create_output}"
             fi
           fi
-          echo "::notice::Release '$RELEASE_TAG' is present with $(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length') asset(s)."
+          release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+          release_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)"
+          missing_assets=''
+          while IFS= read -r -d '' expected; do
+            if ! printf '%s\n' "$release_assets" | grep -qxF "$expected"; then
+              missing_assets="${missing_assets} ${expected}"
+            fi
+          done < <(cat "$assets_file" "$manifests_file")
+          if [ "$release_draft" != 'false' ] || [ -n "$missing_assets" ]; then
+            echo "::error::Release '$RELEASE_TAG' is not a complete published release (draft=$release_draft missing=${missing_assets# }); refusing to report success."
+            exit 1
+          fi
+          echo "::notice::Release '$RELEASE_TAG' is published with all ${#release_paths[@]} asset(s)."
           if [ -n "$PRUNE_PREFIX" ]; then
-            set +e
             releases_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100")"
             grace_cutoff_epoch="$(node -e 'process.stdout.write(String(Math.floor((Date.now() - Number(process.argv[1]) * 60000) / 1000)))' "$PRUNE_GRACE_MINUTES")"
             stale_releases="$(printf '%s' "$releases_json" | node -e '
@@ -225,7 +237,6 @@ runs:
               fi
               gh release delete "$stale" --yes --cleanup-tag || gh release delete "$stale" --yes || echo "::warning::Could not prune release '$stale'; leaving it."
             done <<< "$stale_releases"
-            set -e
             echo "::notice::Release pruning complete."
           fi
         fi

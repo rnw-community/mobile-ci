@@ -80,10 +80,11 @@ itself never publishes outside GitHub Releases.
   (concurrency with `cancel-in-progress: false`), so two runs can never race on
   the shared release-pruning prefix. A new push queues behind the running
   preview rather than cancelling it.
-- The release is retained across runs, so the stable manifest URL stays up while
-  assets are replaced. An in-flight download of a superseded preview can still
-  404 because `clean` removes assets no longer referenced; previews are
-  transient, so long-lived consumers should not rely on stale assets.
+- Every publish uses a **fresh, per-commit tag**, so nothing is updated in place:
+  a release is created once, with all of its assets, and an existing tag is
+  skipped. Deep links always point at the release for the commit that produced
+  them, and a superseded preview is removed only by retention, not by an
+  in-place asset replacement.
 - The manifest omits the protocol's optional response headers
   (`expo-protocol-version`, `expo-manifest-filters`, …). The current
   `expo-updates` client tolerates their absence for a JSON manifest.
