@@ -99,7 +99,7 @@ jobs:
         permissions:
             contents: read
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v1 # v1
+        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v1.23.0 # v1.23.0
         with:
             working-directory: packages/app
             platforms: ios,android
