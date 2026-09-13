@@ -84,6 +84,12 @@ stale) event payload.
 The calling workflow must be triggered by `pull_request`; the job fails
 closed on any other event, because there is no base to compare against.
 
+## Release note
+
+The workflow's internal `native-fingerprint` self-references pin to `v1.23.0`,
+the release that first exposes that action's `file` output. Nothing earlier
+than `v1.23.0` can run this workflow.
+
 ## Example
 
 ```yaml

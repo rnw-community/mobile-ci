@@ -116,8 +116,8 @@ jobs:
                   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
               run: |
                   set -euo pipefail
-                  if [ "$EVENT_NAME" != 'pull_request' ] && [ "$EVENT_NAME" != 'pull_request_target' ]; then
-                    echo "::error::expo-fingerprint-guard compares a pull-request head against its base; the calling workflow must be triggered by 'pull_request' (got '${EVENT_NAME}')."
+                  if [ "$EVENT_NAME" != 'pull_request' ]; then
+                    echo "::error::expo-fingerprint-guard compares a pull-request head against its base; the calling workflow must be triggered by 'pull_request' (got '${EVENT_NAME}'). 'pull_request_target' is rejected deliberately: this job checks out and installs the pull request's head, which must never run in the trusted context that trigger grants."
                     exit 1
                   fi
                   if [ -z "$HEAD_SHA" ]; then
@@ -306,7 +306,7 @@ jobs:
             - name: Fingerprint head (ios)
               if: contains(inputs.platforms, 'ios')
               id: head-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.22.0 # v1.22.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
               with:
                   platform: ios
                   working-directory: ${{ inputs.working-directory }}
@@ -315,7 +315,7 @@ jobs:
             - name: Fingerprint head (android)
               if: contains(inputs.platforms, 'android')
               id: head-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.22.0 # v1.22.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
               with:
                   platform: android
                   working-directory: ${{ inputs.working-directory }}
@@ -386,7 +386,7 @@ jobs:
             - name: Fingerprint base (ios)
               if: contains(inputs.platforms, 'ios')
               id: base-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.22.0 # v1.22.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
               with:
                   platform: ios
                   working-directory: ${{ steps.base.outputs.app-dir }}
@@ -395,7 +395,7 @@ jobs:
             - name: Fingerprint base (android)
               if: contains(inputs.platforms, 'android')
               id: base-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.22.0 # v1.22.0
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
               with:
                   platform: android
                   working-directory: ${{ steps.base.outputs.app-dir }}
@@ -450,6 +450,16 @@ jobs:
                   set -euo pipefail
                   changed=false
                   compared=0
+                  selected="$(printf '%s' "$PLATFORMS" | tr -d '[:space:]')"
+                  for platform in $(printf '%s' "$selected" | tr ',' ' '); do
+                    case "$platform" in
+                      ios|android) ;;
+                      *)
+                        echo "::error::platforms must be a comma-separated list of 'ios' and 'android'; got '${PLATFORMS}'."
+                        exit 1
+                        ;;
+                    esac
+                  done
                   {
                     echo '### Native runtime fingerprint'
                     echo
@@ -459,7 +469,7 @@ jobs:
                     echo '| --- | --- | --- | --- |'
                   } >> "$GITHUB_STEP_SUMMARY"
                   for platform in ios android; do
-                    case ",${PLATFORMS}," in
+                    case ",${selected}," in
                       *",${platform},"*) ;;
                       *) continue ;;
                     esac
