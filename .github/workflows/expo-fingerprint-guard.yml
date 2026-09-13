@@ -354,6 +354,7 @@ jobs:
                   fi
                   base_dir="${RUNNER_TEMP}/expo-fingerprint-base"
                   rm -rf "$base_dir"
+                  git worktree prune
                   git worktree add --detach --force "$base_dir" "$base_commit"
                   {
                     printf 'commit=%s\n' "$base_commit"
