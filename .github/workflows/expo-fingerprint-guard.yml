@@ -506,8 +506,8 @@ jobs:
                     printf "| %s | \`%s\` | \`%s\` | **changed** |\n" "$platform" "$base_hash" "$head_hash" >> "$GITHUB_STEP_SUMMARY"
                     echo "::group::${platform} fingerprint sources that changed"
                     diff_file="${RUNNER_TEMP}/expo-fingerprint-diff-${platform}.json"
-                    if npx --yes "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:diff "$base_file" "$head_file" > "$diff_file"; then
-                      node -e '
+                    if npx --yes "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:diff "$base_file" "$head_file" > "$diff_file" \
+                      && node -e '
                         const fs = require("fs");
                         const describe = (source) => {
                           if (!source) {
@@ -530,7 +530,7 @@ jobs:
                           console.log(line);
                         }
                         fs.writeFileSync(process.argv[2], lines.join("\n"));
-                      ' "$diff_file" "${diff_file}.txt"
+                      ' "$diff_file" "${diff_file}.txt"; then
                       {
                         echo
                         echo "<details><summary>${platform} fingerprint sources that changed</summary>"
