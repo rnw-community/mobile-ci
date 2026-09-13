@@ -146,6 +146,9 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   and posts deep links + QR on the PR. Needs no `EXPO_TOKEN`; only
   `contents: write` (and `pull-requests: write` for the comment) on the calling
   job, and a public repository.
+- `expo-fingerprint-guard.yml` — pull-request gate that fails when a change
+  moves the Expo native runtime fingerprint, so a fingerprint-policy app never
+  silently orphans its published OTA updates; overridable with a label.
 - `store-screenshots.yml` — fleet-native store screenshot capture matrix
   (iOS simulators + Android Redroid containers) driven either by a Maestro
   flow-per-scene convention (`capture-mode: flows`, iOS-only) or by a
@@ -177,7 +180,8 @@ auto-discovered or run standalone by the sharding logic.
 ### Secrets
 
 - `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
-  `pr-closed-cleanup-reusable.yml` need **no secrets at all** — no
+  `pr-closed-cleanup-reusable.yml`, `expo-fingerprint-guard.yml` need **no
+  secrets at all** — no
   `EXPO_TOKEN`, no signing credentials.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):
   `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android),

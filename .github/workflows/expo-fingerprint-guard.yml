@@ -1,0 +1,568 @@
+name: expo-fingerprint-guard
+
+on:
+    workflow_call:
+        inputs:
+            working-directory:
+                description: App directory whose native surface is fingerprinted (the Expo project root).
+                type: string
+                required: false
+                default: '.'
+            platforms:
+                description: Comma-separated platforms to fingerprint and compare; ios, android, or both.
+                type: string
+                required: false
+                default: ios,android
+            app-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs appended to $GITHUB_ENV before any fingerprint is
+                    computed, so the variant the store ships (e.g. APP_VARIANT=production) is what gets
+                    hashed on both sides. Rejects (fails closed) any line without '=' or whose name does
+                    not match ^[A-Za-z_][A-Za-z0-9_]*$.
+                type: string
+                required: false
+                default: ''
+            override-label:
+                description: >-
+                    Pull-request label that downgrades a fingerprint change from a failure to a warning.
+                    Read live from the API on every run, so adding it and re-running the job is enough.
+                type: string
+                required: false
+                default: native-change-acknowledged
+            base-ref:
+                description: >-
+                    Commit-ish the pull-request head is compared against. Leave empty to use the merge
+                    base of the pull request's base and head commits.
+                type: string
+                required: false
+                default: ''
+            fingerprint-version:
+                description: Pinned @expo/fingerprint npm version used for both sides and for the diff.
+                type: string
+                required: false
+                default: '0.20.6'
+            runner-labels:
+                description: JSON array of runner labels for the guard job.
+                type: string
+                required: false
+                default: '["self-hosted","linux","x64"]'
+            node-version:
+                type: string
+                required: false
+                default: '22'
+            install-command:
+                description: >-
+                    Dependency install command, run once in the head checkout and once in the base
+                    worktree. Leave empty to derive it from the resolved package manager.
+                type: string
+                required: false
+                default: ''
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            package-manager:
+                description: >-
+                    JS package manager. Leave empty to auto-detect from package.json
+                    (devEngines.packageManager or packageManager, needs jq) and then the single root
+                    lockfile. install-command must match the resolved manager.
+                type: string
+                required: false
+                default: ''
+            build-command:
+                description: Optional workspace JS build command run at the repository root before fingerprinting.
+                type: string
+                required: false
+                default: ''
+            timeout-minutes:
+                type: number
+                required: false
+                default: 45
+        outputs:
+            hash-ios:
+                description: iOS fingerprint of the pull-request head, empty when ios is not in platforms.
+                value: ${{ jobs.guard.outputs.hash-ios }}
+            hash-android:
+                description: Android fingerprint of the pull-request head, empty when android is not in platforms.
+                value: ${{ jobs.guard.outputs.hash-android }}
+            changed:
+                description: '''true'' when any compared platform fingerprint differs from the base.'
+                value: ${{ jobs.guard.outputs.changed }}
+            acknowledged:
+                description: '''true'' when the override label was present on the pull request.'
+                value: ${{ jobs.guard.outputs.acknowledged }}
+
+permissions:
+    contents: read
+
+jobs:
+    guard:
+        name: Compare native fingerprints
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        permissions:
+            contents: read
+            pull-requests: read
+        outputs:
+            hash-ios: ${{ steps.head-ios.outputs.hash }}
+            hash-android: ${{ steps.head-android.outputs.hash }}
+            changed: ${{ steps.compare.outputs.changed }}
+            acknowledged: ${{ steps.label.outputs.acknowledged }}
+        steps:
+            - name: Assert a pull-request context
+              shell: bash
+              env:
+                  EVENT_NAME: ${{ github.event_name }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+              run: |
+                  set -euo pipefail
+                  if [ "$EVENT_NAME" != 'pull_request' ]; then
+                    echo "::error::expo-fingerprint-guard compares a pull-request head against its base; the calling workflow must be triggered by 'pull_request' (got '${EVENT_NAME}'). 'pull_request_target' is rejected deliberately: this job checks out and installs the pull request's head, which must never run in the trusted context that trigger grants."
+                    exit 1
+                  fi
+                  if [ -z "$HEAD_SHA" ]; then
+                    echo "::error::github.event.pull_request.head.sha is empty; the guard cannot resolve what to fingerprint."
+                    exit 1
+                  fi
+
+            - name: Checkout the pull-request head
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  ref: ${{ github.event.pull_request.head.sha }}
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Apply app-env
+              if: inputs.app-env != ''
+              shell: bash
+              env:
+                  APP_ENV: ${{ inputs.app-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::app-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::app-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::app-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$APP_ENV"
+
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  case "$pm" in
+                    yarn) wanted='yarn.lock' ;;
+                    pnpm) wanted='pnpm-lock.yaml' ;;
+                    *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                  esac
+                  found=''
+                  for candidate in $wanted; do
+                    if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                  done
+                  if [ -z "$found" ]; then
+                    echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                    exit 1
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              shell: bash
+              run: corepack enable
+
+            - name: Resolve install command
+              id: install
+              shell: bash
+              env:
+                  INSTALL_COMMAND_INPUT: ${{ inputs.install-command }}
+                  PACKAGE_MANAGER: ${{ steps.package-manager.outputs.pm }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$INSTALL_COMMAND_INPUT" ]; then
+                    install_command="$INSTALL_COMMAND_INPUT"
+                  else
+                    case "$PACKAGE_MANAGER" in
+                      pnpm) install_command='pnpm install --frozen-lockfile' ;;
+                      yarn) install_command='yarn install --frozen-lockfile' ;;
+                      npm) install_command='npm ci' ;;
+                      *)
+                        echo "::error::Cannot derive an install command for package manager '$PACKAGE_MANAGER'."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  printf 'command=%s\n' "$install_command" >> "$GITHUB_OUTPUT"
+
+            - name: Install head dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ steps.install.outputs.command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build head workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Fingerprint head (ios)
+              if: contains(inputs.platforms, 'ios')
+              id: head-ios
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
+              with:
+                  platform: ios
+                  working-directory: ${{ inputs.working-directory }}
+                  fingerprint-version: ${{ inputs.fingerprint-version }}
+
+            - name: Fingerprint head (android)
+              if: contains(inputs.platforms, 'android')
+              id: head-android
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
+              with:
+                  platform: android
+                  working-directory: ${{ inputs.working-directory }}
+                  fingerprint-version: ${{ inputs.fingerprint-version }}
+
+            - name: Create the base worktree
+              id: base
+              shell: bash
+              env:
+                  BASE_REF_INPUT: ${{ inputs.base-ref }}
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                  BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  WORKING_DIRECTORY: ${{ inputs.working-directory }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$BASE_REF_INPUT" ]; then
+                    base_commit="$(git rev-parse --verify "${BASE_REF_INPUT}^{commit}" 2>/dev/null || true)"
+                    if [ -z "$base_commit" ]; then
+                      echo "::error::base-ref '${BASE_REF_INPUT}' does not resolve to a commit in this checkout."
+                      exit 1
+                    fi
+                  else
+                    base_commit=''
+                    if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+                      base_commit="$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || true)"
+                    fi
+                    if [ -z "$base_commit" ]; then
+                      git fetch --no-tags origin "+refs/heads/${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}" || true
+                      base_commit="$(git merge-base "refs/remotes/origin/${BASE_BRANCH}" "$HEAD_SHA" 2>/dev/null || true)"
+                    fi
+                    if [ -z "$base_commit" ]; then
+                      echo "::error::Cannot compute the merge base of ${BASE_SHA} and ${HEAD_SHA}; the checkout does not contain enough history. This workflow checks out with fetch-depth 0, so a missing merge base means the base branch commit is unreachable - rebase the pull request onto ${BASE_BRANCH}."
+                      exit 1
+                    fi
+                  fi
+                  base_dir="${RUNNER_TEMP}/expo-fingerprint-base"
+                  rm -rf "$base_dir"
+                  git worktree prune
+                  git worktree add --detach --force "$base_dir" "$base_commit"
+                  {
+                    printf 'commit=%s\n' "$base_commit"
+                    printf 'dir=%s\n' "$base_dir"
+                    printf 'app-dir=%s\n' "${base_dir}/${WORKING_DIRECTORY}"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "Base commit: ${base_commit}"
+
+            - name: Install base dependencies
+              shell: bash
+              working-directory: ${{ steps.base.outputs.dir }}
+              env:
+                  INSTALL_COMMAND: ${{ steps.install.outputs.command }}
+                  BASE_COMMIT: ${{ steps.base.outputs.commit }}
+              run: |
+                  set -euo pipefail
+                  if ! eval "$INSTALL_COMMAND"; then
+                    echo "::error::Installing dependencies at the base commit ${BASE_COMMIT} failed, so the base fingerprint cannot be computed. Rebase the pull request onto a base commit whose lockfile installs cleanly."
+                    exit 1
+                  fi
+
+            - name: Build base workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              working-directory: ${{ steps.base.outputs.dir }}
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Fingerprint base (ios)
+              if: contains(inputs.platforms, 'ios')
+              id: base-ios
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
+              with:
+                  platform: ios
+                  working-directory: ${{ steps.base.outputs.app-dir }}
+                  fingerprint-version: ${{ inputs.fingerprint-version }}
+
+            - name: Fingerprint base (android)
+              if: contains(inputs.platforms, 'android')
+              id: base-android
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v1.23.0 # v1.23.0
+              with:
+                  platform: android
+                  working-directory: ${{ steps.base.outputs.app-dir }}
+                  fingerprint-version: ${{ inputs.fingerprint-version }}
+
+            - name: Read the override label
+              id: label
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  OVERRIDE_LABEL: ${{ inputs.override-label }}
+                  PR_NUMBER: ${{ github.event.pull_request.number }}
+                  REPOSITORY: ${{ github.repository }}
+                  PAYLOAD_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+              run: |
+                  set -euo pipefail
+                  labels=''
+                  if labels="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null)"; then
+                    :
+                  else
+                    echo "::warning::Could not read the pull request's labels from the API; falling back to the labels carried by the triggering event payload, which do not reflect labels added after this run started."
+                    labels="$(printf '%s' "$PAYLOAD_LABELS" | tr ',' '\n')"
+                  fi
+                  acknowledged=false
+                  while IFS= read -r label; do
+                    [ -n "$label" ] || continue
+                    if [ "$label" = "$OVERRIDE_LABEL" ]; then
+                      acknowledged=true
+                    fi
+                  done <<< "$labels"
+                  echo "acknowledged=${acknowledged}" >> "$GITHUB_OUTPUT"
+
+            - name: Compare fingerprints
+              id: compare
+              shell: bash
+              env:
+                  ACKNOWLEDGED: ${{ steps.label.outputs.acknowledged }}
+                  BASE_ANDROID_FILE: ${{ steps.base-android.outputs.file }}
+                  BASE_ANDROID_HASH: ${{ steps.base-android.outputs.hash }}
+                  BASE_COMMIT: ${{ steps.base.outputs.commit }}
+                  BASE_IOS_FILE: ${{ steps.base-ios.outputs.file }}
+                  BASE_IOS_HASH: ${{ steps.base-ios.outputs.hash }}
+                  FINGERPRINT_VERSION: ${{ inputs.fingerprint-version }}
+                  HEAD_ANDROID_FILE: ${{ steps.head-android.outputs.file }}
+                  HEAD_ANDROID_HASH: ${{ steps.head-android.outputs.hash }}
+                  HEAD_IOS_FILE: ${{ steps.head-ios.outputs.file }}
+                  HEAD_IOS_HASH: ${{ steps.head-ios.outputs.hash }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  OVERRIDE_LABEL: ${{ inputs.override-label }}
+                  PLATFORMS: ${{ inputs.platforms }}
+              run: |
+                  set -euo pipefail
+                  changed=false
+                  compared=0
+                  selected="$(printf '%s' "$PLATFORMS" | tr -d '[:space:]')"
+                  for platform in $(printf '%s' "$selected" | tr ',' ' '); do
+                    case "$platform" in
+                      ios|android) ;;
+                      *)
+                        echo "::error::platforms must be a comma-separated list of 'ios' and 'android'; got '${PLATFORMS}'."
+                        exit 1
+                        ;;
+                    esac
+                  done
+                  {
+                    echo '### Native runtime fingerprint'
+                    echo
+                    echo "Head \`${HEAD_SHA}\` vs base \`${BASE_COMMIT}\`."
+                    echo
+                    echo '| Platform | Base | Head | Verdict |'
+                    echo '| --- | --- | --- | --- |'
+                  } >> "$GITHUB_STEP_SUMMARY"
+                  for platform in ios android; do
+                    case ",${selected}," in
+                      *",${platform},"*) ;;
+                      *) continue ;;
+                    esac
+                    case "$platform" in
+                      ios)
+                        head_hash="$HEAD_IOS_HASH"
+                        base_hash="$BASE_IOS_HASH"
+                        head_file="$HEAD_IOS_FILE"
+                        base_file="$BASE_IOS_FILE"
+                        ;;
+                      *)
+                        head_hash="$HEAD_ANDROID_HASH"
+                        base_hash="$BASE_ANDROID_HASH"
+                        head_file="$HEAD_ANDROID_FILE"
+                        base_file="$BASE_ANDROID_FILE"
+                        ;;
+                    esac
+                    if [ -z "$head_hash" ] || [ -z "$base_hash" ]; then
+                      echo "::error::No ${platform} fingerprint was produced for one of the two sides (head='${head_hash}', base='${base_hash}'); refusing to report the runtime unchanged."
+                      exit 1
+                    fi
+                    if [ -z "$head_file" ] || [ -z "$base_file" ] || [ "$head_file" = "$base_file" ]; then
+                      echo "::error::The ${platform} head and base fingerprint files are missing or identical ('${head_file}' / '${base_file}'); refusing to compare two sides that may be the same file."
+                      exit 1
+                    fi
+                    compared=$((compared + 1))
+                    if [ "$head_hash" = "$base_hash" ]; then
+                      echo "${platform}: unchanged (${head_hash})"
+                      printf "| %s | \`%s\` | \`%s\` | unchanged |\n" "$platform" "$base_hash" "$head_hash" >> "$GITHUB_STEP_SUMMARY"
+                      continue
+                    fi
+                    changed=true
+                    printf "| %s | \`%s\` | \`%s\` | **changed** |\n" "$platform" "$base_hash" "$head_hash" >> "$GITHUB_STEP_SUMMARY"
+                    echo "::group::${platform} fingerprint sources that changed"
+                    diff_file="${RUNNER_TEMP}/expo-fingerprint-diff-${platform}.json"
+                    if npx --yes "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:diff "$base_file" "$head_file" > "$diff_file" \
+                      && node -e '
+                        const fs = require("fs");
+                        const describe = (source) => {
+                          if (!source) {
+                            return "unknown source";
+                          }
+                          const name = source.filePath || source.id || source.type || "unknown";
+                          const reasons = Array.isArray(source.reasons) && source.reasons.length > 0 ? " [" + source.reasons.join(", ") + "]" : "";
+                          return (source.type || "source") + ": " + name + reasons;
+                        };
+                        const lines = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).map((item) => {
+                          if (item.op === "added") {
+                            return "added   " + describe(item.addedSource);
+                          }
+                          if (item.op === "removed") {
+                            return "removed " + describe(item.removedSource);
+                          }
+                          return "changed " + describe(item.afterSource || item.beforeSource);
+                        });
+                        for (const line of lines) {
+                          console.log(line);
+                        }
+                        fs.writeFileSync(process.argv[2], lines.join("\n"));
+                      ' "$diff_file" "${diff_file}.txt"; then
+                      {
+                        echo
+                        echo "<details><summary>${platform} fingerprint sources that changed</summary>"
+                        echo
+                        echo '~~~text'
+                        cat "${diff_file}.txt"
+                        echo '~~~'
+                        echo
+                        echo '</details>'
+                      } >> "$GITHUB_STEP_SUMMARY"
+                    else
+                      echo "::warning::fingerprint:diff failed for ${platform}; the hashes above are still authoritative."
+                    fi
+                    echo "::endgroup::"
+                  done
+                  if [ "$compared" -eq 0 ]; then
+                    echo "::error::platforms resolved to an empty list; nothing was compared."
+                    exit 1
+                  fi
+                  echo "changed=${changed}" >> "$GITHUB_OUTPUT"
+                  if [ "$changed" != 'true' ]; then
+                    echo "Native runtime unchanged; published OTA updates keep reaching the shipped binaries."
+                    exit 0
+                  fi
+                  message="This pull request changes the native runtime fingerprint, so every OTA update published after it merges targets a runtime version no shipped binary has. A store build via native-publish is required before OTA resumes. Add the label '${OVERRIDE_LABEL}' to the pull request and re-run this job to acknowledge that and proceed."
+                  if [ "$ACKNOWLEDGED" = 'true' ]; then
+                    echo "::warning::${message}"
+                    {
+                      echo
+                      echo "Acknowledged via the \`${OVERRIDE_LABEL}\` label."
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    exit 0
+                  fi
+                  echo "::error::${message}"
+                  exit 1

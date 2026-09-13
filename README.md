@@ -59,7 +59,7 @@ full input reference, and the same doc's siblings under
   just the native-app cache).
 - **Whole pipeline** — consume `ios-maestro.yml` / `android-maestro.yml` /
   `seed-native-cache.yml` / `native-publish.yml` / `native-dev-release.yml` /
-  `expo-ota-preview.yml` via `workflow_call` and collapse your own workflow to
+  `expo-ota-preview.yml` / `expo-fingerprint-guard.yml` via `workflow_call` and collapse your own workflow to
   a thin `uses:` wrapper with inputs. Use this for a new pipeline or when
   migrating a pipeline that already matches this shape closely.
 
@@ -100,6 +100,7 @@ input/output table and a usage example.
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
 | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
 | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `native-fingerprint` → `expo export` → `expo-ota-manifest` → `github-release-publish` → pull-request deep-link + QR comment. EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`. |
+| [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | `native-fingerprint` on the pull-request head → `native-fingerprint` on a merge-base `git worktree` → hash comparison + `fingerprint:diff`. Fails a pull request that silently moves the native runtime fingerprint out from under published OTA updates, unless an override label acknowledges it. |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 `store-screenshots.yml` additionally accepts a `config-path` pointing at a

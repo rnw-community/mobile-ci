@@ -18,6 +18,9 @@ outputs:
   hash:
     description: The computed native fingerprint hash.
     value: ${{ steps.fingerprint.outputs.hash }}
+  file:
+    description: Path to the raw @expo/fingerprint JSON, consumable by `fingerprint:diff`.
+    value: ${{ steps.fingerprint.outputs.file }}
 runs:
   using: composite
   steps:
@@ -30,8 +33,9 @@ runs:
         FINGERPRINT_PLATFORM: ${{ inputs.platform }}
       run: |
         set -euo pipefail
-        out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-$$.json"
-        error_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-$$.err"
+        run_token="$$-${RANDOM}"
+        out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-${run_token}.json"
+        error_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-${run_token}.err"
         # npx has been observed exiting 0 with empty stdout on self-hosted Linux
         # containers, which used to surface later as a bare "Unexpected end of
         # JSON input". Fail closed on empty output, always surface stderr, and
@@ -67,4 +71,5 @@ runs:
         hash=$(node -e "process.stdout.write(require('$out_file').hash)")
         test -n "$hash"
         echo "hash=$hash" >> "$GITHUB_OUTPUT"
+        echo "file=$out_file" >> "$GITHUB_OUTPUT"
         echo "Native fingerprint ($FINGERPRINT_PLATFORM): $hash"
