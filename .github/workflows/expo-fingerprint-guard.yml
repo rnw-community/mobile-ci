@@ -514,7 +514,8 @@ jobs:
                             return "unknown source";
                           }
                           const name = source.filePath || source.id || source.type || "unknown";
-                          return (source.type || "source") + ": " + name;
+                          const reasons = Array.isArray(source.reasons) && source.reasons.length > 0 ? " [" + source.reasons.join(", ") + "]" : "";
+                          return (source.type || "source") + ": " + name + reasons;
                         };
                         const lines = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).map((item) => {
                           if (item.op === "added") {
