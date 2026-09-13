@@ -19,9 +19,10 @@ not "the embedded JS bundle is current for this commit".
 
 ## Outputs
 
-| Name   | Description                     |
-| ------ | -------------------------------- |
-| `hash` | The computed native fingerprint. |
+| Name   | Description                                                                              |
+| ------ | ----------------------------------------------------------------------------------------- |
+| `hash` | The computed native fingerprint.                                                          |
+| `file` | Path to the raw `@expo/fingerprint` JSON, consumable by `fingerprint:diff` in a later step. |
 
 ## Example
 
