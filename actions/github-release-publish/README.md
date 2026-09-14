@@ -25,8 +25,12 @@ means a run cancelled mid-upload can never leave a **published**-but-incomplete
 release behind — worst case it leaves an incomplete **draft**, which the next
 run for the same tag resumes. This is required because:
 - GitHub repositories with **immutable releases** reject uploading assets to a
-  published release (`HTTP 422`) — draft releases remain mutable, so
-  reconciliation only ever mutates the pre-publish draft state, and
+  published release (`HTTP 422`). A release created by a pre-fix run (or on a
+  non-immutable repo, by any other means) that is already published and still
+  incomplete cannot be resumed by reconciliation on an immutable-release
+  repository — delete the release and its tag and re-run with a fresh tag.
+  Draft releases remain mutable, so reconciliation on a still-draft release
+  only ever mutates the pre-publish draft state, and
 - repositories that **restrict tag creation** reject re-creating a deleted tag
   (`pre_receive ... Cannot create ref`), so each fresh publish must use a
   **fresh tag** — pass a unique tag (the `expo-ota-preview` workflow includes

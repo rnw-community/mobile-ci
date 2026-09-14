@@ -44,8 +44,9 @@ inputs:
   clean:
     description: >-
       Retained for compatibility and has no effect: an existing tag's release
-      is reconciled against exactly the staged assets, so stale partial
-      uploads never persist.
+      is reconciled by uploading missing staged assets and re-uploading any
+      stuck in a partial-upload state, so stale partial uploads never persist.
+      An uploaded asset absent from the current source is not deleted.
     required: false
     default: 'false'
   prune-grace-minutes:
