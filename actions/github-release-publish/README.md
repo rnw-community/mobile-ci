@@ -18,19 +18,24 @@ body regardless of the intermediary's content type.
 
 The release is created **as a draft** with all assets, and is only flipped to
 published once every expected asset is confirmed present. An existing tag's
-release is **reconciled**, not skipped: any asset stuck mid-upload is deleted
-and re-uploaded, any missing asset is uploaded, and only then is the release
-published (or left published if it already was, and already complete). That
-means a run cancelled mid-upload can never leave a **published**-but-incomplete
-release behind — worst case it leaves an incomplete **draft**, which the next
-run for the same tag resumes. This is required because:
-- GitHub repositories with **immutable releases** reject uploading assets to a
-  published release (`HTTP 422`). A release created by a pre-fix run (or on a
-  non-immutable repo, by any other means) that is already published and still
-  incomplete cannot be resumed by reconciliation on an immutable-release
-  repository — delete the release and its tag and re-run with a fresh tag.
-  Draft releases remain mutable, so reconciliation on a still-draft release
-  only ever mutates the pre-publish draft state, and
+release is **reconciled**, not skipped, to contain exactly the currently
+staged assets: any asset stuck mid-upload or no longer part of the staged set
+is deleted, any missing asset is (re-)uploaded, and only then is the release
+published (or left published if it already was, and already complete).
+Reconciliation is attempted the same way whether the existing release is
+still a draft or already published — it only actually succeeds against an
+already-published release on a repository that does not enforce immutable
+releases. That means a run cancelled mid-upload can never leave a
+**published**-but-incomplete release behind on an immutable-release
+repository — worst case it leaves an incomplete **draft**, which the next run
+for the same tag resumes. This is required because:
+- GitHub repositories with **immutable releases** reject uploading or deleting
+  assets on a published release (`HTTP 422`). A release that is already
+  published and still incomplete on such a repository (for example, one
+  created by a pre-fix run) cannot be resumed by reconciliation — delete the
+  release and its tag and re-run with a fresh tag instead. Reconciliation
+  against a still-draft release is always safe, since draft releases remain
+  mutable even on an immutable-release repository, and
 - repositories that **restrict tag creation** reject re-creating a deleted tag
   (`pre_receive ... Cannot create ref`), so each fresh publish must use a
   **fresh tag** — pass a unique tag (the `expo-ota-preview` workflow includes

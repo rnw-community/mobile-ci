@@ -8,12 +8,13 @@ description: >-
   repositories with immutable releases (a published release cannot accept new
   or replacement assets) and on repositories that restrict tag creation/re-
   creation (a deleted tag cannot be recreated, so publishes must use a fresh
-  tag). An existing tag is reconciled rather than skipped: missing or
-  partially-uploaded assets are (re)uploaded and the release is published only
-  once complete, so a run cancelled mid-upload never leaves a published-but-
-  incomplete release, and the next run for the same tag can resume it. Zero-
-  byte files are skipped because GitHub Releases cannot store them. Releases
-  sharing a tag prefix are pruned to keep the release list small. Fails closed
+  tag). An existing tag is reconciled rather than skipped, to contain exactly
+  the currently staged assets (stale or partially-uploaded ones are deleted,
+  missing ones are uploaded), and the release is published only once complete,
+  so a run cancelled mid-upload never leaves a published-but-incomplete
+  release, and the next run for the same tag can resume it. Zero-byte files
+  are skipped because GitHub Releases cannot store them. Releases sharing a
+  tag prefix are pruned to keep the release list small. Fails closed
   on a missing source directory or a flattened-name collision.
 inputs:
   source-dir:
@@ -23,8 +24,8 @@ inputs:
     description: >-
       Release tag to publish under, e.g. ota-pr-42. Use a fresh tag per publish
       when the repository restricts tag creation, since a deleted tag cannot be
-      recreated; an existing tag's release is reconciled (missing or partial
-      assets are (re)uploaded) rather than skipped.
+      recreated; an existing tag's release is reconciled to contain exactly the
+      staged assets rather than skipped.
     required: true
   token:
     description: Token with contents:write on the repository.
@@ -44,9 +45,8 @@ inputs:
   clean:
     description: >-
       Retained for compatibility and has no effect: an existing tag's release
-      is reconciled by uploading missing staged assets and re-uploading any
-      stuck in a partial-upload state, so stale partial uploads never persist.
-      An uploaded asset absent from the current source is not deleted.
+      is always reconciled to contain exactly the staged assets (stale and
+      partial uploads are deleted, missing ones are uploaded).
     required: false
     default: 'false'
   prune-grace-minutes:
@@ -204,27 +204,34 @@ runs:
           # and attaching the rest, leaving a draft or (per gh's own
           # internal draft-upload-publish sequence racing a SIGKILL) even a
           # published release short of assets. Reconcile by state rather
-          # than short-circuiting on "tag exists": delete+re-upload any
-          # asset stuck mid-upload, then upload whatever is missing outright.
-          # This step never runs against a published release directly -
-          # uploads only ever target the pre-publish draft state, so
-          # immutable-release repositories never see a mutation attempt on
-          # a published release.
-          existing_assets_uploaded="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
-          existing_assets_partial="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state != "uploaded") | .name')"
+          # than short-circuiting on "tag exists": delete any asset stuck
+          # mid-upload or no longer part of the current staged set, then
+          # upload whatever is missing, so the release converges to exactly
+          # the staged asset set either way. This is attempted even against
+          # an already-published release (not only a still-draft one); it
+          # only actually succeeds there on a repository that does not
+          # enforce immutable releases; the failure branch below handles the
+          # immutable case.
           existing_release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
           reconcile_output=''
           reconcile_failed=0
           if ! reconcile_output="$({
-            while IFS= read -r partial_name; do
-              [ -n "$partial_name" ] || continue
-              echo "Asset '$partial_name' on release '$RELEASE_TAG' is stuck in a non-uploaded state; deleting it for re-upload."
-              gh release delete-asset "$RELEASE_TAG" "$partial_name" --yes
-            done <<< "$existing_assets_partial"
+            expected_names="$(cat "$assets_file" "$manifests_file" | tr '\0' '\n')"
+            while IFS=$'\t' read -r asset_state asset_name; do
+              [ -n "$asset_name" ] || continue
+              if [ "$asset_state" != 'uploaded' ]; then
+                echo "Asset '$asset_name' on release '$RELEASE_TAG' is stuck in a non-uploaded state; deleting it for re-upload."
+                gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
+              elif ! printf '%s\n' "$expected_names" | grep -qxF "$asset_name"; then
+                echo "Asset '$asset_name' on release '$RELEASE_TAG' is not part of the current staged set; deleting it."
+                gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
+              fi
+            done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | "\(.state)\t\(.name)"')
 
+            uploaded_names="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
             missing_paths=()
             while IFS= read -r -d '' expected; do
-              if ! printf '%s\n' "$existing_assets_uploaded" | grep -qxF "$expected"; then
+              if ! printf '%s\n' "$uploaded_names" | grep -qxF "$expected"; then
                 missing_paths+=("$staging/$expected")
               fi
             done < <(cat "$assets_file" "$manifests_file")
