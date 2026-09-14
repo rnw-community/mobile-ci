@@ -3,14 +3,19 @@ description: >-
   Publishes a directory to a GitHub Release under a tag, flattening nested paths
   to `__`-joined asset names so every file gets an immutable download URL. This
   is the same channel the native development .ipa/.apk uses. The release is
-  created with all assets in a single atomic `gh release create` call, which is
-  required on repositories with immutable releases (a published release cannot
-  accept new assets) and on repositories that restrict tag creation/re-creation
-  (a deleted tag cannot be recreated, so publishes must use a fresh tag). An
-  existing tag is treated as already published and skipped. Zero-byte files are
-  skipped because GitHub Releases cannot store them. Releases sharing a tag
-  prefix are pruned to keep the release list small. Fails closed on a missing
-  source directory or a flattened-name collision.
+  created as a draft with all assets, and is only flipped to published once
+  every expected asset is confirmed uploaded, which is required on
+  repositories with immutable releases (a published release cannot accept new
+  or replacement assets) and on repositories that restrict tag creation/re-
+  creation (a deleted tag cannot be recreated, so publishes must use a fresh
+  tag). An existing tag is reconciled rather than skipped, to contain exactly
+  the currently staged assets (stale or partially-uploaded ones are deleted,
+  missing ones are uploaded), and the release is published only once complete,
+  so a run cancelled mid-upload never leaves a published-but-incomplete
+  release, and the next run for the same tag can resume it. Zero-byte files
+  are skipped because GitHub Releases cannot store them. Releases sharing a
+  tag prefix are pruned to keep the release list small. Fails closed
+  on a missing source directory or a flattened-name collision.
 inputs:
   source-dir:
     description: Directory whose files are uploaded as release assets.
@@ -19,7 +24,8 @@ inputs:
     description: >-
       Release tag to publish under, e.g. ota-pr-42. Use a fresh tag per publish
       when the repository restricts tag creation, since a deleted tag cannot be
-      recreated; an existing tag is treated as already published and skipped.
+      recreated; an existing tag's release is reconciled to contain exactly the
+      staged assets rather than skipped.
     required: true
   token:
     description: Token with contents:write on the repository.
@@ -38,9 +44,9 @@ inputs:
     default: '5'
   clean:
     description: >-
-      Retained for compatibility and has no effect: an existing tag is skipped,
-      and a new release is created with exactly the staged assets, so stale
-      assets never persist.
+      Retained for compatibility and has no effect: an existing tag's release
+      is always reconciled to contain exactly the staged assets (stale and
+      partial uploads are deleted, missing ones are uploaded).
     required: false
     default: 'false'
   prune-grace-minutes:
@@ -180,28 +186,95 @@ runs:
           fi
           title="${RELEASE_TITLE:-$RELEASE_TAG}"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release '$RELEASE_TAG' already exists; treating as published (idempotent)."
+            echo "Release '$RELEASE_TAG' already exists; reconciling its assets before reporting success."
           else
-            echo "Publishing ${#release_paths[@]} asset(s) to release '$RELEASE_TAG'."
+            echo "Creating draft release '$RELEASE_TAG' with ${#release_paths[@]} asset(s)."
             create_output=''
-            if ! create_output="$(gh release create "$RELEASE_TAG" --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}" "${release_paths[@]}" 2>&1)"; then
+            if ! create_output="$(gh release create "$RELEASE_TAG" --draft --title "$title" --notes "Expo OTA preview ${RELEASE_TAG}" "${release_paths[@]}" 2>&1)"; then
               if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
                 echo "::error::Failed to create release '$RELEASE_TAG' with ${#release_paths[@]} asset(s): ${create_output}"
                 exit 1
               fi
-              echo "::warning::Release '$RELEASE_TAG' exists after a failed create; verifying its assets: ${create_output}"
+              echo "::warning::Release '$RELEASE_TAG' exists after a failed create; reconciling its assets: ${create_output}"
             fi
           fi
-          release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
-          release_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)"
+
+          # A prior run may have been cancelled between creating the draft
+          # and flipping it to published, or between attaching some assets
+          # and attaching the rest, leaving a draft or (per gh's own
+          # internal draft-upload-publish sequence racing a SIGKILL) even a
+          # published release short of assets. Reconcile by state rather
+          # than short-circuiting on "tag exists": delete any asset stuck
+          # mid-upload or no longer part of the current staged set, then
+          # upload whatever is missing, so the release converges to exactly
+          # the staged asset set either way. This is attempted even against
+          # an already-published release (not only a still-draft one); it
+          # only actually succeeds there on a repository that does not
+          # enforce immutable releases; the failure branch below handles the
+          # immutable case.
+          existing_release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+          reconcile_output=''
+          reconcile_failed=0
+          if ! reconcile_output="$({
+            expected_names="$(cat "$assets_file" "$manifests_file" | tr '\0' '\n')"
+            while IFS=$'\t' read -r asset_state asset_name; do
+              [ -n "$asset_name" ] || continue
+              if [ "$asset_state" != 'uploaded' ]; then
+                echo "Asset '$asset_name' on release '$RELEASE_TAG' is stuck in a non-uploaded state; deleting it for re-upload."
+                gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
+              elif ! printf '%s\n' "$expected_names" | grep -qxF "$asset_name"; then
+                echo "Asset '$asset_name' on release '$RELEASE_TAG' is not part of the current staged set; deleting it."
+                gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
+              fi
+            done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | "\(.state)\t\(.name)"')
+
+            uploaded_names="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
+            missing_paths=()
+            while IFS= read -r -d '' expected; do
+              if ! printf '%s\n' "$uploaded_names" | grep -qxF "$expected"; then
+                missing_paths+=("$staging/$expected")
+              fi
+            done < <(cat "$assets_file" "$manifests_file")
+            if [ "${#missing_paths[@]}" -gt 0 ]; then
+              echo "Uploading ${#missing_paths[@]} missing/re-uploaded asset(s) to release '$RELEASE_TAG'."
+              gh release upload "$RELEASE_TAG" "${missing_paths[@]}"
+            fi
+          } 2>&1)"; then
+            reconcile_failed=1
+          fi
+          printf '%s\n' "$reconcile_output"
+          if [ "$reconcile_failed" -ne 0 ]; then
+            if [ "$existing_release_draft" = 'false' ]; then
+              echo "::error::Release '$RELEASE_TAG' is already published and incomplete, and its assets could not be reconciled (likely an immutable-release repository rejecting the mutation): ${reconcile_output}. Delete the release/tag and re-run to publish a clean one."
+            else
+              echo "::error::Failed to reconcile assets on release '$RELEASE_TAG': ${reconcile_output}"
+            fi
+            exit 1
+          fi
+
+          release_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
           missing_assets=''
           while IFS= read -r -d '' expected; do
             if ! printf '%s\n' "$release_assets" | grep -qxF "$expected"; then
               missing_assets="${missing_assets} ${expected}"
             fi
           done < <(cat "$assets_file" "$manifests_file")
-          if [ "$release_draft" != 'false' ] || [ -n "$missing_assets" ]; then
-            echo "::error::Release '$RELEASE_TAG' is not a complete published release (draft=$release_draft missing=${missing_assets# }); refusing to report success."
+          if [ -n "$missing_assets" ]; then
+            echo "::error::Release '$RELEASE_TAG' is still missing asset(s) after reconciliation (missing=${missing_assets# }); leaving it unpublished so the next run can resume."
+            exit 1
+          fi
+
+          # Only flip to published once every expected asset is confirmed
+          # uploaded, so a cancellation anywhere above this line never
+          # leaves a published-but-incomplete release for the next run to
+          # inherit.
+          release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+          if [ "$release_draft" = 'true' ]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+            release_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+          fi
+          if [ "$release_draft" != 'false' ]; then
+            echo "::error::Release '$RELEASE_TAG' could not be published (draft=$release_draft); refusing to report success."
             exit 1
           fi
           echo "::notice::Release '$RELEASE_TAG' is published with all ${#release_paths[@]} asset(s)."
