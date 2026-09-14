@@ -16,15 +16,21 @@ names. `github.com/.../releases/download/...` responds with a redirect; the
 `expo-updates` client and `expo-dev-client` both follow it and parse the JSON
 body regardless of the intermediary's content type.
 
-The release is created with **all assets in a single atomic `gh release create`
-call**, and an existing tag is treated as already published and skipped. That is
-required because:
+The release is created **as a draft** with all assets, and is only flipped to
+published once every expected asset is confirmed present. An existing tag's
+release is **reconciled**, not skipped: any asset stuck mid-upload is deleted
+and re-uploaded, any missing asset is uploaded, and only then is the release
+published (or left published if it already was, and already complete). That
+means a run cancelled mid-upload can never leave a **published**-but-incomplete
+release behind — worst case it leaves an incomplete **draft**, which the next
+run for the same tag resumes. This is required because:
 - GitHub repositories with **immutable releases** reject uploading assets to a
-  published release (`HTTP 422`), and
+  published release (`HTTP 422`) — draft releases remain mutable, so
+  reconciliation only ever mutates the pre-publish draft state, and
 - repositories that **restrict tag creation** reject re-creating a deleted tag
-  (`pre_receive ... Cannot create ref`), so each publish must use a **fresh
-  tag** — pass a unique tag (the `expo-ota-preview` workflow includes the short
-  commit SHA).
+  (`pre_receive ... Cannot create ref`), so each fresh publish must use a
+  **fresh tag** — pass a unique tag (the `expo-ota-preview` workflow includes
+  the short commit SHA).
 
 Zero-byte files (e.g. `expo export`'s empty `_global.css`) are skipped, because
 GitHub Releases cannot store 0-byte assets. Releases are public for public
@@ -40,7 +46,7 @@ previews.
 | Name            | Required | Default | Description                                                                       |
 | --------------- | -------- | ------- | --------------------------------------------------------------------------------- |
 | `source-dir`    | yes      | —       | Directory whose files are uploaded as release assets.                             |
-| `tag`           | yes      | —       | Release tag; use a **fresh** one per publish (an existing tag is skipped).         |
+| `tag`           | yes      | —       | Release tag; use a **fresh** one per publish (an existing tag is reconciled, not skipped). |
 | `token`         | yes      | —       | Token with `contents: write`.                                                     |
 | `title`         | no       | `''`    | Release title; defaults to the tag.                                               |
 | `prune-prefix`  | no       | `''`    | Delete older releases whose tag starts with this prefix. Empty disables pruning.  |
