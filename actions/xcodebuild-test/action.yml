@@ -76,6 +76,14 @@ inputs:
     description: Value for -parallel-testing-enabled.
     required: false
     default: 'YES'
+  parallel-testing-worker-count:
+    description: >-
+      Value for -parallel-testing-worker-count, applied to the test run only.
+      Each worker is a clone of the leased simulator, so N workers cost N times
+      its memory; a slimmed lease keeps that affordable. Empty lets Xcode
+      choose.
+    required: false
+    default: ''
   artifact-name:
     description: Name of the uploaded .xcresult artifact.
     required: false
@@ -209,6 +217,7 @@ runs:
       shell: bash
       env:
         ONLY_TESTING: ${{ inputs.only-testing }}
+        DESTINATION_ID: ${{ inputs.destination-id }}
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
         XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
@@ -243,7 +252,7 @@ runs:
             printf 'only-testing<<ONLY_TESTING_EOF\nONLY_TESTING_EOF\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the .xctestrun test targets but is not on PATH."; exit 1; }
+          command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to enumerate the tests to shard but is not on PATH."; exit 1; }
           derived_data=''
           previous=''
           # shellcheck disable=SC2086
@@ -255,7 +264,7 @@ runs:
             previous="$word"
           done
           if [ -z "$derived_data" ]; then
-            echo '::error::Sharding by discovered test targets needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
+            echo '::error::Sharding needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
             exit 1
           fi
           xctestrun=''
@@ -264,19 +273,41 @@ runs:
             break
           done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null | LC_ALL=C sort)
           if [ -z "$xctestrun" ]; then
-            echo "::error::No .xctestrun under '$derived_data/Build/Products' after build-for-testing; cannot discover test targets to shard."
+            echo "::error::No .xctestrun under '$derived_data/Build/Products' after build-for-testing; cannot discover tests to shard."
             exit 1
           fi
-          echo "Discovering test targets from $xctestrun"
-          while IFS= read -r target; do
-            [ -n "$target" ] || continue
-            candidates+=("$target")
-          done < <(
-            plutil -convert json -o - "$xctestrun" \
-              | jq -r '[.TestConfigurations[]?.TestTargets[]?.BlueprintName] | unique | .[]'
-          )
+
+          enumeration="${RUNNER_TEMP}/xcodebuild-test-enumeration-$$.json"
+          rm -f "$enumeration"
+          echo "Enumerating the individual tests declared by $xctestrun"
+          if xcodebuild test-without-building \
+              -xctestrun "$xctestrun" \
+              -destination "platform=iOS Simulator,id=$DESTINATION_ID" \
+              -enumerate-tests \
+              -test-enumeration-style flat \
+              -test-enumeration-format json \
+              -test-enumeration-output-path "$enumeration" > /dev/null; then
+            while IFS= read -r identifier; do
+              [ -n "$identifier" ] || continue
+              candidates+=("$identifier")
+            done < <(jq -r '[.. | objects | .enabledTests? // empty | .[]? | .identifier? // empty] | unique | .[]' "$enumeration")
+          else
+            echo '::warning::xcodebuild -enumerate-tests failed; falling back to sharding by whole test target, which is coarser and fails when there are fewer targets than shards.'
+          fi
+          rm -f "$enumeration"
+
           if [ "${#candidates[@]}" -eq 0 ]; then
-            echo "::error::'$xctestrun' declares no test targets; there is nothing to shard."
+            echo "Falling back to the test targets declared by $xctestrun"
+            while IFS= read -r target; do
+              [ -n "$target" ] || continue
+              candidates+=("$target")
+            done < <(
+              plutil -convert json -o - "$xctestrun" \
+                | jq -r '[.TestConfigurations[]?.TestTargets[]?.BlueprintName] | unique | .[]'
+            )
+          fi
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "::error::Neither test enumeration nor '$xctestrun' yielded a single test identifier; there is nothing to shard."
             exit 1
           fi
         fi
@@ -310,6 +341,7 @@ runs:
         SELECTED_TESTS: ${{ steps.shard.outputs.only-testing }}
         RESULT_BUNDLE_PATH: ${{ inputs.result-bundle-path }}
         PARALLEL_TESTING: ${{ inputs.parallel-testing }}
+        PARALLEL_TESTING_WORKER_COUNT: ${{ inputs.parallel-testing-worker-count }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -327,6 +359,13 @@ runs:
         mkdir -p "$(dirname "$RESULT_BUNDLE_PATH")"
         echo "result-bundle-path=$RESULT_BUNDLE_PATH" >> "$GITHUB_OUTPUT"
         args+=(-parallel-testing-enabled "$PARALLEL_TESTING" -resultBundlePath "$RESULT_BUNDLE_PATH")
+        if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ]; then
+          if ! printf '%s' "$PARALLEL_TESTING_WORKER_COUNT" | grep -qE '^[1-9][0-9]*$'; then
+            echo "::error::parallel-testing-worker-count '$PARALLEL_TESTING_WORKER_COUNT' must be a positive integer."
+            exit 1
+          fi
+          args+=(-parallel-testing-worker-count "$PARALLEL_TESTING_WORKER_COUNT")
+        fi
         printf 'xcodebuild'
         printf ' %q' "${args[@]}" test-without-building
         printf '\n'

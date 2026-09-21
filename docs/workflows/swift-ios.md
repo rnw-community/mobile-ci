@@ -113,6 +113,10 @@ The same `cache-backend` / `cache-local-dir` pair also drives `swift-test`'s
 | `enable-xcodebuild-test` | `true`                       | Compile and run the simulator-bound tests at all.         |
 | `simulator-device-type`  | `''`                         | Exact device type name. **Required** whenever `enable-xcodebuild-test` is `true`; the `test` job fails closed on an empty value rather than guessing a device. |
 | `simulator-runtime`      | `latest`                     | `latest` or an exact runtime identifier.                  |
+| `simulator-template-device` | `''`                      | Name of a shut-down, prewarmed device to `simctl clone` instead of creating one. A slimmed template clones slim. |
+| `simulator-slim-profile` | `''`                         | Repo-relative simslim JSON profile the lease is verified against. |
+| `simulator-slim-repair`  | `true`                       | Apply the profile in-job (a reboot) on drift. Set `false` with a slimmed template so an unslimmed one errors. |
+| `parallel-testing-worker-count` | `''`                  | `-parallel-testing-worker-count`. Each worker clones the leased simulator, so raise it only on a slimmed lease. |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
 | `only-testing`           | `''`                         | Test identifiers to run (and to shard).                   |
 | `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. Must list every zero-based index exactly once — `[0, 0]` would run one shard twice, never run the other, and still report green, so it fails closed. |

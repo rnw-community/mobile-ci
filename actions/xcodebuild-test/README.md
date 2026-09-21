@@ -19,6 +19,22 @@ working directory root, or inside the project/workspace's
 `xcshareddata/swiftpm/` — `-disableAutomaticPackageResolution` is added too, so
 a pinned dependency graph is never silently re-resolved mid-run.
 
+## Parallel workers and memory
+
+`-parallel-testing-enabled` makes Xcode **clone the destination simulator**
+once per worker, so `parallel-testing-worker-count: 2` costs two simulators'
+memory, not one. On a 7 GiB CI VM a stock simulator already runs hundreds of
+RuntimeRoot daemons, and two of them will swap rather than go faster.
+
+Lease a *slim* device and the arithmetic changes: `simctl clone` copies the
+launchd disable overrides with the device, so every worker clone inherits the
+slimming — see [`simulator-lease`](../simulator-lease/README.md)'s
+`slim-profile` / `template-device`. Raise `parallel-testing-worker-count` only
+on a slimmed lease.
+
+This action does nothing else about slimming: the lease owns the device's
+shape, and `destination-id` is all this action needs to know about it.
+
 ## Modes, and sharding across jobs
 
 `mode` decides which halves run:
@@ -47,11 +63,18 @@ With `shard-count` > 1 the action splits the test identifiers index-modulo
 across shards:
 
 - If `only-testing` is set, **that list** is what gets split.
-- Otherwise the test targets are discovered from the `.xctestrun` file
+- Otherwise the **individual tests** are enumerated with
+  `xcodebuild test-without-building -enumerate-tests` against the `.xctestrun`
   `build-for-testing` produced under `<derivedDataPath>/Build/Products`. This
   needs `-derivedDataPath` in `xcodebuild-args` (which
   [`xcode-cache`](../xcode-cache/README.md) supplies); without it the step
   fails closed rather than guessing.
+- If enumeration fails, the step warns and falls back to the whole test targets
+  declared by the `.xctestrun`.
+
+Enumerating tests rather than targets is what makes sharding useful for the
+common shape of a UI-test suite: one target, one class, dozens of methods.
+Target-level sharding would give one identifier and fail.
 
 A shard that selects zero identifiers fails the job — `shard-count` higher
 than the number of test identifiers is a configuration error, not a free pass.
@@ -75,6 +98,7 @@ than the number of test identifiers is a configuration error, not a free pass.
 | `xcodebuild-args`    | no       | `''`                        | Extra arguments, e.g. `xcode-cache`'s `xcodebuild-args`. Word-split.      |
 | `working-directory`  | no       | `.`                         | Directory the project/workspace and result bundle resolve against.        |
 | `parallel-testing`   | no       | `YES`                       | Value for `-parallel-testing-enabled`.                                    |
+| `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator; raise it only on a slimmed lease. |
 | `artifact-name`      | no       | `xcresult-<scheme>-<shard-index>` | Name of the uploaded `.xcresult` artifact.                          |
 | `retention-days`     | no       | `7`                         | Retention for that artifact.                                              |
 

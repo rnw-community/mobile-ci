@@ -122,6 +122,39 @@ on:
                 type: string
                 required: false
                 default: latest
+            simulator-template-device:
+                description: >-
+                    Exact name of a shut-down, prewarmed device on the host to clone
+                    instead of creating a stock one. A slimmed template clones slim,
+                    so the lease pays no repair reboot.
+                type: string
+                required: false
+                default: ''
+            simulator-slim-profile:
+                description: >-
+                    Repository-relative simslim JSON profile the leased simulator is
+                    verified against. Empty leases a stock device, which on a small
+                    CI VM means hundreds of RuntimeRoot daemons competing with the
+                    tests for memory.
+                type: string
+                required: false
+                default: ''
+            simulator-slim-repair:
+                description: >-
+                    Apply the slim profile in-job (a reboot) when the lease does not
+                    match it. Set to false together with
+                    simulator-template-device so an unslimmed template is an error.
+                type: string
+                required: false
+                default: 'true'
+            parallel-testing-worker-count:
+                description: >-
+                    -parallel-testing-worker-count for the test run. Each worker is a
+                    clone of the leased simulator, so raise it only on a slimmed
+                    lease. Empty lets Xcode choose.
+                type: string
+                required: false
+                default: ''
             test-plan:
                 type: string
                 required: false
@@ -353,6 +386,9 @@ jobs:
               with:
                   device-type: ${{ inputs.simulator-device-type }}
                   runtime: ${{ inputs.simulator-runtime }}
+                  template-device: ${{ inputs.simulator-template-device }}
+                  slim-profile: ${{ inputs.simulator-slim-profile }}
+                  slim-repair: ${{ inputs.simulator-slim-repair }}
 
             - name: Run this shard's tests
               uses: rnw-community/mobile-ci/actions/xcodebuild-test@v1.23.1 # v1.23.1
@@ -367,6 +403,7 @@ jobs:
                   only-testing: ${{ inputs.only-testing }}
                   shard-index: ${{ matrix.shard }}
                   shard-count: ${{ steps.shards.outputs.count }}
+                  parallel-testing-worker-count: ${{ inputs.parallel-testing-worker-count }}
                   result-bundle-path: ${{ inputs.result-bundle-path-prefix }}${{ matrix.shard }}.xcresult
                   xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
                   working-directory: ${{ inputs.working-directory }}

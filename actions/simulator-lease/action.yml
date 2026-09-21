@@ -33,6 +33,59 @@ inputs:
     description: Bound on `xcrun simctl bootstatus -b`.
     required: false
     default: '300'
+  template-device:
+    description: >-
+      Exact name of an existing, shut-down device on this host to clone instead
+      of creating a fresh one. A prewarmed, already-slimmed template is cloned
+      with its launchd disable overrides intact, so the lease comes up slim
+      with no repair reboot. Empty (default) creates a stock device from
+      device-type + runtime.
+    required: false
+    default: ''
+  slim-profile:
+    description: >-
+      Repository-relative path to a committed simslim JSON profile
+      (`{"name": "ci", "except": [...], "keep": [...]}`). When set, the booted
+      lease is checked against it with `simslim verify --profile`, and
+      `simslim measure` reports the resulting footprint. Empty (default) leases
+      a stock device, which on a 7 GiB CI VM means hundreds of RuntimeRoot
+      daemons competing with the test run for memory.
+    required: false
+    default: ''
+  slim-repair:
+    description: >-
+      When 'true' (the default here, unlike run-maestro-ios) a lease that does
+      not match slim-profile is repaired in-job with `simslim on --profile`,
+      which applies the missing delta and reboots, then is re-verified; a
+      second mismatch still fails. The default differs because this action
+      *creates* the device it leases: a freshly created device is always stock,
+      so drift is expected rather than a provisioning defect. Set it to 'false'
+      together with template-device once the host image ships slimmed
+      templates, so a stock template surfaces as an error instead of being
+      repaired on every run.
+    required: false
+    default: 'true'
+  simslim-version:
+    description: >-
+      Pinned simslim CLI version (plain X.Y.Z), consulted only when
+      slim-profile is set. A `simslim` already on PATH is reused when its
+      `simslim version` output matches exactly; otherwise the matching
+      `simslim-v<version>-macos-arm64.tar.gz` release asset is downloaded into
+      $HOME/.simslim-pinned, checked against simslim-sha256, and extracted into
+      a job-private directory. Preinstall simslim on the host
+      (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
+    required: false
+    default: '0.8.0'
+  simslim-sha256:
+    description: >-
+      SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
+      release asset, maintained in this repo alongside simslim-version because
+      MobAI-App/simslim publishes no checksum file. A download is verified
+      against it before extraction, and a cached copy under
+      $HOME/.simslim-pinned is re-hashed against it on every job. Empty refuses
+      to download at all. Bump it together with simslim-version.
+    required: false
+    default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
 outputs:
   udid:
     description: UDID of the leased simulator.
@@ -43,6 +96,12 @@ outputs:
   lease-file:
     description: Path of the JSON lease file (udid, name, device type, runtime, created-at).
     value: ${{ steps.acquire.outputs.lease-file }}
+  slimmed:
+    description: '`true` when the lease was verified against slim-profile.'
+    value: ${{ steps.slim.outputs.slimmed || 'false' }}
+  footprint:
+    description: Footprint `simslim measure` reported for the leased device, when slim-profile is set.
+    value: ${{ steps.slim.outputs.footprint }}
 runs:
   using: composite
   steps:
@@ -65,6 +124,7 @@ runs:
         DEVICE_TYPE: ${{ inputs.device-type }}
         RUNTIME: ${{ inputs.runtime }}
         NAME_PREFIX: ${{ inputs.name-prefix }}
+        TEMPLATE_DEVICE: ${{ inputs.template-device }}
         LEASE_FILE_INPUT: ${{ inputs.lease-file }}
         BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
       run: |
@@ -111,9 +171,31 @@ runs:
         fi
 
         device_name="${NAME_PREFIX}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
-        udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
+        if [ -n "$TEMPLATE_DEVICE" ]; then
+          template_udid=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg name "$TEMPLATE_DEVICE" '[.devices[][] | select(.name == $name and .isAvailable == true)] | first | .udid // empty'
+          )
+          if [ -z "$template_udid" ]; then
+            echo "::error::template-device '$TEMPLATE_DEVICE' has no exact match among the available simulators on this host. Available devices:"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          template_state=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg udid "$template_udid" '[.devices[][] | select(.udid == $udid) | .state] | first // empty'
+          )
+          if [ "$template_state" != 'Shutdown' ]; then
+            echo "::error::template-device '$TEMPLATE_DEVICE' ($template_udid) is '$template_state'; 'xcrun simctl clone' requires a shut-down source. A template is provisioning state and must never be booted by a job."
+            exit 1
+          fi
+          echo "Cloning template device '$TEMPLATE_DEVICE' ($template_udid) into '$device_name'"
+          udid=$(xcrun simctl clone "$template_udid" "$device_name")
+        else
+          udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
+        fi
         if ! printf '%s' "$udid" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
-          echo "::error::'xcrun simctl create' did not return a UDID for '$device_name'."
+          echo "::error::The leased device for '$device_name' has no UDID; simctl create/clone did not produce one."
           exit 1
         fi
 
@@ -156,6 +238,198 @@ runs:
           fi
           exit 1
         fi
+
+    - name: Install simslim
+      if: inputs.mode == 'acquire' && inputs.slim-profile != ''
+      shell: bash
+      env:
+        SIMSLIM_VERSION: ${{ inputs.simslim-version }}
+        SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
+      run: |
+        set -euo pipefail
+        if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+          exit 1
+        fi
+        if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+          echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
+          exit 1
+        fi
+        expected_version_line="simslim $SIMSLIM_VERSION"
+        existing_bin="$(command -v simslim || true)"
+        if [ -n "$existing_bin" ] && [ "$("$existing_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]; then
+          echo "Using existing simslim $SIMSLIM_VERSION already on PATH: $existing_bin"
+          exit 0
+        fi
+        if [ -z "$SIMSLIM_SHA256" ]; then
+          echo "::error::No simslim $SIMSLIM_VERSION on PATH and simslim-sha256 is empty, so the release asset cannot be integrity-checked; refusing to download. Preinstall simslim $SIMSLIM_VERSION on the host or set simslim-sha256 to the asset's digest."
+          exit 1
+        fi
+        host_arch="$(uname -m)"
+        if [ "$host_arch" != "arm64" ]; then
+          echo "::error::MobAI-App/simslim only publishes macos-arm64 release binaries and this host reports '$host_arch'; preinstall simslim $SIMSLIM_VERSION on PATH (e.g. 'go install github.com/mobai-app/simslim/cmd/simslim@v$SIMSLIM_VERSION') instead."
+          exit 1
+        fi
+
+        sha256_of() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$1" | awk '{print $1}'
+          else
+            shasum -a 256 "$1" | awk '{print $1}'
+          fi
+        }
+
+        asset_name="simslim-v${SIMSLIM_VERSION}-macos-arm64.tar.gz"
+        pinned_root="$HOME/.simslim-pinned"
+        pinned_tarball="$pinned_root/$asset_name"
+        lock_dir="$pinned_root/.lock-$SIMSLIM_VERSION"
+        mkdir -p "$pinned_root"
+
+        cached_tarball_verified() {
+          [ -f "$pinned_tarball" ] && [ "$(sha256_of "$pinned_tarball")" = "$SIMSLIM_SHA256" ]
+        }
+
+        if ! cached_tarball_verified; then
+          lock_acquired=''
+          lock_deadline=$((SECONDS + 300))
+          lock_is_stale() {
+            lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+            if [ -n "$lock_pid" ]; then
+              if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
+              return 0
+            else
+              [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+            fi
+          }
+          while :; do
+            if mkdir "$lock_dir" 2>/dev/null; then
+              echo "$$" > "$lock_dir/pid"
+              lock_acquired=1
+              break
+            fi
+            if cached_tarball_verified; then
+              break
+            fi
+            if lock_is_stale; then
+              echo "::warning::Removing stale simslim download lock '$lock_dir' left behind by a terminated job."
+              rm -rf "$lock_dir"
+              continue
+            fi
+            if [ "$SECONDS" -ge "$lock_deadline" ]; then
+              echo "::error::Timed out waiting for the simslim download lock '$lock_dir'; a concurrent download on this host may be stuck."
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ -n "$lock_acquired" ]; then
+            cleanup() {
+              [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
+              rm -rf "$lock_dir"
+            }
+            trap cleanup EXIT
+
+            if ! cached_tarball_verified; then
+              download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/${asset_name}"
+              scratch_dir="$(mktemp -d "$pinned_root/.download-XXXXXX")"
+              tarball_path="$scratch_dir/$asset_name"
+              curl_exit=0
+              http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")" || curl_exit=$?
+              if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
+                echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a $asset_name asset exists at https://github.com/MobAI-App/simslim/releases."
+                exit 1
+              fi
+              actual_sha="$(sha256_of "$tarball_path")"
+              if [ "$actual_sha" != "$SIMSLIM_SHA256" ]; then
+                echo "::error::SHA-256 mismatch for $asset_name: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to install. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
+                exit 1
+              fi
+              mv -f "$tarball_path" "$pinned_tarball"
+              echo "Downloaded and verified $asset_name against simslim-sha256 $SIMSLIM_SHA256."
+            fi
+            trap - EXIT
+            cleanup
+          fi
+        fi
+
+        job_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/simslim-${SIMSLIM_VERSION}-XXXXXX")"
+        if ! cached_tarball_verified; then
+          echo "::error::Cached $pinned_tarball no longer matches simslim-sha256 $SIMSLIM_SHA256; refusing to extract from it. Delete it and re-run."
+          exit 1
+        fi
+        tar -xzf "$pinned_tarball" -C "$job_dir"
+        job_bin="$job_dir/simslim"
+        if [ ! -f "$job_bin" ]; then
+          echo "::error::$asset_name did not contain a top-level 'simslim' binary; refusing to install."
+          exit 1
+        fi
+        chmod +x "$job_bin"
+        if [ "$("$job_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$expected_version_line" ]; then
+          echo "::error::Extracted simslim at '$job_bin' reports '$("$job_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
+          exit 1
+        fi
+        echo "$job_dir" >> "$GITHUB_PATH"
+        echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
+
+    - name: Verify, repair and measure the lease's slim profile
+      if: inputs.mode == 'acquire' && inputs.slim-profile != ''
+      id: slim
+      shell: bash
+      env:
+        SLIM_PROFILE: ${{ inputs.slim-profile }}
+        SLIM_REPAIR: ${{ inputs.slim-repair }}
+        SIMULATOR_UDID: ${{ steps.acquire.outputs.udid }}
+        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step."; exit 1; }
+        test -n "$SIMULATOR_UDID" || { echo '::error::No leased UDID; the acquire step must run before the slim check.'; exit 1; }
+        if [ ! -f "$SLIM_PROFILE" ]; then
+          echo "::error::slim-profile '$SLIM_PROFILE' does not exist in the checkout."
+          exit 1
+        fi
+        if simslim verify "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
+          echo "Leased simulator $SIMULATOR_UDID already matches slim profile '$SLIM_PROFILE'."
+        elif [ "$SLIM_REPAIR" != 'true' ]; then
+          echo "::error::Leased simulator '$SIMULATOR_UDID' does not match slim profile '$SLIM_PROFILE' and slim-repair is not 'true'. With template-device set, this means the host's template is not slimmed - fix the image rather than paying for a repair reboot on every run."
+          exit 1
+        else
+          echo "::notice::Leased simulator '$SIMULATOR_UDID' is not slim yet; applying '$SLIM_PROFILE' with 'simslim on' (this reboots the device)."
+          if ! simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
+            echo "::error::'simslim on' failed to apply '$SLIM_PROFILE' to '$SIMULATOR_UDID'."
+            exit 1
+          fi
+          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
+          if ! perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+            echo "::error::Simulator '$SIMULATOR_UDID' did not report booted within ${BOOT_TIMEOUT_SECONDS}s after the slim reboot."
+            exit 1
+          fi
+          if ! simslim verify "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
+            echo "::error::Simulator '$SIMULATOR_UDID' still does not match '$SLIM_PROFILE' after 'simslim on'; the runtime may predate iOS 18.5 (the earliest with persistent overrides) or the profile may be invalid."
+            exit 1
+          fi
+        fi
+        measurement="${RUNNER_TEMP}/simslim-measure-$$.txt"
+        if simslim measure "$SIMULATOR_UDID" > "$measurement" 2>&1; then
+          footprint=$(grep -E '[0-9]' "$measurement" | tail -n 1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+        else
+          footprint=''
+          echo "::warning::'simslim measure' failed for '$SIMULATOR_UDID'; continuing without a footprint figure."
+        fi
+        {
+          echo 'slimmed=true'
+          echo "footprint=$footprint"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### Slim simulator lease \`$SIMULATOR_UDID\`"
+          echo
+          echo "Profile: \`$SLIM_PROFILE\`"
+          echo
+          echo '```text'
+          cat "$measurement"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        rm -f "$measurement"
 
     - name: Release the leased simulator
       if: inputs.mode == 'release'
