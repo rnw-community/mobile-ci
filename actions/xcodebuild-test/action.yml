@@ -289,7 +289,15 @@ runs:
           exit 0
         fi
 
-        command -v python3 >/dev/null 2>&1 || { echo "::error::'python3' is required to rewrite the .xctestrun's screen-capture format but is not on PATH."; exit 1; }
+        # A missing python3 is the same class of event as an unreachable
+        # .xctestrun: this action's contract is to run the tests, and the
+        # capture format is an optimisation on top of that. Warn and leave the
+        # scheme's own setting rather than failing a run that would otherwise
+        # have passed — but never pretend the rewrite happened.
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::warning::'python3' is not on PATH, so the .xctestrun's screen-capture format is left at the scheme's own setting; this run pays Xcode's UI-test video. Install the Xcode Command Line Tools on this runner (see docs/self-hosted-runners.md)."
+          exit 0
+        fi
         for xctestrun in "${xctestruns[@]}"; do
           counts="$(XCTESTRUN_PATH="$xctestrun" SCREEN_CAPTURE="$SCREEN_CAPTURE" python3 - <<'PYTHON'
         import os

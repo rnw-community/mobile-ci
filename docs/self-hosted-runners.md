@@ -8,6 +8,19 @@ with several versions of but no `.xcconfig`-level pinning guarantee across
 runs). This doc covers provisioning both pool types plus the two variables
 this repo's own maintainer-only fleet self-test job reads.
 
+## Common to every macOS pool: `python3`
+
+macOS pools need `python3` on `PATH`, which the **Xcode Command Line Tools**
+install (`xcode-select --install`) — a host that can run `xcodebuild` normally
+already has it. [`xcodebuild-test`](../actions/xcodebuild-test/README.md) uses
+it to rewrite the generated `.xctestrun`'s screen-capture format (see [UI tests
+capture screenshots, not video](#ui-tests-capture-screenshots-not-video)); the
+Android `redroid-container` action already requires it outright.
+
+Missing `python3` does not fail a run: the rewrite is skipped with a warning
+and the run pays Xcode's UI-test video for that job. It is a pool-provisioning
+defect, not a test failure, so it is reported as one.
+
 ## Common to every pool: `jq`
 
 Install `jq` on every host in every pool. The reusable workflows' package
