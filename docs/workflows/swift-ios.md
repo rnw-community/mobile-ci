@@ -2,16 +2,28 @@
 
 The whole-pipeline tier for a **native Swift / Xcode** app — no React Native,
 no Expo, no Node, no CocoaPods, no EAS. It composes the à la carte native-Swift
-actions into two jobs:
+actions into three jobs:
 
-| Job        | Composes                                                                                                                                       |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate` | `setup-xcode-pinned` → `xcode-cache` (restore) → `swift-test` → `simulator-lease` (acquire) → `xcodebuild-test` → `simulator-lease` (release) → `xcode-cache` (save) |
-| `publish`  | `setup-xcode-pinned` → `apple-signing` (install) → `xcode-archive-upload` → optional tag + GitHub Release → `apple-signing` (remove)             |
+| Job       | Composes                                                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `build`   | `setup-xcode-pinned` → `xcode-cache` (restore) → `swift-test` → `xcodebuild-test` (`mode: build`) → `xcode-cache` (save)                    |
+| `test`    | One matrix leg per `shards-json` entry: `setup-xcode-pinned` → `xcode-cache` (restore) → `simulator-lease` → `xcodebuild-test` (`mode: test`) → `simulator-lease` (release) |
+| `publish` | `setup-xcode-pinned` → `apple-signing` (install) → `xcode-archive-upload` → optional tag + GitHub Release → `apple-signing` (remove)        |
 
-`validate` needs **no secrets at all**. `publish` is opt-in
-(`enable-publish: true`), runs only after `validate` passes, and is the only
-job that touches signing material.
+`build` and `test` need **no secrets at all**. `publish` is opt-in
+(`enable-publish: true`), runs only after both pass, and is the only job that
+touches signing material.
+
+The split is the point: `build` compiles the tests **once** and saves
+DerivedData under a key of `toolchain + project fingerprint`; every `test`
+shard restores that same key and runs `test-without-building`, so N shards
+share one compile instead of each paying for their own. `shards-json: '[0]'`
+(the default) is a single unsharded leg. Because the array's length *is* the
+shard count, there is no second knob that can disagree with the matrix.
+
+Restored `-derivedDataPath` is an absolute path, so `build` and `test` share
+one `runs-on-json` label set — a homogeneous pool, where the workspace path is
+the same on every VM.
 
 ```yaml
 jobs:
@@ -38,9 +50,16 @@ The three levers, in the order they pay off:
    `cache-backend: local` the entries live on a directory the self-hosted VM
    already mounts, so a warm run pays no network at all.
 3. **`xcodebuild-test`** compiles the tests **once** with `build-for-testing`
-   and then runs them with `test-without-building` against a freshly leased,
-   already-booted simulator — so the cold boot is not inside the test timeout,
-   and the same compiled products can be re-run or sharded.
+   in the `build` job, then runs them with `test-without-building` against a
+   freshly leased, already-booted simulator in each `test` shard — so the cold
+   boot is not inside the test timeout, the compile is not repeated per shard,
+   and wall-clock falls roughly linearly in the number of shards.
+
+The measured shape of the problem, from the consumer of record
+(`vitalyiegorov/pony-labirinth`, run `35560967152`, 21m15s total): `swift test`
+50s, `xcodebuild build` 22s, simulator create 1s, and `xcodebuild test`
+**1177s — 92% of the job**, single shard, recompiling inside `test`. That last
+number is what this workflow's shape exists to attack.
 
 ## Inputs
 
@@ -53,7 +72,7 @@ The three levers, in the order they pay off:
 | `project`             | no       | `''`    | Path to the `.xcodeproj`. Exactly one of project/workspace. |
 | `workspace`           | no       | `''`    | Path to the `.xcworkspace`.                                |
 | `scheme`              | yes      | —       | Scheme built, tested and archived.                         |
-| `configuration`       | no       | `Debug` | Configuration used by `validate`.                          |
+| `configuration`       | no       | `Debug` | Configuration used by `build` and `test`.                  |
 | `working-directory`   | no       | `.`     | Directory every project-relative path resolves against.    |
 | `checkout-fetch-depth`| no       | `1`     | `fetch-depth` passed to `actions/checkout`.                |
 
@@ -61,9 +80,9 @@ The three levers, in the order they pay off:
 
 | Name                        | Default                                          |
 | --------------------------- | -------------------------------------------------- |
-| `runs-on-json`              | `["self-hosted","trf-macos-arm64-4x7"]`            |
+| `runs-on-json`              | `["self-hosted","trf-macos-arm64-4x7"]` (build **and** test) |
 | `publish-runs-on-json`      | `["self-hosted","trf-macos-arm64-6x12"]`           |
-| `validate-timeout-minutes`  | `45`                                               |
+| `validate-timeout-minutes`  | `45` (applies to `build` and to each `test` shard)  |
 | `publish-timeout-minutes`   | `90`                                               |
 
 `runs-on` is resolved before any step runs, so both are JSON arrays of labels
@@ -90,13 +109,13 @@ The same `cache-backend` / `cache-local-dir` pair also drives `swift-test`'s
 | `enable-swift-test`      | `true`                       | Run `swift test --parallel`.                              |
 | `swift-package-path`     | `.`                          | Directory holding `Package.swift`.                        |
 | `swift-test-extra-args`  | `''`                         | Extra arguments for `swift test`.                         |
-| `enable-xcodebuild-test` | `true`                       | Run the simulator-bound test lane.                        |
+| `enable-xcodebuild-test` | `true`                       | Compile and run the simulator-bound tests at all.         |
 | `simulator-device-type`  | `''`                         | Exact device type name; required when the lane is enabled. |
 | `simulator-runtime`      | `latest`                     | `latest` or an exact runtime identifier.                  |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
 | `only-testing`           | `''`                         | Test identifiers to run (and to shard).                   |
-| `shard-count`            | `1`                          | Number of shards; `1` disables sharding.                  |
-| `result-bundle-path`     | `build/TestResults.xcresult` | `.xcresult` path; uploaded as an artifact.                |
+| `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. |
+| `result-bundle-path-prefix` | `build/TestResults-`      | `.xcresult` path per shard: `<prefix><index>.xcresult`; each is uploaded as an artifact. |
 
 ### Publish
 
@@ -171,6 +190,7 @@ jobs:
             project: MyApp.xcodeproj
             scheme: MyApp
             simulator-device-type: 'iPad Pro 11-inch (M4)'
+            shards-json: '[0, 1]'
             cache-backend: local
             cache-local-dir: /Volumes/My Shared Files/ci-shared/xcode-cache
             enable-publish: ${{ github.ref == 'refs/heads/main' }}

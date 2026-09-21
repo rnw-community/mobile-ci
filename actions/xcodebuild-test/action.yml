@@ -5,6 +5,14 @@ description: >-
   sharded across jobs, uploading the .xcresult bundle and publishing a
   pass/fail step summary. Zero tests executed fails the job.
 inputs:
+  mode:
+    description: >-
+      `build` compiles the tests and stops. `test` runs an already-compiled
+      test bundle. `build-and-test` (default) does both in one job. Split the
+      two so N shard jobs share one compile through a restored DerivedData
+      cache.
+    required: false
+    default: build-and-test
   project:
     description: Path to the .xcodeproj. Exactly one of project/workspace is required.
     required: false
@@ -26,9 +34,11 @@ inputs:
     default: iphonesimulator
   destination-id:
     description: >-
-      UDID of an already-booted simulator, e.g. simulator-lease's udid output.
-      Used as `platform=iOS Simulator,id=<udid>`.
-    required: true
+      UDID of an already-booted simulator, e.g. simulator-lease's udid output,
+      used as `platform=iOS Simulator,id=<udid>`. Required unless mode is
+      `build`, which targets `generic/platform=iOS Simulator` when it is empty.
+    required: false
+    default: ''
   test-plan:
     description: Optional test plan name passed as -testPlan.
     required: false
@@ -87,10 +97,11 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Build the scheme for testing
-      id: build
+    - name: Compose the xcodebuild arguments
+      id: compose
       shell: bash
       env:
+        MODE: ${{ inputs.mode }}
         PROJECT: ${{ inputs.project }}
         WORKSPACE: ${{ inputs.workspace }}
         SCHEME: ${{ inputs.scheme }}
@@ -111,8 +122,20 @@ runs:
           echo '::error::Set exactly one of project/workspace.'
           exit 1
         fi
-        if ! printf '%s' "$DESTINATION_ID" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
-          echo "::error::destination-id must be a simulator UDID (got '$DESTINATION_ID')."
+        case "$MODE" in
+          build|test|build-and-test) ;;
+          *) echo "::error::mode must be 'build', 'test' or 'build-and-test' (got '$MODE')."; exit 1 ;;
+        esac
+        if [ -n "$DESTINATION_ID" ]; then
+          if ! printf '%s' "$DESTINATION_ID" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+            echo "::error::destination-id must be a simulator UDID (got '$DESTINATION_ID')."
+            exit 1
+          fi
+          destination="platform=iOS Simulator,id=$DESTINATION_ID"
+        elif [ "$MODE" = 'build' ]; then
+          destination='generic/platform=iOS Simulator'
+        else
+          echo "::error::destination-id is required for mode '$MODE'; only mode 'build' can target a generic simulator."
           exit 1
         fi
 
@@ -127,7 +150,7 @@ runs:
           container="$WORKSPACE"
         fi
         args+=(-scheme "$SCHEME" -configuration "$CONFIGURATION" -sdk "$SDK")
-        args+=(-destination "platform=iOS Simulator,id=$DESTINATION_ID")
+        args+=(-destination "$destination")
         args+=(-skipMacroValidation -skipPackagePluginValidation)
         if [ -n "$TEST_PLAN" ]; then
           args+=(-testPlan "$TEST_PLAN")
@@ -155,18 +178,33 @@ runs:
           args+=("$word")
         done
 
-        printf 'xcodebuild'
-        printf ' %q' "${args[@]}" build-for-testing
-        printf '\n'
-        xcodebuild "${args[@]}" build-for-testing
-
         {
           printf 'common-args<<XCODEBUILD_ARGS_EOF\n'
           printf '%s\n' "${args[@]}"
           printf 'XCODEBUILD_ARGS_EOF\n'
         } >> "$GITHUB_OUTPUT"
 
+    - name: Build the scheme for testing
+      if: inputs.mode != 'test'
+      shell: bash
+      env:
+        COMMON_ARGS: ${{ steps.compose.outputs.common-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        args=()
+        while IFS= read -r argument; do
+          [ -n "$argument" ] || continue
+          args+=("$argument")
+        done <<< "$COMMON_ARGS"
+        printf 'xcodebuild'
+        printf ' %q' "${args[@]}" build-for-testing
+        printf '\n'
+        xcodebuild "${args[@]}" build-for-testing
+
     - name: Resolve this shard's test identifiers
+      if: inputs.mode != 'build'
       id: shard
       shell: bash
       env:
@@ -264,10 +302,11 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Run the tests without rebuilding
+      if: inputs.mode != 'build'
       id: test
       shell: bash
       env:
-        COMMON_ARGS: ${{ steps.build.outputs.common-args }}
+        COMMON_ARGS: ${{ steps.compose.outputs.common-args }}
         SELECTED_TESTS: ${{ steps.shard.outputs.only-testing }}
         RESULT_BUNDLE_PATH: ${{ inputs.result-bundle-path }}
         PARALLEL_TESTING: ${{ inputs.parallel-testing }}

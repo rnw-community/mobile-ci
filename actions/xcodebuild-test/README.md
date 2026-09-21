@@ -18,6 +18,28 @@ working directory root, or inside the project/workspace's
 `xcshareddata/swiftpm/` — `-disableAutomaticPackageResolution` is added too, so
 a pinned dependency graph is never silently re-resolved mid-run.
 
+## Modes, and sharding across jobs
+
+`mode` decides which halves run:
+
+| `mode`           | Runs                                                              |
+| ---------------- | ------------------------------------------------------------------- |
+| `build-and-test` | `build-for-testing` then `test-without-building` (default).          |
+| `build`          | `build-for-testing` only. `destination-id` may be empty, in which case it targets `generic/platform=iOS Simulator`. |
+| `test`           | `test-without-building` only, against products already on disk.      |
+
+Splitting them is how N shards share **one** compile: a build job runs
+`mode: build` and saves DerivedData with
+[`xcode-cache`](../xcode-cache/README.md); every shard job restores that same
+cache key and runs `mode: test`. Because the cache key is
+`toolchain + project fingerprint`, the shards hit the entry the build job just
+wrote without any extra plumbing.
+
+The restored `-derivedDataPath` is an **absolute** path, so the build job and
+its shard jobs must share a workspace path — true across a homogeneous
+self-hosted pool, and the reason this composition targets one runner label
+rather than a mixed set.
+
 ## Sharding
 
 With `shard-count` > 1 the action splits the test identifiers index-modulo
@@ -37,12 +59,13 @@ than the number of test identifiers is a configuration error, not a free pass.
 
 | Name                 | Required | Default                     | Description                                                             |
 | -------------------- | -------- | --------------------------- | ------------------------------------------------------------------------- |
+| `mode`               | no       | `build-and-test`            | `build`, `test`, or `build-and-test`.                                     |
 | `project`            | no       | `''`                        | Path to the `.xcodeproj`. Exactly one of `project`/`workspace`.           |
 | `workspace`          | no       | `''`                        | Path to the `.xcworkspace`. Exactly one of `project`/`workspace`.         |
 | `scheme`             | yes      | —                           | Scheme to build and test.                                                 |
 | `configuration`      | no       | `Debug`                     | Build configuration.                                                      |
 | `sdk`                | no       | `iphonesimulator`           | SDK passed to `xcodebuild`.                                               |
-| `destination-id`     | yes      | —                           | UDID of a booted simulator, e.g. `simulator-lease`'s `udid`.              |
+| `destination-id`     | no       | `''`                        | UDID of a booted simulator, e.g. `simulator-lease`'s `udid`. Required unless `mode` is `build`. |
 | `test-plan`          | no       | `''`                        | Test plan name passed as `-testPlan`.                                     |
 | `only-testing`       | no       | `''`                        | Newline- or space-separated test identifiers to run (and to shard).       |
 | `shard-index`        | no       | `0`                         | Zero-based shard index.                                                   |
@@ -82,4 +105,41 @@ than the number of test identifiers is a configuration error, not a free pass.
   with:
       mode: release
       lease-file: ${{ steps.simulator.outputs.lease-file }}
+```
+
+### Two shards sharing one compile
+
+```yaml
+jobs:
+    build:
+        runs-on: [self-hosted, trf-macos-arm64-4x7]
+        steps:
+            # ... setup-xcode-pinned, xcode-cache restore ...
+            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v1
+              with:
+                  project: MyApp.xcodeproj
+                  scheme: MyApp
+                  mode: build
+                  xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
+            # ... xcode-cache save ...
+
+    test:
+        needs: build
+        runs-on: [self-hosted, trf-macos-arm64-4x7]
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [0, 1]
+        steps:
+            # ... setup-xcode-pinned, xcode-cache restore, simulator-lease ...
+            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v1
+              with:
+                  project: MyApp.xcodeproj
+                  scheme: MyApp
+                  mode: test
+                  destination-id: ${{ steps.simulator.outputs.udid }}
+                  shard-index: ${{ matrix.shard }}
+                  shard-count: 2
+                  result-bundle-path: build/TestResults-${{ matrix.shard }}.xcresult
+                  xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
 ```
