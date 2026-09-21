@@ -44,14 +44,16 @@ inputs:
     default: ''
   slim-profile:
     description: >-
-      Repository-relative path to a committed simslim JSON profile
-      (`{"name": "ci", "except": [...], "keep": [...]}`). When set, the booted
-      lease is checked against it with `simslim verify --profile`, and
-      `simslim measure` reports the resulting footprint. Empty (default) leases
-      a stock device, which on a 7 GiB CI VM means hundreds of RuntimeRoot
-      daemons competing with the test run for memory.
+      `bundled` (the default) uses this release's own `profiles/ci.json`, which
+      keeps the App Store/push/StoreKit (`store`) and Safari/universal-link
+      (`web`) categories on and disables the rest, so a consumer commits no
+      profile of its own. A repository-relative path uses that profile instead.
+      Empty leases a stock device, which on a 7 GiB CI VM means hundreds of
+      RuntimeRoot daemons competing with the test run for memory. The booted
+      lease is checked with `simslim verify --profile` and `simslim measure`
+      reports the resulting footprint.
     required: false
-    default: ''
+    default: bundled
   slim-repair:
     description: >-
       When 'true' (the default here, unlike run-maestro-ios) a lease that does
@@ -75,7 +77,7 @@ inputs:
       a job-private directory. Preinstall simslim on the host
       (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
-    default: '0.8.0'
+    default: '0.10.0'
   simslim-sha256:
     description: >-
       SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
@@ -85,7 +87,7 @@ inputs:
       $HOME/.simslim-pinned is re-hashed against it on every job. Empty refuses
       to download at all. Bump it together with simslim-version.
     required: false
-    default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
+    default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
 outputs:
   udid:
     description: UDID of the leased simulator.
@@ -388,8 +390,12 @@ runs:
         set -euo pipefail
         command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step."; exit 1; }
         test -n "$SIMULATOR_UDID" || { echo '::error::No leased UDID; the acquire step must run before the slim check.'; exit 1; }
+        if [ "$SLIM_PROFILE" = 'bundled' ]; then
+          SLIM_PROFILE="$(cd "$GITHUB_ACTION_PATH/../.." 2>/dev/null && pwd)/profiles/ci.json"
+          echo "slim-profile 'bundled' resolved to this release's shipped profile '$SLIM_PROFILE'."
+        fi
         if [ ! -f "$SLIM_PROFILE" ]; then
-          echo "::error::slim-profile '$SLIM_PROFILE' does not exist in the checkout."
+          echo "::error::slim-profile '$SLIM_PROFILE' does not exist ('bundled' resolves to this release's profiles/ci.json, any other value against the checkout)."
           exit 1
         fi
         if simslim verify "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then

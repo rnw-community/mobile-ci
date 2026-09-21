@@ -24,6 +24,11 @@ the section that matches your task; skip the other.
   Xcode pools, Linux `linux-aarch64` Redroid hosts, prewarm manifest format).
 - `fixtures/` — minimal inputs `self-test.yml` runs this repo's own actions
   against on the fleet (today: a two-test Swift Package for `swift-test`).
+- `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
+  is slimmed against; the actions resolve `slim-profile: bundled` to it.
+- `scripts/slim-simulator.sh` — sourceable `slim_simulator` /
+  `slim_booted_simulators` helpers consumers fetch at a pinned tag instead of
+  keeping a copy.
 - `CONTRIBUTING.md` — versioning, marketplace stance, third-party pinning,
   self-references, local validation, action-change checklist.
 - `RELEASE.md` — the exact tag-and-publish procedure for cutting `v1.x.y`.

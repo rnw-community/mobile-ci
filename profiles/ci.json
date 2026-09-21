@@ -1,0 +1,5 @@
+{
+    "name": "ci",
+    "description": "mobile-ci default: App Store, push and StoreKit (store) plus Safari and universal-link (web) services stay on, every other category is disabled.",
+    "except": ["store", "web"]
+}

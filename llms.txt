@@ -17,6 +17,7 @@ opt-in publish workflows. Pre-`v1`: pin to `@main` or a commit SHA.
 - [RELEASE.md](https://github.com/rnw-community/mobile-ci/blob/main/RELEASE.md): Exact tag-and-publish procedure for cutting a release.
 - [SECURITY.md](https://github.com/rnw-community/mobile-ci/blob/main/SECURITY.md): Vulnerability reporting and the self-hosted-runner threat model.
 - [docs/self-hosted-runners.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/self-hosted-runners.md): Self-hosted host provisioning: macOS Xcode pools, Linux Redroid hosts, prewarm manifest.
+- [scripts/slim-simulator.sh](https://github.com/rnw-community/mobile-ci/blob/main/scripts/slim-simulator.sh): Shared local helper that slims a booted simulator against the bundled `profiles/ci.json`, the same profile CI verifies.
 - [docs/workflows/ios-maestro.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/ios-maestro.md): iOS Maestro e2e reusable workflow reference.
 - [docs/workflows/android-maestro.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/android-maestro.md): Android Maestro e2e reusable workflow reference (avd driver on x86_64 Linux by default).
 - [docs/workflows/seed-native-cache.md](https://github.com/rnw-community/mobile-ci/blob/main/docs/workflows/seed-native-cache.md): Reusable workflow that proactively populates the native-app cache.

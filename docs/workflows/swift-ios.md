@@ -123,7 +123,7 @@ compiled products and pass.
 | `simulator-device-type`  | `''`                         | Exact device type name. **Required** whenever `enable-xcodebuild-test` is `true`; the `test` job fails closed on an empty value rather than guessing a device. |
 | `simulator-runtime`      | `latest`                     | `latest` or an exact runtime identifier.                  |
 | `simulator-template-device` | `''`                      | Name of a shut-down, prewarmed device to `simctl clone` instead of creating one. A slimmed template clones slim. |
-| `simulator-slim-profile` | `''`                         | Repo-relative simslim JSON profile the lease is verified against. |
+| `simulator-slim-profile` | `bundled`                    | `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; empty leases a stock device. |
 | `simulator-slim-repair`  | `true`                       | Apply the profile in-job (a reboot) on drift. Set `false` with a slimmed template so an unslimmed one errors. |
 | `parallel-testing-worker-count` | `''`                  | `-parallel-testing-worker-count`. Each worker clones the leased simulator, so raise it only on a slimmed lease. |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
