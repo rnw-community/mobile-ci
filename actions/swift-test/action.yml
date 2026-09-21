@@ -218,8 +218,11 @@ runs:
         rsync -a .build/ "$staging/build/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"
         if [ -e "$entry" ]; then
-          mv "$entry" "$superseded"
+          mv "$entry" "$superseded" 2>/dev/null || true
         fi
-        mv "$staging" "$entry"
+        if ! mv "$staging" "$entry" 2>/dev/null; then
+          echo "::notice::Another job published '$CACHE_KEY' first; keeping its entry and discarding this identical one."
+          rm -rf "$staging"
+        fi
         rm -rf "$superseded"
         echo "Saved the local cache entry $CACHE_KEY"

@@ -60,10 +60,15 @@ exact-key hits only.
 | ----------------- | -------------------------------------------------------------------------------------- |
 | `cache-hit`       | `true` when an exact-key entry was restored.                                            |
 | `cache-key`       | The computed cache key.                                                                 |
+| `cache-paths`     | Newline-separated resolved absolute paths of the three cached directories.              |
 | `xcodebuild-args` | Shell word list to append to every `xcodebuild` invocation in the job.                  |
 
 `xcodebuild-args` is a plain shell word list, so none of the three directories
-may contain whitespace — the action fails closed if one does.
+may contain whitespace — the action fails closed if one does. Relative inputs
+are resolved against `working-directory` and absolute ones are used as given;
+both backends operate on those resolved paths (`cache-paths`), so an absolute
+`derived-data-dir` caches the directory `xcodebuild` actually writes to rather
+than an empty one under the workspace.
 
 ## Example
 

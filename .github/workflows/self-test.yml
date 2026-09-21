@@ -314,7 +314,7 @@ jobs:
                   echo "Leased simulator $SIMULATOR_UDID is Booted."
 
             - name: simulator-lease release
-              if: always()
+              if: always() && steps.simulator.outputs.lease-file != ''
               uses: ./actions/simulator-lease
               with:
                   mode: release

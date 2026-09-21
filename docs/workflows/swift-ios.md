@@ -35,6 +35,7 @@ jobs:
             project: MyApp.xcodeproj
             scheme: MyApp
             simulator-device-type: 'iPad Pro 11-inch (M4)'
+            enable-swift-test: true
         secrets: {}
 ```
 
@@ -106,15 +107,15 @@ The same `cache-backend` / `cache-local-dir` pair also drives `swift-test`'s
 
 | Name                     | Default                      | Description                                             |
 | ------------------------ | ---------------------------- | --------------------------------------------------------- |
-| `enable-swift-test`      | `true`                       | Run `swift test --parallel`.                              |
-| `swift-package-path`     | `.`                          | Directory holding `Package.swift`.                        |
+| `enable-swift-test`      | `false`                      | Run `swift test --parallel`. Opt-in: an Xcode-only app has no `Package.swift`. |
+| `swift-package-path`     | `.`                          | Directory holding `Package.swift`, resolved **relative to `working-directory`**. |
 | `swift-test-extra-args`  | `''`                         | Extra arguments for `swift test`.                         |
 | `enable-xcodebuild-test` | `true`                       | Compile and run the simulator-bound tests at all.         |
-| `simulator-device-type`  | `''`                         | Exact device type name; required when the lane is enabled. |
+| `simulator-device-type`  | `''`                         | Exact device type name. **Required** whenever `enable-xcodebuild-test` is `true`; the `test` job fails closed on an empty value rather than guessing a device. |
 | `simulator-runtime`      | `latest`                     | `latest` or an exact runtime identifier.                  |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
 | `only-testing`           | `''`                         | Test identifiers to run (and to shard).                   |
-| `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. |
+| `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. Must list every zero-based index exactly once — `[0, 0]` would run one shard twice, never run the other, and still report green, so it fails closed. |
 | `result-bundle-path-prefix` | `build/TestResults-`      | `.xcresult` path per shard: `<prefix><index>.xcresult`; each is uploaded as an artifact. |
 
 ### Publish
@@ -190,6 +191,7 @@ jobs:
             project: MyApp.xcodeproj
             scheme: MyApp
             simulator-device-type: 'iPad Pro 11-inch (M4)'
+            enable-swift-test: true
             shards-json: '[0, 1]'
             cache-backend: local
             cache-local-dir: /Volumes/My Shared Files/ci-shared/xcode-cache

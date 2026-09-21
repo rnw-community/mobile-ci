@@ -115,10 +115,27 @@ runs:
         : "${BUILD_NUMBER:?build-number is required}"
         : "${PROFILE_UUID:?profile-uuid is required}"
 
+        assert_removable_child() {
+          local label="$1"
+          local candidate="$2"
+          case "$candidate" in
+            '') echo "::error::${label} must not be empty."; return 1 ;;
+            /*) echo "::error::${label} '$candidate' is absolute; only a path inside working-directory may be removed by this action."; return 1 ;;
+          esac
+          case "/$candidate/" in
+            */../*|*/./*) echo "::error::${label} '$candidate' must not contain '.' or '..' segments."; return 1 ;;
+          esac
+          case "$candidate" in
+            .|..) echo "::error::${label} '$candidate' is the working directory itself."; return 1 ;;
+          esac
+          return 0
+        }
+
         archive_path="$ARCHIVE_PATH_INPUT"
         if [ -z "$archive_path" ]; then
           archive_path="build/${SCHEME}.xcarchive"
         fi
+        assert_removable_child 'archive-path' "$archive_path"
         rm -rf "$archive_path"
         mkdir -p "$(dirname "$archive_path")"
 
@@ -191,6 +208,14 @@ runs:
         PLIST
         plutil -lint "$export_options" > /dev/null
 
+        case "$EXPORT_PATH" in
+          '') echo '::error::export-path must not be empty.'; exit 1 ;;
+          /*) echo "::error::export-path '$EXPORT_PATH' is absolute; only a path inside working-directory may be removed by this action."; exit 1 ;;
+          .|..) echo "::error::export-path '$EXPORT_PATH' is the working directory itself."; exit 1 ;;
+        esac
+        case "/$EXPORT_PATH/" in
+          */../*|*/./*) echo "::error::export-path '$EXPORT_PATH' must not contain '.' or '..' segments."; exit 1 ;;
+        esac
         rm -rf "$EXPORT_PATH"
         args=(-exportArchive -archivePath "$ARCHIVE_PATH" -exportPath "$EXPORT_PATH" -exportOptionsPlist "$export_options")
         if [ "$destination" = 'upload' ]; then

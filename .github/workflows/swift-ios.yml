@@ -92,10 +92,13 @@ on:
                     Package.swift
                     **/Package.resolved
             enable-swift-test:
-                description: Run `swift test --parallel` for the Swift Package in the build job.
+                description: >-
+                    Run `swift test --parallel` for the Swift Package in the build
+                    job. Off by default: an Xcode-only app has no Package.swift, and
+                    swift-test fails closed rather than silently skipping.
                 type: boolean
                 required: false
-                default: true
+                default: false
             swift-package-path:
                 type: string
                 required: false
@@ -256,7 +259,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/swift-test@v1.23.1 # v1.23.1
               with:
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  package-path: ${{ inputs.swift-package-path }}
+                  package-path: ${{ inputs.working-directory }}/${{ inputs.swift-package-path }}
                   extra-args: ${{ inputs.swift-test-extra-args }}
                   backend: ${{ inputs.cache-backend }}
                   local-dir: ${{ inputs.cache-local-dir }}
@@ -325,18 +328,23 @@ jobs:
                   fingerprint-paths: ${{ inputs.fingerprint-paths }}
                   working-directory: ${{ inputs.working-directory }}
 
-            - name: Count the shards
+            - name: Validate the shard plan and the simulator device type
               id: shards
               shell: bash
               env:
                   SHARDS_JSON: ${{ inputs.shards-json }}
+                  SIMULATOR_DEVICE_TYPE: ${{ inputs.simulator-device-type }}
               run: |
                   set -euo pipefail
-                  count=$(printf '%s' "$SHARDS_JSON" | jq 'length')
-                  if [ "$count" -lt 1 ]; then
-                    echo "::error::shards-json must hold at least one shard index (got '$SHARDS_JSON')."
+                  if [ -z "$SIMULATOR_DEVICE_TYPE" ]; then
+                    echo '::error::simulator-device-type is required whenever enable-xcodebuild-test is true; there is no safe default device across runner fleets.'
                     exit 1
                   fi
+                  if ! printf '%s' "$SHARDS_JSON" | jq -e 'type == "array" and length > 0 and (all(.[]; type == "number" and . == floor and . >= 0)) and (sort == [range(0; length)])' > /dev/null; then
+                    echo "::error::shards-json must list every zero-based shard index exactly once, e.g. '[0, 1]' (got '$SHARDS_JSON'). A duplicate index would run one shard twice and never run another, and still report green."
+                    exit 1
+                  fi
+                  count=$(printf '%s' "$SHARDS_JSON" | jq 'length')
                   echo "count=$count" >> "$GITHUB_OUTPUT"
 
             - name: Lease an isolated simulator
@@ -364,7 +372,7 @@ jobs:
                   working-directory: ${{ inputs.working-directory }}
 
             - name: Release the leased simulator
-              if: always()
+              if: always() && steps.simulator.outputs.lease-file != ''
               uses: rnw-community/mobile-ci/actions/simulator-lease@v1.23.1 # v1.23.1
               with:
                   mode: release

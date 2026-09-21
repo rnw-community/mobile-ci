@@ -64,6 +64,17 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate the mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          install|remove) ;;
+          *) echo "::error::mode must be 'install' or 'remove' (got '$MODE'); a mistyped mode would skip both steps and report a green no-op."; exit 1 ;;
+        esac
+
     - name: Install Apple signing material into a throwaway keychain
       if: inputs.mode == 'install'
       id: install
@@ -95,16 +106,43 @@ runs:
           ''|*[!A-Za-z0-9]*) echo "::error::asc-key-id must be non-empty and alphanumeric."; exit 1 ;;
         esac
 
-        keychain="$RUNNER_TEMP/${KEYCHAIN_NAME}.keychain-db"
-        certificate="$RUNNER_TEMP/${KEYCHAIN_NAME}-distribution.p12"
-        profile="$RUNNER_TEMP/${KEYCHAIN_NAME}-profile.mobileprovision"
-        profile_plist="$RUNNER_TEMP/${KEYCHAIN_NAME}-profile.plist"
-        wwdr="$RUNNER_TEMP/${KEYCHAIN_NAME}-wwdr.cer"
-        asc_key="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+        state_dir="$RUNNER_TEMP/${KEYCHAIN_NAME}"
+        state_file="$state_dir/state.json"
+        keychain="$state_dir/${KEYCHAIN_NAME}.keychain-db"
+        certificate="$state_dir/distribution.p12"
+        profile="$state_dir/profile.mobileprovision"
+        profile_plist="$state_dir/profile.plist"
+        wwdr="$state_dir/wwdr.cer"
+        asc_key="$state_dir/AuthKey_${ASC_KEY_ID}.p8"
         profiles_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
-        state_file="$RUNNER_TEMP/${KEYCHAIN_NAME}-state.json"
 
         umask 077
+        if [ -e "$state_dir" ]; then
+          echo "::error::'$state_dir' already exists; another apple-signing install with keychain-name '$KEYCHAIN_NAME' is still active on this runner. Give this job a distinct keychain-name or serialise the two."
+          exit 1
+        fi
+        mkdir -p "$state_dir"
+        chmod 700 "$state_dir"
+
+        previous_keychains=$(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+        profile_uuid=''
+        profile_owned='false'
+
+        record_state() {
+          jq -n \
+            --arg stateDir "$state_dir" \
+            --arg keychain "$keychain" \
+            --arg profileUuid "$profile_uuid" \
+            --arg ascKey "$asc_key" \
+            --arg profilesDir "$profiles_dir" \
+            --arg profileOwned "$profile_owned" \
+            --arg previousKeychains "$previous_keychains" \
+            '{stateDir: $stateDir, keychain: $keychain, profileUuid: $profileUuid, ascKey: $ascKey, profilesDir: $profilesDir, profileOwned: ($profileOwned == "true"), previousKeychains: ($previousKeychains | split("\n") | map(select(length > 0)))}' \
+            > "$state_file"
+          chmod 600 "$state_file"
+        }
+        record_state
+
         printf '%s' "$CERTIFICATE_BASE64" | /usr/bin/base64 -D > "$certificate"
         printf '%s' "$ASC_KEY_BASE64" | /usr/bin/base64 -D > "$asc_key"
         printf '%s' "$PROFILE_BASE64" | /usr/bin/base64 -D > "$profile"
@@ -127,7 +165,14 @@ runs:
           exit 1
         fi
         mkdir -p "$profiles_dir"
-        cp "$profile" "$profiles_dir/$profile_uuid.mobileprovision"
+        installed_profile="$profiles_dir/$profile_uuid.mobileprovision"
+        if [ -e "$installed_profile" ]; then
+          echo "::notice::'$profile_uuid.mobileprovision' is already installed on this runner; leaving it in place and not removing it at teardown."
+        else
+          cp "$profile" "$installed_profile"
+          profile_owned='true'
+        fi
+        record_state
 
         keychain_password="$(openssl rand -hex 24)"
         security create-keychain -p "$keychain_password" "$keychain"
@@ -137,23 +182,13 @@ runs:
         security import "$wwdr" -A -t cert -f x509 -k "$keychain"
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
 
-        previous_keychains=$(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
-        default_keychain=$(security default-keychain -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
-        security list-keychains -d user -s "$keychain" "$default_keychain"
-
-        jq -n \
-          --arg keychain "$keychain" \
-          --arg profileUuid "$profile_uuid" \
-          --arg ascKey "$asc_key" \
-          --arg certificate "$certificate" \
-          --arg profile "$profile" \
-          --arg profilePlist "$profile_plist" \
-          --arg wwdr "$wwdr" \
-          --arg profilesDir "$profiles_dir" \
-          --arg previousKeychains "$previous_keychains" \
-          '{keychain: $keychain, profileUuid: $profileUuid, ascKey: $ascKey, scratch: [$certificate, $profile, $profilePlist, $wwdr], profilesDir: $profilesDir, previousKeychains: ($previousKeychains | split("\n") | map(select(length > 0)))}' \
-          > "$state_file"
-        chmod 600 "$state_file"
+        search_list=("$keychain")
+        while IFS= read -r entry; do
+          [ -n "$entry" ] || continue
+          [ "$entry" = "$keychain" ] && continue
+          search_list+=("$entry")
+        done <<< "$previous_keychains"
+        security list-keychains -d user -s "${search_list[@]}"
 
         {
           echo "profile-uuid=$profile_uuid"
@@ -169,16 +204,22 @@ runs:
         KEYCHAIN_NAME: ${{ inputs.keychain-name }}
       run: |
         set -euo pipefail
-        state_file="$RUNNER_TEMP/${KEYCHAIN_NAME}-state.json"
+        state_dir="$RUNNER_TEMP/${KEYCHAIN_NAME}"
+        state_file="$state_dir/state.json"
         if [ ! -f "$state_file" ]; then
-          echo "::warning::No signing state at '$state_file'; the install call never completed, so there is nothing to remove."
+          if [ -e "$state_dir" ]; then
+            echo "::warning::'$state_dir' exists without a state file; removing it wholesale so no decoded secret survives this job."
+            rm -rf "$state_dir"
+            exit 0
+          fi
+          echo "::warning::No signing state under '$state_dir'; the install call never created anything, so there is nothing to remove."
           exit 0
         fi
         command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the signing state but is not on PATH."; exit 1; }
         keychain=$(jq -r '.keychain // empty' "$state_file")
         profile_uuid=$(jq -r '.profileUuid // empty' "$state_file")
-        asc_key=$(jq -r '.ascKey // empty' "$state_file")
         profiles_dir=$(jq -r '.profilesDir // empty' "$state_file")
+        profile_owned=$(jq -r '.profileOwned // false' "$state_file")
 
         previous=()
         while IFS= read -r entry; do
@@ -192,17 +233,11 @@ runs:
 
         if [ -n "$keychain" ]; then
           security delete-keychain "$keychain" 2>/dev/null || true
-          rm -f "$keychain"
         fi
-        if [ -n "$asc_key" ]; then
-          rm -f "$asc_key"
-        fi
-        while IFS= read -r scratch; do
-          [ -n "$scratch" ] || continue
-          rm -f "$scratch"
-        done < <(jq -r '.scratch[]? // empty' "$state_file")
-        if [ -n "$profile_uuid" ] && [ -n "$profiles_dir" ]; then
+        if [ "$profile_owned" = 'true' ] && [ -n "$profile_uuid" ] && [ -n "$profiles_dir" ]; then
           rm -f "$profiles_dir/$profile_uuid.mobileprovision"
+        elif [ -n "$profile_uuid" ]; then
+          echo "::notice::'$profile_uuid.mobileprovision' was already installed before this job; leaving it in place."
         fi
-        rm -f "$state_file"
-        echo 'Removed the throwaway keychain, the provisioning profile and the App Store Connect key.'
+        rm -rf "$state_dir"
+        echo 'Removed the throwaway keychain, the decoded signing material and the App Store Connect key.'

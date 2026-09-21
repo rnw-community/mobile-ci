@@ -13,7 +13,8 @@ missing or unreadable result bundle: no evidence is never a pass.
 
 Every run adds `-skipMacroValidation -skipPackagePluginValidation` (a CI
 checkout can never answer Xcode's interactive macro/plugin trust prompt) and
-`-parallel-testing-enabled YES`. When a `Package.resolved` is found — at the
+`-parallel-testing-enabled` with the caller's `parallel-testing` value, which
+defaults to `YES`. When a `Package.resolved` is found — at the
 working directory root, or inside the project/workspace's
 `xcshareddata/swiftpm/` — `-disableAutomaticPackageResolution` is added too, so
 a pinned dependency graph is never silently re-resolved mid-run.

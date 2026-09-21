@@ -46,6 +46,17 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate the mode
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          acquire|release) ;;
+          *) echo "::error::mode must be 'acquire' or 'release' (got '$MODE'); a mistyped mode would skip both steps and leak the leased device behind a green run."; exit 1 ;;
+        esac
+
     - name: Acquire an isolated simulator
       if: inputs.mode == 'acquire'
       id: acquire
@@ -110,21 +121,27 @@ runs:
         if [ -z "$lease_file" ]; then
           lease_file="${RUNNER_TEMP}/simulator-lease-${udid}.json"
         fi
-        mkdir -p "$(dirname "$lease_file")"
-        jq -n \
-          --arg udid "$udid" \
-          --arg name "$device_name" \
-          --arg deviceType "$device_type_id" \
-          --arg runtime "$runtime_id" \
-          --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-          '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
-          > "$lease_file"
-
-        {
-          echo "udid=$udid"
-          echo "name=$device_name"
-          echo "lease-file=$lease_file"
-        } >> "$GITHUB_OUTPUT"
+        if ! {
+          mkdir -p "$(dirname "$lease_file")" \
+            && jq -n \
+              --arg udid "$udid" \
+              --arg name "$device_name" \
+              --arg deviceType "$device_type_id" \
+              --arg runtime "$runtime_id" \
+              --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+              '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
+              > "$lease_file" \
+            && {
+              echo "udid=$udid"
+              echo "name=$device_name"
+              echo "lease-file=$lease_file"
+            } >> "$GITHUB_OUTPUT"
+        }; then
+          echo "::error::Could not record the lease for simulator '$udid'; deleting the device now rather than leaking one no release call can find."
+          xcrun simctl delete "$udid" 2>/dev/null || true
+          rm -f "$lease_file"
+          exit 1
+        fi
 
         echo "Leased simulator $device_name ($udid) on $runtime_id"
         xcrun simctl boot "$udid" || true

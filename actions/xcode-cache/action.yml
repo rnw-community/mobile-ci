@@ -71,6 +71,9 @@ outputs:
   cache-key:
     description: The computed cache key.
     value: ${{ steps.key.outputs.key }}
+  cache-paths:
+    description: Newline-separated resolved absolute paths of the three cached directories.
+    value: ${{ steps.key.outputs.cache-paths }}
   xcodebuild-args:
     description: >-
       Arguments the caller appends to its xcodebuild invocations so Xcode uses
@@ -178,8 +181,11 @@ runs:
         done
 
         echo "Fingerprinted ${count} file(s) into $fingerprint"
-        echo "key=${KEY_PREFIX}-${RUNNER_OS}-${TOOLCHAIN}-${fingerprint}" >> "$GITHUB_OUTPUT"
         {
+          printf 'key=%s\n' "${KEY_PREFIX}-${RUNNER_OS}-${TOOLCHAIN}-${fingerprint}"
+          printf 'cache-paths<<XCODE_CACHE_PATHS_EOF\n'
+          printf '%s\n' "${absolute[@]}"
+          printf 'XCODE_CACHE_PATHS_EOF\n'
           printf 'xcodebuild-args=-derivedDataPath %s' "${absolute[0]}"
           printf ' -clonedSourcePackagesDirPath %s' "${absolute[1]}"
           printf ' COMPILATION_CACHE_ENABLE_CACHING=YES'
@@ -191,10 +197,7 @@ runs:
       id: restore
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-          path: |
-              ${{ inputs.working-directory }}/${{ inputs.derived-data-dir }}
-              ${{ inputs.working-directory }}/${{ inputs.spm-clones-dir }}
-              ${{ inputs.working-directory }}/${{ inputs.cas-dir }}
+          path: ${{ steps.key.outputs.cache-paths }}
           key: ${{ steps.key.outputs.key }}
           restore-keys: ${{ inputs.restore-keys }}
 
@@ -202,10 +205,7 @@ runs:
       if: inputs.mode == 'save' && inputs.backend == 'github'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
-          path: |
-              ${{ inputs.working-directory }}/${{ inputs.derived-data-dir }}
-              ${{ inputs.working-directory }}/${{ inputs.spm-clones-dir }}
-              ${{ inputs.working-directory }}/${{ inputs.cas-dir }}
+          path: ${{ steps.key.outputs.cache-paths }}
           key: ${{ steps.key.outputs.key }}
 
     - name: Restore Xcode cache from the local directory
@@ -260,8 +260,11 @@ runs:
         rsync -a "$CAS_DIR/" "$staging/cas/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"
         if [ -e "$entry" ]; then
-          mv "$entry" "$superseded"
+          mv "$entry" "$superseded" 2>/dev/null || true
         fi
-        mv "$staging" "$entry"
+        if ! mv "$staging" "$entry" 2>/dev/null; then
+          echo "::notice::Another job published '$CACHE_KEY' first; keeping its entry and discarding this identical one."
+          rm -rf "$staging"
+        fi
         rm -rf "$superseded"
         echo "Saved the local cache entry $CACHE_KEY"
