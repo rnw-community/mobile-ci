@@ -288,6 +288,32 @@ per-device caches, logs, and temporary files read-only; `simslim disk-clean
 run by any action; schedule it alongside runtime cleanup if simulator disk
 growth is a problem on a pool.
 
+### UI tests capture screenshots, not video
+
+Slimming the simulator is not the whole memory story on a 7 GiB guest. Xcode 26
+records a **video of every UI test** — `PreferredScreenCaptureFormat =
+screenRecording` in the generated `.xctestrun` — and the encoder that produces
+it, `VTEncoderXPCService`, was measured on a 4 CPU / 7 GiB `maestro` guest at
+**~1 GB of RSS and a full core**: the single largest consumer in a run whose
+free memory never rose above ~50 MB, with 100+ attachments accumulated in the
+`.xcresult` after half an hour
+([#147](https://github.com/rnw-community/mobile-ci/issues/147)). On a host with
+four cores and seven gigabytes, that is a quarter of the CPU and a seventh of
+the memory spent on a recording that `deleteOnSuccess` throws away whenever the
+run is green.
+
+So [`xcodebuild-test`](../actions/xcodebuild-test/README.md) defaults
+`screen-capture` to `screenshots` and rewrites the `.xctestrun` before the run.
+Nothing is needed on the host, and failure evidence is unchanged — screenshots
+are still attached to the uploaded `.xcresult`. A pool with memory and cores to
+spare can ask for `screen-capture: screenRecording` per job.
+
+This is also why the "two XCUITest workers in one VM" experiment (#147) was
+*not* adopted: two workers measured 0.81× the wall time of one and produced a
+timing flake, because the guest was memory-bound before the second worker
+existed. Re-measure that only on a quiet host, on the 6x12 builder profile,
+after the encoder is gone.
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,

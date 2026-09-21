@@ -35,6 +35,28 @@ on a slimmed lease.
 This action does nothing else about slimming: the lease owns the device's
 shape, and `destination-id` is all this action needs to know about it.
 
+## Screen capture: screenshots, not video
+
+Xcode 26 records a **video** of every UI test. That is one
+`VTEncoderXPCService` process, and on a 4 CPU / 7 GiB CI guest it was measured
+at **~1 GB RSS and a full core** — the single largest consumer in a run whose
+free memory never left ~50 MB
+([#147](https://github.com/rnw-community/mobile-ci/issues/147)). The video is
+also thrown away on success (`deleteOnSuccess`), so a green run pays a
+gigabyte and a core for a file nobody ever opens.
+
+`screen-capture` therefore defaults to **`screenshots`**. Failure evidence is
+unchanged — screenshots are still attached to the `.xcresult` this action
+uploads. Set `screen-capture: screenRecording` to get Xcode's video back on a
+host with memory to spare.
+
+It is applied by rewriting every `PreferredScreenCaptureFormat` in the
+generated `.xctestrun`, which is also the file `shard-count > 1` reads to
+enumerate tests. Finding it needs `-derivedDataPath` in `xcodebuild-args`
+(`xcode-cache` supplies it). Without one, sharding fails as it always did and
+the capture format is left at the scheme's own setting with a warning — this
+action never silently claims to have changed a setting it could not reach.
+
 ## Modes, and sharding across jobs
 
 `mode` decides which halves run:
@@ -99,6 +121,7 @@ than the number of test identifiers is a configuration error, not a free pass.
 | `working-directory`  | no       | `.`                         | Directory the project/workspace and result bundle resolve against.        |
 | `parallel-testing`   | no       | `YES`                       | Value for `-parallel-testing-enabled`.                                    |
 | `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator; raise it only on a slimmed lease. |
+| `screen-capture`     | no       | `screenshots`               | `screenshots` or `screenRecording`, written into the `.xctestrun`. Video costs ~1 GB and a core on a 7 GiB guest. |
 | `artifact-name`      | no       | `xcresult-<scheme>-<shard-index>` | Name of the uploaded `.xcresult` artifact.                          |
 | `retention-days`     | no       | `7`                         | Retention for that artifact.                                              |
 
