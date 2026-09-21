@@ -46,17 +46,26 @@ slim_simulator() {
 }
 
 booted_simulator_udids() {
-    xcrun simctl list devices booted 2>/dev/null \
-        | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)) (Booted).*/\1/p'
+    local listing
+
+    if ! listing="$(xcrun simctl list devices booted)"; then
+        echo "slim-simulator: 'xcrun simctl list devices booted' failed, so which simulators need slimming is unknown." >&2
+        return 1
+    fi
+
+    printf '%s\n' "$listing" | sed -n 's/.*(\([0-9A-Fa-f-]\{36\}\)) (Booted).*/\1/p'
 }
 
 slim_booted_simulators() {
+    local udids
     local udid
+
+    udids="$(booted_simulator_udids)" || return 1
 
     while IFS= read -r udid; do
         [ -n "$udid" ] || continue
         slim_simulator "$udid" || return 1
-    done <<<"$(booted_simulator_udids)"
+    done <<<"$udids"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

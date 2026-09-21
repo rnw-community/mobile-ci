@@ -258,8 +258,9 @@ when the simulator it booted is not in the state the consumer committed to.
 - **Provision on the host, verify in the job.** Apply the profile once per
   device at provisioning time (`simslim on <udid> --profile ci.json`; see
   [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim))
-  and leave `simulator-slim-profile` at `bundled`, this repo's own
-  [`profiles/ci.json`](../../profiles/ci.json). After `simctl bootstatus` and
+  and set `simulator-slim-profile` to `bundled`, this repo's own
+  [`profiles/ci.json`](../../profiles/ci.json) — the reusable workflows default
+  to it, a direct call to this action must pass it. After `simctl bootstatus` and
   before the app install, `simslim verify --profile` compares the booted
   simulator's overrides against the profile and fails the step listing the
   drift.
