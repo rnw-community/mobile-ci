@@ -145,7 +145,8 @@ already have a working pipeline and are adopting one piece at a time (à la
 carte tier — see [README.md](README.md#pick-your-tier)):
 
 - `ios-maestro.yml` — iOS Maestro e2e.
-- `android-maestro.yml` — Android Maestro e2e (Redroid driver by default).
+- `android-maestro.yml` — Android Maestro e2e (`avd` driver on an x86_64
+  Linux KVM pool by default; `redroid` for a `linux-aarch64` pool).
 - `seed-native-cache.yml` — proactively warms the native-app cache.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.

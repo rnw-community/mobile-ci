@@ -1,7 +1,7 @@
 # android-maestro.yml
 
 `workflow_call` reusable workflow: Android Maestro e2e on self-hosted
-runners, defaulting to the Redroid driver.
+runners, defaulting to the `avd` driver on an x86_64 Linux KVM pool.
 
 Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
 `ubuntu-latest`) → **build** (one job per `targets` entry — native
@@ -11,8 +11,11 @@ fingerprint, native-app-cache restore, optional repack-on-hit, `gradlew
 `shard-count` — download the built `.apk`, boot Redroid or an AVD emulator
 per `android-driver`, run a Maestro flow shard) → **status** (aggregates
 detect/build/test into a single required check). `build` and `test` default
-to a self-hosted `linux-tiered`/`linux-xl` pool; `detect` and `status` always
-run on `ubuntu-latest`.
+to the self-hosted x86_64 Linux pool (`["self-hosted","trf-linux-amd64-4x8"]`
+— 4 vCPU / 8 GiB, `/dev/kvm`), which is the host shape the default `avd`
+driver needs; `detect` and `status` always run on `ubuntu-latest`. Linux jobs
+belong on a Linux node — see
+[self-hosted-runners.md#which-pool-a-job-belongs-on](../self-hosted-runners.md#which-pool-a-job-belongs-on).
 
 The `status` job reports three distinct outcomes, in its log and in
 `$GITHUB_STEP_SUMMARY`: **passed**, **failed** (naming the job and result
@@ -26,7 +29,7 @@ silently.
 
 | Name                        | Required | Default                                       | Description |
 | ------------------------------ | -------- | ------------------------------------------------ | -------------- |
-| `runner-labels`                 | no       | `["self-hosted","linux-tiered","linux-xl"]`        | JSON array of self-hosted runner labels for the build/test jobs. |
+| `runner-labels`                 | no       | `["self-hosted","trf-linux-amd64-4x8"]`             | JSON array of self-hosted runner labels for the build/test jobs. The default is the x86_64 Linux KVM pool (4 vCPU / 8 GiB) the default `avd` driver needs; override it together with `android-driver: redroid` to run on a `linux-aarch64` binder/privileged-docker pool. |
 | `build-runner-labels`           | no       | `''`                                               | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
 | `test-runner-labels`            | no       | `''`                                               | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. |
 | `targets`                       | **yes**  | —                                                  | JSON array of build targets: `{name, appDir, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. |
@@ -52,12 +55,12 @@ silently.
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
-| `android-driver`                | no       | `redroid`                                          | `redroid` (default) or `avd`. Google publishes no `linux-aarch64` build of the Android emulator/NDK/cmake, so `avd` cannot boot on this workflow's default self-hosted `runner-labels`; `redroid` runs Android as a privileged container over `binder_linux` instead and needs none of those packages. Pick `avd` only when overriding `runner-labels` to a host with a working emulator (e.g. GitHub-hosted x86_64 runners, which carry KVM out of the box, or a self-hosted x86_64 Linux KVM host). Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator via `reactivecircus/android-emulator-runner` and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only) — also used as the native-app-cache `arch` key segment for both drivers. |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
-| `emulator-ram-size`             | no       | `''`                                               | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default. Set it on a memory-bounded runner: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
+| `emulator-ram-size`             | no       | `2048`                                             | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default; the shipped default is bounded because the default `runner-labels` pool is a memory-bounded 8 GiB container. Raise it only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
 | `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
 | `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty keeps the profile default. |
 | `redroid-image`                 | no       | `redroid/redroid:15.0.0_64only-latest`             | Redroid image tag, used on a `redroid-prewarm-manifest-path` miss. Verified against a `6.17` host kernel — older `13.x` tags are known to never finish boot on that kernel, and `14.x` images hard-lock the guest kernel version. |

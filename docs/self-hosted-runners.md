@@ -20,6 +20,36 @@ resolve step warns and falls back to root-lockfile detection, which is enough
 for Yarn and npm but **fails closed for pnpm** — pnpm's version can only come
 from `package.json`.
 
+## Which pool a job belongs on
+
+One rule, stated once: **a job runs on the cheapest pool that can actually
+run it, and a macOS pool only when the job needs macOS.** Concretely, on a
+fleet whose macOS hosts also host Linux guests, every Linux guest on a Mac
+consumes one of that host's two Apple-Virtualization slots — i.e. one of its
+macOS job slots — so a Linux job parked on a Mac's Linux guest is paid for
+twice: once in its own runtime and once in the iOS build it displaced.
+
+| Job | Pool | Why |
+| --- | --- | --- |
+| `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
+| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro on the `avd` driver | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
+| Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the only shape that runs Android on arm64 |
+| Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
+
+This repo's own defaults follow that rule: `android-maestro.yml`'s
+`runner-labels` and `seed-native-cache.yml`'s `android-runner-labels` default
+to `["self-hosted","trf-linux-amd64-4x8"]` — the x86_64 Linux KVM shape
+documented under [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-driver)
+— and `android-maestro.yml`'s `android-driver` defaults to `avd` to match,
+since `redroid` cannot run on that shape. The one deliberate exception is
+`store-screenshots.yml`'s `android-capture-runner-labels`, which stays on a
+Redroid-capable Linux pool: `capture-screenshots-android` drives a
+`redroid-container` and has no `avd` code path at all.
+
+Label names are a property of your fleet, not of this repo. The defaults name
+the labels of the fleet this repo is developed against; on another fleet,
+override them to whatever labels carry the same host shape.
+
 ## macOS pools (iOS)
 
 Each macOS runner needs one or more Xcode versions installed side by side at
@@ -218,9 +248,10 @@ growth is a problem on a pool.
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,
 or `cmake`, so `reactivecircus/android-emulator-runner` (`run-maestro-android`,
-the `avd` driver) is structurally unusable on `linux-aarch64` self-hosted
-runners regardless of tuning. `run-maestro-android-redroid` (the `redroid`
-driver, `android-maestro.yml`'s default) runs Android as a privileged Docker
+the `avd` driver, `android-maestro.yml`'s default) is structurally unusable on
+`linux-aarch64` self-hosted runners regardless of tuning.
+`run-maestro-android-redroid` (the `redroid` driver, selected explicitly
+together with `runner-labels` pointing at this shape) runs Android as a privileged Docker
 container over the host's `binder_linux` kernel module instead, and needs
 none of the emulator's `linux-aarch64`-unavailable dependencies.
 
@@ -477,10 +508,10 @@ Options for a consumer app that depends on GMS at runtime:
 2. **Switch to `android-driver: avd` with a `google_apis` system image**
    (`emulator-target: google_apis` is already the default for the `avd`
    driver), on a runner architecture Google actually ships an emulator for
-   — x86_64 Linux or macOS `arm64`. This is not an option on this repo's
-   default `linux-aarch64` self-hosted pool: Google publishes no
-   `linux-aarch64` build of the Android emulator (see above), so `avd`
-   cannot boot there regardless of system image. See
+   — x86_64 Linux or macOS `arm64`. This is what `android-maestro.yml`
+   defaults to; it is only unavailable if you have pointed the run at a
+   `linux-aarch64` pool, where Google publishes no build of the Android
+   emulator (see above) and `avd` cannot boot regardless of system image. See
    [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-driver) below
    for that host shape's requirements.
 3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
@@ -587,13 +618,15 @@ guarantee):
 shapes a run needs, and both are fully supported — the choice is per-fleet,
 not a migration from one to the other:
 
-- **`redroid`** (default) needs the `linux-aarch64` binder/privileged-docker
-  shape documented above, and runs Android natively on arm64 — required if
-  your app ships (or you must test) an arm64-only APK. Stock images carry no
-  Google Play Services (see [GMS](#google-play-services-gms) above).
-- **`avd`** needs the x86_64 KVM shape documented in this section. A
-  `google_apis` system image carries real Google Play Services, at the cost
-  of requiring the app under test to build (or include) an x86_64 ABI.
+- **`avd`** (default) needs the x86_64 KVM shape documented in this section,
+  which is also what `runner-labels` defaults to. A `google_apis` system image
+  carries real Google Play Services, at the cost of requiring the app under
+  test to build (or include) an x86_64 ABI.
+- **`redroid`** needs the `linux-aarch64` binder/privileged-docker shape
+  documented above, and runs Android natively on arm64 — required if your app
+  ships (or you must test) an arm64-only APK. Stock images carry no Google
+  Play Services (see [GMS](#google-play-services-gms) above). Selecting it
+  means overriding `runner-labels` too: it cannot run on the default pool.
 
 Set `android-driver` together with `runner-labels` (or the split
 `build-runner-labels`/`test-runner-labels`) from the consumer workflow to
@@ -608,11 +641,14 @@ all default their `android-runner-labels` input to the same macOS pool as
 iOS (`["self-hosted","macOS","ARM64"]`), not because the Android build needs
 a Mac, but because Google's Android NDK build tooling used by `eas build
 --local` is x86_64-only on Linux — there is no `linux-aarch64` NDK to run it
-with, the same gap that rules out the `avd` driver on this repo's default
-Maestro pool. An x86_64 Linux KVM host — the same shape provisioned above
-for the `avd` driver — is x86_64-native and can serve these Android EAS
-build jobs too; point `android-runner-labels` at it instead of accepting the
-macOS default.
+with, the same gap that rules out the `redroid`-only `linux-aarch64` shape
+for an Android build. An x86_64 Linux KVM host — the same shape
+`android-maestro.yml` and `seed-native-cache.yml` now default to — is
+x86_64-native and can serve these Android EAS build jobs too. Per
+[Which pool a job belongs on](#which-pool-a-job-belongs-on) that is where
+they belong; point `android-runner-labels` at it rather than accepting the
+macOS default, which remains only because no run has yet proven `eas build
+--local` on this fleet's x86_64 Linux containers.
 
 ## Maintainer note: fleet self-test repo variables
 

@@ -432,7 +432,14 @@ on:
                 description: >-
                     JSON array of runner labels for the Android capture job (the
                     Redroid pool). Deliberately does NOT fall back to runner-labels,
-                    whose macOS default can never run a Redroid container.
+                    whose macOS default can never run a Redroid container. This is
+                    the one Linux default that is NOT the x86_64 Linux pool
+                    android-maestro.yml and seed-native-cache.yml now default to:
+                    capture-screenshots-android drives a redroid-container, which
+                    needs sudo docker --privileged and binder_linux, and has no avd
+                    code path — a rootless-container x86_64 pool can run neither.
+                    Point it at whatever pool on your fleet carries the Redroid
+                    capability.
                 type: string
                 required: false
                 default: '["self-hosted","linux-tiered","linux-xl"]'

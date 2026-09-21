@@ -260,7 +260,9 @@ values before relying on this.
 ## Android capture
 
 - Runs on the `android-capture-runner-labels` pool (default
-  `["self-hosted","linux-tiered","linux-xl"]`) — a Linux Redroid host per
+  `["self-hosted","linux-tiered","linux-xl"]`, the fleet's Redroid-capable
+  Linux pool and the one Linux default that is deliberately not the x86_64
+  pool the Maestro/cache workflows use) — a Linux Redroid host per
   [docs/self-hosted-runners.md](../self-hosted-runners.md) (binder_linux
   module, privileged containers, prewarm manifest). This input deliberately
   does **not** fall back to `runner-labels`, whose macOS default can never
@@ -707,7 +709,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
-| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job (the Redroid pool). No fallback to `runner-labels`. |
+| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job (the Redroid pool). No fallback to `runner-labels`. Unlike `android-maestro.yml`/`seed-native-cache.yml`, this default stays on the Redroid-capable pool: `capture-screenshots-android` drives a `redroid-container` (`sudo docker --privileged` + `binder_linux`) and has no `avd` code path, so a rootless-container x86_64 pool cannot run it. |
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |

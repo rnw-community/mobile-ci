@@ -4,18 +4,27 @@ on:
     workflow_call:
         inputs:
             runner-labels:
-                description: JSON array of self-hosted runner labels for the build/test jobs.
+                description: >-
+                    JSON array of self-hosted runner labels for the build/test jobs.
+                    The default is an x86_64 Linux KVM pool (4 vCPU / 8 GiB), the
+                    host shape the default android-driver ('avd') needs: Google
+                    ships an x86_64 Linux emulator and NDK, and both the Gradle
+                    build and the emulator fit in 8 GiB with emulator-ram-size
+                    bounded (see below). Override it to a linux-aarch64
+                    binder/privileged-docker pool together with
+                    android-driver: redroid.
                 type: string
                 required: false
-                default: '["self-hosted","linux-tiered","linux-xl"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             build-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the build job only. Falls
                     back to runner-labels when empty; set this and test-runner-labels
                     together to split build/test across separate runner pools. Android
                     builds cross-compiling native code (NDK/cmake) on a linux-aarch64
-                    self-hosted fleet may need this overridden to a macOS/x86_64 pool
-                    instead — Google does not publish linux-aarch64 NDK/cmake binaries.
+                    self-hosted fleet need this overridden to a macOS or x86_64 pool —
+                    Google does not publish linux-aarch64 NDK/cmake binaries. The
+                    default runner-labels pool is x86_64 and needs no such override.
                 type: string
                 required: false
                 default: ''
@@ -202,16 +211,17 @@ on:
                 default: '2.8.0'
             android-driver:
                 description: >-
-                    'redroid' (default) or 'avd'. Google publishes no linux-aarch64
-                    build of the Android emulator/NDK/cmake, so 'avd' cannot boot on
-                    this workflow's default self-hosted runner-labels; 'redroid' runs
-                    Android as a privileged container over binder_linux instead and
-                    needs none of those packages. Pick 'avd' only when overriding
-                    runner-labels to a host with a working emulator (e.g. GitHub-hosted
-                    x86_64 runners, which carry KVM out of the box).
+                    'avd' (default) or 'redroid'. 'avd' boots Google's own emulator
+                    and matches the default runner-labels, an x86_64 Linux pool with
+                    /dev/kvm and no privileged-container or binder_linux support.
+                    'redroid' runs Android as a privileged Docker container over the
+                    host's binder_linux module and is the driver for a linux-aarch64
+                    pool, where Google publishes no emulator/NDK/cmake at all; select
+                    it together with runner-labels pointing at such a host, since it
+                    cannot run on the default pool.
                 type: string
                 required: false
-                default: redroid
+                default: avd
             emulator-api-level:
                 type: string
                 required: false
@@ -231,15 +241,17 @@ on:
             emulator-ram-size:
                 description: >-
                     Emulator RAM in MB. Empty keeps the hardware profile's own
-                    default. Set this when test-runner-labels point at a
-                    memory-bounded host: a cgroup limit kills qemu instead of
-                    reporting an out-of-memory condition, so the job fails as a
-                    lost adb connection ("0 devices connected") partway through
-                    a run whose earlier flows passed. Mirrors what
-                    redroid-memory does for the redroid driver.
+                    default; the default here is bounded on purpose, because the
+                    default runner-labels pool is a memory-bounded 8 GiB container.
+                    A cgroup limit kills qemu instead of reporting an out-of-memory
+                    condition, so an unbounded guest fails the job as a lost adb
+                    connection ("0 devices connected") partway through a run whose
+                    earlier flows passed. Raise it only with headroom measured on
+                    the pool the run lands on. Mirrors what redroid-memory does for
+                    the redroid driver.
                 type: string
                 required: false
-                default: ''
+                default: '2048'
             emulator-heap-size:
                 description: Android VM heap size in MB for the emulated device.
                 type: string
