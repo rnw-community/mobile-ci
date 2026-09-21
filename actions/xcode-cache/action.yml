@@ -1,0 +1,267 @@
+name: xcode-cache
+description: >-
+  Restores or saves an Xcode build cache triple — DerivedData, the resolved
+  Swift Package clones, and the Xcode 26 compilation cache (CAS) — keyed on the
+  pinned toolchain plus a project fingerprint, and emits the xcodebuild
+  arguments that point Xcode at all three.
+inputs:
+  mode:
+    description: '`restore` or `save`.'
+    required: true
+  backend:
+    description: >-
+      `github` stores the cache with actions/cache. `local` stores it as a plain
+      directory under local-dir (a self-hosted runner's shared mount), with no
+      network access at all.
+    required: false
+    default: github
+  local-dir:
+    description: Directory holding the cache entries when backend is `local`.
+    required: false
+    default: ''
+  derived-data-dir:
+    description: DerivedData directory passed to xcodebuild as -derivedDataPath.
+    required: false
+    default: build/DerivedData
+  spm-clones-dir:
+    description: >-
+      Swift Package clone directory passed to xcodebuild as
+      -clonedSourcePackagesDirPath.
+    required: false
+    default: build/SourcePackages
+  cas-dir:
+    description: >-
+      Xcode 26 compilation cache (CAS) directory passed to xcodebuild as
+      COMPILATION_CACHE_CAS_PATH.
+    required: false
+    default: build/CompilationCache
+  toolchain:
+    description: >-
+      Cache-key segment identifying the toolchain, e.g. setup-xcode-pinned's
+      toolchain-key output (xcode-26.4.1-17E202).
+    required: true
+  fingerprint-paths:
+    description: >-
+      Newline- or space-separated globs whose matched file contents are hashed
+      into the cache key. Matching zero files fails the step rather than
+      producing a fingerprint over nothing.
+    required: false
+    default: |
+      **/*.pbxproj
+      Package.swift
+      **/Package.resolved
+  working-directory:
+    description: Directory the fingerprint globs and the cache directories are resolved against.
+    required: false
+    default: .
+  key-prefix:
+    description: Cache-key namespace, bumped to invalidate every entry at once.
+    required: false
+    default: xcode-cache-v1
+  restore-keys:
+    description: >-
+      Newline-separated fallback key prefixes for a `github` restore. Ignored by
+      the `local` backend, which only ever takes an exact-key hit.
+    required: false
+    default: ''
+outputs:
+  cache-hit:
+    description: '`true` when an exact-key cache entry was restored.'
+    value: ${{ steps.restore.outputs.cache-hit || steps.local-restore.outputs.cache-hit }}
+  cache-key:
+    description: The computed cache key.
+    value: ${{ steps.key.outputs.key }}
+  xcodebuild-args:
+    description: >-
+      Arguments the caller appends to its xcodebuild invocations so Xcode uses
+      the three cached directories.
+    value: ${{ steps.key.outputs.xcodebuild-args }}
+runs:
+  using: composite
+  steps:
+    - name: Compute Xcode cache key and xcodebuild arguments
+      id: key
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BACKEND: ${{ inputs.backend }}
+        LOCAL_DIR: ${{ inputs.local-dir }}
+        DERIVED_DATA_DIR: ${{ inputs.derived-data-dir }}
+        SPM_CLONES_DIR: ${{ inputs.spm-clones-dir }}
+        CAS_DIR: ${{ inputs.cas-dir }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        FINGERPRINT_PATHS: ${{ inputs.fingerprint-paths }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        KEY_PREFIX: ${{ inputs.key-prefix }}
+      run: |
+        set -euo pipefail
+
+        case "$MODE" in
+          restore|save) ;;
+          *) echo "::error::mode must be 'restore' or 'save' (got '$MODE')."; exit 1 ;;
+        esac
+        case "$BACKEND" in
+          github) ;;
+          local)
+            if [ -z "$LOCAL_DIR" ]; then
+              echo "::error::backend 'local' requires local-dir."
+              exit 1
+            fi
+            ;;
+          *) echo "::error::backend must be 'github' or 'local' (got '$BACKEND')."; exit 1 ;;
+        esac
+
+        cd "$WORKING_DIRECTORY"
+        root="$PWD"
+
+        absolute=()
+        exclude_expression='^\./(\.git|\.build)/'
+        for directory in "$DERIVED_DATA_DIR" "$SPM_CLONES_DIR" "$CAS_DIR"; do
+          case "$directory" in
+            '') echo "::error::derived-data-dir, spm-clones-dir and cas-dir must all be non-empty."; exit 1 ;;
+            /*) resolved="$directory" ;;
+            *)
+              resolved="$root/$directory"
+              exclude_expression="${exclude_expression}|^\./${directory%/}/"
+              ;;
+          esac
+          case "$resolved" in
+            *[[:space:]]*) echo "::error::Cache directory '$resolved' contains whitespace; xcodebuild-args is a shell word list and cannot carry it."; exit 1 ;;
+          esac
+          absolute+=("$resolved")
+        done
+
+        matched="${RUNNER_TEMP}/xcode-cache-fingerprint-$$.list"
+        : > "$matched"
+        while IFS= read -r pattern; do
+          case "$pattern" in
+            '') continue ;;
+            '**/'*)
+              name="${pattern#\*\*/}"
+              case "$name" in
+                */*) echo "::error::fingerprint-paths pattern '$pattern' puts a path separator after '**/'; only a bare filename glob is supported there."; exit 1 ;;
+              esac
+              find . -type f -name "$name" -print \
+                | { grep -Ev "$exclude_expression" || true; } >> "$matched"
+              ;;
+            *'*'*|*'?'*|*'['*)
+              # shellcheck disable=SC2086
+              for candidate in $pattern; do
+                [ -f "$candidate" ] && printf '%s\n' "$candidate" >> "$matched"
+              done
+              ;;
+            *)
+              [ -f "$pattern" ] && printf '%s\n' "$pattern" >> "$matched"
+              ;;
+          esac
+        done < <(printf '%s\n' "$FINGERPRINT_PATHS" | tr '[:blank:]' '\n')
+
+        count=$(LC_ALL=C sort -u "$matched" | grep -c . || true)
+        if [ "$count" -eq 0 ]; then
+          echo "::error::fingerprint-paths matched no files under '$root'; a cache key over an empty fingerprint would collide across unrelated projects."
+          rm -f "$matched"
+          exit 1
+        fi
+
+        fingerprint=$(
+          LC_ALL=C sort -u "$matched" \
+            | tr '\n' '\0' \
+            | xargs -0 shasum -a 256 \
+            | shasum -a 256 \
+            | cut -c1-40
+        )
+        rm -f "$matched"
+        test -n "$fingerprint"
+
+        for resolved in "${absolute[@]}"; do
+          mkdir -p "$resolved"
+        done
+
+        echo "Fingerprinted ${count} file(s) into $fingerprint"
+        echo "key=${KEY_PREFIX}-${RUNNER_OS}-${TOOLCHAIN}-${fingerprint}" >> "$GITHUB_OUTPUT"
+        {
+          printf 'xcodebuild-args=-derivedDataPath %s' "${absolute[0]}"
+          printf ' -clonedSourcePackagesDirPath %s' "${absolute[1]}"
+          printf ' COMPILATION_CACHE_ENABLE_CACHING=YES'
+          printf ' COMPILATION_CACHE_CAS_PATH=%s\n' "${absolute[2]}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore Xcode cache from GitHub
+      if: inputs.mode == 'restore' && inputs.backend == 'github'
+      id: restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ${{ inputs.working-directory }}/${{ inputs.derived-data-dir }}
+              ${{ inputs.working-directory }}/${{ inputs.spm-clones-dir }}
+              ${{ inputs.working-directory }}/${{ inputs.cas-dir }}
+          key: ${{ steps.key.outputs.key }}
+          restore-keys: ${{ inputs.restore-keys }}
+
+    - name: Save Xcode cache to GitHub
+      if: inputs.mode == 'save' && inputs.backend == 'github'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: |
+              ${{ inputs.working-directory }}/${{ inputs.derived-data-dir }}
+              ${{ inputs.working-directory }}/${{ inputs.spm-clones-dir }}
+              ${{ inputs.working-directory }}/${{ inputs.cas-dir }}
+          key: ${{ steps.key.outputs.key }}
+
+    - name: Restore Xcode cache from the local directory
+      if: inputs.mode == 'restore' && inputs.backend == 'local'
+      id: local-restore
+      shell: bash
+      env:
+        LOCAL_DIR: ${{ inputs.local-dir }}
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+        DERIVED_DATA_DIR: ${{ inputs.derived-data-dir }}
+        SPM_CLONES_DIR: ${{ inputs.spm-clones-dir }}
+        CAS_DIR: ${{ inputs.cas-dir }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
+        cd "$WORKING_DIRECTORY"
+        entry="$LOCAL_DIR/$CACHE_KEY"
+        if [ ! -f "$entry/.complete" ]; then
+          echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+          echo "Local cache miss for $CACHE_KEY"
+          exit 0
+        fi
+        rsync -a --delete "$entry/derived-data/" "$DERIVED_DATA_DIR/"
+        rsync -a --delete "$entry/spm-clones/" "$SPM_CLONES_DIR/"
+        rsync -a --delete "$entry/cas/" "$CAS_DIR/"
+        echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+        echo "Local cache hit for $CACHE_KEY"
+
+    - name: Save Xcode cache to the local directory
+      if: inputs.mode == 'save' && inputs.backend == 'local'
+      shell: bash
+      env:
+        LOCAL_DIR: ${{ inputs.local-dir }}
+        CACHE_KEY: ${{ steps.key.outputs.key }}
+        DERIVED_DATA_DIR: ${{ inputs.derived-data-dir }}
+        SPM_CLONES_DIR: ${{ inputs.spm-clones-dir }}
+        CAS_DIR: ${{ inputs.cas-dir }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
+        cd "$WORKING_DIRECTORY"
+        mkdir -p "$LOCAL_DIR"
+        entry="$LOCAL_DIR/$CACHE_KEY"
+        staging="$LOCAL_DIR/.staging-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
+        superseded="$LOCAL_DIR/.superseded-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
+        rm -rf "$staging" "$superseded"
+        mkdir -p "$staging/derived-data" "$staging/spm-clones" "$staging/cas"
+        rsync -a "$DERIVED_DATA_DIR/" "$staging/derived-data/"
+        rsync -a "$SPM_CLONES_DIR/" "$staging/spm-clones/"
+        rsync -a "$CAS_DIR/" "$staging/cas/"
+        date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"
+        if [ -e "$entry" ]; then
+          mv "$entry" "$superseded"
+        fi
+        mv "$staging" "$entry"
+        rm -rf "$superseded"
+        echo "Saved the local cache entry $CACHE_KEY"
