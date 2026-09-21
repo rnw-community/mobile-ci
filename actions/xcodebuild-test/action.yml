@@ -84,6 +84,20 @@ inputs:
       choose.
     required: false
     default: ''
+  screen-capture:
+    description: >-
+      Screen-capture format for the UI tests, written into the generated
+      `.xctestrun` before the run: `screenshots` (the default) or
+      `screenRecording`. Xcode 26 records a *video* of every UI test, which
+      costs `VTEncoderXPCService` roughly 1 GB of RSS and a full core — on a
+      4 CPU / 7 GiB CI guest whose free memory never left ~50 MB that is the
+      single largest consumer in the run (measured in #147). Screenshots keep
+      the same failure evidence for a fraction of it. Applied by rewriting
+      every `PreferredScreenCaptureFormat` in the `.xctestrun`, so it needs
+      `-derivedDataPath` in xcodebuild-args to find it; without one the
+      scheme's own setting is left alone and a warning is logged.
+    required: false
+    default: screenshots
   artifact-name:
     description: Name of the uploaded .xcresult artifact.
     required: false
@@ -211,6 +225,130 @@ runs:
         printf '\n'
         xcodebuild "${args[@]}" build-for-testing
 
+    - name: Locate the .xctestrun and set its screen-capture format
+      id: xctestrun
+      shell: bash
+      env:
+        SCREEN_CAPTURE: ${{ inputs.screen-capture }}
+        SCHEME: ${{ inputs.scheme }}
+        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        case "$SCREEN_CAPTURE" in
+          screenshots|screenRecording) ;;
+          *) echo "::error::screen-capture must be 'screenshots' or 'screenRecording' (got '$SCREEN_CAPTURE')."; exit 1 ;;
+        esac
+
+        # One step decides which .xctestrun describes this run, and both the
+        # screen-capture rewrite below and the sharding step read the answer
+        # from here. When the answer is unusable the *reason* travels with it,
+        # so sharding can still fail closed with the message it always had
+        # while a capture rewrite only warns: sharding cannot proceed without
+        # the file, capture can.
+        derived_data=''
+        previous=''
+        # shellcheck disable=SC2086
+        for word in $XCODEBUILD_ARGS; do
+          if [ "$previous" = '-derivedDataPath' ]; then
+            derived_data="$word"
+            break
+          fi
+          previous="$word"
+        done
+
+        xctestruns=()
+        problem=''
+        if [ -z "$derived_data" ]; then
+          problem='Sharding needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
+        else
+          while IFS= read -r candidate; do
+            [ -n "$candidate" ] || continue
+            xctestruns+=("$candidate")
+          done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f \
+            \( -name "${SCHEME}_*.xctestrun" -o -name "${SCHEME}.xctestrun" \) 2>/dev/null | LC_ALL=C sort)
+          if [ "${#xctestruns[@]}" -eq 0 ]; then
+            problem="No .xctestrun for scheme '$SCHEME' under '$derived_data/Build/Products' after build-for-testing; cannot discover tests to shard. A DerivedData cache shared by several schemes only carries the one its build job compiled. Found: $({ find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null || true; } | tr '\n' ' ')"
+          elif [ "${#xctestruns[@]}" -gt 1 ]; then
+            problem="Several .xctestrun bundles match scheme '$SCHEME', so which one describes this run is a guess: $(printf '%s ' "${xctestruns[@]}"). Pass only-testing explicitly, or give this scheme its own derived-data-dir."
+          fi
+        fi
+
+        resolved=''
+        if [ "${#xctestruns[@]}" -eq 1 ]; then
+          resolved="${xctestruns[0]}"
+        fi
+        {
+          printf 'path=%s\n' "$resolved"
+          printf 'problem<<XCTESTRUN_PROBLEM_EOF\n%s\nXCTESTRUN_PROBLEM_EOF\n' "$problem"
+        } >> "$GITHUB_OUTPUT"
+
+        if [ "${#xctestruns[@]}" -eq 0 ]; then
+          echo "::warning::Screen capture left at the scheme's own setting: ${problem}"
+          exit 0
+        fi
+
+        # A missing python3 is the same class of event as an unreachable
+        # .xctestrun: this action's contract is to run the tests, and the
+        # capture format is an optimisation on top of that. Warn and leave the
+        # scheme's own setting rather than failing a run that would otherwise
+        # have passed — but never pretend the rewrite happened.
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::warning::'python3' is not on PATH, so the .xctestrun's screen-capture format is left at the scheme's own setting; this run pays Xcode's UI-test video. Install the Xcode Command Line Tools on this runner (see docs/self-hosted-runners.md)."
+          exit 0
+        fi
+        for xctestrun in "${xctestruns[@]}"; do
+          counts="$(XCTESTRUN_PATH="$xctestrun" SCREEN_CAPTURE="$SCREEN_CAPTURE" python3 - <<'PYTHON'
+        import os
+        import plistlib
+
+        path = os.environ['XCTESTRUN_PATH']
+        wanted = os.environ['SCREEN_CAPTURE']
+        KEY = 'PreferredScreenCaptureFormat'
+
+        with open(path, 'rb') as handle:
+            raw = handle.read()
+        plist = plistlib.loads(raw)
+        # Round-tripping through JSON would lose <data>/<date>; keep the file in the
+        # format xcodebuild wrote it in.
+        fmt = plistlib.FMT_BINARY if raw[:8] == b'bplist00' else plistlib.FMT_XML
+
+        found = 0
+        changed = 0
+
+
+        def walk(node):
+            global found, changed
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == KEY:
+                        found += 1
+                        if value != wanted:
+                            node[key] = wanted
+                            changed += 1
+                    else:
+                        walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+
+        walk(plist)
+        if changed:
+            with open(path, 'wb') as handle:
+                plistlib.dump(plist, handle, fmt=fmt)
+        print(f'{found} {changed}')
+        PYTHON
+        )"
+          read -r found changed <<< "$counts"
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::'$xctestrun' declares no PreferredScreenCaptureFormat; this Xcode records no UI-test video, so there is nothing to switch to '$SCREEN_CAPTURE'."
+          else
+            echo "Screen capture in '$xctestrun': ${changed} of ${found} PreferredScreenCaptureFormat entries set to '$SCREEN_CAPTURE'."
+          fi
+        done
+
     - name: Resolve this shard's test identifiers
       if: inputs.mode != 'build'
       id: shard
@@ -221,7 +359,8 @@ runs:
         DESTINATION_ID: ${{ inputs.destination-id }}
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
-        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        XCTESTRUN: ${{ steps.xctestrun.outputs.path }}
+        XCTESTRUN_PROBLEM: ${{ steps.xctestrun.outputs.problem }}
         WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
@@ -254,37 +393,13 @@ runs:
             exit 0
           fi
           command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to enumerate the tests to shard but is not on PATH."; exit 1; }
-          derived_data=''
-          previous=''
-          # shellcheck disable=SC2086
-          for word in $XCODEBUILD_ARGS; do
-            if [ "$previous" = '-derivedDataPath' ]; then
-              derived_data="$word"
-              break
-            fi
-            previous="$word"
-          done
-          if [ -z "$derived_data" ]; then
-            echo '::error::Sharding needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
+          # The .xctestrun was already resolved once, by the screen-capture
+          # step; sharding is the caller that cannot continue without it.
+          if [ -z "$XCTESTRUN" ]; then
+            echo "::error::${XCTESTRUN_PROBLEM}"
             exit 1
           fi
-          xctestruns=()
-          while IFS= read -r candidate; do
-            [ -n "$candidate" ] || continue
-            xctestruns+=("$candidate")
-          done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f -name "${SCHEME}_*.xctestrun" -o -maxdepth 1 -type f -name "${SCHEME}.xctestrun" 2>/dev/null | LC_ALL=C sort)
-          if [ "${#xctestruns[@]}" -eq 0 ]; then
-            echo "::error::No .xctestrun for scheme '$SCHEME' under '$derived_data/Build/Products' after build-for-testing; cannot discover tests to shard. A DerivedData cache shared by several schemes only carries the one its build job compiled."
-            find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null || true
-            exit 1
-          fi
-          if [ "${#xctestruns[@]}" -gt 1 ]; then
-            echo "::error::Several .xctestrun bundles match scheme '$SCHEME'; refusing to guess which one describes this run:"
-            printf '  %s\n' "${xctestruns[@]}"
-            echo '::error::Pass only-testing explicitly, or give this scheme its own derived-data-dir.'
-            exit 1
-          fi
-          xctestrun="${xctestruns[0]}"
+          xctestrun="$XCTESTRUN"
 
           enumeration="${RUNNER_TEMP}/xcodebuild-test-enumeration-$$.json"
           rm -f "$enumeration"

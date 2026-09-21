@@ -8,6 +8,20 @@ with several versions of but no `.xcconfig`-level pinning guarantee across
 runs). This doc covers provisioning both pool types plus the two variables
 this repo's own maintainer-only fleet self-test job reads.
 
+## Common to every macOS pool: `python3`
+
+macOS pools need `python3` on `PATH`, which the **Xcode Command Line Tools**
+install (`xcode-select --install`) — a host that can run `xcodebuild` normally
+already has it. [`xcodebuild-test`](../actions/xcodebuild-test/README.md) uses
+it to rewrite the generated `.xctestrun`'s screen-capture format (see [UI tests
+capture screenshots, not video](#ui-tests-capture-screenshots-not-video)). On
+Linux Redroid hosts, `redroid-container` needs it only when a prewarm manifest
+is present — it reads the manifest's `image` and `dataDir` with it.
+
+Missing `python3` does not fail a run: the rewrite is skipped with a warning
+and the run pays Xcode's UI-test video for that job. It is a pool-provisioning
+defect, not a test failure, so it is reported as one.
+
 ## Common to every pool: `jq`
 
 Install `jq` on every host in every pool. The reusable workflows' package
@@ -287,6 +301,32 @@ per-device caches, logs, and temporary files read-only; `simslim disk-clean
 --categories caches,logs,temporary --confirm <udid>` deletes them. Neither is
 run by any action; schedule it alongside runtime cleanup if simulator disk
 growth is a problem on a pool.
+
+### UI tests capture screenshots, not video
+
+Slimming the simulator is not the whole memory story on a 7 GiB guest. Xcode 26
+records a **video of every UI test** — `PreferredScreenCaptureFormat =
+screenRecording` in the generated `.xctestrun` — and the encoder that produces
+it, `VTEncoderXPCService`, was measured on a 4 CPU / 7 GiB `maestro` guest at
+**~1 GB of RSS and a full core**: the single largest consumer in a run whose
+free memory never rose above ~50 MB, with 100+ attachments accumulated in the
+`.xcresult` after half an hour
+([#147](https://github.com/rnw-community/mobile-ci/issues/147)). On a host with
+four cores and seven gigabytes, that is a quarter of the CPU and a seventh of
+the memory spent on a recording that `deleteOnSuccess` throws away whenever the
+run is green.
+
+So [`xcodebuild-test`](../actions/xcodebuild-test/README.md) defaults
+`screen-capture` to `screenshots` and rewrites the `.xctestrun` before the run.
+Nothing is needed on the host, and failure evidence is unchanged — screenshots
+are still attached to the uploaded `.xcresult`. A pool with memory and cores to
+spare can ask for `screen-capture: screenRecording` per job.
+
+This is also why the "two XCUITest workers in one VM" experiment (#147) was
+*not* adopted: two workers measured 0.81× the wall time of one and produced a
+timing flake, because the guest was memory-bound before the second worker
+existed. Re-measure that only on a quiet host, on the 6x12 builder profile,
+after the encoder is gone.
 
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
