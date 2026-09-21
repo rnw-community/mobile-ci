@@ -100,7 +100,7 @@ runs:
         : "${EXPECTED_APPLICATION_IDENTIFIER:?expected-application-identifier is required for mode 'install'}"
         command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to record the signing state but is not on PATH."; exit 1; }
         case "$KEYCHAIN_NAME" in
-          ''|*[!A-Za-z0-9._-]*) echo "::error::keychain-name '$KEYCHAIN_NAME' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
+          ''|.|..|*[!A-Za-z0-9._-]*) echo "::error::keychain-name '$KEYCHAIN_NAME' must be a plain path component of letters, digits, '.', '_' or '-' — never '.' or '..', which would make teardown remove RUNNER_TEMP itself."; exit 1 ;;
         esac
         case "$ASC_KEY_ID" in
           ''|*[!A-Za-z0-9]*) echo "::error::asc-key-id must be non-empty and alphanumeric."; exit 1 ;;
@@ -204,6 +204,9 @@ runs:
         KEYCHAIN_NAME: ${{ inputs.keychain-name }}
       run: |
         set -euo pipefail
+        case "$KEYCHAIN_NAME" in
+          ''|.|..|*[!A-Za-z0-9._-]*) echo "::error::keychain-name '$KEYCHAIN_NAME' must be a plain path component of letters, digits, '.', '_' or '-' — never '.' or '..', which would make teardown remove RUNNER_TEMP itself."; exit 1 ;;
+        esac
         state_dir="$RUNNER_TEMP/${KEYCHAIN_NAME}"
         state_file="$state_dir/state.json"
         if [ ! -f "$state_file" ]; then

@@ -285,6 +285,7 @@ jobs:
                   spm-clones-dir: ${{ inputs.spm-clones-dir }}
                   cas-dir: ${{ inputs.cas-dir }}
                   fingerprint-paths: ${{ inputs.fingerprint-paths }}
+                  key-prefix: ${{ format('xcode-cache-v1-{0}-{1}', inputs.scheme, inputs.configuration) }}
                   working-directory: ${{ inputs.working-directory }}
 
             - name: Run the Swift Package tests
@@ -311,7 +312,7 @@ jobs:
                   working-directory: ${{ inputs.working-directory }}
 
             - name: Save the Xcode build cache
-              if: always() && steps.cache.outputs.cache-hit != 'true'
+              if: success() && steps.cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/xcode-cache@v1.23.1 # v1.23.1
               with:
                   mode: save
@@ -322,6 +323,7 @@ jobs:
                   spm-clones-dir: ${{ inputs.spm-clones-dir }}
                   cas-dir: ${{ inputs.cas-dir }}
                   fingerprint-paths: ${{ inputs.fingerprint-paths }}
+                  key-prefix: ${{ format('xcode-cache-v1-{0}-{1}', inputs.scheme, inputs.configuration) }}
                   working-directory: ${{ inputs.working-directory }}
 
     test:
@@ -359,6 +361,7 @@ jobs:
                   spm-clones-dir: ${{ inputs.spm-clones-dir }}
                   cas-dir: ${{ inputs.cas-dir }}
                   fingerprint-paths: ${{ inputs.fingerprint-paths }}
+                  key-prefix: ${{ format('xcode-cache-v1-{0}-{1}', inputs.scheme, inputs.configuration) }}
                   working-directory: ${{ inputs.working-directory }}
 
             - name: Validate the shard plan and the simulator device type

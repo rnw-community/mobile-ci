@@ -327,7 +327,17 @@ jobs:
                   SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
               run: |
                   set -euo pipefail
-                  if xcrun simctl list devices -j | jq -e --arg udid "$SIMULATOR_UDID" '[.devices[][] | select(.udid == $udid)] | length > 0' > /dev/null; then
+                  listing="$RUNNER_TEMP/simctl-devices-after-release.json"
+                  if ! xcrun simctl list devices -j > "$listing"; then
+                    echo '::error::xcrun simctl list devices failed; cleanup cannot be verified, which is not the same as cleanup having happened.'
+                    exit 1
+                  fi
+                  if ! survivors=$(jq -r --arg udid "$SIMULATOR_UDID" '[.devices[][] | select(.udid == $udid)] | length' "$listing"); then
+                    echo "::error::Could not parse '$listing'; cleanup cannot be verified."
+                    exit 1
+                  fi
+                  rm -f "$listing"
+                  if [ "$survivors" != '0' ]; then
                     echo "::error::simulator-lease left '$SIMULATOR_UDID' behind after mode: release."
                     exit 1
                   fi

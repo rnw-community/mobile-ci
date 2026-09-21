@@ -98,10 +98,16 @@ rather than anything derived at runtime.
 | `derived-data-dir`  | `build/DerivedData`                                    | `-derivedDataPath`.                                    |
 | `spm-clones-dir`    | `build/SourcePackages`                                 | `-clonedSourcePackagesDirPath`.                        |
 | `cas-dir`           | `build/CompilationCache`                               | `COMPILATION_CACHE_CAS_PATH`.                          |
-| `fingerprint-paths` | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved` | Globs hashed into the cache key.                       |
+| `fingerprint-paths` | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift` | Globs hashed into the cache key. Sources are included because the `test` shards restore what `build` compiled. |
 
 The same `cache-backend` / `cache-local-dir` pair also drives `swift-test`'s
 `.build` cache.
+
+The cache key also carries the **scheme and configuration**
+(`key-prefix: xcode-cache-v1-<scheme>-<configuration>`), so two callers sharing
+one checkout and one `derived-data-dir` cannot restore each other's products.
+The `build` job saves only on **success**, so a failed compile never publishes
+a half-built DerivedData under an immutable key that a retry would restore.
 
 ### Tests
 

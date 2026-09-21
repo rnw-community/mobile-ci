@@ -43,13 +43,19 @@ inputs:
   fingerprint-paths:
     description: >-
       Newline- or space-separated globs whose matched file contents are hashed
-      into the cache key. Matching zero files fails the step rather than
-      producing a fingerprint over nothing.
+      into the cache key. A `**` is expanded with find, so both `**/*.swift`
+      and `Sources/**/*.swift` work; the three cache directories, `.git` and
+      `.build` are never matched. The default includes every `*.swift` on
+      purpose: a build job and its test shards share this key, so a key that
+      did not move with the sources would hand the shards the previous
+      commit's compiled products. Matching zero files fails the step rather
+      than producing a fingerprint over nothing.
     required: false
     default: |
       **/*.pbxproj
       Package.swift
       **/Package.resolved
+      **/*.swift
   working-directory:
     description: Directory the fingerprint globs and the cache directories are resolved against.
     required: false
@@ -139,12 +145,14 @@ runs:
         while IFS= read -r pattern; do
           case "$pattern" in
             '') continue ;;
-            '**/'*)
-              name="${pattern#\*\*/}"
+            *'**'*)
+              prefix="${pattern%%'**'*}"
+              name="${pattern#*'**'}"
+              name="${name#/}"
               case "$name" in
-                */*) echo "::error::fingerprint-paths pattern '$pattern' puts a path separator after '**/'; only a bare filename glob is supported there."; exit 1 ;;
+                ''|*/*) echo "::error::fingerprint-paths pattern '$pattern' must end in a bare filename glob after '**/', e.g. 'Sources/**/*.swift'."; exit 1 ;;
               esac
-              find . -type f -name "$name" -print \
+              find . -type f -path "./${prefix}*" -name "$name" -print \
                 | { grep -Ev "$exclude_expression" || true; } >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)

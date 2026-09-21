@@ -18,6 +18,25 @@ Matching **zero** files fails the step: a key computed over an empty
 fingerprint would collide across unrelated projects and hand one project
 another's DerivedData.
 
+A `**` is expanded with `find`, so `**/*.swift` and `Sources/**/*.swift` both
+work; the three cache directories, `.git` and `.build` are never matched, so a
+`Package.resolved` restored *into* the cache cannot perturb its own key.
+
+**The default fingerprint includes every `*.swift` on purpose.** A build job
+and its test shards share this key (see
+[`xcodebuild-test`](../xcodebuild-test/README.md)'s `mode`), so a key that did
+not move with the sources would let a shard restore the previous commit's
+compiled products and report `test-without-building` green without testing the
+current source. Narrow `fingerprint-paths` only if nothing downstream reuses
+the compiled products. The Xcode 26 CAS is what keeps a source change cheap:
+the key misses, but the unchanged translation units are still content-addressed
+hits.
+
+`key-prefix` is the place to put anything else that changes the identity of the
+compiled products — most importantly the **scheme and configuration** when one
+`derived-data-dir` is shared between them. `swift-ios.yml` passes
+`xcode-cache-v1-<scheme>-<configuration>` for exactly that reason.
+
 Call the action twice per job — `mode: restore` before the build, `mode: save`
 after it — and guard the save with
 `if: steps.<restore-id>.outputs.cache-hit != 'true'` so a warm run never
@@ -49,7 +68,7 @@ exact-key hits only.
 | `spm-clones-dir`     | no       | `build/SourcePackages`                      | Swift Package clone directory.                                               |
 | `cas-dir`            | no       | `build/CompilationCache`                    | Xcode 26 compilation-cache (CAS) directory.                                  |
 | `toolchain`          | yes      | —                                           | Toolchain key segment, e.g. `setup-xcode-pinned`'s `toolchain-key`.          |
-| `fingerprint-paths`  | no       | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved` | Newline- or space-separated globs hashed into the key.            |
+| `fingerprint-paths`  | no       | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift` | Newline- or space-separated globs hashed into the key. |
 | `working-directory`  | no       | `.`                                         | Directory the globs and cache directories resolve against.                   |
 | `key-prefix`         | no       | `xcode-cache-v1`                            | Key namespace; bump it to invalidate every entry at once.                    |
 | `restore-keys`       | no       | `''`                                        | Newline-separated fallback prefixes for a `github` restore.                  |

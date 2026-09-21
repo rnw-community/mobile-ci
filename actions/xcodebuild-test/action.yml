@@ -217,6 +217,7 @@ runs:
       shell: bash
       env:
         ONLY_TESTING: ${{ inputs.only-testing }}
+        SCHEME: ${{ inputs.scheme }}
         DESTINATION_ID: ${{ inputs.destination-id }}
         SHARD_INDEX: ${{ inputs.shard-index }}
         SHARD_COUNT: ${{ inputs.shard-count }}
@@ -267,15 +268,23 @@ runs:
             echo '::error::Sharding needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
             exit 1
           fi
-          xctestrun=''
+          xctestruns=()
           while IFS= read -r candidate; do
-            xctestrun="$candidate"
-            break
-          done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null | LC_ALL=C sort)
-          if [ -z "$xctestrun" ]; then
-            echo "::error::No .xctestrun under '$derived_data/Build/Products' after build-for-testing; cannot discover tests to shard."
+            [ -n "$candidate" ] || continue
+            xctestruns+=("$candidate")
+          done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f -name "${SCHEME}_*.xctestrun" -o -maxdepth 1 -type f -name "${SCHEME}.xctestrun" 2>/dev/null | LC_ALL=C sort)
+          if [ "${#xctestruns[@]}" -eq 0 ]; then
+            echo "::error::No .xctestrun for scheme '$SCHEME' under '$derived_data/Build/Products' after build-for-testing; cannot discover tests to shard. A DerivedData cache shared by several schemes only carries the one its build job compiled."
+            find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null || true
             exit 1
           fi
+          if [ "${#xctestruns[@]}" -gt 1 ]; then
+            echo "::error::Several .xctestrun bundles match scheme '$SCHEME'; refusing to guess which one describes this run:"
+            printf '  %s\n' "${xctestruns[@]}"
+            echo '::error::Pass only-testing explicitly, or give this scheme its own derived-data-dir.'
+            exit 1
+          fi
+          xctestrun="${xctestruns[0]}"
 
           enumeration="${RUNNER_TEMP}/xcodebuild-test-enumeration-$$.json"
           rm -f "$enumeration"
@@ -315,7 +324,7 @@ runs:
         selected=()
         index=0
         for identifier in "${candidates[@]}"; do
-          if [ "$((index % SHARD_COUNT))" -eq "$SHARD_INDEX" ]; then
+          if [ "$((index % 10#$SHARD_COUNT))" -eq "$((10#$SHARD_INDEX))" ]; then
             selected+=("$identifier")
           fi
           index=$((index + 1))

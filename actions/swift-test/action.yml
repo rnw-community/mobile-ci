@@ -81,12 +81,14 @@ runs:
         while IFS= read -r pattern; do
           case "$pattern" in
             '') continue ;;
-            '**/'*)
-              name="${pattern#\*\*/}"
+            *'**'*)
+              prefix="${pattern%%'**'*}"
+              name="${pattern#*'**'}"
+              name="${name#/}"
               case "$name" in
-                */*) echo "::error::fingerprint-paths pattern '$pattern' puts a path separator after '**/'; only a bare filename glob is supported there."; exit 1 ;;
+                ''|*/*) echo "::error::fingerprint-paths pattern '$pattern' must end in a bare filename glob after '**/', e.g. 'Sources/**/*.swift'."; exit 1 ;;
               esac
-              find . -type f -name "$name" -print \
+              find . -type f -path "./${prefix}*" -name "$name" -print \
                 | { grep -Ev '^\./(\.git|\.build)/' || true; } >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)

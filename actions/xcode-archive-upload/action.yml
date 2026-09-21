@@ -189,20 +189,29 @@ runs:
           *) echo "::error::upload must be 'true' or 'false' (got '$UPLOAD')."; exit 1 ;;
         esac
 
+        xml_escape() {
+          printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+        }
+        export_method_xml=$(xml_escape "$EXPORT_METHOD")
+        team_id_xml=$(xml_escape "$TEAM_ID")
+        signing_certificate_xml=$(xml_escape "$SIGNING_CERTIFICATE")
+        bundle_id_xml=$(xml_escape "$BUNDLE_ID")
+        profile_uuid_xml=$(xml_escape "$PROFILE_UUID")
+
         export_options="$RUNNER_TEMP/xcode-archive-upload-ExportOptions-$$.plist"
         cat > "$export_options" <<PLIST
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0"><dict>
-        <key>method</key><string>${EXPORT_METHOD}</string>
+        <key>method</key><string>${export_method_xml}</string>
         <key>destination</key><string>${destination}</string>
-        <key>teamID</key><string>${TEAM_ID}</string>
+        <key>teamID</key><string>${team_id_xml}</string>
         <key>signingStyle</key><string>manual</string>
-        <key>signingCertificate</key><string>${SIGNING_CERTIFICATE}</string>
+        <key>signingCertificate</key><string>${signing_certificate_xml}</string>
         <key>provisioningProfiles</key><dict>
-        <key>${BUNDLE_ID}</key><string>${PROFILE_UUID}</string>
+        <key>${bundle_id_xml}</key><string>${profile_uuid_xml}</string>
         </dict>
-        <key>distributionBundleIdentifier</key><string>${BUNDLE_ID}</string>
+        <key>distributionBundleIdentifier</key><string>${bundle_id_xml}</string>
         <key>manageAppVersionAndBuildNumber</key><false/>
         </dict></plist>
         PLIST

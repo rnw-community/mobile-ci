@@ -181,6 +181,22 @@ runs:
             xcrun simctl list devices available
             exit 1
           fi
+          template_device_type=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg udid "$template_udid" '[.devices[][] | select(.udid == $udid) | .deviceTypeIdentifier] | first // empty'
+          )
+          if [ "$template_device_type" != "$device_type_id" ]; then
+            echo "::error::template-device '$TEMPLATE_DEVICE' is a '$template_device_type', not the requested device-type '$DEVICE_TYPE' ($device_type_id). A clone would run the tests on the wrong device while the lease claimed otherwise."
+            exit 1
+          fi
+          template_runtime=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg udid "$template_udid" '[.devices | to_entries[] | select(.value[]?.udid == $udid) | .key] | first // empty'
+          )
+          if [ "$template_runtime" != "$runtime_id" ]; then
+            echo "::error::template-device '$TEMPLATE_DEVICE' runs '$template_runtime', not the resolved runtime '$runtime_id'. A clone would run the tests on the wrong OS while the lease claimed otherwise."
+            exit 1
+          fi
           template_state=$(
             xcrun simctl list devices -j \
               | jq -r --arg udid "$template_udid" '[.devices[][] | select(.udid == $udid) | .state] | first // empty'
