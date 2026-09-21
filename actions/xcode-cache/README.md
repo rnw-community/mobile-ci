@@ -62,8 +62,18 @@ different hosts sharing one mount cannot collide on a staging path.
 A restore only counts as a hit when `.complete` exists, so a save interrupted
 mid-copy is never read back as a cache. Saves stage into a scratch directory
 and swap it in with `mv`, so a concurrent reader never observes a half-written
-entry. `restore-keys` is a `github`-only concept; the `local` backend takes
-exact-key hits only.
+entry.
+
+**There are no fallback keys, on either backend.** A prefix-matched restore
+would populate DerivedData from an *older* fingerprint while reporting
+`cache-hit: false`, and a `test-without-building` shard would then run the
+wrong revision's products and pass. Only an exact-key hit is a hit. The Xcode
+26 CAS is the safe version of the same idea: it is content-addressed, so a
+partial reuse after a key miss can never be a stale one.
+
+The computed key must be a single safe path component — `key-prefix` and
+`toolchain` may not contain `/` or `..`, which the `local` backend would
+otherwise follow out of `local-dir`.
 
 ## Inputs
 
@@ -79,7 +89,6 @@ exact-key hits only.
 | `fingerprint-paths`  | no       | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift` | Newline- or space-separated globs hashed into the key. |
 | `working-directory`  | no       | `.`                                         | Directory the globs and cache directories resolve against.                   |
 | `key-prefix`         | no       | `xcode-cache-v1`                            | Key namespace; bump it to invalidate every entry at once.                    |
-| `restore-keys`       | no       | `''`                                        | Newline-separated fallback prefixes for a `github` restore.                  |
 
 ## Outputs
 

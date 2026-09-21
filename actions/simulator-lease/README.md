@@ -67,7 +67,7 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `device-type`          | no       | `''`                | Exact device type name, e.g. `iPad Pro 11-inch (M4)`. Required for `acquire`.  |
 | `runtime`              | no       | `latest`            | `latest`, or an exact runtime identifier.                                      |
 | `name-prefix`          | no       | `mobile-ci-lease`   | Device-name prefix; run id, attempt and a random suffix are appended.          |
-| `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`.       |
+| `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`, which is unique per device. An explicit path is written with `noclobber`, so a second job cannot overwrite the first job's lease and make one `release` delete the other's device. |
 | `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`.                                         |
 | `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one.    |
 | `slim-profile`         | no       | `''`                | Repo-relative simslim JSON profile. Empty leases a stock device.               |

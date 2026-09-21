@@ -197,6 +197,8 @@ runs:
         if [ -z "$lease_file" ]; then
           lease_file="${RUNNER_TEMP}/simulator-lease-${udid}.json"
         fi
+        lease_created=0
+        set -o noclobber
         if ! {
           mkdir -p "$(dirname "$lease_file")" \
             && jq -n \
@@ -207,17 +209,22 @@ runs:
               --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
               '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
               > "$lease_file" \
+            && lease_created=1 \
             && {
               echo "udid=$udid"
               echo "name=$device_name"
               echo "lease-file=$lease_file"
             } >> "$GITHUB_OUTPUT"
         }; then
-          echo "::error::Could not record the lease for simulator '$udid'; deleting the device now rather than leaking one no release call can find."
+          set +o noclobber
+          echo "::error::Could not record the lease for simulator '$udid' at '$lease_file'; deleting the device now rather than leaking one no release call can find. If the file already exists, another job on this runner owns that lease path - give this job a distinct lease-file."
           xcrun simctl delete "$udid" 2>/dev/null || true
-          rm -f "$lease_file"
+          if [ "$lease_created" -eq 1 ]; then
+            rm -f "$lease_file"
+          fi
           exit 1
         fi
+        set +o noclobber
 
         echo "Leased simulator $device_name ($udid) on $runtime_id"
         xcrun simctl boot "$udid" || true

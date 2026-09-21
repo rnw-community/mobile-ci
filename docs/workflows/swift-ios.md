@@ -108,6 +108,9 @@ The cache key also carries the **scheme and configuration**
 one checkout and one `derived-data-dir` cannot restore each other's products.
 The `build` job saves only on **success**, so a failed compile never publishes
 a half-built DerivedData under an immutable key that a retry would restore.
+There are no fallback/prefix keys: only an exact hit counts, because a
+prefix-matched DerivedData would let a `test` shard run an older revision's
+compiled products and pass.
 
 ### Tests
 

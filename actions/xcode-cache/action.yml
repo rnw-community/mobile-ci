@@ -64,12 +64,6 @@ inputs:
     description: Cache-key namespace, bumped to invalidate every entry at once.
     required: false
     default: xcode-cache-v1
-  restore-keys:
-    description: >-
-      Newline-separated fallback key prefixes for a `github` restore. Ignored by
-      the `local` backend, which only ever takes an exact-key hit.
-    required: false
-    default: ''
 outputs:
   cache-hit:
     description: '`true` when an exact-key cache entry was restored.'
@@ -209,8 +203,15 @@ runs:
         done
 
         echo "Fingerprinted ${count} file(s) into $fingerprint"
+        cache_key="${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"
+        case "$cache_key" in
+          ''|*/*|*..*)
+            echo "::error::The computed cache key '$cache_key' is not a single safe path component; key-prefix and toolchain must not contain '/' or '..', which the local backend would follow out of local-dir."
+            exit 1
+            ;;
+        esac
         {
-          printf 'key=%s\n' "${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"
+          printf 'key=%s\n' "$cache_key"
           printf 'cache-paths<<XCODE_CACHE_PATHS_EOF\n'
           printf '%s\n' "${absolute[@]}"
           printf 'XCODE_CACHE_PATHS_EOF\n'
@@ -227,7 +228,6 @@ runs:
       with:
           path: ${{ steps.key.outputs.cache-paths }}
           key: ${{ steps.key.outputs.key }}
-          restore-keys: ${{ inputs.restore-keys }}
 
     - name: Save Xcode cache to GitHub
       if: inputs.mode == 'save' && inputs.backend == 'github'
@@ -251,6 +251,9 @@ runs:
         set -euo pipefail
         command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
         cd "$WORKING_DIRECTORY"
+        case "$CACHE_KEY" in
+          ''|*/*|*..*) echo "::error::Refusing to use cache key '$CACHE_KEY' as a directory name under local-dir; it is not a single safe path component."; exit 1 ;;
+        esac
         entry="$LOCAL_DIR/$CACHE_KEY"
         if [ ! -f "$entry/.complete" ]; then
           echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -277,6 +280,9 @@ runs:
         set -euo pipefail
         command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
         cd "$WORKING_DIRECTORY"
+        case "$CACHE_KEY" in
+          ''|*/*|*..*) echo "::error::Refusing to use cache key '$CACHE_KEY' as a directory name under local-dir; it is not a single safe path component."; exit 1 ;;
+        esac
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"

@@ -118,7 +118,14 @@ runs:
         rm -f "$matched"
         test -n "$fingerprint"
         echo "Fingerprinted ${count} file(s) into $fingerprint"
-        echo "key=${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}" >> "$GITHUB_OUTPUT"
+        cache_key="${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"
+        case "$cache_key" in
+          ''|*/*|*..*)
+            echo "::error::The computed cache key '$cache_key' is not a single safe path component; key-prefix and toolchain must not contain '/' or '..', which the local backend would follow out of local-dir."
+            exit 1
+            ;;
+        esac
+        echo "key=$cache_key" >> "$GITHUB_OUTPUT"
 
     - name: Restore .build from GitHub
       if: inputs.cache == 'true' && inputs.backend == 'github'
@@ -140,6 +147,9 @@ runs:
         set -euo pipefail
         command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
         cd "$PACKAGE_PATH"
+        case "$CACHE_KEY" in
+          ''|*/*|*..*) echo "::error::Refusing to use cache key '$CACHE_KEY' as a directory name under local-dir; it is not a single safe path component."; exit 1 ;;
+        esac
         entry="$LOCAL_DIR/$CACHE_KEY"
         if [ ! -f "$entry/.complete" ]; then
           echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -211,6 +221,9 @@ runs:
         command -v rsync >/dev/null 2>&1 || { echo "::error::'rsync' is required by the local cache backend but is not on PATH."; exit 1; }
         cd "$PACKAGE_PATH"
         test -d .build || { echo "::warning::No .build directory to save."; exit 0; }
+        case "$CACHE_KEY" in
+          ''|*/*|*..*) echo "::error::Refusing to use cache key '$CACHE_KEY' as a directory name under local-dir; it is not a single safe path component."; exit 1 ;;
+        esac
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
