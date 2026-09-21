@@ -88,34 +88,35 @@ runs:
               case "$name" in
                 ''|*/*) echo "::error::fingerprint-paths pattern '$pattern' must end in a bare filename glob after '**/', e.g. 'Sources/**/*.swift'."; exit 1 ;;
               esac
-              find . -type f -path "./${prefix}*" -name "$name" -print \
-                | { grep -Ev '^\./(\.git|\.build)/' || true; } >> "$matched"
+              find . -type f -path "./${prefix}*" -name "$name" -print0 \
+                | while IFS= read -r -d '' found; do
+                    case "$found" in
+                      ./.git/*|./.build/*) continue ;;
+                    esac
+                    printf '%s\0' "$found"
+                  done >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)
               # shellcheck disable=SC2086
               for candidate in $pattern; do
-                [ -f "$candidate" ] && printf '%s\n' "$candidate" >> "$matched"
+                [ -f "$candidate" ] && printf '%s\0' "$candidate" >> "$matched"
               done
               ;;
             *)
-              [ -f "$pattern" ] && printf '%s\n' "$pattern" >> "$matched"
+              [ -f "$pattern" ] && printf '%s\0' "$pattern" >> "$matched"
               ;;
           esac
         done < <(printf '%s\n' "$FINGERPRINT_PATHS" | tr '[:blank:]' '\n')
-        count=$(LC_ALL=C sort -u "$matched" | grep -c . || true)
-        if [ "$count" -eq 0 ]; then
+        if [ ! -s "$matched" ]; then
           echo "::error::fingerprint-paths matched no files under '$PACKAGE_PATH'; a cache key over an empty fingerprint would collide across unrelated packages."
           rm -f "$matched"
           exit 1
         fi
-        fingerprint=$(
-          LC_ALL=C sort -u "$matched" \
-            | tr '\n' '\0' \
-            | xargs -0 shasum -a 256 \
-            | shasum -a 256 \
-            | cut -c1-40
-        )
-        rm -f "$matched"
+        hashes="${RUNNER_TEMP}/swift-test-fingerprint-$$.hashes"
+        xargs -0 shasum -a 256 < "$matched" | LC_ALL=C sort -u > "$hashes"
+        count=$(grep -c . "$hashes" || true)
+        fingerprint=$(shasum -a 256 < "$hashes" | cut -c1-40)
+        rm -f "$matched" "$hashes"
         test -n "$fingerprint"
         echo "Fingerprinted ${count} file(s) into $fingerprint"
         cache_key="${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"
@@ -227,6 +228,7 @@ runs:
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
+        trap 'rm -rf "$staging"' EXIT
         mkdir -p "$staging/build"
         rsync -a .build/ "$staging/build/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"

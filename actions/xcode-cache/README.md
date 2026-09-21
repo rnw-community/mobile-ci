@@ -13,7 +13,9 @@ reuses between runs:
 
 The cache key is `<key-prefix>-<RUNNER_OS>-<RUNNER_ARCH>-<toolchain>-<fingerprint>`, where
 `toolchain` is `setup-xcode-pinned`'s `toolchain-key` output and `fingerprint`
-is a SHA-256 over the contents of every file matched by `fingerprint-paths`.
+is a SHA-256 over the per-file content digests of every file matched by
+`fingerprint-paths`, collected NUL-delimited so a path containing a newline
+cannot break it.
 Matching **zero** files fails the step: a key computed over an empty
 fingerprint would collide across unrelated projects and hand one project
 another's DerivedData.

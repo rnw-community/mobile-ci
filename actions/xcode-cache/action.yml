@@ -167,10 +167,10 @@ runs:
           return 1
         }
         keep_unexcluded() {
-          while IFS= read -r found; do
+          while IFS= read -r -d '' found; do
             [ -n "$found" ] || continue
             excluded "$found" && continue
-            printf '%s\n' "$found"
+            printf '%s\0' "$found"
           done
         }
 
@@ -186,7 +186,7 @@ runs:
               case "$name" in
                 ''|*/*) echo "::error::fingerprint-paths pattern '$pattern' must end in a bare filename glob after '**/', e.g. 'Sources/**/*.swift'."; exit 1 ;;
               esac
-              find . -type f -path "./${prefix}*" -name "$name" -print \
+              find . -type f -path "./${prefix}*" -name "$name" -print0 \
                 | keep_unexcluded >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)
@@ -194,32 +194,28 @@ runs:
               for candidate in $pattern; do
                 [ -f "$candidate" ] || continue
                 excluded "./${candidate#./}" && continue
-                printf '%s\n' "$candidate" >> "$matched"
+                printf '%s\0' "$candidate" >> "$matched"
               done
               ;;
             *)
               [ -f "$pattern" ] || continue
               excluded "./${pattern#./}" && continue
-              printf '%s\n' "$pattern" >> "$matched"
+              printf '%s\0' "$pattern" >> "$matched"
               ;;
           esac
         done < <(printf '%s\n' "$FINGERPRINT_PATHS" | tr '[:blank:]' '\n')
 
-        count=$(LC_ALL=C sort -u "$matched" | grep -c . || true)
-        if [ "$count" -eq 0 ]; then
+        if [ ! -s "$matched" ]; then
           echo "::error::fingerprint-paths matched no files under '$root'; a cache key over an empty fingerprint would collide across unrelated projects."
           rm -f "$matched"
           exit 1
         fi
 
-        fingerprint=$(
-          LC_ALL=C sort -u "$matched" \
-            | tr '\n' '\0' \
-            | xargs -0 shasum -a 256 \
-            | shasum -a 256 \
-            | cut -c1-40
-        )
-        rm -f "$matched"
+        hashes="${RUNNER_TEMP}/xcode-cache-fingerprint-$$.hashes"
+        xargs -0 shasum -a 256 < "$matched" | LC_ALL=C sort -u > "$hashes"
+        count=$(grep -c . "$hashes" || true)
+        fingerprint=$(shasum -a 256 < "$hashes" | cut -c1-40)
+        rm -f "$matched" "$hashes"
         test -n "$fingerprint"
 
         echo "Fingerprinted ${count} file(s) into $fingerprint"
@@ -306,6 +302,7 @@ runs:
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
+        trap 'rm -rf "$staging"' EXIT
         mkdir -p "$staging/derived-data" "$staging/spm-clones" "$staging/cas"
         rsync -a "$DERIVED_DATA_DIR/" "$staging/derived-data/"
         rsync -a "$SPM_CLONES_DIR/" "$staging/spm-clones/"
