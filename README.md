@@ -62,6 +62,12 @@ full input reference, and the same doc's siblings under
   `expo-ota-preview.yml` / `expo-fingerprint-guard.yml` via `workflow_call` and collapse your own workflow to
   a thin `uses:` wrapper with inputs. Use this for a new pipeline or when
   migrating a pipeline that already matches this shape closely.
+- **Native Swift / Xcode** — an app with no React Native, no Expo, no Node and
+  no CocoaPods is a first-class consumer too. Compose `xcode-cache`,
+  `swift-test`, `simulator-lease`, `xcodebuild-test`, `apple-signing` and
+  `xcode-archive-upload` à la carte, or take the whole pipeline with
+  [`swift-ios.yml`](docs/workflows/swift-ios.md). Nothing in that lane installs
+  a JS toolchain or reads an Expo fingerprint.
 
 ## Action catalog
 
@@ -71,6 +77,12 @@ full input reference, and the same doc's siblings under
 | [`native-fingerprint`](actions/native-fingerprint/README.md)     | Tokenless `@expo/fingerprint` hash of an app's native surface. |
 | [`native-app-cache`](actions/native-app-cache/README.md)         | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
 | [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
+| [`xcode-cache`](actions/xcode-cache/README.md)                   | Restore/save DerivedData + resolved Swift Package clones + the Xcode 26 compilation cache (CAS), keyed on toolchain + project fingerprint; `github` or network-free `local` backend. Emits the `xcodebuild` arguments that point Xcode at all three. |
+| [`swift-test`](actions/swift-test/README.md)                     | `swift test --parallel` for a Swift Package, `.build` cached on the same key scheme, pass/fail step summary. |
+| [`simulator-lease`](actions/simulator-lease/README.md)           | Create + boot + `bootstatus -b` an isolated, run-scoped simulator; paired `mode: release` shuts it down and deletes it. |
+| [`xcodebuild-test`](actions/xcodebuild-test/README.md)           | `build-for-testing` once, then `test-without-building` against a booted simulator; optional sharding, `.xcresult` artifact, summary; zero executed tests fails the job. |
+| [`apple-signing`](actions/apple-signing/README.md)               | Throwaway keychain from the caller's `.p12`/profile/ASC key, profile ↔ App ID assertion, paired `mode: remove` teardown. No secret is echoed. |
+| [`xcode-archive-upload`](actions/xcode-archive-upload/README.md) | `xcodebuild archive` + `-exportArchive` straight to App Store Connect with an ASC API key, or local export only. |
 | [`build-ios-app`](actions/build-ios-app/README.md)               | Release, ad-hoc-signed (entitlements preserved) iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified. |
 | [`build-android-app`](actions/build-android-app/README.md)       | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`. |
 | [`repack-app`](actions/repack-app/README.md)                     | Inject a freshly exported JS bundle into a cached native shell without a full native rebuild. |
@@ -96,6 +108,7 @@ input/output table and a usage example.
 | [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-ios` \| cache miss: `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
 | [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) \| cache miss: `build-android-app` → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
 | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
+| [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `validate` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `simulator-lease` → `xcodebuild-test` → `xcode-cache` save, no secrets) and an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
 | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
