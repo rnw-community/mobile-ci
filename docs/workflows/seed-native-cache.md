@@ -20,7 +20,7 @@ optionally `push`/`schedule`) in the consuming repository.
 | Name                          | Required | Default                                       | Description |
 | -------------------------------- | -------- | ------------------------------------------------ | -------------- |
 | `ios-runner-labels`               | no       | `["self-hosted","macOS","ARM64"]`                  | JSON array of self-hosted runner labels for `seed-ios`. |
-| `android-runner-labels`           | no       | `["self-hosted","linux-tiered","linux-xl"]`        | JSON array of self-hosted runner labels for `seed-android`. |
+| `android-runner-labels`           | no       | `["self-hosted","trf-linux-amd64-4x8"]`             | JSON array of self-hosted runner labels for `seed-android`. The default is the x86_64 Linux pool (4 vCPU / 8 GiB): Gradle plus D8 need the 8 GiB profile, and Google ships an Android NDK/cmake for x86_64 Linux but none for `linux-aarch64`. |
 | `ios-targets`                     | no       | `[]`                                               | JSON array of iOS build targets: `{name, appDir, workspace, scheme, prebuildCommand}`. `seed-ios` is skipped entirely when this is `[]`. |
 | `android-targets`                 | no       | `[]`                                               | JSON array of Android build targets: `{name, appDir, prebuildCommand}`. `seed-android` is skipped entirely when this is `[]`. |
 | `xcode-version`                   | no       | `26.4.1`                                           | Xcode version string, e.g. `26.4.1`. |

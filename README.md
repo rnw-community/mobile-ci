@@ -88,7 +88,7 @@ full input reference, and the same doc's siblings under
 | [`repack-app`](actions/repack-app/README.md)                     | Inject a freshly exported JS bundle into a cached native shell without a full native rebuild. |
 | [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
-| [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners; `android-maestro.yml`'s default. |
+| [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners (`android-maestro.yml`'s `android-driver: redroid`). |
 | [`redroid-container`](actions/redroid-container/README.md)       | Standalone Redroid container lifecycle (`mode: start` / `mode: teardown`) — run-scoped naming, prewarm manifest, kernel-assigned loopback adb port — for jobs that drive the booted device themselves. |
 | [`capture-screenshots-ios`](actions/capture-screenshots-ios/README.md) | Boots a pinned Simulator and captures one screenshot per locale x appearance x scene — discovered Maestro flows or a deep-link/flow scene manifest with a per-cell seed hook — into a fixed `raw/ios/<device-slug>/...` layout for store screenshot pipelines. |
 | [`capture-screenshots-android`](actions/capture-screenshots-android/README.md) | Drives an already-booted Android device (Redroid/AVD/physical) through a scene manifest — `wm size`/`wm density` device shaping, per-app locales, demo-mode status bar, per-cell seed hook — into a fixed `raw/android/<device-slug>/...` layout. |
@@ -106,7 +106,7 @@ input/output table and a usage example.
 | Workflow                          | Composes                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
 | [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-ios` \| cache miss: `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
-| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) \| cache miss: `build-android-app` → `run-maestro-android-redroid` (default) or `run-maestro-android` (`android-driver: avd`) |
+| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) \| cache miss: `build-android-app` → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) |
 | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
 | [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `build` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `xcodebuild-test` `mode: build` → `xcode-cache` save) → `test` (one matrix shard per `shards-json` entry: `xcode-cache` restore → `simulator-lease` → `xcodebuild-test` `mode: test`), both secretless, then an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). N shards share one compile through the restored DerivedData cache. |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
@@ -196,23 +196,26 @@ and fails with an actionable message rather than letting
 ### Android driver: Redroid vs AVD
 
 `android-maestro.yml`'s `android-driver` input picks the Maestro-execution
-step's Android backend, `redroid` by default:
+step's Android backend, `avd` by default:
 
-- **`redroid`** (default) — Android as a privileged container over the
-  `binder_linux` kernel module (`run-maestro-android-redroid`). Needs no
-  `sdkmanager`, NDK, or emulator binary on the runner, so it is the only
-  driver that works at all on `linux-aarch64` self-hosted runners — this
-  workflow's own default `runner-labels`. See
+- **`avd`** (default) — a real Android emulator via
+  `reactivecircus/android-emulator-runner` (`run-maestro-android`), on a host
+  with `/dev/kvm`. This is what the default `runner-labels`
+  (`["self-hosted","trf-linux-amd64-4x8"]`, an x86_64 Linux KVM pool) provide,
+  and it needs no privileged container, no Docker daemon, and no
+  `binder_linux`. A `google_apis` system image also carries real Google Play
+  Services. Bound the guest on a memory-limited runner — hence the shipped
+  `emulator-ram-size: 2048` default.
+- **`redroid`** — Android as a privileged container over the `binder_linux`
+  kernel module (`run-maestro-android-redroid`). Needs no `sdkmanager`, NDK,
+  or emulator binary on the runner, so it is the only driver that works at
+  all on `linux-aarch64` self-hosted runners — select it together with
+  `runner-labels` pointing at such a pool, since it cannot run on the default
+  x86_64 one. Stock images ship no Google Play Services. See
   [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for how to
-  provision a Redroid host.
-- **`avd`** — a real Android emulator via
-  `reactivecircus/android-emulator-runner` (`run-maestro-android`). Only
-  viable when `runner-labels` is overridden to a host with a working
-  emulator + acceleration, e.g. GitHub-hosted `ubuntu-latest` (KVM-accelerated
-  out of the box). Google does not publish `linux-aarch64` builds of the
-  Android emulator, NDK, or `cmake`, so `avd` cannot boot on this workflow's
-  default self-hosted fleet regardless of tuning — that gap is exactly why
-  `redroid` is the default rather than an opt-in.
+  provision a Redroid host, and
+  [which pool a job belongs on](docs/self-hosted-runners.md#which-pool-a-job-belongs-on)
+  for the fleet policy these defaults follow.
 
 `ios-maestro.yml` / `android-maestro.yml` also support splitting build and
 test onto separate runner pools via `build-runner-labels` /

@@ -145,7 +145,8 @@ already have a working pipeline and are adopting one piece at a time (à la
 carte tier — see [README.md](README.md#pick-your-tier)):
 
 - `ios-maestro.yml` — iOS Maestro e2e.
-- `android-maestro.yml` — Android Maestro e2e (Redroid driver by default).
+- `android-maestro.yml` — Android Maestro e2e (`avd` driver on an x86_64
+  Linux KVM pool by default; `redroid` for a `linux-aarch64` pool).
 - `seed-native-cache.yml` — proactively warms the native-app cache.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.
@@ -207,12 +208,19 @@ requires which secret and how the job fails fast when one is missing.
 ### Self-hosted runner prerequisites
 
 Every workflow above assumes a self-hosted fleet: macOS Xcode pools for iOS,
-and Linux `linux-aarch64` + Docker + `binder_linux` for the Redroid Android
-driver. Read [docs/self-hosted-runners.md](docs/self-hosted-runners.md)
-before wiring a pipeline — it covers exact Xcode install layout, the
-`binder_linux` kernel module, privileged-container requirements, and the
-Redroid prewarm manifest format that avoids paying for a cold
-`docker pull` + first-boot on every shard.
+and one of two Android host shapes — x86_64 Linux with `/dev/kvm` and an
+Android SDK for the default `avd` driver (no Docker daemon, no privileged
+container, no kernel module), or `linux-aarch64` with Docker,
+`binder_linux`, and privileged containers allowed for the `redroid` driver.
+The `avd` shape is what `android-maestro.yml`'s default `runner-labels`
+name; the `redroid` shape is selected by passing `android-driver: redroid`
+together with `runner-labels` for that pool. `android-maestro.yml`'s test
+job fails closed on the mismatch rather than timing out. Read
+[docs/self-hosted-runners.md](docs/self-hosted-runners.md) before wiring a
+pipeline — it covers exact Xcode install layout, which pool a job belongs
+on, KVM/emulator prerequisites, the `binder_linux` kernel module,
+privileged-container requirements, and the Redroid prewarm manifest format
+that avoids paying for a cold `docker pull` + first-boot on every shard.
 
 ### Minimal consumer snippet
 

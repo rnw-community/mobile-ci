@@ -8,9 +8,14 @@ on:
                 required: false
                 default: '["self-hosted","macOS","ARM64"]'
             android-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for seed-android. The
+                    default is the x86_64 Linux pool (4 vCPU / 8 GiB): Gradle plus
+                    D8 need the 8 GiB profile, and Google's Android NDK/cmake exist
+                    for x86_64 Linux but not for linux-aarch64.
                 type: string
                 required: false
-                default: '["self-hosted","linux-tiered","linux-xl"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             ios-targets:
                 description: >-
                     JSON array of iOS build targets: {name, appDir, workspace, scheme, prebuildCommand}.
