@@ -39,10 +39,12 @@ Two ways to get a slim lease, in preference order:
 1. **`template-device`** — clone a prewarmed, already-slimmed, **shut-down**
    device that the host image ships. `xcrun simctl clone` copies the launchd
    overrides with the device, so the lease is slim from its first boot and
-   pays **no** repair reboot. The template's own `deviceTypeIdentifier` and
-   runtime are checked against the requested `device-type`/`runtime` before the
-   clone, so a stale template can never quietly run the tests on a different
-   device or OS than the lease claims. Set `slim-repair: false` alongside it so a
+   pays **no** repair reboot. The template is selected by **name, device type,
+   runtime and `Shutdown` state together** — not by name alone — so a host with
+   several devices of that name cannot hand the job an old runtime or a booted
+   one, and a stale template can never quietly run the tests on a different
+   device or OS than the lease claims. When nothing matches, every device with
+   that name is printed with its runtime, type and state. Set `slim-repair: false` alongside it so a
    template that is *not* slim surfaces as an error rather than being silently
    repaired on every run. The action fails closed if the named template is
    booted — a template is provisioning state, never a job's device.

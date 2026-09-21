@@ -124,21 +124,41 @@ runs:
         root="$PWD"
 
         absolute=()
-        exclude_expression='^\./(\.git|\.build)/'
+        exclude_prefixes=('./.git/' './.build/')
         for directory in "$DERIVED_DATA_DIR" "$SPM_CLONES_DIR" "$CAS_DIR"; do
           case "$directory" in
             '') echo "::error::derived-data-dir, spm-clones-dir and cas-dir must all be non-empty."; exit 1 ;;
             /*) resolved="$directory" ;;
-            *)
-              resolved="$root/$directory"
-              exclude_expression="${exclude_expression}|^\./${directory%/}/"
-              ;;
+            *) resolved="$root/$directory" ;;
           esac
           case "$resolved" in
-            *[[:space:]]*) echo "::error::Cache directory '$resolved' contains whitespace; xcodebuild-args is a shell word list and cannot carry it."; exit 1 ;;
+            *[[:space:]]*|*'*'*|*'?'*|*'['*)
+              echo "::error::Cache directory '$resolved' contains whitespace or a shell glob metacharacter; xcodebuild-args is an unquoted shell word list and cannot carry it."
+              exit 1
+              ;;
           esac
+          relative="${resolved#"$root"/}"
+          if [ "$relative" != "$resolved" ]; then
+            exclude_prefixes+=("./${relative%/}/")
+          fi
           absolute+=("$resolved")
         done
+
+        excluded() {
+          for prefix in "${exclude_prefixes[@]}"; do
+            case "$1" in
+              "$prefix"*) return 0 ;;
+            esac
+          done
+          return 1
+        }
+        keep_unexcluded() {
+          while IFS= read -r found; do
+            [ -n "$found" ] || continue
+            excluded "$found" && continue
+            printf '%s\n' "$found"
+          done
+        }
 
         matched="${RUNNER_TEMP}/xcode-cache-fingerprint-$$.list"
         : > "$matched"
@@ -153,7 +173,7 @@ runs:
                 ''|*/*) echo "::error::fingerprint-paths pattern '$pattern' must end in a bare filename glob after '**/', e.g. 'Sources/**/*.swift'."; exit 1 ;;
               esac
               find . -type f -path "./${prefix}*" -name "$name" -print \
-                | { grep -Ev "$exclude_expression" || true; } >> "$matched"
+                | keep_unexcluded >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)
               # shellcheck disable=SC2086
@@ -190,7 +210,7 @@ runs:
 
         echo "Fingerprinted ${count} file(s) into $fingerprint"
         {
-          printf 'key=%s\n' "${KEY_PREFIX}-${RUNNER_OS}-${TOOLCHAIN}-${fingerprint}"
+          printf 'key=%s\n' "${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"
           printf 'cache-paths<<XCODE_CACHE_PATHS_EOF\n'
           printf '%s\n' "${absolute[@]}"
           printf 'XCODE_CACHE_PATHS_EOF\n'
@@ -259,9 +279,9 @@ runs:
         cd "$WORKING_DIRECTORY"
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
-        staging="$LOCAL_DIR/.staging-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
-        superseded="$LOCAL_DIR/.superseded-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
-        rm -rf "$staging" "$superseded"
+        staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
+        superseded="${staging}.superseded"
+        rm -rf "$superseded"
         mkdir -p "$staging/derived-data" "$staging/spm-clones" "$staging/cas"
         rsync -a "$DERIVED_DATA_DIR/" "$staging/derived-data/"
         rsync -a "$SPM_CLONES_DIR/" "$staging/spm-clones/"

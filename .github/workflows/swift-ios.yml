@@ -91,6 +91,7 @@ on:
                     **/*.pbxproj
                     Package.swift
                     **/Package.resolved
+                    **/*.swift
             enable-swift-test:
                 description: >-
                     Run `swift test --parallel` for the Swift Package in the build

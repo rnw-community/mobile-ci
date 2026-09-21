@@ -11,7 +11,7 @@ reuses between runs:
   `COMPILATION_CACHE_CAS_PATH`) — content-addressed compiled outputs, which
   survive a DerivedData path change and are shareable across checkouts.
 
-The cache key is `<key-prefix>-<RUNNER_OS>-<toolchain>-<fingerprint>`, where
+The cache key is `<key-prefix>-<RUNNER_OS>-<RUNNER_ARCH>-<toolchain>-<fingerprint>`, where
 `toolchain` is `setup-xcode-pinned`'s `toolchain-key` output and `fingerprint`
 is a SHA-256 over the contents of every file matched by `fingerprint-paths`.
 Matching **zero** files fails the step: a key computed over an empty
@@ -19,8 +19,14 @@ fingerprint would collide across unrelated projects and hand one project
 another's DerivedData.
 
 A `**` is expanded with `find`, so `**/*.swift` and `Sources/**/*.swift` both
-work; the three cache directories, `.git` and `.build` are never matched, so a
-`Package.resolved` restored *into* the cache cannot perturb its own key.
+work. The three cache directories, `.git` and `.build` are never matched, so a
+`Package.resolved` or a `.swift` restored *into* the cache cannot perturb its
+own key — and that holds whether the directory was given relatively or as an
+absolute path under `working-directory`, because the exclusion is a literal
+path-prefix test rather than a regex built from the input.
+
+`RUNNER_ARCH` is in the key because compiled products are not portable between
+Intel and Apple-silicon runners.
 
 **The default fingerprint includes every `*.swift` on purpose.** A build job
 and its test shards share this key (see
@@ -51,6 +57,8 @@ rewrites the same key.
 
 A `local` entry is a directory named after the cache key holding
 `derived-data/`, `spm-clones/`, `cas/`, and a `.complete` marker written last.
+Each save stages into its own `mktemp -d` directory, so two matrix jobs on
+different hosts sharing one mount cannot collide on a staging path.
 A restore only counts as a hit when `.complete` exists, so a save interrupted
 mid-copy is never read back as a cache. Saves stage into a scratch directory
 and swap it in with `mv`, so a concurrent reader never observes a half-written
@@ -83,7 +91,9 @@ exact-key hits only.
 | `xcodebuild-args` | Shell word list to append to every `xcodebuild` invocation in the job.                  |
 
 `xcodebuild-args` is a plain shell word list, so none of the three directories
-may contain whitespace — the action fails closed if one does. Relative inputs
+may contain whitespace or a shell glob metacharacter (`*`, `?`, `[`) — the
+action fails closed if one does, rather than letting the caller's unquoted
+expansion mangle the path. Relative inputs
 are resolved against `working-directory` and absolute ones are used as given;
 both backends operate on those resolved paths (`cache-paths`), so an absolute
 `derived-data-dir` caches the directory `xcodebuild` actually writes to rather

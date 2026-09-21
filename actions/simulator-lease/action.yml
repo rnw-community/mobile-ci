@@ -174,35 +174,13 @@ runs:
         if [ -n "$TEMPLATE_DEVICE" ]; then
           template_udid=$(
             xcrun simctl list devices -j \
-              | jq -r --arg name "$TEMPLATE_DEVICE" '[.devices[][] | select(.name == $name and .isAvailable == true)] | first | .udid // empty'
+              | jq -r --arg name "$TEMPLATE_DEVICE" --arg deviceType "$device_type_id" --arg runtime "$runtime_id" \
+                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.name == $name and .isAvailable == true and .deviceTypeIdentifier == $deviceType and .state == "Shutdown") | .udid] | first // empty'
           )
           if [ -z "$template_udid" ]; then
-            echo "::error::template-device '$TEMPLATE_DEVICE' has no exact match among the available simulators on this host. Available devices:"
-            xcrun simctl list devices available
-            exit 1
-          fi
-          template_device_type=$(
+            echo "::error::No shut-down device named '$TEMPLATE_DEVICE' of type '$device_type_id' on runtime '$runtime_id'. A clone of anything else would run the tests on a device the lease does not describe. Devices with that name:"
             xcrun simctl list devices -j \
-              | jq -r --arg udid "$template_udid" '[.devices[][] | select(.udid == $udid) | .deviceTypeIdentifier] | first // empty'
-          )
-          if [ "$template_device_type" != "$device_type_id" ]; then
-            echo "::error::template-device '$TEMPLATE_DEVICE' is a '$template_device_type', not the requested device-type '$DEVICE_TYPE' ($device_type_id). A clone would run the tests on the wrong device while the lease claimed otherwise."
-            exit 1
-          fi
-          template_runtime=$(
-            xcrun simctl list devices -j \
-              | jq -r --arg udid "$template_udid" '[.devices | to_entries[] | select(.value[]?.udid == $udid) | .key] | first // empty'
-          )
-          if [ "$template_runtime" != "$runtime_id" ]; then
-            echo "::error::template-device '$TEMPLATE_DEVICE' runs '$template_runtime', not the resolved runtime '$runtime_id'. A clone would run the tests on the wrong OS while the lease claimed otherwise."
-            exit 1
-          fi
-          template_state=$(
-            xcrun simctl list devices -j \
-              | jq -r --arg udid "$template_udid" '[.devices[][] | select(.udid == $udid) | .state] | first // empty'
-          )
-          if [ "$template_state" != 'Shutdown' ]; then
-            echo "::error::template-device '$TEMPLATE_DEVICE' ($template_udid) is '$template_state'; 'xcrun simctl clone' requires a shut-down source. A template is provisioning state and must never be booted by a job."
+              | jq -r --arg name "$TEMPLATE_DEVICE" '.devices | to_entries[] | .key as $runtime | .value[] | select(.name == $name) | "  \(.udid)  runtime=\($runtime)  type=\(.deviceTypeIdentifier)  state=\(.state)  available=\(.isAvailable)"'
             exit 1
           fi
           echo "Cloning template device '$TEMPLATE_DEVICE' ($template_udid) into '$device_name'"

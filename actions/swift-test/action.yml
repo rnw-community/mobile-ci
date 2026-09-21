@@ -118,7 +118,7 @@ runs:
         rm -f "$matched"
         test -n "$fingerprint"
         echo "Fingerprinted ${count} file(s) into $fingerprint"
-        echo "key=${KEY_PREFIX}-${RUNNER_OS}-${TOOLCHAIN}-${fingerprint}" >> "$GITHUB_OUTPUT"
+        echo "key=${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}" >> "$GITHUB_OUTPUT"
 
     - name: Restore .build from GitHub
       if: inputs.cache == 'true' && inputs.backend == 'github'
@@ -213,9 +213,9 @@ runs:
         test -d .build || { echo "::warning::No .build directory to save."; exit 0; }
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
-        staging="$LOCAL_DIR/.staging-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
-        superseded="$LOCAL_DIR/.superseded-$$-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}"
-        rm -rf "$staging" "$superseded"
+        staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
+        superseded="${staging}.superseded"
+        rm -rf "$superseded"
         mkdir -p "$staging/build"
         rsync -a .build/ "$staging/build/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"

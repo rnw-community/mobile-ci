@@ -364,8 +364,33 @@ runs:
           [ -n "$identifier" ] || continue
           args+=("-only-testing:$identifier")
         done <<< "$SELECTED_TESTS"
+        PWD_PHYSICAL="$(pwd -P)"
+        assert_removable_child() {
+          local label="$1"
+          local candidate="$2"
+          case "$candidate" in
+            ''|.|..) echo "::error::${label} '$candidate' must be a path inside working-directory, not the directory itself."; return 1 ;;
+            /*) echo "::error::${label} '$candidate' is absolute; only a path inside working-directory may be removed by this action."; return 1 ;;
+          esac
+          case "/$candidate/" in
+            */../*|*/./*) echo "::error::${label} '$candidate' must not contain '.' or '..' segments."; return 1 ;;
+          esac
+          local parent
+          parent="$(dirname "$candidate")"
+          mkdir -p "$parent"
+          local real_parent real_root
+          real_parent="$(cd "$parent" && pwd -P)"
+          real_root="$PWD_PHYSICAL"
+          if [ "$real_parent" != "$real_root" ]; then
+            case "$real_parent/" in
+              "$real_root"/*) : ;;
+              *) echo "::error::${label} '$candidate' resolves to '$real_parent', outside working-directory '$real_root' — an intermediate symlink would make this action remove data it does not own."; return 1 ;;
+            esac
+          fi
+          return 0
+        }
+        assert_removable_child 'result-bundle-path' "$RESULT_BUNDLE_PATH"
         rm -rf "$RESULT_BUNDLE_PATH"
-        mkdir -p "$(dirname "$RESULT_BUNDLE_PATH")"
         echo "result-bundle-path=$RESULT_BUNDLE_PATH" >> "$GITHUB_OUTPUT"
         args+=(-parallel-testing-enabled "$PARALLEL_TESTING" -resultBundlePath "$RESULT_BUNDLE_PATH")
         if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ]; then
