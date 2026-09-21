@@ -151,6 +151,18 @@ runs:
             echo "::error::Cache directory '$directory' resolves to '$physical', which is the working directory or the filesystem root. The local backend rsyncs into it with --delete, so this would erase the checkout."
             exit 1
           fi
+          case "$directory" in
+            /*) ;;
+            *)
+              case "$physical/" in
+                "$root_physical"/*) ;;
+                *)
+                  echo "::error::Relative cache directory '$directory' resolves to '$physical', outside the working directory '$root_physical' — a symlink in the checkout is redirecting it. The local backend rsyncs into it with --delete, so this would delete files this action does not own. Pass an absolute path if you genuinely mean a directory outside the checkout."
+                  exit 1
+                  ;;
+              esac
+              ;;
+          esac
           relative="${resolved#"$root"/}"
           if [ "$relative" != "$resolved" ]; then
             exclude_prefixes+=("./${relative%/}/")
@@ -212,7 +224,7 @@ runs:
         fi
 
         hashes="${RUNNER_TEMP}/xcode-cache-fingerprint-$$.hashes"
-        xargs -0 shasum -a 256 < "$matched" | LC_ALL=C sort -u > "$hashes"
+        xargs -0 shasum -a 256 -- < "$matched" | LC_ALL=C sort -u > "$hashes"
         count=$(grep -c . "$hashes" || true)
         fingerprint=$(shasum -a 256 < "$hashes" | cut -c1-40)
         rm -f "$matched" "$hashes"

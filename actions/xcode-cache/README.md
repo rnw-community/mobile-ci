@@ -116,7 +116,15 @@ expansion mangle the path.
 
 None of them may contain a `.` or `..` segment, or resolve (through symlinks)
 to the working directory or to `/`. The `local` backend restores into them with
-`rsync -a --delete`, so a `derived-data-dir` of `.` would delete the checkout. Relative inputs
+`rsync -a --delete`, so a `derived-data-dir` of `.` would delete the checkout.
+
+A **relative** input must additionally resolve to a physical child of
+`working-directory`: a `build -> /elsewhere` symlink in the checkout would
+otherwise redirect a `--delete` restore at files this action does not own, and
+that symlink is content a pull request controls. An **absolute** input is the
+caller naming a location deliberately, so it is allowed outside the checkout —
+that is the documented way to cache into a directory the repository cannot
+point at. Relative inputs
 are resolved against `working-directory` and absolute ones are used as given;
 both backends operate on those resolved paths (`cache-paths`), so an absolute
 `derived-data-dir` caches the directory `xcodebuild` actually writes to rather

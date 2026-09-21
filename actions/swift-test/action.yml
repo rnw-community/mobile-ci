@@ -113,7 +113,7 @@ runs:
           exit 1
         fi
         hashes="${RUNNER_TEMP}/swift-test-fingerprint-$$.hashes"
-        xargs -0 shasum -a 256 < "$matched" | LC_ALL=C sort -u > "$hashes"
+        xargs -0 shasum -a 256 -- < "$matched" | LC_ALL=C sort -u > "$hashes"
         count=$(grep -c . "$hashes" || true)
         fingerprint=$(shasum -a 256 < "$hashes" | cut -c1-40)
         rm -f "$matched" "$hashes"
@@ -158,6 +158,15 @@ runs:
           exit 0
         fi
         mkdir -p .build
+        package_physical="$(pwd -P)"
+        build_physical="$(cd .build && pwd -P)"
+        case "$build_physical/" in
+          "$package_physical"/*) ;;
+          *)
+            echo "::error::'.build' under '$PACKAGE_PATH' resolves to '$build_physical', outside the package directory '$package_physical' — a symlink is redirecting it. Restoring with 'rsync --delete' would delete files this action does not own."
+            exit 1
+            ;;
+        esac
         rsync -a --delete "$entry/build/" .build/
         echo "cache-hit=true" >> "$GITHUB_OUTPUT"
         echo "Local cache hit for $CACHE_KEY"
