@@ -20,9 +20,10 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 `native-dev-release.yml`), scoped to exactly the jobs that submit to a store
 or cut a dev release, and only for the platforms you enable.
 
-**Released.** Exact `vX.Y.Z` tags are published, plus a floating `v1` tag
-that moves with the latest release — pin to an exact tag or a full commit
-SHA for reproducibility, or `@v1` to float. See
+**Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
+per major (`v2` is current; `v1` stays frozen at `v1.23.1`) that moves with
+the latest release of that major — pin to an exact tag or a full commit SHA
+for reproducibility, or `@v2` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
 
@@ -275,7 +276,7 @@ maintainer-only fleet self-test job reads.
 
 ## Repo practices
 
-- Semver + sliding `v1` tag (see [CONTRIBUTING.md](CONTRIBUTING.md)
+- Semver + a sliding major tag per major (see [CONTRIBUTING.md](CONTRIBUTING.md)
   and [RELEASE.md](RELEASE.md)).
 - Every third-party action pinned by full commit SHA with a `# vX.Y.Z` comment.
 - `actionlint`, `shellcheck`, and `zizmor` run in CI (`self-test.yml`) on
@@ -285,9 +286,10 @@ maintainer-only fleet self-test job reads.
 - MIT licensed.
 
 **Versioning note:** examples in this README and the per-action/per-workflow
-docs use `@v1` or `@main` for readability. `@v1` floats to the latest
-release and `@main` can change without a deprecation window — pin to an
-exact `vX.Y.Z` tag or a full commit SHA when you need reproducibility.
+docs use a floating major tag or `@main` for readability. A major tag such as
+`@v2` floats to the latest release of that major and `@main` can change
+without a deprecation window — pin to an exact `vX.Y.Z` tag or a full commit
+SHA when you need reproducibility.
 
 ## Used in the wild
 

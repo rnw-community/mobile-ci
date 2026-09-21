@@ -14,18 +14,20 @@ concrete evidence (file/line, command output, or spec reference).
 ## Versioning
 
 This repo follows semver on git tags (`v1.2.3`), plus a sliding major tag
-(`v1`) that consumers should pin to in their `uses:` lines
-(`rnw-community/mobile-ci/actions/build-ios-app@v1`). The sliding tag is
-force-moved to the latest compatible release after each publish, the same
-convention `actions/checkout`, `actions/setup-node`, and most of the official
-GitHub Actions follow. Pin to an exact `vX.Y.Z` tag instead of `v1` only if
-you need to freeze against upstream drift entirely.
+per major (`v1`, `v2`, ...) that consumers should pin to in their `uses:`
+lines (`rnw-community/mobile-ci/actions/build-ios-app@v2`). A release moves
+only its own major's sliding tag, the same convention `actions/checkout`,
+`actions/setup-node`, and most of the official GitHub Actions follow: cutting
+`v2.0.0` moves `v2` and leaves `v1` frozen at the last `v1.x.y`, so nothing
+floating on `v1` is handed a breaking change it did not opt into. Pin to an
+exact `vX.Y.Z` tag instead of a sliding tag only if you need to freeze against
+upstream drift entirely.
 
-**Release status:** `v1` has been cut; `v1.0.0` through the latest `v1.x.y`
-are available (see [RELEASE.md](RELEASE.md) for the full procedure).
-Consumers pin to `@v1` for the latest compatible release or to an exact
-`@vX.Y.Z` tag to freeze the dependency entirely; pinning to `@main` still
-works but is no longer necessary and gets no deprecation window.
+**Release status:** `v2` is current; `v2.0.0` is the latest release and `v1`
+remains frozen at `v1.23.1` (see [RELEASE.md](RELEASE.md) for the full
+procedure). Consumers pin to `@v2` for the latest compatible release or to an
+exact `@vX.Y.Z` tag to freeze the dependency entirely; pinning to `@main`
+still works but is no longer necessary and gets no deprecation window.
 
 Breaking changes to an action's inputs/outputs or a reusable workflow's inputs
 bump the major version. Additive inputs with sensible defaults, new actions,
