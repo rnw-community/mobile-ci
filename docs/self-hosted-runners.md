@@ -123,42 +123,87 @@ favor of its own pinned copy — no `brew uninstall`/`brew upgrade` is
 required, and a host is free to keep whatever Homebrew-managed `maestro` it
 already has.
 
-### Slim simulators with simslim
+### Every simulator runs slim
 
-A stock simulator sits at roughly 4 GB of `phys_footprint` once booted, and
-that figure - not CPU - is what caps how many `run-maestro-ios` shards or
-`capture-screenshots-ios` jobs a macOS host can run at once before it starts
-swapping. [simslim](https://github.com/MobAI-App/simslim) (MIT, Go, macOS
-only) disables ~170 launchd daemons a CI simulator never needs by writing
+Every iOS simulator mobile-ci touches — a leased device, a host device a
+Maestro shard boots, a capture job's device, or a developer's local simulator —
+runs slim. A stock simulator sits at roughly 4 GB of `phys_footprint` once
+booted, and that figure, not CPU, is what caps how many `run-maestro-ios`
+shards or `capture-screenshots-ios` jobs a macOS host can run at once before it
+starts swapping. [simslim](https://github.com/MobAI-App/simslim) (MIT, Go,
+macOS only) disables ~170 launchd daemons a CI simulator never needs by writing
 persistent `launchctl disable` overrides into that one simulator's launchd
 database, cutting a booted simulator to roughly a quarter of the memory. The
 host itself is never touched, and `simslim off` restores stock.
 
-Slimming belongs in host provisioning, not in the job. The overrides persist
-across reboots, so pay for `simslim on` once per device and let the actions'
-`simulator-slim-profile` input only *verify* on every run:
+The order is always **boot → slim → install → drive**: slimming after the app
+is installed and fixtures are seeded wastes a boot cycle, and slimming is only
+possible on a device that exists.
 
-```bash
-brew install mobai-app/tap/simslim
+**The profile lives here.** [`profiles/ci.json`](../profiles/ci.json) keeps the
+`store` category (App Store, push notifications, StoreKit, media) and the `web`
+category (Safari sync, web push, universal links) enabled and disables every
+other category `simslim profiles` lists — the set a UI-test or screenshot run
+actually depends on. It is the single source of truth for CI and local runs
+alike, so a consumer repo commits no profile of its own.
 
-# One committed profile per purpose, e.g. <app-repo>/e2e/simslim.ci.json:
-#   { "name": "ci", "except": ["store", "web"], "keep": [] }
-for udid in $(xcrun simctl list -j devices available \
-        | jq -r '.devices[][] | select(.name == "iPhone 17 Pro") | .udid'); do
-    simslim on "$udid" --profile /path/to/simslim.ci.json --boot-timeout 15m
-    simslim verify "$udid" --profile /path/to/simslim.ci.json
-    simslim measure "$udid"
-done
-```
-
-Then, in the caller:
+**In CI, nothing calls simslim by hand.** `simulator-lease`,
+`run-maestro-ios` and `capture-screenshots-ios` resolve the special value
+`bundled` to that file, and the reusable workflows (`ios-maestro.yml`,
+`store-screenshots.yml`, `swift-ios.yml`) default `simulator-slim-profile` to
+`bundled` and `simulator-slim-repair` to `'true'`, with `simslim-version` and
+`simslim-sha256` pinned here too. A caller passes none of them:
 
 ```yaml
 with:
     simulator-device: iPhone 17 Pro
-    simulator-slim-profile: e2e/simslim.ci.json
     simulator-requires: push,universal-links
 ```
+
+`simulator-requires` stays per consumer — which features the flows depend on is
+a property of the app, not of the fleet. Override `simulator-slim-profile` with
+a repository-relative path to use a different profile, or set it to `''` to opt
+out of slimming entirely.
+
+**Locally, use the shared helper** rather than a copy of it. Fetch it once at a
+pinned tag and source it:
+
+```bash
+brew install mobai-app/tap/simslim
+curl -fsSL https://raw.githubusercontent.com/rnw-community/mobile-ci/v2/scripts/slim-simulator.sh \
+    -o /usr/local/bin/slim-simulator.sh
+
+xcrun simctl boot "$udid"
+. /usr/local/bin/slim-simulator.sh && slim_simulator "$udid"
+xcrun simctl install "$udid" MyApp.app
+```
+
+`slim_simulator <udid>` verifies against the profile and only applies the
+missing delta (`simslim on --no-reboot --profile`) when the device has drifted,
+so it is idempotent and never drops an installed app or a seeded fixture.
+`slim_booted_simulators` does the same for every booted device, and running the
+script instead of sourcing it does exactly that. It fails fast with the
+Homebrew hint when `simslim` is missing. The profile is taken from
+`$SIMSLIM_PROFILE` when set, then from `profiles/ci.json` next to the script's
+parent directory, and otherwise downloaded from `$SIMSLIM_PROFILE_REF`
+(default `v2`) — so a lone copy of the script still slims against the same
+profile CI uses.
+
+**Provisioning: pay for it once.** The overrides persist across reboots, so
+slim a host's devices at provisioning time and let the job only verify:
+
+```bash
+for udid in $(xcrun simctl list -j devices available \
+        | jq -r '.devices[][] | select(.name == "iPhone 17 Pro") | .udid'); do
+    simslim on "$udid" --profile /path/to/profiles/ci.json --boot-timeout 15m
+    simslim verify "$udid" --profile /path/to/profiles/ci.json
+    simslim measure "$udid"
+done
+```
+
+Then set `simulator-slim-repair: 'false'` in the caller so a device that comes
+up stock fails the job as the provisioning defect it is, instead of paying for
+an in-job `simslim on` reboot on every shard.
 
 **Leased simulators: clone a slimmed template.** `run-maestro-ios` and
 `capture-screenshots-ios` boot a device the host already owns, so the loop
@@ -177,8 +222,8 @@ slimmed, **shut-down** template is slim from its first boot:
 udid=$(xcrun simctl create 'trf-template-iPad Pro 11-inch (M4)' \
     'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4' \
     "$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier')")
-simslim on "$udid" --profile /path/to/simslim.ci.json --boot-timeout 15m
-simslim verify "$udid" --profile /path/to/simslim.ci.json
+simslim on "$udid" --profile /path/to/profiles/ci.json --boot-timeout 15m
+simslim verify "$udid" --profile /path/to/profiles/ci.json
 simslim measure "$udid"
 xcrun simctl shutdown "$udid"
 ```
@@ -186,7 +231,6 @@ xcrun simctl shutdown "$udid"
 ```yaml
 with:
     template-device: 'trf-template-iPad Pro 11-inch (M4)'
-    slim-profile: e2e/simslim.ci.json
     slim-repair: 'false'
 ```
 

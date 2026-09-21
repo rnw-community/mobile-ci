@@ -137,7 +137,7 @@ inputs:
       simslim-sha256, and extracted into a job-private directory. Preinstall simslim on the host
       (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
-    default: '0.8.0'
+    default: '0.10.0'
   simslim-sha256:
     description: >-
       SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
@@ -150,17 +150,18 @@ inputs:
       so only a preinstalled `simslim` on PATH with the exact version can
       satisfy the job. Bump it together with simslim-version.
     required: false
-    default: 'c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19'
+    default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
   simulator-slim-profile:
     description: >-
-      Repository-relative path to a committed simslim JSON profile
-      (`{"name": "ci", "except": [...], "keep": [...]}`). When set, the
-      booted simulator's launchd disable overrides are checked against the
-      profile with `simslim verify --profile` before the app is installed,
-      and any drift fails the step. A simulator only stays slim per device:
-      an erased, recreated, or new-runtime device comes up stock and quietly
-      heavy, which is exactly what this catches. Apply the profile on the
-      host at provisioning time with `simslim on <udid> --profile <path>`;
+      `bundled` uses this release's own `profiles/ci.json` (App Store/push/
+      StoreKit and Safari/universal-link services on, the rest off), so a
+      consumer commits no profile of its own; a repository-relative path uses
+      that profile instead. The booted simulator's launchd disable overrides
+      are checked against it with `simslim verify --profile` before the app is
+      installed, and any drift fails the step. A simulator only stays slim per
+      device: an erased, recreated, or new-runtime device comes up stock and
+      quietly heavy, which is exactly what this catches. Apply the profile on
+      the host at provisioning time with `simslim on <udid> --profile <path>`;
       see docs/self-hosted-runners.md. Leave empty (default) to skip.
     required: false
     default: ''
@@ -649,8 +650,12 @@ runs:
             exit 1
           fi
           if [ -n "$SIMULATOR_SLIM_PROFILE" ]; then
+            if [ "$SIMULATOR_SLIM_PROFILE" = 'bundled' ]; then
+              SIMULATOR_SLIM_PROFILE="$(cd "$GITHUB_ACTION_PATH/../.." 2>/dev/null && pwd)/profiles/ci.json"
+              echo "simulator-slim-profile 'bundled' resolved to this release's shipped profile '$SIMULATOR_SLIM_PROFILE'."
+            fi
             if [ ! -f "$SIMULATOR_SLIM_PROFILE" ]; then
-              echo "::error::simulator-slim-profile '$SIMULATOR_SLIM_PROFILE' does not exist or is not a file (paths resolve against the workspace)."
+              echo "::error::simulator-slim-profile '$SIMULATOR_SLIM_PROFILE' does not exist or is not a file ('bundled' resolves to this release's profiles/ci.json, any other value against the workspace)."
               exit 1
             fi
             echo "Verifying simulator $SIMULATOR_UDID against slim profile '$SIMULATOR_SLIM_PROFILE'."

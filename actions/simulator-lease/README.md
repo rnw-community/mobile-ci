@@ -30,9 +30,15 @@ free pages**. The UI-test step was not CPU-bound; it was memory-starved.
 
 [simslim](https://github.com/MobAI-App/simslim) fixes that by writing
 persistent `launchctl disable` overrides into one simulator's launchd database.
-Point `slim-profile` at a committed profile
-(`{"name": "ci", "except": [], "keep": []}`) and the booted lease is verified
-against it, repaired if it drifts, and measured into the job summary.
+`slim-profile` defaults to `bundled`, this release's own
+[`profiles/ci.json`](../../profiles/ci.json) — the `store` (App Store, push,
+StoreKit) and `web` (Safari sync, universal links) categories stay on, every
+other category is disabled — so a consumer commits no profile of its own. Point
+it at a repository-relative path to use a different one, or set it to `''` to
+lease a stock device. Either way the booted lease is verified against the
+profile, repaired if it drifts, and measured into the job summary. The same
+profile is what [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh)
+applies on a developer's Mac, so a local run reproduces the CI simulator.
 
 Two ways to get a slim lease, in preference order:
 
@@ -70,10 +76,10 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`, which is unique per device. An explicit path is written with `noclobber`, so a second job cannot overwrite the first job's lease and make one `release` delete the other's device. |
 | `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`.                                         |
 | `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one.    |
-| `slim-profile`         | no       | `''`                | Repo-relative simslim JSON profile. Empty leases a stock device.               |
+| `slim-profile`         | no       | `bundled`           | `bundled` uses this release's [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; `''` leases a stock device. |
 | `slim-repair`          | no       | `true`              | Apply the profile in-job (a reboot) when the lease does not match it.          |
-| `simslim-version`      | no       | `0.8.0`             | Pinned simslim CLI version.                                                    |
-| `simslim-sha256`       | no       | `c7d33ba0…d9b19`    | Digest of that version's `macos-arm64` release asset.                          |
+| `simslim-version`      | no       | `0.10.0`             | Pinned simslim CLI version.                                                    |
+| `simslim-sha256`       | no       | `eec00b27…f4a1d`    | Digest of that version's `macos-arm64` release asset.                          |
 
 `device-type` and `runtime` are matched exactly against
 `xcrun simctl list devicetypes -j` / `list runtimes -j`; no fuzzy matching and
@@ -99,7 +105,6 @@ immediately instead of silently testing on something else.
   with:
       device-type: 'iPad Pro 11-inch (M4)'
       runtime: latest
-      slim-profile: e2e/simslim.ci.json
 
 - name: Test
   run: |
