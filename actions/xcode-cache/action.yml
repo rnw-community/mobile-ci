@@ -123,6 +123,7 @@ runs:
 
         cd "$WORKING_DIRECTORY"
         root="$PWD"
+        root_physical="$(pwd -P)"
 
         absolute=()
         exclude_prefixes=('./.git/' './.build/')
@@ -138,6 +139,18 @@ runs:
               exit 1
               ;;
           esac
+          case "/$directory/" in
+            */../*|*/./*)
+              echo "::error::Cache directory '$directory' must not contain '.' or '..' segments; the local backend rsyncs into it with --delete, so a path that resolves back to the checkout would delete the checkout."
+              exit 1
+              ;;
+          esac
+          mkdir -p "$resolved"
+          physical="$(cd "$resolved" && pwd -P)"
+          if [ "$physical" = "$root_physical" ] || [ "$physical" = '/' ]; then
+            echo "::error::Cache directory '$directory' resolves to '$physical', which is the working directory or the filesystem root. The local backend rsyncs into it with --delete, so this would erase the checkout."
+            exit 1
+          fi
           relative="${resolved#"$root"/}"
           if [ "$relative" != "$resolved" ]; then
             exclude_prefixes+=("./${relative%/}/")
@@ -208,10 +221,6 @@ runs:
         )
         rm -f "$matched"
         test -n "$fingerprint"
-
-        for resolved in "${absolute[@]}"; do
-          mkdir -p "$resolved"
-        done
 
         echo "Fingerprinted ${count} file(s) into $fingerprint"
         cache_key="${KEY_PREFIX}-${RUNNER_OS}-${RUNNER_ARCH}-${TOOLCHAIN}-${fingerprint}"

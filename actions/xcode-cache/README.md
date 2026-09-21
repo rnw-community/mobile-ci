@@ -110,7 +110,11 @@ otherwise follow out of `local-dir`.
 `xcodebuild-args` is a plain shell word list, so none of the three directories
 may contain whitespace or a shell glob metacharacter (`*`, `?`, `[`) — the
 action fails closed if one does, rather than letting the caller's unquoted
-expansion mangle the path. Relative inputs
+expansion mangle the path.
+
+None of them may contain a `.` or `..` segment, or resolve (through symlinks)
+to the working directory or to `/`. The `local` backend restores into them with
+`rsync -a --delete`, so a `derived-data-dir` of `.` would delete the checkout. Relative inputs
 are resolved against `working-directory` and absolute ones are used as given;
 both backends operate on those resolved paths (`cache-paths`), so an absolute
 `derived-data-dir` caches the directory `xcodebuild` actually writes to rather
