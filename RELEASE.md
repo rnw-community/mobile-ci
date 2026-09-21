@@ -2,7 +2,8 @@
 
 Modeled on `softprops/action-gh-release` and
 `reactivecircus/android-emulator-runner`: an exact `vX.Y.Z` tag per release,
-plus a floating major tag (`v1`) that consumers pin to in practice. **No
+plus a floating major tag (`v1`, `v2`, ... — the major of the release
+being cut) that consumers pin to in practice. **No
 `CHANGELOG.md`** — by explicit decision, the GitHub Release notes for each
 `vX.Y.Z` tag *are* the changelog. Use GitHub's generated release notes
 (grouped by PR/label) rather than hand-writing a duplicate summary.
@@ -70,29 +71,37 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
    mis-categorized PRs, not to add a hand-written summary (see the no-
    `CHANGELOG.md` decision above — the generated notes are the record).
 
-5. **Move the floating major tag** (`v1`) to point at the same commit as the
-   new exact tag — force-move, the same convention `actions/checkout`,
-   `actions/setup-node`, and most official GitHub Actions follow:
+5. **Move the floating major tag of *this* release's major** to point at the
+   same commit as the new exact tag — force-move, the same convention
+   `actions/checkout`, `actions/setup-node`, and most official GitHub Actions
+   follow. The floating tag is the major of the tag you just cut, never a
+   hard-coded `v1`: moving `v1` onto a `v2.x.y` commit would hand every
+   consumer floating on the previous major a breaking change they never opted
+   into. Each major's floating tag stays where that major's last release left
+   it.
 
    ```bash
-   git tag -f v1 v1.2.3
+   git tag -f v1 v1.2.3      # releasing v1.2.3 moves v1
    git push -f origin v1
+   # releasing v2.0.0 moves v2 instead, and v1 is left untouched
    ```
 
 6. **Verify both refs peel to the same commit**:
 
    ```bash
    git rev-parse v1.2.3^{commit}
-   git rev-parse v1^{commit}
+   git rev-parse v1^{commit}       # the floating tag of the same major
    # both must print the identical SHA
    ```
 
 7. **Verify release self-consistency**: every self-reference-bearing file in
    the tagged commit must point at that same tag — the reusable workflows
    (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
-   `store-screenshots.yml`; `native-publish.yml` and `native-dev-release.yml`
-   have none) **and** the composite actions that call sibling actions
-   (`run-maestro-android-redroid/action.yml` → `redroid-container`). Fail
+   `store-screenshots.yml`, `swift-ios.yml`, `expo-ota-preview.yml`,
+   `expo-fingerprint-guard.yml`; `native-publish.yml` and
+   `native-dev-release.yml` have none) **and** the composite actions that call
+   sibling actions (`run-maestro-android-redroid/action.yml` →
+   `redroid-container`). Fail
    closed: any reference whose tag or trailing comment does not match the
    release is a broken release, not a warning.
 
@@ -104,6 +113,9 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
                .github/workflows/android-maestro.yml \
                .github/workflows/seed-native-cache.yml \
                .github/workflows/store-screenshots.yml \
+               .github/workflows/swift-ios.yml \
+               .github/workflows/expo-ota-preview.yml \
+               .github/workflows/expo-fingerprint-guard.yml \
                actions/run-maestro-android-redroid/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
        --jq '.content' | base64 -d)"
@@ -140,8 +152,8 @@ plus a floating major tag (`v1`) that consumers pin to in practice. **No
 
 8. **Smoke-check one consumer pipeline** against the new tag before calling
    the release done — re-point a real consumer's workflow (or a scratch
-   branch of one) at `@v1` (or the exact `@v1.2.3`) and confirm its next run
-   is green. A green `self-test` on this repo proves the schemas are
+   branch of one) at the new floating major tag (or the exact `@v1.2.3`) and
+   confirm its next run is green. A green `self-test` on this repo proves the schemas are
    internally consistent; it does not prove a real consumer's `targets`/
    `flows-dir`/secrets wiring still resolves against the new tag.
 
@@ -169,9 +181,11 @@ rewrites these self-references to relative paths before schema-checking
 them, so a not-yet-existent tag never has to actually resolve during CI on
 the release PR.
 
-The floating major tag (`v1`) is a separate, deliberately mutable pointer
-used only by *consumers* who choose to float — it is force-moved in step 5
-above and is never what the self-references in this repo point at.
+The floating major tag (`v1`, `v2`, ...) is a separate, deliberately mutable
+pointer used only by *consumers* who choose to float — the one matching the
+release's own major is force-moved in step 5 above, older majors are left
+frozen, and none of them is ever what the self-references in this repo point
+at.
 
 ### Validating a not-yet-tagged self-reference on the fleet
 

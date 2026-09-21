@@ -133,8 +133,9 @@ and style findings may be fixed or answered with reasoning.**
 
 Self-references pin to the exact release tag (`@vX.Y.Z # vX.Y.Z`);
 consumers pin to an exact tag or a full commit SHA, or float on the
-sliding `v1` tag at their own risk. The exact tag-and-publish procedure,
-including moving the floating `v1` tag, lives in
+sliding major tag (`v2` is current) at their own risk. The exact
+tag-and-publish procedure, including moving the floating major tag of the
+release being cut — and only that major's, so `v1` stays frozen — lives in
 [RELEASE.md](RELEASE.md) — never move a release tag manually outside that
 procedure.
 
@@ -173,8 +174,8 @@ Full input/secret/permission tables and a copy-pasteable example live in
 workflow you are wiring, do not guess at input names or defaults.
 
 **Pin to an exact `vX.Y.Z` tag or a full commit SHA with a trailing
-`# comment`.** A floating `v1` tag exists for consumers who accept moving
-with the latest release (see [README.md](README.md) and
+`# comment`.** A floating major tag (`v2`) exists for consumers who accept
+moving with the latest release of that major (see [README.md](README.md) and
 [RELEASE.md](RELEASE.md)); `@main` can change without a deprecation window.
 
 ```yaml

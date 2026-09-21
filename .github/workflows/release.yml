@@ -29,7 +29,8 @@ jobs:
 
             # RELEASE.md's checklist has no automation past step 1 (bumping
             # self-references in the release PR itself): steps 2-8 - verify
-            # self-test, tag, publish the GitHub Release, float v1, and
+            # self-test, tag, publish the GitHub Release, float the major
+            # tag, and
             # self-check consistency - are run by hand after the release PR
             # merges. A merged "release: vX.Y.Z" PR that nobody follows up on
             # leaves every self-reference in this repo pointed at a tag that
@@ -117,23 +118,30 @@ jobs:
                   git tag -a "${TAG}" -m "${TAG}"
                   git push origin "${TAG}"
                   gh release create "${TAG}" --generate-notes --title "${TAG}"
-                  git tag -f v1 "${TAG}"
-                  git push -f origin v1
+                  # The floating tag is the major of the release being cut, not
+                  # a hard-coded 'v1': moving v1 onto a v2.x.y commit would hand
+                  # every consumer floating on the previous major a breaking
+                  # change they never opted into. v1 stays where the last v1.x.y
+                  # release left it.
+                  major="${TAG%%.*}"
+                  git tag -f "${major}" "${TAG}"
+                  git push -f origin "${major}"
                   {
                       echo "tagged=true"
                   } >> "$GITHUB_OUTPUT"
 
-            - name: Verify v1 and the exact tag peel to the same commit
+            - name: Verify the floating major tag and the exact tag peel to the same commit
               if: steps.detect.outputs.tag != '' && steps.existing.outputs.exists == 'false'
               shell: bash
               env:
                   TAG: ${{ steps.detect.outputs.tag }}
               run: |
                   set -euo pipefail
+                  major="${TAG%%.*}"
                   exact="$(git rev-parse "${TAG}^{commit}")"
-                  floating="$(git rev-parse "v1^{commit}")"
+                  floating="$(git rev-parse "${major}^{commit}")"
                   if [ "$exact" != "$floating" ]; then
-                      echo "::error::${TAG} (${exact}) and v1 (${floating}) do not point at the same commit."
+                      echo "::error::${TAG} (${exact}) and ${major} (${floating}) do not point at the same commit."
                       exit 1
                   fi
-                  echo "${TAG} and v1 both point at ${exact}."
+                  echo "${TAG} and ${major} both point at ${exact}."
