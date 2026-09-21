@@ -12,7 +12,10 @@ in seconds without a simulator, so a simulator-bound `xcodebuild test` only
 has to cover what genuinely needs UIKit.
 
 A fingerprint that matches **zero** files fails the step rather than producing
-a key over nothing. A restore hit suppresses the matching save, so a warm run
+a key over nothing. `.build` must resolve to a physical child of
+`package-path`: a symlink redirecting it would make a save copy whatever it
+points at into the cache, and a restore `rsync --delete` into it. That check
+runs once, in the key step, so it covers both modes and both backends. A restore hit suppresses the matching save, so a warm run
 never rewrites the same key.
 
 ## Inputs

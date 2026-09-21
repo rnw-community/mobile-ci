@@ -76,6 +76,16 @@ runs:
         esac
         cd "$PACKAGE_PATH"
         test -f Package.swift || { echo "::error::No Package.swift under '$PACKAGE_PATH'."; exit 1; }
+        package_physical="$(pwd -P)"
+        mkdir -p .build
+        build_physical="$(cd .build && pwd -P)"
+        case "$build_physical/" in
+          "$package_physical"/*) ;;
+          *)
+            echo "::error::'.build' under '$PACKAGE_PATH' resolves to '$build_physical', outside the package directory '$package_physical' — a symlink is redirecting it. Saving would copy whatever it points at into the cache, and restoring would 'rsync --delete' into it."
+            exit 1
+            ;;
+        esac
         matched="${RUNNER_TEMP}/swift-test-fingerprint-$$.list"
         : > "$matched"
         while IFS= read -r pattern; do
@@ -158,15 +168,6 @@ runs:
           exit 0
         fi
         mkdir -p .build
-        package_physical="$(pwd -P)"
-        build_physical="$(cd .build && pwd -P)"
-        case "$build_physical/" in
-          "$package_physical"/*) ;;
-          *)
-            echo "::error::'.build' under '$PACKAGE_PATH' resolves to '$build_physical', outside the package directory '$package_physical' — a symlink is redirecting it. Restoring with 'rsync --delete' would delete files this action does not own."
-            exit 1
-            ;;
-        esac
         rsync -a --delete "$entry/build/" .build/
         echo "cache-hit=true" >> "$GITHUB_OUTPUT"
         echo "Local cache hit for $CACHE_KEY"
