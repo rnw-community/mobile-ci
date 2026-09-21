@@ -1,0 +1,232 @@
+name: xcode-archive-upload
+description: >-
+  Archives a scheme for generic iOS with manual signing, then exports it —
+  either straight to App Store Connect with an API key, or to a local export
+  directory when upload is disabled.
+inputs:
+  project:
+    description: Path to the .xcodeproj. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  workspace:
+    description: Path to the .xcworkspace. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  scheme:
+    description: Scheme to archive.
+    required: true
+  configuration:
+    description: Build configuration.
+    required: false
+    default: Release
+  team-id:
+    description: Apple Developer team identifier used as DEVELOPMENT_TEAM and exportOptions teamID.
+    required: true
+  bundle-id:
+    description: Bundle identifier the exported provisioning profile is keyed on.
+    required: true
+  build-number:
+    description: CFBundleVersion for this build, passed as CURRENT_PROJECT_VERSION.
+    required: true
+  profile-uuid:
+    description: Provisioning profile UUID, e.g. apple-signing's profile-uuid output.
+    required: true
+  signing-certificate:
+    description: Signing certificate name for manual signing.
+    required: false
+    default: Apple Distribution
+  asc-key-id:
+    description: App Store Connect API key ID. Required when upload is true.
+    required: false
+    default: ''
+  asc-issuer-id:
+    description: App Store Connect API issuer ID. Required when upload is true.
+    required: false
+    default: ''
+  asc-key-path:
+    description: >-
+      Path of the App Store Connect AuthKey_<id>.p8, e.g. apple-signing's
+      asc-key-path output. Required when upload is true.
+    required: false
+    default: ''
+  archive-path:
+    description: Path of the produced .xcarchive.
+    required: false
+    default: ''
+  export-path:
+    description: Directory -exportArchive writes into.
+    required: false
+    default: build/AppStoreUpload
+  upload:
+    description: >-
+      `true` exports with destination=upload, submitting the build to App Store
+      Connect. `false` exports to export-path only and never contacts Apple.
+    required: false
+    default: 'true'
+  export-method:
+    description: exportOptions `method` value.
+    required: false
+    default: app-store-connect
+  xcodebuild-args:
+    description: Extra xcodebuild arguments appended to the archive invocation. Word-split.
+    required: false
+    default: ''
+  working-directory:
+    description: Directory the project/workspace, archive and export paths resolve against.
+    required: false
+    default: .
+outputs:
+  archive-path:
+    description: Path of the produced .xcarchive.
+    value: ${{ steps.archive.outputs.archive-path }}
+  export-path:
+    description: Directory -exportArchive wrote into.
+    value: ${{ steps.export.outputs.export-path }}
+runs:
+  using: composite
+  steps:
+    - name: Archive the scheme
+      id: archive
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        WORKSPACE: ${{ inputs.workspace }}
+        SCHEME: ${{ inputs.scheme }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        TEAM_ID: ${{ inputs.team-id }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        PROFILE_UUID: ${{ inputs.profile-uuid }}
+        SIGNING_CERTIFICATE: ${{ inputs.signing-certificate }}
+        ARCHIVE_PATH_INPUT: ${{ inputs.archive-path }}
+        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        if [ -n "$PROJECT" ] && [ -n "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace, not both.'
+          exit 1
+        fi
+        if [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace.'
+          exit 1
+        fi
+        : "${TEAM_ID:?team-id is required}"
+        : "${BUILD_NUMBER:?build-number is required}"
+        : "${PROFILE_UUID:?profile-uuid is required}"
+
+        archive_path="$ARCHIVE_PATH_INPUT"
+        if [ -z "$archive_path" ]; then
+          archive_path="build/${SCHEME}.xcarchive"
+        fi
+        rm -rf "$archive_path"
+        mkdir -p "$(dirname "$archive_path")"
+
+        args=()
+        if [ -n "$PROJECT" ]; then
+          test -e "$PROJECT" || { echo "::error::No project at '$PROJECT'."; exit 1; }
+          args+=(-project "$PROJECT")
+        else
+          test -e "$WORKSPACE" || { echo "::error::No workspace at '$WORKSPACE'."; exit 1; }
+          args+=(-workspace "$WORKSPACE")
+        fi
+        args+=(-scheme "$SCHEME" -configuration "$CONFIGURATION")
+        args+=(-destination 'generic/platform=iOS' -archivePath "$archive_path")
+        args+=(-skipMacroValidation -skipPackagePluginValidation)
+        args+=("DEVELOPMENT_TEAM=$TEAM_ID" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER")
+        args+=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$SIGNING_CERTIFICATE")
+        args+=("PROVISIONING_PROFILE_SPECIFIER=$PROFILE_UUID")
+        # shellcheck disable=SC2086
+        for word in $XCODEBUILD_ARGS; do
+          args+=("$word")
+        done
+
+        echo "Archiving build $BUILD_NUMBER into $archive_path"
+        xcodebuild "${args[@]}" archive
+        test -d "$archive_path" || { echo "::error::xcodebuild reported success but produced no archive at '$archive_path'."; exit 1; }
+        echo "archive-path=$archive_path" >> "$GITHUB_OUTPUT"
+
+    - name: Export the archive
+      id: export
+      shell: bash
+      env:
+        TEAM_ID: ${{ inputs.team-id }}
+        BUNDLE_ID: ${{ inputs.bundle-id }}
+        PROFILE_UUID: ${{ inputs.profile-uuid }}
+        SIGNING_CERTIFICATE: ${{ inputs.signing-certificate }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+        ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+        ARCHIVE_PATH: ${{ steps.archive.outputs.archive-path }}
+        EXPORT_PATH: ${{ inputs.export-path }}
+        UPLOAD: ${{ inputs.upload }}
+        EXPORT_METHOD: ${{ inputs.export-method }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        : "${BUNDLE_ID:?bundle-id is required}"
+        case "$UPLOAD" in
+          true) destination='upload' ;;
+          false) destination='export' ;;
+          *) echo "::error::upload must be 'true' or 'false' (got '$UPLOAD')."; exit 1 ;;
+        esac
+
+        export_options="$RUNNER_TEMP/xcode-archive-upload-ExportOptions-$$.plist"
+        cat > "$export_options" <<PLIST
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+        <key>method</key><string>${EXPORT_METHOD}</string>
+        <key>destination</key><string>${destination}</string>
+        <key>teamID</key><string>${TEAM_ID}</string>
+        <key>signingStyle</key><string>manual</string>
+        <key>signingCertificate</key><string>${SIGNING_CERTIFICATE}</string>
+        <key>provisioningProfiles</key><dict>
+        <key>${BUNDLE_ID}</key><string>${PROFILE_UUID}</string>
+        </dict>
+        <key>distributionBundleIdentifier</key><string>${BUNDLE_ID}</string>
+        <key>manageAppVersionAndBuildNumber</key><false/>
+        </dict></plist>
+        PLIST
+        plutil -lint "$export_options" > /dev/null
+
+        rm -rf "$EXPORT_PATH"
+        args=(-exportArchive -archivePath "$ARCHIVE_PATH" -exportPath "$EXPORT_PATH" -exportOptionsPlist "$export_options")
+        if [ "$destination" = 'upload' ]; then
+          : "${ASC_KEY_ID:?asc-key-id is required when upload is true}"
+          : "${ASC_ISSUER_ID:?asc-issuer-id is required when upload is true}"
+          : "${ASC_KEY_PATH:?asc-key-path is required when upload is true}"
+          test -s "$ASC_KEY_PATH" || { echo "::error::No App Store Connect key at '$ASC_KEY_PATH'."; exit 1; }
+          args+=(-authenticationKeyPath "$ASC_KEY_PATH")
+          args+=(-authenticationKeyID "$ASC_KEY_ID")
+          args+=(-authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          echo "Exporting and uploading $ARCHIVE_PATH to App Store Connect"
+        else
+          echo "Exporting $ARCHIVE_PATH to $EXPORT_PATH without contacting App Store Connect"
+        fi
+        echo "export-path=$EXPORT_PATH" >> "$GITHUB_OUTPUT"
+        xcodebuild "${args[@]}"
+        rm -f "$export_options"
+
+    - name: Publish the archive summary
+      if: always() && steps.archive.outputs.archive-path != ''
+      shell: bash
+      env:
+        SCHEME: ${{ inputs.scheme }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        ARCHIVE_PATH: ${{ steps.archive.outputs.archive-path }}
+        UPLOAD: ${{ inputs.upload }}
+      run: |
+        set -euo pipefail
+        if [ "$UPLOAD" = 'true' ]; then
+          destination='App Store Connect'
+        else
+          destination='local export only'
+        fi
+        {
+          echo "### xcodebuild archive — \`${SCHEME}\` build ${BUILD_NUMBER}"
+          echo
+          echo "- Archive: \`${ARCHIVE_PATH}\`"
+          echo "- Destination: ${destination}"
+        } >> "$GITHUB_STEP_SUMMARY"

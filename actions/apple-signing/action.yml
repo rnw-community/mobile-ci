@@ -1,0 +1,208 @@
+name: apple-signing
+description: >-
+  Installs a caller-owned Apple distribution certificate, App Store
+  provisioning profile and App Store Connect API key into a throwaway keychain
+  scoped to one job, asserting the profile's application-identifier before any
+  archive runs. The paired `mode: remove` call deletes every artefact it wrote.
+inputs:
+  mode:
+    description: '`install` or `remove`.'
+    required: false
+    default: install
+  certificate-base64:
+    description: Base64-encoded distribution certificate (.p12).
+    required: false
+    default: ''
+  certificate-password:
+    description: Password protecting the .p12.
+    required: false
+    default: ''
+  profile-base64:
+    description: Base64-encoded provisioning profile (.mobileprovision).
+    required: false
+    default: ''
+  asc-key-base64:
+    description: Base64-encoded App Store Connect API private key (.p8).
+    required: false
+    default: ''
+  asc-key-id:
+    description: App Store Connect API key ID; names the written AuthKey_<id>.p8.
+    required: false
+    default: ''
+  expected-application-identifier:
+    description: >-
+      The `<team>.<bundle-id>` the provisioning profile must declare as its
+      application-identifier entitlement. A mismatch fails the step.
+    required: false
+    default: ''
+  keychain-name:
+    description: Base name of the throwaway keychain created under RUNNER_TEMP.
+    required: false
+    default: mobile-ci-signing
+  wwdr-url:
+    description: Apple Worldwide Developer Relations intermediate certificate URL.
+    required: false
+    default: https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+  wwdr-sha256:
+    description: Expected SHA-256 of the downloaded WWDR certificate.
+    required: false
+    default: dcf21878c77f4198e4b4614f03d696d89c66c66008d4244e1b99161aac91601f
+  keychain-timeout-seconds:
+    description: Auto-lock timeout applied to the throwaway keychain.
+    required: false
+    default: '21600'
+outputs:
+  profile-uuid:
+    description: UUID of the installed provisioning profile.
+    value: ${{ steps.install.outputs.profile-uuid }}
+  keychain-path:
+    description: Path of the throwaway keychain.
+    value: ${{ steps.install.outputs.keychain-path }}
+  asc-key-path:
+    description: Path of the written App Store Connect AuthKey_<id>.p8.
+    value: ${{ steps.install.outputs.asc-key-path }}
+runs:
+  using: composite
+  steps:
+    - name: Install Apple signing material into a throwaway keychain
+      if: inputs.mode == 'install'
+      id: install
+      shell: bash
+      env:
+        CERTIFICATE_BASE64: ${{ inputs.certificate-base64 }}
+        CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+        PROFILE_BASE64: ${{ inputs.profile-base64 }}
+        ASC_KEY_BASE64: ${{ inputs.asc-key-base64 }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        EXPECTED_APPLICATION_IDENTIFIER: ${{ inputs.expected-application-identifier }}
+        KEYCHAIN_NAME: ${{ inputs.keychain-name }}
+        WWDR_URL: ${{ inputs.wwdr-url }}
+        WWDR_SHA256: ${{ inputs.wwdr-sha256 }}
+        KEYCHAIN_TIMEOUT_SECONDS: ${{ inputs.keychain-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        : "${CERTIFICATE_BASE64:?certificate-base64 is required for mode 'install'}"
+        : "${CERTIFICATE_PASSWORD:?certificate-password is required for mode 'install'}"
+        : "${PROFILE_BASE64:?profile-base64 is required for mode 'install'}"
+        : "${ASC_KEY_BASE64:?asc-key-base64 is required for mode 'install'}"
+        : "${ASC_KEY_ID:?asc-key-id is required for mode 'install'}"
+        : "${EXPECTED_APPLICATION_IDENTIFIER:?expected-application-identifier is required for mode 'install'}"
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to record the signing state but is not on PATH."; exit 1; }
+        case "$KEYCHAIN_NAME" in
+          ''|*[!A-Za-z0-9._-]*) echo "::error::keychain-name '$KEYCHAIN_NAME' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
+        esac
+        case "$ASC_KEY_ID" in
+          ''|*[!A-Za-z0-9]*) echo "::error::asc-key-id must be non-empty and alphanumeric."; exit 1 ;;
+        esac
+
+        keychain="$RUNNER_TEMP/${KEYCHAIN_NAME}.keychain-db"
+        certificate="$RUNNER_TEMP/${KEYCHAIN_NAME}-distribution.p12"
+        profile="$RUNNER_TEMP/${KEYCHAIN_NAME}-profile.mobileprovision"
+        profile_plist="$RUNNER_TEMP/${KEYCHAIN_NAME}-profile.plist"
+        wwdr="$RUNNER_TEMP/${KEYCHAIN_NAME}-wwdr.cer"
+        asc_key="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+        profiles_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+        state_file="$RUNNER_TEMP/${KEYCHAIN_NAME}-state.json"
+
+        umask 077
+        printf '%s' "$CERTIFICATE_BASE64" | /usr/bin/base64 -D > "$certificate"
+        printf '%s' "$ASC_KEY_BASE64" | /usr/bin/base64 -D > "$asc_key"
+        printf '%s' "$PROFILE_BASE64" | /usr/bin/base64 -D > "$profile"
+        chmod 600 "$certificate" "$asc_key" "$profile"
+        for written in "$certificate" "$asc_key" "$profile"; do
+          if [ ! -s "$written" ]; then
+            echo "::error::A base64 input decoded to an empty file ($(basename "$written")); the secret is unset or not base64."
+            exit 1
+          fi
+        done
+
+        curl --fail --silent --show-error --location "$WWDR_URL" --output "$wwdr"
+        echo "$WWDR_SHA256  $wwdr" | shasum -a 256 -c -
+
+        security cms -D -i "$profile" > "$profile_plist"
+        profile_uuid=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$profile_plist")
+        application_identifier=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")
+        if [ "$application_identifier" != "$EXPECTED_APPLICATION_IDENTIFIER" ]; then
+          echo "::error::The provisioning profile declares application-identifier '$application_identifier', not the expected '$EXPECTED_APPLICATION_IDENTIFIER'."
+          exit 1
+        fi
+        mkdir -p "$profiles_dir"
+        cp "$profile" "$profiles_dir/$profile_uuid.mobileprovision"
+
+        keychain_password="$(openssl rand -hex 24)"
+        security create-keychain -p "$keychain_password" "$keychain"
+        security set-keychain-settings -lut "$KEYCHAIN_TIMEOUT_SECONDS" "$keychain"
+        security unlock-keychain -p "$keychain_password" "$keychain"
+        security import "$certificate" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+        security import "$wwdr" -A -t cert -f x509 -k "$keychain"
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+
+        previous_keychains=$(security list-keychains -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+        default_keychain=$(security default-keychain -d user | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+        security list-keychains -d user -s "$keychain" "$default_keychain"
+
+        jq -n \
+          --arg keychain "$keychain" \
+          --arg profileUuid "$profile_uuid" \
+          --arg ascKey "$asc_key" \
+          --arg certificate "$certificate" \
+          --arg profile "$profile" \
+          --arg profilePlist "$profile_plist" \
+          --arg wwdr "$wwdr" \
+          --arg profilesDir "$profiles_dir" \
+          --arg previousKeychains "$previous_keychains" \
+          '{keychain: $keychain, profileUuid: $profileUuid, ascKey: $ascKey, scratch: [$certificate, $profile, $profilePlist, $wwdr], profilesDir: $profilesDir, previousKeychains: ($previousKeychains | split("\n") | map(select(length > 0)))}' \
+          > "$state_file"
+        chmod 600 "$state_file"
+
+        {
+          echo "profile-uuid=$profile_uuid"
+          echo "keychain-path=$keychain"
+          echo "asc-key-path=$asc_key"
+        } >> "$GITHUB_OUTPUT"
+        echo "Installed signing material for $EXPECTED_APPLICATION_IDENTIFIER (profile $profile_uuid)."
+
+    - name: Remove the Apple signing material
+      if: inputs.mode == 'remove'
+      shell: bash
+      env:
+        KEYCHAIN_NAME: ${{ inputs.keychain-name }}
+      run: |
+        set -euo pipefail
+        state_file="$RUNNER_TEMP/${KEYCHAIN_NAME}-state.json"
+        if [ ! -f "$state_file" ]; then
+          echo "::warning::No signing state at '$state_file'; the install call never completed, so there is nothing to remove."
+          exit 0
+        fi
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the signing state but is not on PATH."; exit 1; }
+        keychain=$(jq -r '.keychain // empty' "$state_file")
+        profile_uuid=$(jq -r '.profileUuid // empty' "$state_file")
+        asc_key=$(jq -r '.ascKey // empty' "$state_file")
+        profiles_dir=$(jq -r '.profilesDir // empty' "$state_file")
+
+        previous=()
+        while IFS= read -r entry; do
+          [ -n "$entry" ] || continue
+          [ "$entry" = "$keychain" ] && continue
+          previous+=("$entry")
+        done < <(jq -r '.previousKeychains[]? // empty' "$state_file")
+        if [ "${#previous[@]}" -gt 0 ]; then
+          security list-keychains -d user -s "${previous[@]}"
+        fi
+
+        if [ -n "$keychain" ]; then
+          security delete-keychain "$keychain" 2>/dev/null || true
+          rm -f "$keychain"
+        fi
+        if [ -n "$asc_key" ]; then
+          rm -f "$asc_key"
+        fi
+        while IFS= read -r scratch; do
+          [ -n "$scratch" ] || continue
+          rm -f "$scratch"
+        done < <(jq -r '.scratch[]? // empty' "$state_file")
+        if [ -n "$profile_uuid" ] && [ -n "$profiles_dir" ]; then
+          rm -f "$profiles_dir/$profile_uuid.mobileprovision"
+        fi
+        rm -f "$state_file"
+        echo 'Removed the throwaway keychain, the provisioning profile and the App Store Connect key.'
