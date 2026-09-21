@@ -365,6 +365,15 @@ runs:
           args+=("-only-testing:$identifier")
         done <<< "$SELECTED_TESTS"
         PWD_PHYSICAL="$(pwd -P)"
+        nearest_existing_ancestor() {
+          local probe="$1" parent
+          while [ ! -e "$probe" ]; do
+            parent="$(dirname "$probe")"
+            [ "$parent" = "$probe" ] && break
+            probe="$parent"
+          done
+          (cd "$probe" 2>/dev/null && pwd -P)
+        }
         assert_removable_child() {
           local label="$1"
           local candidate="$2"
@@ -377,10 +386,20 @@ runs:
           esac
           local parent
           parent="$(dirname "$candidate")"
-          mkdir -p "$parent"
-          local real_parent real_root
-          real_parent="$(cd "$parent" && pwd -P)"
+          local real_root ancestor
           real_root="$PWD_PHYSICAL"
+          ancestor="$(nearest_existing_ancestor "$parent")"
+          case "${ancestor:-/}/" in
+            "$real_root"/) ;;
+            "$real_root"/*) ;;
+            *)
+              echo "::error::The nearest existing ancestor of ${label} '$candidate' is '${ancestor:-<unresolvable>}', outside working-directory '$real_root' — a symlink is redirecting it. Refusing to create or remove anything there."
+              return 1
+              ;;
+          esac
+          mkdir -p "$parent"
+          local real_parent
+          real_parent="$(cd "$parent" && pwd -P)"
           if [ "$real_parent" != "$real_root" ]; then
             case "$real_parent/" in
               "$real_root"/*) : ;;

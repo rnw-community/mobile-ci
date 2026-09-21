@@ -86,6 +86,12 @@ runs:
             exit 1
             ;;
         esac
+        excluded() {
+          case "$1" in
+            ./.git/*|./.build/*) return 0 ;;
+          esac
+          return 1
+        }
         matched="${RUNNER_TEMP}/swift-test-fingerprint-$$.list"
         : > "$matched"
         while IFS= read -r pattern; do
@@ -100,20 +106,22 @@ runs:
               esac
               find . -type f -path "./${prefix}*" -name "$name" -print0 \
                 | while IFS= read -r -d '' found; do
-                    case "$found" in
-                      ./.git/*|./.build/*) continue ;;
-                    esac
+                    excluded "$found" && continue
                     printf '%s\0' "$found"
                   done >> "$matched"
               ;;
             *'*'*|*'?'*|*'['*)
               # shellcheck disable=SC2086
               for candidate in $pattern; do
-                [ -f "$candidate" ] && printf '%s\0' "$candidate" >> "$matched"
+                [ -f "$candidate" ] || continue
+                excluded "./${candidate#./}" && continue
+                printf '%s\0' "$candidate" >> "$matched"
               done
               ;;
             *)
-              [ -f "$pattern" ] && printf '%s\0' "$pattern" >> "$matched"
+              [ -f "$pattern" ] || continue
+              excluded "./${pattern#./}" && continue
+              printf '%s\0' "$pattern" >> "$matched"
               ;;
           esac
         done < <(printf '%s\n' "$FINGERPRINT_PATHS" | tr '[:blank:]' '\n')

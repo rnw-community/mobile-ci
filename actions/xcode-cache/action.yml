@@ -125,6 +125,16 @@ runs:
         root="$PWD"
         root_physical="$(pwd -P)"
 
+        nearest_existing_ancestor() {
+          local probe="$1" parent
+          while [ ! -e "$probe" ]; do
+            parent="$(dirname "$probe")"
+            [ "$parent" = "$probe" ] && break
+            probe="$parent"
+          done
+          (cd "$probe" 2>/dev/null && pwd -P)
+        }
+
         absolute=()
         exclude_prefixes=('./.git/' './.build/')
         for directory in "$DERIVED_DATA_DIR" "$SPM_CLONES_DIR" "$CAS_DIR"; do
@@ -143,6 +153,20 @@ runs:
             */../*|*/./*)
               echo "::error::Cache directory '$directory' must not contain '.' or '..' segments; the local backend rsyncs into it with --delete, so a path that resolves back to the checkout would delete the checkout."
               exit 1
+              ;;
+          esac
+          case "$directory" in
+            /*) ;;
+            *)
+              ancestor="$(nearest_existing_ancestor "$resolved")"
+              case "${ancestor:-/}/" in
+                "$root_physical"/) ;;
+                "$root_physical"/*) ;;
+                *)
+                  echo "::error::The nearest existing ancestor of relative cache directory '$directory' is '${ancestor:-<unresolvable>}', outside the working directory '$root_physical' — a symlink in the checkout is redirecting it. Refusing to create anything there."
+                  exit 1
+                  ;;
+              esac
               ;;
           esac
           mkdir -p "$resolved"

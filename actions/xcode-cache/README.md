@@ -118,8 +118,10 @@ None of them may contain a `.` or `..` segment, or resolve (through symlinks)
 to the working directory or to `/`. The `local` backend restores into them with
 `rsync -a --delete`, so a `derived-data-dir` of `.` would delete the checkout.
 
-A **relative** input must additionally resolve to a physical child of
-`working-directory`: a `build -> /elsewhere` symlink in the checkout would
+A **relative** input is validated *before* anything is created: its nearest
+existing ancestor must already sit under `working-directory`, so a redirected
+path cannot even cause a directory to be made outside the checkout. It must
+then also resolve to a physical child of `working-directory`: a `build -> /elsewhere` symlink in the checkout would
 otherwise redirect a `--delete` restore at files this action does not own, and
 that symlink is content a pull request controls. An **absolute** input is the
 caller naming a location deliberately, so it is allowed outside the checkout —
