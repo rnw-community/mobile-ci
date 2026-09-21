@@ -753,7 +753,7 @@ jobs:
             # skip both silently and let this job (and the status job that
             # gates on its result) report success having run zero Maestro
             # flows.
-            - name: Validate android-driver
+            - name: Validate android-driver against this runner
               shell: bash
               env:
                   ANDROID_DRIVER: ${{ inputs.android-driver }}
@@ -765,6 +765,17 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  [ "$ANDROID_DRIVER" = avd ] || exit 0
+                  [ "$(uname -s)" = Linux ] || exit 0
+                  arch="$(uname -m)"
+                  if [ "$arch" != x86_64 ]; then
+                    echo "::error::android-driver 'avd' needs an x86_64 Linux runner; this one is '$arch'. Google publishes no linux-aarch64 Android emulator, so no tuning makes an AVD boot here. Either point runner-labels/test-runner-labels at an x86_64 Linux KVM host (this workflow's default), or pass android-driver: redroid for a binder_linux/privileged-docker pool."
+                    exit 1
+                  fi
+                  if [ ! -e /dev/kvm ]; then
+                    echo "::error::android-driver 'avd' needs /dev/kvm on the runner; it is absent here. Without it the emulator falls back to software rendering and times out instead of failing clearly. Expose /dev/kvm to this runner, or pass android-driver: redroid with runner-labels naming a Redroid-capable pool."
+                    exit 1
+                  fi
 
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'

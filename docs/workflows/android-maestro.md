@@ -25,6 +25,21 @@ because the target packages were untouched, reported explicitly as "zero
 Maestro flows ran (not a pass)" rather than blending into a green check
 silently.
 
+## Migrating a Redroid caller (default change)
+
+`runner-labels` and `android-driver` defaults changed together: they name one
+host shape, and the pair is meaningless split apart. A caller that pins its own
+`linux-aarch64` Redroid `runner-labels` (or `test-runner-labels`) but relied on
+the old `redroid` driver default must now pass `android-driver: redroid`
+explicitly. Nothing else changes for it, and nothing at all changes for a
+caller that already passes `android-driver`. The mismatch is not silent: the
+test job asserts the selected driver against the runner it landed on (x86_64 +
+`/dev/kvm` for `avd`) and fails immediately with the override to add, instead
+of letting an emulator that cannot boot there time out. This is a breaking
+input-default change under
+[CONTRIBUTING.md#versioning](../../CONTRIBUTING.md#versioning) and ships in a
+major release.
+
 ## Inputs
 
 | Name                        | Required | Default                                       | Description |

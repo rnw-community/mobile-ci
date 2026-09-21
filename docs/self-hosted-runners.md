@@ -33,7 +33,7 @@ twice: once in its own runtime and once in the iOS build it displaced.
 | --- | --- | --- |
 | `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
 | Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro on the `avd` driver | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
-| Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the only shape that runs Android on arm64 |
+| Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
 | Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
 
 This repo's own defaults follow that rule: `android-maestro.yml`'s
