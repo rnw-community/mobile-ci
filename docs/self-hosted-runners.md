@@ -130,6 +130,51 @@ with:
     simulator-requires: push,universal-links
 ```
 
+**Leased simulators: clone a slimmed template.** `run-maestro-ios` and
+`capture-screenshots-ios` boot a device the host already owns, so the loop
+above is the whole story for them. `simulator-lease` is different: it *creates*
+the device it hands to `xcodebuild-test`, and a freshly created device is
+always stock. That is why its `slim-repair` defaults to `'true'` (the opposite
+of `run-maestro-ios`) — with only `slim-profile` set, every lease pays one
+`simslim on` reboot.
+
+The way to stop paying it is `template-device`. `xcrun simctl clone` copies the
+device's launchd disable overrides along with the device, so a clone of a
+slimmed, **shut-down** template is slim from its first boot:
+
+```bash
+# Host provisioning, once per image: one shut-down, slimmed template per device type.
+udid=$(xcrun simctl create 'trf-template-iPad Pro 11-inch (M4)' \
+    'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4' \
+    "$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier')")
+simslim on "$udid" --profile /path/to/simslim.ci.json --boot-timeout 15m
+simslim verify "$udid" --profile /path/to/simslim.ci.json
+simslim measure "$udid"
+xcrun simctl shutdown "$udid"
+```
+
+```yaml
+with:
+    template-device: 'trf-template-iPad Pro 11-inch (M4)'
+    slim-profile: e2e/simslim.ci.json
+    slim-repair: 'false'
+```
+
+`slim-repair: 'false'` is the point of the pairing: with a template in place, a
+lease that comes up stock means the *image* lost its slimming, and that should
+fail loudly rather than be repaired on every run. The action also refuses to
+clone a template that is booted — a template is provisioning state, never a
+job's device.
+
+**The fleet base image should ship these templates.** Measured inside
+pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
+simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,
+a Safari extension, Spotlight — with about **2 GB in the compressor and ~14 MB
+of free pages**. The UI-test step there was memory-starved, not CPU-bound. This
+also gates `-parallel-testing-worker-count`: each worker is a *clone* of the
+leased device, so raising it on a stock lease multiplies that footprint, while
+clones of a slim lease inherit the overrides.
+
 **What resets a simulator to stock.** `xcrun simctl erase`, delete-and-recreate,
 "Erase All Content and Settings", and every device created from a newly
 installed runtime come up stock with no error anywhere - the simulator just

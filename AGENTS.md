@@ -22,6 +22,8 @@ the section that matches your task; skip the other.
   reusable workflow, one file per workflow in `.github/workflows/`.
 - `docs/self-hosted-runners.md` — self-hosted host provisioning guide (macOS
   Xcode pools, Linux `linux-aarch64` Redroid hosts, prewarm manifest format).
+- `fixtures/` — minimal inputs `self-test.yml` runs this repo's own actions
+  against on the fleet (today: a two-test Swift Package for `swift-test`).
 - `CONTRIBUTING.md` — versioning, marketplace stance, third-party pinning,
   self-references, local validation, action-change checklist.
 - `RELEASE.md` — the exact tag-and-publish procedure for cutting `v1.x.y`.
@@ -105,6 +107,14 @@ Procedure:
 A change that cannot be exercised by suuudokuuu (a driver it does not use, a
 platform it does not ship) must say so explicitly in its PR body, and name
 whatever validation was done instead.
+
+suuudokuuu is a React Native / Expo consumer and exercises **none** of the
+native-Swift lane (`xcode-cache`, `swift-test`, `simulator-lease`,
+`xcodebuild-test`, `apple-signing`, `xcode-archive-upload`, `swift-ios.yml`).
+That lane's consumer of record is `vitalyiegorov/pony-labirinth`, a pure
+Xcode/SwiftPM app with no Node, Expo or CocoaPods; validate changes to it there,
+plus `self-test.yml`'s manual `fleet-swift-self-test` job for the two actions
+`fixtures/swift-package` can cover on its own.
 
 ### PR review etiquette
 

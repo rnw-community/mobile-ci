@@ -156,7 +156,7 @@ jobs:
                   rm -rf "$scratch"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard; do
+                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard swift-ios; do
                     sed -E "$self_ref_rewrite" \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done
@@ -268,3 +268,77 @@ jobs:
             - name: Report toolchain resolved
               shell: bash
               run: echo 'setup-xcode-pinned resolved DEVELOPER_DIR successfully on the fleet.'
+
+    fleet-swift-self-test:
+        name: Fleet Swift self-test (manual only)
+        if: github.event_name == 'workflow_dispatch'
+        runs-on: [self-hosted, macOS, ARM64]
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: setup-xcode-pinned
+              id: xcode
+              uses: ./actions/setup-xcode-pinned
+              with:
+                  version: ${{ vars.MOBILE_CI_SELFTEST_XCODE_VERSION || '26.4.1' }}
+                  build: ${{ vars.MOBILE_CI_SELFTEST_XCODE_BUILD || '17E202' }}
+
+            - name: swift-test against the fixture package
+              uses: ./actions/swift-test
+              with:
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  package-path: fixtures/swift-package
+
+            - name: simulator-lease acquire
+              id: simulator
+              uses: ./actions/simulator-lease
+              with:
+                  device-type: ${{ vars.MOBILE_CI_SELFTEST_DEVICE_TYPE || 'iPhone 17 Pro' }}
+                  runtime: latest
+                  name-prefix: mobile-ci-self-test
+
+            - name: Assert the leased simulator is booted
+              shell: bash
+              env:
+                  SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+              run: |
+                  set -euo pipefail
+                  test -n "$SIMULATOR_UDID"
+                  state=$(xcrun simctl list devices -j | jq -r --arg udid "$SIMULATOR_UDID" '[.devices[][] | select(.udid == $udid) | .state] | first // empty')
+                  if [ "$state" != 'Booted' ]; then
+                    echo "::error::simulator-lease returned '$SIMULATOR_UDID' but simctl reports state '${state:-unknown}', not Booted."
+                    exit 1
+                  fi
+                  echo "Leased simulator $SIMULATOR_UDID is Booted."
+
+            - name: simulator-lease release
+              if: always() && steps.simulator.outputs.lease-file != ''
+              uses: ./actions/simulator-lease
+              with:
+                  mode: release
+                  lease-file: ${{ steps.simulator.outputs.lease-file }}
+
+            - name: Assert the leased simulator is gone
+              if: always() && steps.simulator.outputs.udid != ''
+              shell: bash
+              env:
+                  SIMULATOR_UDID: ${{ steps.simulator.outputs.udid }}
+              run: |
+                  set -euo pipefail
+                  listing="$RUNNER_TEMP/simctl-devices-after-release.json"
+                  if ! xcrun simctl list devices -j > "$listing"; then
+                    echo '::error::xcrun simctl list devices failed; cleanup cannot be verified, which is not the same as cleanup having happened.'
+                    exit 1
+                  fi
+                  if ! survivors=$(jq -r --arg udid "$SIMULATOR_UDID" '[.devices[][] | select(.udid == $udid)] | length' "$listing"); then
+                    echo "::error::Could not parse '$listing'; cleanup cannot be verified."
+                    exit 1
+                  fi
+                  rm -f "$listing"
+                  if [ "$survivors" != '0' ]; then
+                    echo "::error::simulator-lease left '$SIMULATOR_UDID' behind after mode: release."
+                    exit 1
+                  fi
+                  echo "Leased simulator $SIMULATOR_UDID was deleted."

@@ -344,7 +344,10 @@ runs:
             lock_is_stale() {
               lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
               if [ -n "$lock_pid" ]; then
-                if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
+                if kill -0 "$lock_pid" 2>/dev/null; then
+                  [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +60 2>/dev/null)" ]
+                  return
+                fi
                 return 0
               else
                 [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]

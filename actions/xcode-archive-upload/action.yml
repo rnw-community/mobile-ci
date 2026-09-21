@@ -1,0 +1,332 @@
+name: xcode-archive-upload
+description: >-
+  Archives a scheme for generic iOS with manual signing, then exports it —
+  either straight to App Store Connect with an API key, or to a local export
+  directory when upload is disabled.
+inputs:
+  project:
+    description: Path to the .xcodeproj. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  workspace:
+    description: Path to the .xcworkspace. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  scheme:
+    description: Scheme to archive.
+    required: true
+  configuration:
+    description: Build configuration.
+    required: false
+    default: Release
+  team-id:
+    description: Apple Developer team identifier used as DEVELOPMENT_TEAM and exportOptions teamID.
+    required: true
+  bundle-id:
+    description: Bundle identifier the exported provisioning profile is keyed on.
+    required: true
+  build-number:
+    description: CFBundleVersion for this build, passed as CURRENT_PROJECT_VERSION.
+    required: true
+  profile-uuid:
+    description: Provisioning profile UUID, e.g. apple-signing's profile-uuid output.
+    required: true
+  signing-certificate:
+    description: Signing certificate name for manual signing.
+    required: false
+    default: Apple Distribution
+  asc-key-id:
+    description: App Store Connect API key ID. Required when upload is true.
+    required: false
+    default: ''
+  asc-issuer-id:
+    description: App Store Connect API issuer ID. Required when upload is true.
+    required: false
+    default: ''
+  asc-key-path:
+    description: >-
+      Path of the App Store Connect AuthKey_<id>.p8, e.g. apple-signing's
+      asc-key-path output. Required when upload is true.
+    required: false
+    default: ''
+  archive-path:
+    description: Path of the produced .xcarchive.
+    required: false
+    default: ''
+  export-path:
+    description: Directory -exportArchive writes into.
+    required: false
+    default: build/AppStoreUpload
+  upload:
+    description: >-
+      `true` exports with destination=upload, submitting the build to App Store
+      Connect. `false` exports to export-path only and never contacts Apple.
+    required: false
+    default: 'true'
+  export-method:
+    description: exportOptions `method` value.
+    required: false
+    default: app-store-connect
+  xcodebuild-args:
+    description: Extra xcodebuild arguments appended to the archive invocation. Word-split.
+    required: false
+    default: ''
+  working-directory:
+    description: Directory the project/workspace, archive and export paths resolve against.
+    required: false
+    default: .
+outputs:
+  archive-path:
+    description: Path of the produced .xcarchive.
+    value: ${{ steps.archive.outputs.archive-path }}
+  export-path:
+    description: Directory -exportArchive wrote into.
+    value: ${{ steps.export.outputs.export-path }}
+runs:
+  using: composite
+  steps:
+    - name: Archive the scheme
+      id: archive
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        WORKSPACE: ${{ inputs.workspace }}
+        SCHEME: ${{ inputs.scheme }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        TEAM_ID: ${{ inputs.team-id }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        PROFILE_UUID: ${{ inputs.profile-uuid }}
+        SIGNING_CERTIFICATE: ${{ inputs.signing-certificate }}
+        ARCHIVE_PATH_INPUT: ${{ inputs.archive-path }}
+        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        if [ -n "$PROJECT" ] && [ -n "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace, not both.'
+          exit 1
+        fi
+        if [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace.'
+          exit 1
+        fi
+        : "${TEAM_ID:?team-id is required}"
+        : "${BUILD_NUMBER:?build-number is required}"
+        : "${PROFILE_UUID:?profile-uuid is required}"
+
+        PWD_PHYSICAL="$(pwd -P)"
+        nearest_existing_ancestor() {
+          local probe="$1" parent
+          while [ ! -e "$probe" ]; do
+            parent="$(dirname "$probe")"
+            [ "$parent" = "$probe" ] && break
+            probe="$parent"
+          done
+          (cd "$probe" 2>/dev/null && pwd -P)
+        }
+        assert_removable_child() {
+          local label="$1"
+          local candidate="$2"
+          case "$candidate" in
+            ''|.|..) echo "::error::${label} '$candidate' must be a path inside working-directory, not the directory itself."; return 1 ;;
+            /*) echo "::error::${label} '$candidate' is absolute; only a path inside working-directory may be removed by this action."; return 1 ;;
+          esac
+          case "/$candidate/" in
+            */../*|*/./*) echo "::error::${label} '$candidate' must not contain '.' or '..' segments."; return 1 ;;
+          esac
+          local parent
+          parent="$(dirname "$candidate")"
+          local real_root ancestor
+          real_root="$PWD_PHYSICAL"
+          ancestor="$(nearest_existing_ancestor "$parent")"
+          case "${ancestor:-/}/" in
+            "$real_root"/) ;;
+            "$real_root"/*) ;;
+            *)
+              echo "::error::The nearest existing ancestor of ${label} '$candidate' is '${ancestor:-<unresolvable>}', outside working-directory '$real_root' — a symlink is redirecting it. Refusing to create or remove anything there."
+              return 1
+              ;;
+          esac
+          mkdir -p "$parent"
+          local real_parent
+          real_parent="$(cd "$parent" && pwd -P)"
+          if [ "$real_parent" != "$real_root" ]; then
+            case "$real_parent/" in
+              "$real_root"/*) : ;;
+              *) echo "::error::${label} '$candidate' resolves to '$real_parent', outside working-directory '$real_root' — an intermediate symlink would make this action remove data it does not own."; return 1 ;;
+            esac
+          fi
+          return 0
+        }
+
+        archive_path="$ARCHIVE_PATH_INPUT"
+        if [ -z "$archive_path" ]; then
+          archive_path="build/${SCHEME}.xcarchive"
+        fi
+        assert_removable_child 'archive-path' "$archive_path"
+        rm -rf "$archive_path"
+        mkdir -p "$(dirname "$archive_path")"
+
+        args=()
+        if [ -n "$PROJECT" ]; then
+          test -e "$PROJECT" || { echo "::error::No project at '$PROJECT'."; exit 1; }
+          args+=(-project "$PROJECT")
+        else
+          test -e "$WORKSPACE" || { echo "::error::No workspace at '$WORKSPACE'."; exit 1; }
+          args+=(-workspace "$WORKSPACE")
+        fi
+        args+=(-scheme "$SCHEME" -configuration "$CONFIGURATION")
+        args+=(-destination 'generic/platform=iOS' -archivePath "$archive_path")
+        args+=(-skipMacroValidation -skipPackagePluginValidation)
+        args+=("DEVELOPMENT_TEAM=$TEAM_ID" "CURRENT_PROJECT_VERSION=$BUILD_NUMBER")
+        args+=(CODE_SIGN_STYLE=Manual "CODE_SIGN_IDENTITY=$SIGNING_CERTIFICATE")
+        args+=("PROVISIONING_PROFILE_SPECIFIER=$PROFILE_UUID")
+        # shellcheck disable=SC2086
+        for word in $XCODEBUILD_ARGS; do
+          args+=("$word")
+        done
+
+        echo "Archiving build $BUILD_NUMBER into $archive_path"
+        xcodebuild "${args[@]}" archive
+        test -d "$archive_path" || { echo "::error::xcodebuild reported success but produced no archive at '$archive_path'."; exit 1; }
+        echo "archive-path=$archive_path" >> "$GITHUB_OUTPUT"
+
+    - name: Export the archive
+      id: export
+      shell: bash
+      env:
+        TEAM_ID: ${{ inputs.team-id }}
+        BUNDLE_ID: ${{ inputs.bundle-id }}
+        PROFILE_UUID: ${{ inputs.profile-uuid }}
+        SIGNING_CERTIFICATE: ${{ inputs.signing-certificate }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+        ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+        ARCHIVE_PATH: ${{ steps.archive.outputs.archive-path }}
+        EXPORT_PATH: ${{ inputs.export-path }}
+        UPLOAD: ${{ inputs.upload }}
+        EXPORT_METHOD: ${{ inputs.export-method }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        : "${BUNDLE_ID:?bundle-id is required}"
+        case "$UPLOAD" in
+          true) destination='upload' ;;
+          false) destination='export' ;;
+          *) echo "::error::upload must be 'true' or 'false' (got '$UPLOAD')."; exit 1 ;;
+        esac
+
+        xml_escape() {
+          printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+        }
+        export_method_xml=$(xml_escape "$EXPORT_METHOD")
+        team_id_xml=$(xml_escape "$TEAM_ID")
+        signing_certificate_xml=$(xml_escape "$SIGNING_CERTIFICATE")
+        bundle_id_xml=$(xml_escape "$BUNDLE_ID")
+        profile_uuid_xml=$(xml_escape "$PROFILE_UUID")
+
+        export_options="$RUNNER_TEMP/xcode-archive-upload-ExportOptions-$$.plist"
+        cat > "$export_options" <<PLIST
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0"><dict>
+        <key>method</key><string>${export_method_xml}</string>
+        <key>destination</key><string>${destination}</string>
+        <key>teamID</key><string>${team_id_xml}</string>
+        <key>signingStyle</key><string>manual</string>
+        <key>signingCertificate</key><string>${signing_certificate_xml}</string>
+        <key>provisioningProfiles</key><dict>
+        <key>${bundle_id_xml}</key><string>${profile_uuid_xml}</string>
+        </dict>
+        <key>distributionBundleIdentifier</key><string>${bundle_id_xml}</string>
+        <key>manageAppVersionAndBuildNumber</key><false/>
+        </dict></plist>
+        PLIST
+        plutil -lint "$export_options" > /dev/null
+
+        PWD_PHYSICAL="$(pwd -P)"
+        nearest_existing_ancestor() {
+          local probe="$1" parent
+          while [ ! -e "$probe" ]; do
+            parent="$(dirname "$probe")"
+            [ "$parent" = "$probe" ] && break
+            probe="$parent"
+          done
+          (cd "$probe" 2>/dev/null && pwd -P)
+        }
+        assert_removable_child() {
+          local label="$1"
+          local candidate="$2"
+          case "$candidate" in
+            ''|.|..) echo "::error::${label} '$candidate' must be a path inside working-directory, not the directory itself."; return 1 ;;
+            /*) echo "::error::${label} '$candidate' is absolute; only a path inside working-directory may be removed by this action."; return 1 ;;
+          esac
+          case "/$candidate/" in
+            */../*|*/./*) echo "::error::${label} '$candidate' must not contain '.' or '..' segments."; return 1 ;;
+          esac
+          local parent
+          parent="$(dirname "$candidate")"
+          local real_root ancestor
+          real_root="$PWD_PHYSICAL"
+          ancestor="$(nearest_existing_ancestor "$parent")"
+          case "${ancestor:-/}/" in
+            "$real_root"/) ;;
+            "$real_root"/*) ;;
+            *)
+              echo "::error::The nearest existing ancestor of ${label} '$candidate' is '${ancestor:-<unresolvable>}', outside working-directory '$real_root' — a symlink is redirecting it. Refusing to create or remove anything there."
+              return 1
+              ;;
+          esac
+          mkdir -p "$parent"
+          local real_parent
+          real_parent="$(cd "$parent" && pwd -P)"
+          if [ "$real_parent" != "$real_root" ]; then
+            case "$real_parent/" in
+              "$real_root"/*) : ;;
+              *) echo "::error::${label} '$candidate' resolves to '$real_parent', outside working-directory '$real_root' — an intermediate symlink would make this action remove data it does not own."; return 1 ;;
+            esac
+          fi
+          return 0
+        }
+        assert_removable_child 'export-path' "$EXPORT_PATH"
+        rm -rf "$EXPORT_PATH"
+        args=(-exportArchive -archivePath "$ARCHIVE_PATH" -exportPath "$EXPORT_PATH" -exportOptionsPlist "$export_options")
+        if [ "$destination" = 'upload' ]; then
+          : "${ASC_KEY_ID:?asc-key-id is required when upload is true}"
+          : "${ASC_ISSUER_ID:?asc-issuer-id is required when upload is true}"
+          : "${ASC_KEY_PATH:?asc-key-path is required when upload is true}"
+          test -s "$ASC_KEY_PATH" || { echo "::error::No App Store Connect key at '$ASC_KEY_PATH'."; exit 1; }
+          args+=(-authenticationKeyPath "$ASC_KEY_PATH")
+          args+=(-authenticationKeyID "$ASC_KEY_ID")
+          args+=(-authenticationKeyIssuerID "$ASC_ISSUER_ID")
+          echo "Exporting and uploading $ARCHIVE_PATH to App Store Connect"
+        else
+          echo "Exporting $ARCHIVE_PATH to $EXPORT_PATH without contacting App Store Connect"
+        fi
+        echo "export-path=$EXPORT_PATH" >> "$GITHUB_OUTPUT"
+        xcodebuild "${args[@]}"
+        rm -f "$export_options"
+
+    - name: Publish the archive summary
+      if: always() && steps.archive.outputs.archive-path != ''
+      shell: bash
+      env:
+        SCHEME: ${{ inputs.scheme }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        ARCHIVE_PATH: ${{ steps.archive.outputs.archive-path }}
+        UPLOAD: ${{ inputs.upload }}
+      run: |
+        set -euo pipefail
+        if [ "$UPLOAD" = 'true' ]; then
+          destination='App Store Connect'
+        else
+          destination='local export only'
+        fi
+        {
+          echo "### xcodebuild archive — \`${SCHEME}\` build ${BUILD_NUMBER}"
+          echo
+          echo "- Archive: \`${ARCHIVE_PATH}\`"
+          echo "- Destination: ${destination}"
+        } >> "$GITHUB_STEP_SUMMARY"
