@@ -98,7 +98,7 @@ rather than anything derived at runtime.
 | `derived-data-dir`  | `build/DerivedData`                                    | `-derivedDataPath`.                                    |
 | `spm-clones-dir`    | `build/SourcePackages`                                 | `-clonedSourcePackagesDirPath`.                        |
 | `cas-dir`           | `build/CompilationCache`                               | `COMPILATION_CACHE_CAS_PATH`.                          |
-| `fingerprint-paths` | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift` | Globs hashed into the cache key. Sources are included because the `test` shards restore what `build` compiled. |
+| `fingerprint-paths` | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift`, `**/*.xcconfig`, `**/*.plist`, `**/*.entitlements` | Globs hashed into the cache key. Build inputs are included because the `test` shards restore what `build` compiled. Not exhaustive: add asset catalogs or script-phase inputs your project has. |
 
 The same `cache-backend` / `cache-local-dir` pair also drives `swift-test`'s
 `.build` cache.

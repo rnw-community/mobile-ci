@@ -28,13 +28,21 @@ path-prefix test rather than a regex built from the input.
 `RUNNER_ARCH` is in the key because compiled products are not portable between
 Intel and Apple-silicon runners.
 
-**The default fingerprint includes every `*.swift` on purpose.** A build job
+**The default fingerprint covers the build inputs on purpose.** Sources,
+project files, lockfiles, xcconfigs, plists and entitlements — everything a
+plain Xcode/SwiftPM app compiles from. A build job
 and its test shards share this key (see
 [`xcodebuild-test`](../xcodebuild-test/README.md)'s `mode`), so a key that did
 not move with the sources would let a shard restore the previous commit's
 compiled products and report `test-without-building` green without testing the
 current source. Narrow `fingerprint-paths` only if nothing downstream reuses
-the compiled products. The Xcode 26 CAS is what keeps a source change cheap:
+the compiled products.
+
+It is **deliberately not exhaustive, and cannot be**: a project with an asset
+catalog, generated resources, or a script phase that reads files outside these
+globs must add them to `fingerprint-paths`. What the default guarantees is that
+no *cache directory's own contents* ever enter the fingerprint, on any glob
+form — recursive or not. The Xcode 26 CAS is what keeps a source change cheap:
 the key misses, but the unchanged translation units are still content-addressed
 hits.
 
@@ -86,7 +94,7 @@ otherwise follow out of `local-dir`.
 | `spm-clones-dir`     | no       | `build/SourcePackages`                      | Swift Package clone directory.                                               |
 | `cas-dir`            | no       | `build/CompilationCache`                    | Xcode 26 compilation-cache (CAS) directory.                                  |
 | `toolchain`          | yes      | —                                           | Toolchain key segment, e.g. `setup-xcode-pinned`'s `toolchain-key`.          |
-| `fingerprint-paths`  | no       | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift` | Newline- or space-separated globs hashed into the key. |
+| `fingerprint-paths`  | no       | `**/*.pbxproj`, `Package.swift`, `**/Package.resolved`, `**/*.swift`, `**/*.xcconfig`, `**/*.plist`, `**/*.entitlements` | Newline- or space-separated globs hashed into the key. |
 | `working-directory`  | no       | `.`                                         | Directory the globs and cache directories resolve against.                   |
 | `key-prefix`         | no       | `xcode-cache-v1`                            | Key namespace; bump it to invalidate every entry at once.                    |
 

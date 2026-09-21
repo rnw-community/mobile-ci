@@ -342,6 +342,9 @@ runs:
             lock_acquired=''
             lock_deadline=$((SECONDS + 300))
             lock_is_stale() {
+              if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+                return 0
+              fi
               lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
               if [ -n "$lock_pid" ]; then
                 if kill -0 "$lock_pid" 2>/dev/null; then return 1; fi
