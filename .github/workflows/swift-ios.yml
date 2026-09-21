@@ -1,0 +1,400 @@
+name: swift-ios
+
+on:
+    workflow_call:
+        inputs:
+            runs-on-json:
+                description: JSON array of runner labels for the validate job.
+                type: string
+                required: false
+                default: '["self-hosted","trf-macos-arm64-4x7"]'
+            publish-runs-on-json:
+                description: JSON array of runner labels for the publish job.
+                type: string
+                required: false
+                default: '["self-hosted","trf-macos-arm64-6x12"]'
+            xcode-version:
+                description: Xcode version string as `xcodebuild -version` reports it.
+                type: string
+                required: true
+            xcode-build:
+                description: Xcode build number as `xcodebuild -version` reports it.
+                type: string
+                required: true
+            project:
+                description: Path to the .xcodeproj. Exactly one of project/workspace.
+                type: string
+                required: false
+                default: ''
+            workspace:
+                description: Path to the .xcworkspace. Exactly one of project/workspace.
+                type: string
+                required: false
+                default: ''
+            scheme:
+                description: Scheme built and tested (and archived when publishing).
+                type: string
+                required: true
+            configuration:
+                description: Build configuration used by the validate job.
+                type: string
+                required: false
+                default: Debug
+            working-directory:
+                description: Directory every project-relative path resolves against.
+                type: string
+                required: false
+                default: .
+            checkout-fetch-depth:
+                description: fetch-depth passed to actions/checkout.
+                type: number
+                required: false
+                default: 1
+            validate-timeout-minutes:
+                type: number
+                required: false
+                default: 45
+            publish-timeout-minutes:
+                type: number
+                required: false
+                default: 90
+            cache-backend:
+                description: '`github` (actions/cache) or `local` (a directory under cache-local-dir).'
+                type: string
+                required: false
+                default: github
+            cache-local-dir:
+                description: >-
+                    Cache root for `cache-backend: local`. On the fleet this is the
+                    VM's shared host mount, so the cache never crosses the network.
+                type: string
+                required: false
+                default: ''
+            derived-data-dir:
+                type: string
+                required: false
+                default: build/DerivedData
+            spm-clones-dir:
+                type: string
+                required: false
+                default: build/SourcePackages
+            cas-dir:
+                type: string
+                required: false
+                default: build/CompilationCache
+            fingerprint-paths:
+                description: Newline- or space-separated globs hashed into the Xcode cache key.
+                type: string
+                required: false
+                default: |
+                    **/*.pbxproj
+                    Package.swift
+                    **/Package.resolved
+            enable-swift-test:
+                description: Run `swift test --parallel` for the Swift Package before the simulator lane.
+                type: boolean
+                required: false
+                default: true
+            swift-package-path:
+                type: string
+                required: false
+                default: .
+            swift-test-extra-args:
+                type: string
+                required: false
+                default: ''
+            enable-xcodebuild-test:
+                description: Run the simulator-bound build-for-testing / test-without-building lane.
+                type: boolean
+                required: false
+                default: true
+            simulator-device-type:
+                description: Exact simulator device type name, e.g. 'iPad Pro 11-inch (M4)'.
+                type: string
+                required: false
+                default: ''
+            simulator-runtime:
+                description: '`latest`, or an exact simulator runtime identifier.'
+                type: string
+                required: false
+                default: latest
+            test-plan:
+                type: string
+                required: false
+                default: ''
+            only-testing:
+                description: Newline- or space-separated test identifiers to run (and to shard).
+                type: string
+                required: false
+                default: ''
+            shard-count:
+                description: Number of test shards; 1 disables sharding.
+                type: number
+                required: false
+                default: 1
+            result-bundle-path:
+                type: string
+                required: false
+                default: build/TestResults.xcresult
+            enable-publish:
+                description: Run the publish job (signing, archive, optional upload and release).
+                type: boolean
+                required: false
+                default: false
+            publish-configuration:
+                type: string
+                required: false
+                default: Release
+            publish-environment:
+                description: GitHub Environment the publish job runs in, for its approval and secret scope.
+                type: string
+                required: false
+                default: ''
+            team-id:
+                description: Apple Developer team identifier.
+                type: string
+                required: false
+                default: ''
+            bundle-id:
+                description: Bundle identifier of the app being published.
+                type: string
+                required: false
+                default: ''
+            build-number:
+                description: CFBundleVersion for this build. Defaults to 1000 + the run number.
+                type: string
+                required: false
+                default: ''
+            signing-certificate:
+                type: string
+                required: false
+                default: Apple Distribution
+            archive-path:
+                type: string
+                required: false
+                default: ''
+            export-path:
+                type: string
+                required: false
+                default: build/AppStoreUpload
+            upload:
+                description: '`true` submits the export to App Store Connect; `false` exports locally only.'
+                type: boolean
+                required: false
+                default: true
+            create-release:
+                description: Tag the published commit and cut a GitHub Release for it.
+                type: boolean
+                required: false
+                default: false
+            release-tag-prefix:
+                description: Tag is `<prefix><build-number>`.
+                type: string
+                required: false
+                default: build/
+        secrets:
+            apple-certificate-base64:
+                required: false
+            apple-certificate-password:
+                required: false
+            apple-profile-base64:
+                required: false
+            asc-key-base64:
+                required: false
+            asc-key-id:
+                required: false
+            asc-issuer-id:
+                required: false
+        outputs:
+            build-number:
+                description: The build number the publish job used.
+                value: ${{ jobs.publish.outputs.build-number }}
+
+permissions:
+    contents: read
+
+jobs:
+    validate:
+        name: Validate
+        runs-on: ${{ fromJSON(inputs.runs-on-json) }}
+        timeout-minutes: ${{ inputs.validate-timeout-minutes }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+                  fetch-depth: ${{ inputs.checkout-fetch-depth }}
+
+            - name: Select the pinned Xcode toolchain
+              id: xcode
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.23.1 # v1.23.1
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - name: Restore the Xcode build cache
+              id: cache
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v1.23.1 # v1.23.1
+              with:
+                  mode: restore
+                  backend: ${{ inputs.cache-backend }}
+                  local-dir: ${{ inputs.cache-local-dir }}
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  derived-data-dir: ${{ inputs.derived-data-dir }}
+                  spm-clones-dir: ${{ inputs.spm-clones-dir }}
+                  cas-dir: ${{ inputs.cas-dir }}
+                  fingerprint-paths: ${{ inputs.fingerprint-paths }}
+                  working-directory: ${{ inputs.working-directory }}
+
+            - name: Run the Swift Package tests
+              if: inputs.enable-swift-test
+              uses: rnw-community/mobile-ci/actions/swift-test@v1.23.1 # v1.23.1
+              with:
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  package-path: ${{ inputs.swift-package-path }}
+                  extra-args: ${{ inputs.swift-test-extra-args }}
+                  backend: ${{ inputs.cache-backend }}
+                  local-dir: ${{ inputs.cache-local-dir }}
+
+            - name: Lease an isolated simulator
+              if: inputs.enable-xcodebuild-test
+              id: simulator
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v1.23.1 # v1.23.1
+              with:
+                  device-type: ${{ inputs.simulator-device-type }}
+                  runtime: ${{ inputs.simulator-runtime }}
+
+            - name: Build and run the scheme's tests
+              if: inputs.enable-xcodebuild-test
+              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v1.23.1 # v1.23.1
+              with:
+                  project: ${{ inputs.project }}
+                  workspace: ${{ inputs.workspace }}
+                  scheme: ${{ inputs.scheme }}
+                  configuration: ${{ inputs.configuration }}
+                  destination-id: ${{ steps.simulator.outputs.udid }}
+                  test-plan: ${{ inputs.test-plan }}
+                  only-testing: ${{ inputs.only-testing }}
+                  shard-count: ${{ inputs.shard-count }}
+                  result-bundle-path: ${{ inputs.result-bundle-path }}
+                  xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
+                  working-directory: ${{ inputs.working-directory }}
+
+            - name: Release the leased simulator
+              if: always() && inputs.enable-xcodebuild-test
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v1.23.1 # v1.23.1
+              with:
+                  mode: release
+                  lease-file: ${{ steps.simulator.outputs.lease-file }}
+
+            - name: Save the Xcode build cache
+              if: always() && steps.cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v1.23.1 # v1.23.1
+              with:
+                  mode: save
+                  backend: ${{ inputs.cache-backend }}
+                  local-dir: ${{ inputs.cache-local-dir }}
+                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
+                  derived-data-dir: ${{ inputs.derived-data-dir }}
+                  spm-clones-dir: ${{ inputs.spm-clones-dir }}
+                  cas-dir: ${{ inputs.cas-dir }}
+                  fingerprint-paths: ${{ inputs.fingerprint-paths }}
+                  working-directory: ${{ inputs.working-directory }}
+
+    publish:
+        name: Publish
+        if: inputs.enable-publish
+        needs: validate
+        runs-on: ${{ fromJSON(inputs.publish-runs-on-json) }}
+        timeout-minutes: ${{ inputs.publish-timeout-minutes }}
+        environment: ${{ inputs.publish-environment }}
+        permissions:
+            contents: write
+        outputs:
+            build-number: ${{ steps.build-number.outputs.build-number }}
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+                  fetch-depth: ${{ inputs.checkout-fetch-depth }}
+
+            - name: Select the pinned Xcode toolchain
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v1.23.1 # v1.23.1
+              with:
+                  version: ${{ inputs.xcode-version }}
+                  build: ${{ inputs.xcode-build }}
+
+            - name: Resolve the build number
+              id: build-number
+              shell: bash
+              env:
+                  REQUESTED_BUILD_NUMBER: ${{ inputs.build-number }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$REQUESTED_BUILD_NUMBER" ]; then
+                    resolved="$REQUESTED_BUILD_NUMBER"
+                  else
+                    resolved="$((1000 + GITHUB_RUN_NUMBER))"
+                  fi
+                  if ! printf '%s' "$resolved" | grep -qE '^[0-9]+$'; then
+                    echo "::error::build-number '$resolved' must be a non-negative integer."
+                    exit 1
+                  fi
+                  echo "build-number=$resolved" >> "$GITHUB_OUTPUT"
+                  echo "Publishing build $resolved"
+
+            - name: Install the Apple signing material
+              id: signing
+              uses: rnw-community/mobile-ci/actions/apple-signing@v1.23.1 # v1.23.1
+              with:
+                  certificate-base64: ${{ secrets.apple-certificate-base64 }}
+                  certificate-password: ${{ secrets.apple-certificate-password }}
+                  profile-base64: ${{ secrets.apple-profile-base64 }}
+                  asc-key-base64: ${{ secrets.asc-key-base64 }}
+                  asc-key-id: ${{ secrets.asc-key-id }}
+                  expected-application-identifier: ${{ inputs.team-id }}.${{ inputs.bundle-id }}
+
+            - name: Archive and export the scheme
+              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v1.23.1 # v1.23.1
+              with:
+                  project: ${{ inputs.project }}
+                  workspace: ${{ inputs.workspace }}
+                  scheme: ${{ inputs.scheme }}
+                  configuration: ${{ inputs.publish-configuration }}
+                  team-id: ${{ inputs.team-id }}
+                  bundle-id: ${{ inputs.bundle-id }}
+                  build-number: ${{ steps.build-number.outputs.build-number }}
+                  profile-uuid: ${{ steps.signing.outputs.profile-uuid }}
+                  signing-certificate: ${{ inputs.signing-certificate }}
+                  asc-key-id: ${{ secrets.asc-key-id }}
+                  asc-issuer-id: ${{ secrets.asc-issuer-id }}
+                  asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+                  archive-path: ${{ inputs.archive-path }}
+                  export-path: ${{ inputs.export-path }}
+                  upload: ${{ inputs.upload }}
+                  working-directory: ${{ inputs.working-directory }}
+
+            - name: Tag the commit and cut a GitHub Release
+              if: inputs.create-release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  BUILD_NUMBER: ${{ steps.build-number.outputs.build-number }}
+                  RELEASE_TAG_PREFIX: ${{ inputs.release-tag-prefix }}
+              run: |
+                  set -euo pipefail
+                  tag="${RELEASE_TAG_PREFIX}${BUILD_NUMBER}"
+                  if gh release view "$tag" > /dev/null 2>&1; then
+                    echo "Release $tag already exists; leaving it untouched."
+                    exit 0
+                  fi
+                  gh release create "$tag" \
+                    --target "$GITHUB_SHA" \
+                    --title "Build $BUILD_NUMBER" \
+                    --generate-notes
+                  echo "Created the tag and release $tag."
+
+            - name: Remove the Apple signing material
+              if: always()
+              uses: rnw-community/mobile-ci/actions/apple-signing@v1.23.1 # v1.23.1
+              with:
+                  mode: remove
