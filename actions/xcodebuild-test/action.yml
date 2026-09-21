@@ -1,0 +1,354 @@
+name: xcodebuild-test
+description: >-
+  Compiles a scheme's tests once with `build-for-testing`, then runs them with
+  `test-without-building` against an already-booted simulator, optionally
+  sharded across jobs, uploading the .xcresult bundle and publishing a
+  pass/fail step summary. Zero tests executed fails the job.
+inputs:
+  project:
+    description: Path to the .xcodeproj. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  workspace:
+    description: Path to the .xcworkspace. Exactly one of project/workspace is required.
+    required: false
+    default: ''
+  scheme:
+    description: Scheme to build and test.
+    required: true
+  configuration:
+    description: Build configuration.
+    required: false
+    default: Debug
+  sdk:
+    description: SDK passed to xcodebuild.
+    required: false
+    default: iphonesimulator
+  destination-id:
+    description: >-
+      UDID of an already-booted simulator, e.g. simulator-lease's udid output.
+      Used as `platform=iOS Simulator,id=<udid>`.
+    required: true
+  test-plan:
+    description: Optional test plan name passed as -testPlan.
+    required: false
+    default: ''
+  only-testing:
+    description: >-
+      Optional newline- or space-separated test identifiers (target,
+      target/Class, target/Class/method). When set, this is the list that gets
+      sharded instead of the test targets discovered from the .xctestrun.
+    required: false
+    default: ''
+  shard-index:
+    description: Zero-based index of this shard.
+    required: false
+    default: '0'
+  shard-count:
+    description: Total number of shards. 1 disables sharding entirely.
+    required: false
+    default: '1'
+  result-bundle-path:
+    description: Path of the .xcresult bundle produced by the test run.
+    required: false
+    default: build/TestResults.xcresult
+  xcodebuild-args:
+    description: >-
+      Extra xcodebuild arguments, e.g. xcode-cache's xcodebuild-args output.
+      Shell-word-split, so no argument may contain whitespace.
+    required: false
+    default: ''
+  working-directory:
+    description: Directory the project/workspace and result bundle resolve against.
+    required: false
+    default: .
+  parallel-testing:
+    description: Value for -parallel-testing-enabled.
+    required: false
+    default: 'YES'
+  artifact-name:
+    description: Name of the uploaded .xcresult artifact.
+    required: false
+    default: ''
+  retention-days:
+    description: Retention for the uploaded .xcresult artifact.
+    required: false
+    default: '7'
+outputs:
+  result-bundle-path:
+    description: Path of the .xcresult bundle.
+    value: ${{ steps.test.outputs.result-bundle-path }}
+  tests-total:
+    description: Total number of tests the run executed.
+    value: ${{ steps.summary.outputs.tests-total }}
+  tests-failed:
+    description: Number of failed tests.
+    value: ${{ steps.summary.outputs.tests-failed }}
+runs:
+  using: composite
+  steps:
+    - name: Build the scheme for testing
+      id: build
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        WORKSPACE: ${{ inputs.workspace }}
+        SCHEME: ${{ inputs.scheme }}
+        CONFIGURATION: ${{ inputs.configuration }}
+        SDK: ${{ inputs.sdk }}
+        DESTINATION_ID: ${{ inputs.destination-id }}
+        TEST_PLAN: ${{ inputs.test-plan }}
+        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        if [ -n "$PROJECT" ] && [ -n "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace, not both.'
+          exit 1
+        fi
+        if [ -z "$PROJECT" ] && [ -z "$WORKSPACE" ]; then
+          echo '::error::Set exactly one of project/workspace.'
+          exit 1
+        fi
+        if ! printf '%s' "$DESTINATION_ID" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+          echo "::error::destination-id must be a simulator UDID (got '$DESTINATION_ID')."
+          exit 1
+        fi
+
+        args=()
+        if [ -n "$PROJECT" ]; then
+          test -e "$PROJECT" || { echo "::error::No project at '$PROJECT'."; exit 1; }
+          args+=(-project "$PROJECT")
+          container="$PROJECT"
+        else
+          test -e "$WORKSPACE" || { echo "::error::No workspace at '$WORKSPACE'."; exit 1; }
+          args+=(-workspace "$WORKSPACE")
+          container="$WORKSPACE"
+        fi
+        args+=(-scheme "$SCHEME" -configuration "$CONFIGURATION" -sdk "$SDK")
+        args+=(-destination "platform=iOS Simulator,id=$DESTINATION_ID")
+        args+=(-skipMacroValidation -skipPackagePluginValidation)
+        if [ -n "$TEST_PLAN" ]; then
+          args+=(-testPlan "$TEST_PLAN")
+        fi
+
+        resolved_lockfile=''
+        for candidate in \
+          'Package.resolved' \
+          "$container/project.xcworkspace/xcshareddata/swiftpm/Package.resolved" \
+          "$container/xcshareddata/swiftpm/Package.resolved"; do
+          if [ -f "$candidate" ]; then
+            resolved_lockfile="$candidate"
+            break
+          fi
+        done
+        if [ -n "$resolved_lockfile" ]; then
+          echo "Package.resolved found at '$resolved_lockfile'; disabling automatic package resolution."
+          args+=(-disableAutomaticPackageResolution)
+        else
+          echo '::notice::No Package.resolved found; leaving automatic package resolution enabled.'
+        fi
+
+        # shellcheck disable=SC2086
+        for word in $XCODEBUILD_ARGS; do
+          args+=("$word")
+        done
+
+        printf 'xcodebuild'
+        printf ' %q' "${args[@]}" build-for-testing
+        printf '\n'
+        xcodebuild "${args[@]}" build-for-testing
+
+        {
+          printf 'common-args<<XCODEBUILD_ARGS_EOF\n'
+          printf '%s\n' "${args[@]}"
+          printf 'XCODEBUILD_ARGS_EOF\n'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Resolve this shard's test identifiers
+      id: shard
+      shell: bash
+      env:
+        ONLY_TESTING: ${{ inputs.only-testing }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        XCODEBUILD_ARGS: ${{ inputs.xcodebuild-args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        for value in "$SHARD_INDEX" "$SHARD_COUNT"; do
+          if ! printf '%s' "$value" | grep -qE '^[0-9]+$'; then
+            echo "::error::shard-index and shard-count must be non-negative integers (got '$SHARD_INDEX'/'$SHARD_COUNT')."
+            exit 1
+          fi
+        done
+        if [ "$SHARD_COUNT" -lt 1 ]; then
+          echo "::error::shard-count must be at least 1 (got '$SHARD_COUNT')."
+          exit 1
+        fi
+        if [ "$SHARD_INDEX" -ge "$SHARD_COUNT" ]; then
+          echo "::error::shard-index '$SHARD_INDEX' is out of range for shard-count '$SHARD_COUNT'."
+          exit 1
+        fi
+
+        candidates=()
+        while IFS= read -r identifier; do
+          [ -n "$identifier" ] || continue
+          candidates+=("$identifier")
+        done <<< "$(printf '%s\n' "$ONLY_TESTING" | tr '[:blank:]' '\n')"
+
+        if [ "${#candidates[@]}" -eq 0 ]; then
+          if [ "$SHARD_COUNT" -eq 1 ]; then
+            echo 'Not sharded and no only-testing list; the whole scheme is tested.'
+            printf 'only-testing<<ONLY_TESTING_EOF\nONLY_TESTING_EOF\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the .xctestrun test targets but is not on PATH."; exit 1; }
+          derived_data=''
+          previous=''
+          # shellcheck disable=SC2086
+          for word in $XCODEBUILD_ARGS; do
+            if [ "$previous" = '-derivedDataPath' ]; then
+              derived_data="$word"
+              break
+            fi
+            previous="$word"
+          done
+          if [ -z "$derived_data" ]; then
+            echo '::error::Sharding by discovered test targets needs -derivedDataPath in xcodebuild-args (xcode-cache supplies it) so the .xctestrun can be found; pass only-testing instead if you do not cache DerivedData.'
+            exit 1
+          fi
+          xctestrun=''
+          while IFS= read -r candidate; do
+            xctestrun="$candidate"
+            break
+          done < <(find "$derived_data/Build/Products" -maxdepth 1 -type f -name '*.xctestrun' 2>/dev/null | LC_ALL=C sort)
+          if [ -z "$xctestrun" ]; then
+            echo "::error::No .xctestrun under '$derived_data/Build/Products' after build-for-testing; cannot discover test targets to shard."
+            exit 1
+          fi
+          echo "Discovering test targets from $xctestrun"
+          while IFS= read -r target; do
+            [ -n "$target" ] || continue
+            candidates+=("$target")
+          done < <(
+            plutil -convert json -o - "$xctestrun" \
+              | jq -r '[.TestConfigurations[]?.TestTargets[]?.BlueprintName] | unique | .[]'
+          )
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "::error::'$xctestrun' declares no test targets; there is nothing to shard."
+            exit 1
+          fi
+        fi
+
+        selected=()
+        index=0
+        for identifier in "${candidates[@]}"; do
+          if [ "$((index % SHARD_COUNT))" -eq "$SHARD_INDEX" ]; then
+            selected+=("$identifier")
+          fi
+          index=$((index + 1))
+        done
+        if [ "${#selected[@]}" -eq 0 ]; then
+          echo "::error::Shard ${SHARD_INDEX}/${SHARD_COUNT} selected none of the ${#candidates[@]} test identifier(s); reduce shard-count so every shard has work instead of shipping a green empty run."
+          exit 1
+        fi
+        echo "Shard ${SHARD_INDEX}/${SHARD_COUNT} runs ${#selected[@]} of ${#candidates[@]} test identifier(s):"
+        printf '  %s\n' "${selected[@]}"
+        {
+          printf 'only-testing<<ONLY_TESTING_EOF\n'
+          printf '%s\n' "${selected[@]}"
+          printf 'ONLY_TESTING_EOF\n'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Run the tests without rebuilding
+      id: test
+      shell: bash
+      env:
+        COMMON_ARGS: ${{ steps.build.outputs.common-args }}
+        SELECTED_TESTS: ${{ steps.shard.outputs.only-testing }}
+        RESULT_BUNDLE_PATH: ${{ inputs.result-bundle-path }}
+        PARALLEL_TESTING: ${{ inputs.parallel-testing }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        args=()
+        while IFS= read -r argument; do
+          [ -n "$argument" ] || continue
+          args+=("$argument")
+        done <<< "$COMMON_ARGS"
+        while IFS= read -r identifier; do
+          [ -n "$identifier" ] || continue
+          args+=("-only-testing:$identifier")
+        done <<< "$SELECTED_TESTS"
+        rm -rf "$RESULT_BUNDLE_PATH"
+        mkdir -p "$(dirname "$RESULT_BUNDLE_PATH")"
+        echo "result-bundle-path=$RESULT_BUNDLE_PATH" >> "$GITHUB_OUTPUT"
+        args+=(-parallel-testing-enabled "$PARALLEL_TESTING" -resultBundlePath "$RESULT_BUNDLE_PATH")
+        printf 'xcodebuild'
+        printf ' %q' "${args[@]}" test-without-building
+        printf '\n'
+        xcodebuild "${args[@]}" test-without-building
+
+    - name: Publish the xcodebuild test summary
+      id: summary
+      if: always() && steps.test.outputs.result-bundle-path != ''
+      shell: bash
+      env:
+        RESULT_BUNDLE_PATH: ${{ steps.test.outputs.result-bundle-path }}
+        SCHEME: ${{ inputs.scheme }}
+        SHARD_INDEX: ${{ inputs.shard-index }}
+        SHARD_COUNT: ${{ inputs.shard-count }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the .xcresult summary but is not on PATH."; exit 1; }
+        if [ ! -e "$RESULT_BUNDLE_PATH" ]; then
+          echo "::error::No result bundle at '$RESULT_BUNDLE_PATH'; xcodebuild produced no test evidence, which is never a pass."
+          exit 1
+        fi
+        summary_json="${RUNNER_TEMP}/xcresult-summary-$$.json"
+        if ! xcrun xcresulttool get test-results summary --path "$RESULT_BUNDLE_PATH" --format json > "$summary_json"; then
+          echo "::error::'xcrun xcresulttool get test-results summary' failed for '$RESULT_BUNDLE_PATH'; the run cannot be verified and is not treated as a pass."
+          exit 1
+        fi
+        total=$(jq -r '.totalTestCount // 0' "$summary_json")
+        passed=$(jq -r '.passedTests // 0' "$summary_json")
+        failed=$(jq -r '.failedTests // 0' "$summary_json")
+        skipped=$(jq -r '.skippedTests // 0' "$summary_json")
+        expected_failures=$(jq -r '.expectedFailures // 0' "$summary_json")
+        {
+          echo "tests-total=$total"
+          echo "tests-failed=$failed"
+        } >> "$GITHUB_OUTPUT"
+        shard_label=''
+        if [ "$SHARD_COUNT" != '1' ]; then
+          shard_label=" — shard ${SHARD_INDEX}/${SHARD_COUNT}"
+        fi
+        {
+          echo "### xcodebuild test — \`${SCHEME}\`${shard_label}"
+          echo
+          echo '| Total | Passed | Failed | Skipped | Expected failures |'
+          echo '| ----- | ------ | ------ | ------- | ----------------- |'
+          echo "| $total | $passed | $failed | $skipped | $expected_failures |"
+        } >> "$GITHUB_STEP_SUMMARY"
+        rm -f "$summary_json"
+        if [ "$total" -eq 0 ]; then
+          echo '::error::The result bundle reports zero executed tests. A test run that ran nothing is a configuration failure, not a pass.'
+          exit 1
+        fi
+        echo "Executed $total test(s): $passed passed, $failed failed, $skipped skipped."
+
+    - name: Upload the xcresult bundle
+      if: always() && steps.test.outputs.result-bundle-path != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+          name: ${{ inputs.artifact-name != '' && inputs.artifact-name || format('xcresult-{0}-{1}', inputs.scheme, inputs.shard-index) }}
+          path: ${{ inputs.working-directory }}/${{ steps.test.outputs.result-bundle-path }}
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}

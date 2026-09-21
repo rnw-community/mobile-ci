@@ -1,0 +1,187 @@
+name: simulator-lease
+description: >-
+  Leases an isolated iOS Simulator for one job — creates a run-scoped device of
+  the requested device type and runtime, boots it, waits for
+  `simctl bootstatus -b`, and records the lease in a file so the paired
+  `mode: release` call shuts the device down and deletes it.
+inputs:
+  mode:
+    description: '`acquire` or `release`.'
+    required: false
+    default: acquire
+  device-type:
+    description: >-
+      Exact simulator device type name as `xcrun simctl list devicetypes`
+      reports it, e.g. 'iPad Pro 11-inch (M4)'. Matched exactly, never fuzzily.
+    required: false
+    default: ''
+  runtime:
+    description: >-
+      `latest` for the newest available iOS runtime, or an exact runtime
+      identifier (com.apple.CoreSimulator.SimRuntime.iOS-26-0).
+    required: false
+    default: latest
+  name-prefix:
+    description: Prefix of the created device's name; the run id, attempt and a random suffix are appended.
+    required: false
+    default: mobile-ci-lease
+  lease-file:
+    description: JSON file recording the lease. The release call reads it back.
+    required: false
+    default: ''
+  boot-timeout-seconds:
+    description: Bound on `xcrun simctl bootstatus -b`.
+    required: false
+    default: '300'
+outputs:
+  udid:
+    description: UDID of the leased simulator.
+    value: ${{ steps.acquire.outputs.udid }}
+  name:
+    description: Name of the leased simulator.
+    value: ${{ steps.acquire.outputs.name }}
+  lease-file:
+    description: Path of the JSON lease file (udid, name, device type, runtime, created-at).
+    value: ${{ steps.acquire.outputs.lease-file }}
+runs:
+  using: composite
+  steps:
+    - name: Acquire an isolated simulator
+      if: inputs.mode == 'acquire'
+      id: acquire
+      shell: bash
+      env:
+        DEVICE_TYPE: ${{ inputs.device-type }}
+        RUNTIME: ${{ inputs.runtime }}
+        NAME_PREFIX: ${{ inputs.name-prefix }}
+        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
+        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to resolve the simulator device type and runtime but is not on PATH."; exit 1; }
+        command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
+        if [ -z "$DEVICE_TYPE" ]; then
+          echo "::error::device-type is required for mode 'acquire'; this action never guesses a device."
+          exit 1
+        fi
+        case "$NAME_PREFIX" in
+          ''|*[!A-Za-z0-9._-]*) echo "::error::name-prefix '$NAME_PREFIX' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
+        esac
+        if ! printf '%s' "$BOOT_TIMEOUT_SECONDS" | grep -qE '^[1-9][0-9]*$'; then
+          echo "::error::boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive integer."
+          exit 1
+        fi
+
+        device_type_id=$(
+          xcrun simctl list devicetypes -j \
+            | jq -r --arg name "$DEVICE_TYPE" '[.devicetypes[] | select(.name == $name) | .identifier] | first // empty'
+        )
+        if [ -z "$device_type_id" ]; then
+          echo "::error::device-type '$DEVICE_TYPE' has no exact match among the installed simulator device types. Installed device types:"
+          xcrun simctl list devicetypes
+          exit 1
+        fi
+
+        if [ "$RUNTIME" = 'latest' ]; then
+          runtime_id=$(
+            xcrun simctl list runtimes -j \
+              | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier // empty'
+          )
+        else
+          runtime_id=$(
+            xcrun simctl list runtimes -j \
+              | jq -r --arg id "$RUNTIME" '[.runtimes[] | select(.isAvailable and .identifier == $id) | .identifier] | first // empty'
+          )
+        fi
+        if [ -z "$runtime_id" ] || [ "$runtime_id" = 'null' ]; then
+          echo "::error::No available iOS runtime matching '$RUNTIME' on this runner. Available runtimes:"
+          xcrun simctl list runtimes
+          exit 1
+        fi
+
+        device_name="${NAME_PREFIX}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
+        udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
+        if ! printf '%s' "$udid" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+          echo "::error::'xcrun simctl create' did not return a UDID for '$device_name'."
+          exit 1
+        fi
+
+        lease_file="$LEASE_FILE_INPUT"
+        if [ -z "$lease_file" ]; then
+          lease_file="${RUNNER_TEMP}/simulator-lease-${udid}.json"
+        fi
+        mkdir -p "$(dirname "$lease_file")"
+        jq -n \
+          --arg udid "$udid" \
+          --arg name "$device_name" \
+          --arg deviceType "$device_type_id" \
+          --arg runtime "$runtime_id" \
+          --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+          '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
+          > "$lease_file"
+
+        {
+          echo "udid=$udid"
+          echo "name=$device_name"
+          echo "lease-file=$lease_file"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Leased simulator $device_name ($udid) on $runtime_id"
+        xcrun simctl boot "$udid" || true
+        if perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" xcrun simctl bootstatus "$udid" -b; then
+          echo "Simulator $udid reported booted."
+        else
+          bootstatus_exit=$?
+          if [ "$bootstatus_exit" -eq 142 ]; then
+            echo "::error::xcrun simctl bootstatus timed out after ${BOOT_TIMEOUT_SECONDS}s waiting for simulator '$udid' to report booted; treating it as wedged."
+          else
+            echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
+          fi
+          exit 1
+        fi
+
+    - name: Release the leased simulator
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to read the lease file but is not on PATH."; exit 1; }
+        leases=()
+        if [ -n "$LEASE_FILE_INPUT" ]; then
+          if [ ! -f "$LEASE_FILE_INPUT" ]; then
+            echo "::warning::No lease file at '$LEASE_FILE_INPUT'; the acquire call never completed, so there is nothing to release."
+            exit 0
+          fi
+          leases+=("$LEASE_FILE_INPUT")
+        else
+          while IFS= read -r candidate; do
+            leases+=("$candidate")
+          done < <(find "$RUNNER_TEMP" -maxdepth 1 -type f -name 'simulator-lease-*.json' | LC_ALL=C sort)
+          if [ "${#leases[@]}" -eq 0 ]; then
+            echo "::warning::No simulator lease files under '$RUNNER_TEMP'; the acquire call never completed, so there is nothing to release."
+            exit 0
+          fi
+        fi
+        failures=0
+        for lease in "${leases[@]}"; do
+          udid=$(jq -r '.udid // empty' "$lease")
+          if [ -z "$udid" ]; then
+            echo "::error::Lease file '$lease' carries no udid; refusing to guess which simulator to delete."
+            failures=$((failures + 1))
+            continue
+          fi
+          echo "Releasing simulator $udid (lease $lease)"
+          xcrun simctl shutdown "$udid" 2>/dev/null || true
+          if ! xcrun simctl delete "$udid"; then
+            echo "::error::'xcrun simctl delete $udid' failed; the leased simulator is still on this runner."
+            failures=$((failures + 1))
+            continue
+          fi
+          rm -f "$lease"
+        done
+        if [ "$failures" -gt 0 ]; then
+          echo "::error::${failures} simulator lease(s) could not be released."
+          exit 1
+        fi
