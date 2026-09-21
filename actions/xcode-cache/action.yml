@@ -45,17 +45,24 @@ inputs:
       Newline- or space-separated globs whose matched file contents are hashed
       into the cache key. A `**` is expanded with find, so both `**/*.swift`
       and `Sources/**/*.swift` work; the three cache directories, `.git` and
-      `.build` are never matched. The default includes every `*.swift` on
-      purpose: a build job and its test shards share this key, so a key that
-      did not move with the sources would hand the shards the previous
-      commit's compiled products. Matching zero files fails the step rather
-      than producing a fingerprint over nothing.
+      `.build` are never matched, on any glob form. The default covers the
+      build inputs a plain Xcode/SwiftPM app has - sources, project files,
+      lockfiles, xcconfigs, plists and entitlements - on purpose: a build job
+      and its test shards share this key, so a key that did not move with them
+      would hand the shards the previous commit's compiled products. A project
+      with other build inputs (asset catalogs, generated resources, files a
+      script phase reads) must add them here; the default is deliberately not
+      exhaustive and cannot be. Matching zero files fails the step rather than
+      producing a fingerprint over nothing.
     required: false
     default: |
       **/*.pbxproj
       Package.swift
       **/Package.resolved
       **/*.swift
+      **/*.xcconfig
+      **/*.plist
+      **/*.entitlements
   working-directory:
     description: Directory the fingerprint globs and the cache directories are resolved against.
     required: false
@@ -172,11 +179,15 @@ runs:
             *'*'*|*'?'*|*'['*)
               # shellcheck disable=SC2086
               for candidate in $pattern; do
-                [ -f "$candidate" ] && printf '%s\n' "$candidate" >> "$matched"
+                [ -f "$candidate" ] || continue
+                excluded "./${candidate#./}" && continue
+                printf '%s\n' "$candidate" >> "$matched"
               done
               ;;
             *)
-              [ -f "$pattern" ] && printf '%s\n' "$pattern" >> "$matched"
+              [ -f "$pattern" ] || continue
+              excluded "./${pattern#./}" && continue
+              printf '%s\n' "$pattern" >> "$matched"
               ;;
           esac
         done < <(printf '%s\n' "$FINGERPRINT_PATHS" | tr '[:blank:]' '\n')
@@ -286,19 +297,13 @@ runs:
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
-        superseded="${staging}.superseded"
-        rm -rf "$superseded"
         mkdir -p "$staging/derived-data" "$staging/spm-clones" "$staging/cas"
         rsync -a "$DERIVED_DATA_DIR/" "$staging/derived-data/"
         rsync -a "$SPM_CLONES_DIR/" "$staging/spm-clones/"
         rsync -a "$CAS_DIR/" "$staging/cas/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"
-        if [ -e "$entry" ]; then
-          mv "$entry" "$superseded" 2>/dev/null || true
-        fi
-        if ! mv "$staging" "$entry" 2>/dev/null; then
-          echo "::notice::Another job published '$CACHE_KEY' first; keeping its entry and discarding this identical one."
+        if [ -e "$entry" ] || ! mv "$staging" "$entry" 2>/dev/null; then
+          echo "::notice::'$CACHE_KEY' is already published; keeping that entry and discarding this identical one."
           rm -rf "$staging"
         fi
-        rm -rf "$superseded"
         echo "Saved the local cache entry $CACHE_KEY"

@@ -227,17 +227,11 @@ runs:
         mkdir -p "$LOCAL_DIR"
         entry="$LOCAL_DIR/$CACHE_KEY"
         staging="$(mktemp -d "$LOCAL_DIR/.staging-XXXXXXXX")"
-        superseded="${staging}.superseded"
-        rm -rf "$superseded"
         mkdir -p "$staging/build"
         rsync -a .build/ "$staging/build/"
         date -u '+%Y-%m-%dT%H:%M:%SZ' > "$staging/.complete"
-        if [ -e "$entry" ]; then
-          mv "$entry" "$superseded" 2>/dev/null || true
-        fi
-        if ! mv "$staging" "$entry" 2>/dev/null; then
-          echo "::notice::Another job published '$CACHE_KEY' first; keeping its entry and discarding this identical one."
+        if [ -e "$entry" ] || ! mv "$staging" "$entry" 2>/dev/null; then
+          echo "::notice::'$CACHE_KEY' is already published; keeping that entry and discarding this identical one."
           rm -rf "$staging"
         fi
-        rm -rf "$superseded"
         echo "Saved the local cache entry $CACHE_KEY"
