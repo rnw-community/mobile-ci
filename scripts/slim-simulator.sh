@@ -15,9 +15,10 @@ simslim_profile_path() {
         return 0
     fi
 
-    local cached="${TMPDIR:-/tmp}/mobile-ci-simslim-${SIMSLIM_PROFILE_REF:-v2}-ci.json"
+    local ref="${SIMSLIM_PROFILE_REF:-v2}"
+    local cached="${TMPDIR:-/tmp}/mobile-ci-simslim-${ref//\//-}-ci.json"
     if [ ! -s "$cached" ] && ! curl -fsSL \
-        "https://raw.githubusercontent.com/rnw-community/mobile-ci/${SIMSLIM_PROFILE_REF:-v2}/profiles/ci.json" \
+        "https://raw.githubusercontent.com/rnw-community/mobile-ci/${ref}/profiles/ci.json" \
         -o "$cached"; then
         rm -f "$cached"
         echo "slim-simulator: could not fetch the mobile-ci ci.json profile; set SIMSLIM_PROFILE to a local one." >&2
