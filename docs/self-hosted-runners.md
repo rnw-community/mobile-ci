@@ -14,8 +14,9 @@ macOS pools need `python3` on `PATH`, which the **Xcode Command Line Tools**
 install (`xcode-select --install`) — a host that can run `xcodebuild` normally
 already has it. [`xcodebuild-test`](../actions/xcodebuild-test/README.md) uses
 it to rewrite the generated `.xctestrun`'s screen-capture format (see [UI tests
-capture screenshots, not video](#ui-tests-capture-screenshots-not-video)); the
-Android `redroid-container` action already requires it outright.
+capture screenshots, not video](#ui-tests-capture-screenshots-not-video)). On
+Linux Redroid hosts, `redroid-container` needs it only when a prewarm manifest
+is present — it reads the manifest's `image` and `dataDir` with it.
 
 Missing `python3` does not fail a run: the rewrite is skipped with a warning
 and the run pays Xcode's UI-test video for that job. It is a pool-provisioning
