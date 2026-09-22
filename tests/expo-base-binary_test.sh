@@ -39,7 +39,7 @@ stub_oras() {
 case "$1 $2" in
     "manifest fetch")
         case "${ORAS_MANIFEST_MODE:-missing}" in
-            present) exit 0 ;;
+            present) printf "%s" "${ORAS_MANIFEST_JSON:-{\}}"; exit 0 ;;
             missing) echo "Error: $3: not found" >&2; exit 1 ;;
             unauthorized) echo "Error: unauthorized: authentication required" >&2; exit 1 ;;
         esac
@@ -273,26 +273,118 @@ publish_guard() {
         REFERENCE='ghcr.io/o/r/e2e-base:ios-e2e-k' \
         ARTIFACT_NAME=e2e-base-ios-e2e-k \
         SOURCE_PATH=base.tar.gz \
+        PLATFORM=ios \
+        FLAVOR=e2e \
+        KEY=k \
         FORCE="${FORCE:-false}" \
         DEFAULT_BRANCH=main \
         "$@"
 }
 
-case_start 'a published base is immutable'
+# published_manifest <platform> <flavor> <key> — the manifest the publish step
+# below writes, as `oras manifest fetch` returns it.
+published_manifest() {
+    jq -cn --arg platform "$1" --arg flavor "$2" --arg key "$3" '{
+        schemaVersion: 2,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+        artifactType: "application/vnd.rnw-community.mobile-ci.e2e-base.v1",
+        layers: [{mediaType: "application/octet-stream", digest: "sha256:0000", size: 5}],
+        annotations: {
+            "org.opencontainers.image.revision": "1111111111111111111111111111111111111111",
+            "dev.rnw-community.mobile-ci.platform": $platform,
+            "dev.rnw-community.mobile-ci.flavor": $flavor,
+            "dev.rnw-community.mobile-ci.native-key": $key
+        }
+    }'
+}
+
+case_start 'an address another run already published for this key is success, not a race lost (#162)'
 dir="$(publish_workspace)"
-publish_guard "$dir" ORAS_MANIFEST_MODE=present
-if [ "$STEP_STATUS" -eq 0 ]; then
-    fail_case 'an address that already holds a base was published over'
+publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON="$(published_manifest ios e2e k)"
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "a base already published for the same key failed the build: $(cat "$dir/log")"
 else
-    assert_contains "$(cat "$dir/log")" 'already holds a base binary' 'error message' && pass_case
+    assert_equals 'false' "$(step_output "$dir" publish)" 'publish (the existing base is kept, never overwritten)' \
+        && assert_contains "$(cat "$dir/log")" 'another run already published' 'notice' \
+        && assert_contains "$(cat "$dir/log")" '1111111111111111111111111111111111111111' 'the revision that published it' \
+        && assert_not_contains "$(cat "$dir/log")" '::error::' 'log' \
+        && pass_case
+fi
+
+case_start 'an address holding a base for a different key is refused, not overwritten'
+dir="$(publish_workspace)"
+publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON="$(published_manifest ios e2e other-key)"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case "an address whose base describes another key was accepted (publish='$(step_output "$dir" publish)')"
+else
+    assert_contains "$(cat "$dir/log")" 'native-key' 'error names the mismatched field' \
+        && assert_not_contains "$(cat "$dir/log")" 'publish=true' 'log' \
+        && assert_equals '' "$(step_output "$dir" publish)" 'publish' \
+        && pass_case
+fi
+
+case_start 'an address holding a base for another platform is refused'
+dir="$(publish_workspace)"
+publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON="$(published_manifest android e2e k)"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'an android base under an ios address was accepted'
+else
+    assert_contains "$(cat "$dir/log")" 'platform' 'error names the mismatched field' && pass_case
+fi
+
+case_start 'an address holding something this action never published is refused'
+dir="$(publish_workspace)"
+publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON='{"schemaVersion":2,"layers":[]}'
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'an unannotated manifest was taken for a published base'
+else
+    assert_contains "$(cat "$dir/log")" 'is not the base' 'error message' && pass_case
 fi
 
 case_start 'force overwrites, and says what it cost'
 dir="$(publish_workspace)"
-FORCE=true publish_guard "$dir" ORAS_MANIFEST_MODE=present
+FORCE=true publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON="$(published_manifest ios e2e k)"
 assert_equals 0 "$STEP_STATUS" 'guard exit status' \
     && assert_equals 'true' "$(step_output "$dir" publish)" 'publish' \
     && assert_contains "$(cat "$dir/log")" '::warning::Overwriting' 'warning' \
+    && pass_case
+
+case_start 'force also overwrites an address holding something else'
+dir="$(publish_workspace)"
+FORCE=true publish_guard "$dir" ORAS_MANIFEST_MODE=present ORAS_MANIFEST_JSON="$(published_manifest ios e2e other-key)"
+assert_equals 0 "$STEP_STATUS" 'guard exit status' \
+    && assert_equals 'true' "$(step_output "$dir" publish)" 'publish' \
+    && pass_case
+
+case_start 'a default-branch artifact already under this name is success, not a race lost (#162)'
+dir="$(publish_workspace)"
+stub_gh "$dir" "$ARTIFACTS_ON_MAIN"
+publish_guard "$dir" BACKEND=artifact REFERENCE=e2e-base-ios-e2e-k \
+    GH_ARTIFACTS_JSON="$dir/artifacts.json" GITHUB_REPOSITORY=o/r
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "an artifact already published for the same key failed the build: $(cat "$dir/log")"
+else
+    assert_equals 'false' "$(step_output "$dir" publish)" 'publish' \
+        && assert_contains "$(cat "$dir/log")" 'another run already published' 'notice' \
+        && pass_case
+fi
+
+case_start 'a fork artifact named for the default branch does not stop the default branch publishing'
+dir="$(publish_workspace)"
+stub_gh "$dir" '{"artifacts":[{"id":13,"expired":false,"created_at":"2026-01-03T00:00:00Z","workflow_run":{"head_branch":"main","repository_id":1,"head_repository_id":2}}]}'
+publish_guard "$dir" BACKEND=artifact REFERENCE=e2e-base-ios-e2e-k \
+    GH_ARTIFACTS_JSON="$dir/artifacts.json" GITHUB_REPOSITORY=o/r
+assert_equals 0 "$STEP_STATUS" "guard exit status: $(cat "$dir/log")" \
+    && assert_equals 'true' "$(step_output "$dir" publish)" 'publish (a fetch would refuse that artifact, so it is not a published base)' \
+    && pass_case
+
+case_start 'force re-uploads a default-branch artifact'
+dir="$(publish_workspace)"
+stub_gh "$dir" "$ARTIFACTS_ON_MAIN"
+FORCE=true publish_guard "$dir" BACKEND=artifact REFERENCE=e2e-base-ios-e2e-k \
+    GH_ARTIFACTS_JSON="$dir/artifacts.json" GITHUB_REPOSITORY=o/r
+assert_equals 0 "$STEP_STATUS" 'guard exit status' \
+    && assert_equals 'true' "$(step_output "$dir" publish)" 'publish' \
     && pass_case
 
 case_start 'a free address publishes'

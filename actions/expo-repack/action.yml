@@ -59,8 +59,19 @@ inputs:
       Android SDK build-tools directory holding zipalign and apksigner, passed
       to @expo/repack-app and used for this action's signature verification. A
       relative path is resolved once, against the directory this action is
-      called from, so both uses name the same tools. Empty falls back to
-      whatever is already on PATH.
+      called from, so both uses name the same tools. Empty resolves it from
+      the SDK under ANDROID_SDK_ROOT (or ANDROID_HOME) - the
+      android-build-tools-version directory when that is set, else the newest
+      installed one holding both tools, failing when there is none - and falls
+      back to PATH only when no SDK is installed at all.
+    required: false
+    default: ''
+  android-build-tools-version:
+    description: >-
+      Build-tools version to resolve under the SDK when android-build-tools-dir
+      is empty, e.g. the version android-actions/setup-android installed. A
+      version the SDK does not hold fails the step, naming the path it looked
+      at.
     required: false
     default: ''
   keystore-path:
@@ -100,6 +111,7 @@ runs:
         PLATFORM: ${{ inputs.platform }}
         BASE_PATH: ${{ inputs.base-path }}
         ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+        ANDROID_BUILD_TOOLS_VERSION: ${{ inputs.android-build-tools-version }}
       run: |
         set -euo pipefail
         case "$PLATFORM" in
@@ -146,10 +158,84 @@ runs:
           ''|/*) ;;
           *) build_tools_dir="$PWD/$build_tools_dir" ;;
         esac
+        sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+        if [ "$PLATFORM" = android ] && [ -z "$build_tools_dir" ] && [ -n "$sdk_root" ]; then
+          if [ -n "$ANDROID_BUILD_TOOLS_VERSION" ]; then
+            build_tools_dir="$sdk_root/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+            for tool in apksigner zipalign; do
+              if [ ! -x "$build_tools_dir/$tool" ]; then
+                echo "::error::android-build-tools-version is '$ANDROID_BUILD_TOOLS_VERSION', but '$build_tools_dir/$tool' is not an installed tool. The repack signs and aligns the APK with the build-tools under the SDK at '$sdk_root'; install build-tools;$ANDROID_BUILD_TOOLS_VERSION there, or set android-build-tools-dir."
+                exit 1
+              fi
+            done
+          else
+            for candidate in "$sdk_root"/build-tools/*/; do
+              candidate="${candidate%/}"
+              if [ -x "$candidate/apksigner" ] && [ -x "$candidate/zipalign" ]; then
+                printf '%s\n' "$candidate"
+              fi
+            done > "$work/build-tools-candidates"
+            build_tools_dir=$(sort -V "$work/build-tools-candidates" | tail -1)
+            if [ -z "$build_tools_dir" ]; then
+              echo "::error::An Android SDK is installed at '$sdk_root', but no directory under '$sdk_root/build-tools' holds both apksigner and zipalign. Install build-tools there, or set android-build-tools-dir or android-build-tools-version."
+              exit 1
+            fi
+          fi
+          echo "Android build-tools resolved from the SDK: $build_tools_dir"
+        fi
 
         echo "source-app=$source_app" >> "$GITHUB_OUTPUT"
         echo "build-tools-dir=$build_tools_dir" >> "$GITHUB_OUTPUT"
         echo "Base binary accepted: $source_app"
+
+    - name: Provide plutil where the host has none
+      id: plutil
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+      run: |
+        set -euo pipefail
+        if [ "$PLATFORM" != ios ] || command -v plutil >/dev/null 2>&1; then
+          echo "shim-dir=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error::@expo/repack-app converts the iOS Info.plist with macOS plutil, which this host does not have, and the stand-in this action provides runs on python3, which this host does not have either. Install python3 on the repack host."
+          exit 1
+        fi
+        shim_dir="$RUNNER_TEMP/expo-repack/plutil"
+        mkdir -p "$shim_dir"
+        cat > "$shim_dir/plutil" <<'PLUTIL'
+        #!/usr/bin/env python3
+        import plistlib
+        import sys
+
+        FORMATS = {'xml1': plistlib.FMT_XML, 'binary1': plistlib.FMT_BINARY}
+
+        arguments = sys.argv[1:]
+        if len(arguments) != 3 or arguments[0] != '-convert' or arguments[1] not in FORMATS:
+            sys.stderr.write(
+                'plutil ' + ' '.join(arguments) + ': not implemented. This is the stand-in '
+                'rnw-community/mobile-ci expo-repack provides on a host with no plutil, and it '
+                'implements only the in-place "plutil -convert xml1|binary1 <file>" '
+                '@expo/repack-app uses. Run the repack on a host with a real plutil, or extend '
+                'the stand-in.\n'
+            )
+            sys.exit(2)
+        path = arguments[2]
+        try:
+            with open(path, 'rb') as handle:
+                value = plistlib.load(handle)
+            encoded = plistlib.dumps(value, fmt=FORMATS[arguments[1]], sort_keys=False)
+        except Exception as error:
+            sys.stderr.write(f'{path}: not a property list plutil can convert: {error}\n')
+            sys.exit(1)
+        with open(path, 'wb') as handle:
+            handle.write(encoded)
+        PLUTIL
+        chmod +x "$shim_dir/plutil"
+        echo "shim-dir=$shim_dir" >> "$GITHUB_OUTPUT"
+        echo "This host has no plutil; @expo/repack-app converts the Info.plist with the python3 stand-in at $shim_dir/plutil."
 
     - name: Repack the base binary with this build's JavaScript
       shell: bash
@@ -166,8 +252,12 @@ runs:
         KEYSTORE_KEY_ALIAS: ${{ inputs.keystore-key-alias }}
         KEYSTORE_KEY_PASSWORD: ${{ inputs.keystore-key-password }}
         VERBOSE: ${{ inputs.verbose }}
+        PLUTIL_SHIM_DIR: ${{ steps.plutil.outputs.shim-dir }}
       run: |
         set -euo pipefail
+        if [ -n "$PLUTIL_SHIM_DIR" ]; then
+          PATH="$PLUTIL_SHIM_DIR:$PATH"
+        fi
         repack_env=()
         while IFS= read -r line; do
           [ -n "$line" ] || continue
@@ -185,8 +275,12 @@ runs:
               exit 1
               ;;
           esac
+          if [ "$name" = PATH ] && [ -n "$PLUTIL_SHIM_DIR" ]; then
+            echo "::error::repack-env may not set 'PATH' on a host with no plutil: the stand-in @expo/repack-app converts the Info.plist with is on the PATH this step provides."
+            exit 1
+          fi
           case "$name" in
-            PLATFORM|SOURCE_APP|REPACK_VERSION|REPACK_ENV|NODE_ENV|KEYSTORE_PATH|KEYSTORE_PASSWORD|KEYSTORE_KEY_ALIAS|KEYSTORE_KEY_PASSWORD|ANDROID_BUILD_TOOLS_DIR|VERBOSE)
+            PLATFORM|SOURCE_APP|REPACK_VERSION|REPACK_ENV|NODE_ENV|KEYSTORE_PATH|KEYSTORE_PASSWORD|KEYSTORE_KEY_ALIAS|KEYSTORE_KEY_PASSWORD|ANDROID_BUILD_TOOLS_DIR|VERBOSE|PLUTIL_SHIM_DIR)
               echo "::error::repack-env may not set '$name'; it is this step's own control variable, and overwriting it would repack something other than what the inputs asked for."
               exit 1
               ;;

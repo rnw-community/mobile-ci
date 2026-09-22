@@ -18,9 +18,24 @@ Two backends, one contract:
   an option; workflow artifacts expire, so a key can go cold and cost a native
   build again.
 
-Either way a published base is **immutable**: `publish` refuses an address that
-already holds one unless `force: true` is set, because a key already in use must
-keep meaning the same binary.
+Either way a published base is **immutable**: `publish` never overwrites an
+address that already holds one unless `force: true` is set, because a key
+already in use must keep meaning the same binary.
+
+Publishing is **idempotent**. Two default-branch runs that build the same native
+key — the warm-up and the e2e run on the same push — both reach `publish`, and
+the second finds the address taken. That is the outcome both wanted, so the
+second run succeeds with a notice and pushes nothing — on `ghcr` the notice
+names the revision and manifest digest that published the base, on `artifact`
+it names the default-branch artifact. On `ghcr` the existing manifest is checked first: its
+`artifactType` and its `platform`, `flavor` and `native-key` annotations must
+be the ones this publish would write. Anything else at the address fails the
+step, because it is not this key's base and is still never overwritten without
+`force`. On `artifact` the name is the key, so an artifact already under it —
+from a default-branch run of this repository, exactly the ones a fetch accepts —
+is this key's base. The binaries themselves are not compared: two
+native builds are not byte-identical, and the key is what says they are
+interchangeable.
 
 `oras` is not assumed to be on the runner. An `oras` of exactly `oras-version`
 already on `PATH` is reused; otherwise the release asset for the runner's OS and
@@ -63,7 +78,7 @@ failure) fails the job: an unreadable store is not an absent base.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.1 # v3.0.1
+- uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.2 # v3.0.2
   id: base
   with:
       mode: fetch

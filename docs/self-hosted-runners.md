@@ -101,12 +101,17 @@ archive. `["self-hosted","trf-linux-amd64-4x8"]` is the default
   archive, `curl` fetches the pinned `oras` when one has to be downloaded, and
   `jq` carries the per-target plan between the `plan` and `native-targets`
   jobs.
+- **iOS only: `python3`.** `@expo/repack-app` rewrites the `Info.plist` with
+  macOS `plutil`; on a host without one, `expo-repack` provides a `python3`
+  stand-in for the two conversions it makes (see
+  [repack.md](repack.md#what-the-linux-repack-host-has-to-provide)).
 - **Android only: a JDK 17 on the host.** Nothing in the repack job installs
   one, and both `sdkmanager` and `apksigner` are Java programs. The Android
   build-tools themselves (`zipalign`, `apksigner`) are *not* a host
   prerequisite: the job installs
   `platform-tools build-tools;<android-build-tools-version>` itself through
-  `android-actions/setup-android`.
+  `android-actions/setup-android`, and `expo-repack` resolves that directory
+  under `ANDROID_SDK_ROOT` — nothing has to put it on `PATH`.
 
 **What a repack host does not need:** no Xcode, no simulator, no emulator, no
 `/dev/kvm`, no `binder_linux`, no privileged container. A repack never boots a

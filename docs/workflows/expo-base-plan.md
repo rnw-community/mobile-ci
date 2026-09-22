@@ -58,7 +58,7 @@ key and the address that is empty.
 | `expect-config` | string | no | `''` | Newline-separated `<dotted.path>=<value>` assertions on the repacked binary's embedded `app.config`. |
 | `repack-app-version` | string | no | `0.7.2` | Pinned `@expo/repack-app` npm version. |
 | `cmdline-tools-version` | string | no | `12266719` | Android cmdline-tools version. Ignored on ios. |
-| `android-build-tools-dir` | string | no | `''` | Build-tools directory holding `zipalign`/`apksigner`. Empty falls back to `PATH`. |
+| `android-build-tools-dir` | string | no | `''` | Build-tools directory holding `zipalign`/`apksigner`. Empty uses `$ANDROID_SDK_ROOT/build-tools/<android-build-tools-version>`, which the plan job installs. |
 | `android-build-tools-version` | string | no | `35.0.0` | Build-tools version the plan job installs. |
 | `android-keystore-path` | string | no | `android/app/debug.keystore` | Keystore, relative to a target's `appDir`, the repacked APK is signed with. |
 | `android-keystore-password` | string | no | `android` | Password of that keystore. |

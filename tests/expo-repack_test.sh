@@ -46,7 +46,40 @@ unpack() {
     # caller's own working directory, so a relative base-path must resolve
     # against that and not against the workspace variable.
     run_step "$dir" PLATFORM="$platform" BASE_PATH="$base" \
-        ANDROID_BUILD_TOOLS_DIR='' GITHUB_WORKSPACE="$dir/elsewhere"
+        ANDROID_BUILD_TOOLS_DIR='' ANDROID_BUILD_TOOLS_VERSION='' \
+        ANDROID_SDK_ROOT='' ANDROID_HOME='' GITHUB_WORKSPACE="$dir/elsewhere"
+}
+
+# install_build_tools <sdk root> <version> [tool ...] — a build-tools directory
+# laid out the way sdkmanager installs it, holding the named tools (both by
+# default).
+install_build_tools() {
+    local sdk="$1" version="$2" tool
+    shift 2
+    [ "$#" -gt 0 ] || set -- apksigner zipalign
+    mkdir -p "$sdk/build-tools/$version"
+    for tool in "$@"; do
+        printf '#!/bin/sh\nexit 0\n' > "$sdk/build-tools/$version/$tool"
+        chmod +x "$sdk/build-tools/$version/$tool"
+    done
+}
+
+# resolve_build_tools <workspace> <platform> [VAR=value ...] — the unpack step
+# on a valid base with no build-tools directory configured, so the SDK the
+# workflow installed is what decides.
+resolve_build_tools() {
+    local dir="$1" platform="$2"
+    shift 2
+    if [ "$platform" = android ]; then
+        make_android_base "$dir" true
+        base=base.apk
+    else
+        make_ios_base "$dir" true
+        base=base.tar.gz
+    fi
+    run_step "$dir" PLATFORM="$platform" BASE_PATH="$base" \
+        ANDROID_BUILD_TOOLS_DIR='' ANDROID_BUILD_TOOLS_VERSION='' \
+        ANDROID_SDK_ROOT='' ANDROID_HOME='' "$@"
 }
 
 case_start 'an iOS base with no embedded bundle is refused'
@@ -110,16 +143,82 @@ case_start 'a relative build-tools directory is resolved once, for both steps'
 dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
 make_android_base "$dir" true
 mkdir -p "$dir/work/tools/build-tools"
+install_build_tools "$dir/sdk" 35.0.0
 run_step "$dir" PLATFORM=android BASE_PATH=base.apk \
-    ANDROID_BUILD_TOOLS_DIR=tools/build-tools GITHUB_WORKSPACE="$dir/elsewhere"
+    ANDROID_BUILD_TOOLS_DIR=tools/build-tools ANDROID_BUILD_TOOLS_VERSION=35.0.0 \
+    ANDROID_SDK_ROOT="$dir/sdk" ANDROID_HOME='' GITHUB_WORKSPACE="$dir/elsewhere"
 assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
-    && assert_equals "$dir/work/tools/build-tools" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
+    && assert_equals "$dir/work/tools/build-tools" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir (an explicit directory wins over the SDK)' \
     && pass_case
 
-case_start 'an empty build-tools directory stays empty so PATH still decides'
+case_start 'with no SDK installed an empty build-tools directory stays empty so PATH still decides'
 dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
-make_android_base "$dir" true
-run_step "$dir" PLATFORM=android BASE_PATH=base.apk ANDROID_BUILD_TOOLS_DIR=''
+resolve_build_tools "$dir" android
+assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
+    && assert_equals '' "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
+    && pass_case
+
+case_start 'the build-tools version the workflow installed is found under ANDROID_SDK_ROOT (#163)'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 34.0.0
+install_build_tools "$dir/sdk" 35.0.0
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk" ANDROID_BUILD_TOOLS_VERSION=35.0.0
+assert_equals 0 "$STEP_STATUS" "unpack exit status: $(cat "$dir/log")" \
+    && assert_equals "$dir/sdk/build-tools/35.0.0" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
+    && pass_case
+
+case_start 'ANDROID_HOME stands in for an unset ANDROID_SDK_ROOT'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 35.0.0
+resolve_build_tools "$dir" android ANDROID_HOME="$dir/sdk" ANDROID_BUILD_TOOLS_VERSION=35.0.0
+assert_equals 0 "$STEP_STATUS" "unpack exit status: $(cat "$dir/log")" \
+    && assert_equals "$dir/sdk/build-tools/35.0.0" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
+    && pass_case
+
+case_start 'with no version asked for, the newest installed build-tools is used'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 9.0.0
+install_build_tools "$dir/sdk" 35.0.0
+install_build_tools "$dir/sdk" 36.0.0 zipalign
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk"
+assert_equals 0 "$STEP_STATUS" "unpack exit status: $(cat "$dir/log")" \
+    && assert_equals "$dir/sdk/build-tools/35.0.0" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir (newest holding both tools, compared as versions)' \
+    && pass_case
+
+case_start 'an installed SDK with no usable build-tools is a named error, not a fall back to PATH'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 36.0.0 zipalign
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case "an SDK with no apksigner resolved to '$(step_output "$dir" build-tools-dir)', leaving PATH to decide"
+else
+    assert_contains "$(cat "$dir/log")" "$dir/sdk/build-tools" 'error names the SDK directory it searched' && pass_case
+fi
+
+case_start 'a build-tools version the SDK does not hold is a named error, not a bare apksigner'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 34.0.0
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk" ANDROID_BUILD_TOOLS_VERSION=35.0.0
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case "a missing build-tools version resolved to '$(step_output "$dir" build-tools-dir)'"
+else
+    assert_contains "$(cat "$dir/log")" "$dir/sdk/build-tools/35.0.0" 'error names the resolved path' && pass_case
+fi
+
+case_start 'a build-tools directory missing zipalign is refused before the repack runs'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 35.0.0 apksigner
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk" ANDROID_BUILD_TOOLS_VERSION=35.0.0
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'a build-tools directory with no zipalign was accepted'
+else
+    assert_contains "$(cat "$dir/log")" 'zipalign' 'error names the missing tool' && pass_case
+fi
+
+case_start 'an iOS repack never resolves Android build-tools'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 35.0.0
+resolve_build_tools "$dir" ios ANDROID_SDK_ROOT="$dir/sdk" ANDROID_BUILD_TOOLS_VERSION=35.0.0
 assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
     && assert_equals '' "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
     && pass_case
@@ -131,6 +230,185 @@ if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'a missing base was accepted'
 else
     pass_case
+fi
+
+PLUTIL_STEP='Provide plutil where the host has none'
+
+# host_path_without_plutil <workspace> — a PATH holding only what the step
+# needs and no plutil, so the case means the same on a Mac as on Linux.
+host_path_without_plutil() {
+    local dir="$1" tool
+    mkdir -p "$dir/host-bin"
+    for tool in bash env mkdir chmod rm cat python3; do
+        ln -sf "$(command -v "$tool")" "$dir/host-bin/$tool"
+    done
+    printf '%s\n' "$dir/stub-bin:$dir/host-bin"
+}
+
+# provide_plutil <workspace> <platform> [VAR=value ...]
+provide_plutil() {
+    local dir="$1" platform="$2"
+    shift 2
+    run_step "$dir" PLATFORM="$platform" PATH="$(host_path_without_plutil "$dir")" "$@"
+}
+
+# write_plist <path> <xml1|binary1> — an Info.plist carrying every value type
+# repack-app round-trips through plutil.
+write_plist() {
+    PLIST_PATH="$1" PLIST_FORMAT="$2" python3 - <<'PYTHON'
+import datetime, os, plistlib
+value = {
+    'CFBundleIdentifier': 'com.example.app',
+    'CFBundleShortVersionString': '1.4.0',
+    'CFBundleVersion': '42',
+    'LSRequiresIPhoneOS': True,
+    'UIDeviceFamily': [1, 2],
+    'MinimumOSVersion': '15.1',
+    'Scale': 1.5,
+    'Blob': b'\x00\x01binary',
+    'Built': datetime.datetime(2026, 9, 23, 12, 0, 0),
+    'EXUpdatesEnabled': False,
+    'Nested': {'Inner': ['a', {'Deep': 7}]},
+}
+fmt = plistlib.FMT_XML if os.environ['PLIST_FORMAT'] == 'xml1' else plistlib.FMT_BINARY
+with open(os.environ['PLIST_PATH'], 'wb') as handle:
+    plistlib.dump(value, handle, fmt=fmt)
+PYTHON
+}
+
+# plist_state <path> — "<format> <same content as write_plist: true|false>".
+plist_state() {
+    PLIST_PATH="$1" python3 - <<'PYTHON'
+import datetime, os, plistlib
+raw = open(os.environ['PLIST_PATH'], 'rb').read()
+fmt = 'binary1' if raw.startswith(b'bplist00') else ('xml1' if raw.lstrip().startswith(b'<?xml') else 'unknown')
+try:
+    value = plistlib.loads(raw)
+except Exception:
+    value = None
+expected = {
+    'CFBundleIdentifier': 'com.example.app',
+    'CFBundleShortVersionString': '1.4.0',
+    'CFBundleVersion': '42',
+    'LSRequiresIPhoneOS': True,
+    'UIDeviceFamily': [1, 2],
+    'MinimumOSVersion': '15.1',
+    'Scale': 1.5,
+    'Blob': b'\x00\x01binary',
+    'Built': datetime.datetime(2026, 9, 23, 12, 0, 0),
+    'EXUpdatesEnabled': False,
+    'Nested': {'Inner': ['a', {'Deep': 7}]},
+}
+same = value == expected and all(type(value[k]) is type(expected[k]) for k in expected) if isinstance(value, dict) else False
+print(f"{fmt} {'true' if same else 'false'}")
+PYTHON
+}
+
+case_start 'an iOS repack on a host with no plutil is given one (#163)'
+dir="$(new_workspace "$ACTION" "$PLUTIL_STEP")"
+provide_plutil "$dir" ios
+shim_dir="$(step_output "$dir" shim-dir)"
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "the step failed: $(cat "$dir/log")"
+elif [ -z "$shim_dir" ] || [ ! -x "$shim_dir/plutil" ]; then
+    fail_case "no executable plutil was provided (shim-dir='$shim_dir')"
+else
+    pass_case
+fi
+
+case_start 'a host that has a real plutil keeps it'
+dir="$(new_workspace "$ACTION" "$PLUTIL_STEP")"
+stub "$dir" plutil 'exit 0'
+provide_plutil "$dir" ios
+assert_equals 0 "$STEP_STATUS" 'step exit status' \
+    && assert_equals '' "$(step_output "$dir" shim-dir)" 'shim-dir' \
+    && pass_case
+
+case_start 'an Android repack is never given a plutil'
+dir="$(new_workspace "$ACTION" "$PLUTIL_STEP")"
+provide_plutil "$dir" android
+assert_equals 0 "$STEP_STATUS" 'step exit status' \
+    && assert_equals '' "$(step_output "$dir" shim-dir)" 'shim-dir' \
+    && pass_case
+
+# shim_workspace — a provided plutil, and its directory printed after the
+# workspace on the same line.
+shim_workspace() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$PLUTIL_STEP")"
+    provide_plutil "$dir" ios
+    printf '%s %s\n' "$dir" "$(step_output "$dir" shim-dir)"
+}
+
+# run_shim <shim dir> <arguments ...> — the shim as @expo/repack-app spawns
+# it; its output lands in $dir/shim.log, its status in SHIM_STATUS.
+run_shim() {
+    local shim_dir="$1"
+    shift
+    SHIM_STATUS=0
+    "$shim_dir/plutil" "$@" > "$dir/shim.log" 2>&1 || SHIM_STATUS=$?
+}
+
+case_start 'plutil -convert xml1 decodes a binary Info.plist in place, keeping every value and type'
+read -r dir shim_dir <<< "$(shim_workspace)"
+write_plist "$dir/Info.plist" binary1
+run_shim "$shim_dir" -convert xml1 "$dir/Info.plist"
+assert_equals 0 "$SHIM_STATUS" "shim exit status: $(cat "$dir/shim.log")" \
+    && assert_equals 'xml1 true' "$(plist_state "$dir/Info.plist")" 'converted plist' \
+    && pass_case
+
+case_start 'plutil -convert xml1 on an XML Info.plist leaves the same plist'
+read -r dir shim_dir <<< "$(shim_workspace)"
+write_plist "$dir/Info.plist" xml1
+run_shim "$shim_dir" -convert xml1 "$dir/Info.plist"
+assert_equals 0 "$SHIM_STATUS" "shim exit status: $(cat "$dir/shim.log")" \
+    && assert_equals 'xml1 true' "$(plist_state "$dir/Info.plist")" 'converted plist' \
+    && pass_case
+
+case_start 'plutil -convert binary1 encodes an XML Info.plist in place, keeping every value and type'
+read -r dir shim_dir <<< "$(shim_workspace)"
+write_plist "$dir/Info.plist" xml1
+run_shim "$shim_dir" -convert binary1 "$dir/Info.plist"
+assert_equals 0 "$SHIM_STATUS" "shim exit status: $(cat "$dir/shim.log")" \
+    && assert_equals 'binary1 true' "$(plist_state "$dir/Info.plist")" 'converted plist' \
+    && pass_case
+
+case_start 'plutil -convert binary1 on a binary Info.plist leaves the same plist'
+read -r dir shim_dir <<< "$(shim_workspace)"
+write_plist "$dir/Info.plist" binary1
+run_shim "$shim_dir" -convert binary1 "$dir/Info.plist"
+assert_equals 0 "$SHIM_STATUS" "shim exit status: $(cat "$dir/shim.log")" \
+    && assert_equals 'binary1 true' "$(plist_state "$dir/Info.plist")" 'converted plist' \
+    && pass_case
+
+case_start 'any plutil use repack-app does not make fails loudly and leaves the file alone'
+read -r dir shim_dir <<< "$(shim_workspace)"
+write_plist "$dir/Info.plist" binary1
+before="$(cksum < "$dir/Info.plist")"
+problems=''
+for invocation in '-lint' '-convert json' '-convert xml1 -o out.plist' '-extract CFBundleVersion raw' '-replace CFBundleVersion -string 43' '-p'; do
+    # shellcheck disable=SC2086 # each invocation is a word list on purpose.
+    run_shim "$shim_dir" $invocation "$dir/Info.plist"
+    if [ "$SHIM_STATUS" -eq 0 ]; then
+        problems="$problems '$invocation' succeeded;"
+    elif ! grep -q 'not implemented' "$dir/shim.log"; then
+        problems="$problems '$invocation' failed without naming why: $(cat "$dir/shim.log");"
+    fi
+done
+if [ -n "$problems" ]; then
+    fail_case "$problems"
+else
+    assert_equals "$before" "$(cksum < "$dir/Info.plist")" 'Info.plist after refused invocations' && pass_case
+fi
+
+case_start 'a file that is not a property list fails the conversion and is left alone'
+read -r dir shim_dir <<< "$(shim_workspace)"
+printf 'not a plist\n' > "$dir/Info.plist"
+run_shim "$shim_dir" -convert xml1 "$dir/Info.plist"
+if [ "$SHIM_STATUS" -eq 0 ]; then
+    fail_case 'a malformed plist converted'
+else
+    assert_equals 'not a plist' "$(cat "$dir/Info.plist")" 'Info.plist' && pass_case
 fi
 
 # assert_workspace <embedded app.config json> — an iOS repack output laid out
@@ -238,6 +516,7 @@ repack() {
         KEYSTORE_KEY_ALIAS=androiddebugkey \
         KEYSTORE_KEY_PASSWORD=android \
         VERBOSE=false \
+        PLUTIL_SHIM_DIR='' \
         GITHUB_WORKSPACE="$dir/work" \
         NPX_ARGS_FILE="$dir/npx-args"
 }
@@ -274,6 +553,45 @@ elif [ -f "$dir/npx-args" ]; then
 else
     assert_contains "$(cat "$dir/log")" 'No keystore at' 'error message' && pass_case
 fi
+
+case_start 'repack-env cannot replace the PATH the provided plutil is on'
+dir="$(repack_workspace)"
+run_step "$dir" \
+    PLATFORM=ios \
+    SOURCE_APP="$dir/runner-temp/expo-repack/base/Base.app" \
+    REPACK_VERSION=0.7.2 REPACK_ENV='PATH=/usr/bin:/bin' ANDROID_BUILD_TOOLS_DIR='' \
+    KEYSTORE_PATH='' KEYSTORE_PASSWORD='' KEYSTORE_KEY_ALIAS='' KEYSTORE_KEY_PASSWORD='' \
+    VERBOSE=false PLUTIL_SHIM_DIR="$dir/shim" NPX_ARGS_FILE="$dir/npx-args"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'a repack-env PATH hid the provided plutil from @expo/repack-app'
+elif [ -f "$dir/npx-args" ]; then
+    fail_case 'the repack ran before the PATH override was refused'
+else
+    assert_contains "$(cat "$dir/log")" "may not set 'PATH'" 'error message' && pass_case
+fi
+
+case_start 'the provided plutil is on the PATH @expo/repack-app spawns it from'
+dir="$(repack_workspace)"
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$dir" npx '
+command -v plutil > "$NPX_PLUTIL_FILE" || printf "none\n" > "$NPX_PLUTIL_FILE"
+previous=""
+for argument in "$@"; do
+    if [ "$previous" = --output ]; then mkdir -p "$argument"; fi
+    previous="$argument"
+done'
+mkdir -p "$dir/shim"
+printf '#!/bin/sh\nexit 0\n' > "$dir/shim/plutil"
+chmod +x "$dir/shim/plutil"
+run_step "$dir" \
+    PLATFORM=ios \
+    SOURCE_APP="$dir/runner-temp/expo-repack/base/Base.app" \
+    REPACK_VERSION=0.7.2 REPACK_ENV='' ANDROID_BUILD_TOOLS_DIR='' \
+    KEYSTORE_PATH='' KEYSTORE_PASSWORD='' KEYSTORE_KEY_ALIAS='' KEYSTORE_KEY_PASSWORD='' \
+    VERBOSE=false PLUTIL_SHIM_DIR="$dir/shim" NPX_PLUTIL_FILE="$dir/npx-plutil"
+assert_equals 0 "$STEP_STATUS" "repack exit status: $(cat "$dir/log")" \
+    && assert_equals "$dir/shim/plutil" "$(cat "$dir/npx-plutil")" 'plutil @expo/repack-app resolves' \
+    && pass_case
 
 # sign_workspace <bundled: true|false> — a repacked APK laid out where the
 # verify step looks for it, with an apksigner stub whose reported certificate

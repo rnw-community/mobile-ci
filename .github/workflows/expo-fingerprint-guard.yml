@@ -306,7 +306,7 @@ jobs:
             - name: Fingerprint head (ios)
               if: contains(inputs.platforms, 'ios')
               id: head-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.2 # v3.0.2
               with:
                   platform: ios
                   working-directory: ${{ inputs.working-directory }}
@@ -315,7 +315,7 @@ jobs:
             - name: Fingerprint head (android)
               if: contains(inputs.platforms, 'android')
               id: head-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.2 # v3.0.2
               with:
                   platform: android
                   working-directory: ${{ inputs.working-directory }}
@@ -387,7 +387,7 @@ jobs:
             - name: Fingerprint base (ios)
               if: contains(inputs.platforms, 'ios')
               id: base-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.2 # v3.0.2
               with:
                   platform: ios
                   working-directory: ${{ steps.base.outputs.app-dir }}
@@ -396,7 +396,7 @@ jobs:
             - name: Fingerprint base (android)
               if: contains(inputs.platforms, 'android')
               id: base-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.2 # v3.0.2
               with:
                   platform: android
                   working-directory: ${{ steps.base.outputs.app-dir }}

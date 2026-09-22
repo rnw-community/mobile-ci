@@ -739,7 +739,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
 | `android-build-tools-version`       | no       | `35.0.0`                                  | Android build-tools version the `plan-android` repack job installs via `android-actions/setup-android`, for the `zipalign` and `apksigner` a repacked APK is aligned and signed with. The Gradle build installs whatever its `compileSdkVersion` resolves to; the repack job never runs Gradle, so it asks for build-tools explicitly. |
-| `android-build-tools-dir`           | no       | `''`                                     | Path to the build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Empty relies on what `android-build-tools-version` puts on `PATH`. |
+| `android-build-tools-dir`           | no       | `''`                                     | Path to the build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Empty uses the `android-build-tools-version` directory the repack job installs under the SDK (`$ANDROID_SDK_ROOT/build-tools/<version>`); a version the SDK does not hold fails the repack, naming the path. |
 | `android-keystore-path`             | no       | `android/app/debug.keystore`              | Keystore, relative to `android-target`'s `appDir`, the repacked APK is signed with. The default is the React Native debug keystore an `expo prebuild` app ships and Gradle signs its release build with — sign the repack with anything else and the device refuses to install it over the base. These are the published debug-keystore constants, not secrets; a release key belongs in `native-publish.yml`, never here. Empty leaves `@expo/repack-app`'s own default in place. |
 | `android-keystore-password`         | no       | `android`                                 | Password of `android-keystore-path`. Ignored when that is empty. |
 | `android-keystore-key-alias`        | no       | `androiddebugkey`                         | Key alias inside `android-keystore-path`. Ignored when that is empty. |
@@ -862,7 +862,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.0.1 # v3.0.1
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.0.2 # v3.0.2
 ```
 
 - `contents: read` — checkout.

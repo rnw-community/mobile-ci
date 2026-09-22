@@ -112,7 +112,7 @@ major release.
 | `expect-config`                 | no       | `''`                                               | Newline-separated `<dotted.path>=<value>` assertions the repacked APK's embedded `app.config` must satisfy exactly. Every value `repack-env` is expected to have rewritten belongs here: a config rewrite nobody checked is a repack nobody can trust. |
 | `repack-app-version`            | no       | `0.7.2`                                            | Pinned `@expo/repack-app` npm version. |
 | `repack-timeout-minutes`        | no       | `30`                                               | `plan`/repack job timeout. |
-| `android-build-tools-dir`       | no       | `''`                                               | Path to the Android SDK build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Leave empty to rely on what `android-build-tools-version` puts on `PATH`. |
+| `android-build-tools-dir`       | no       | `''`                                               | Path to the Android SDK build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Leave empty to use the `android-build-tools-version` directory the repack job installs under the SDK (`$ANDROID_SDK_ROOT/build-tools/<version>`); a version the SDK does not hold fails the repack, naming the path. |
 | `android-build-tools-version`   | no       | `35.0.0`                                           | Android build-tools version the repack job installs via `android-actions/setup-android`, for the `zipalign` and `apksigner` a repacked APK is aligned and signed with. The Gradle build installs whatever its `compileSdkVersion` resolves to; the repack job never runs Gradle, so it asks for build-tools explicitly. |
 | `android-keystore-path`         | no       | `android/app/debug.keystore`                       | Keystore, relative to a target's `appDir`, the repacked APK is signed with. The default is the React Native debug keystore an `expo prebuild` app ships and Gradle signs its release build with — sign the repack with anything else and the emulator refuses to install it over the base. These are the published debug-keystore constants, not secrets; a release key belongs in [`native-publish.yml`](native-publish.md), never here. Empty leaves `@expo/repack-app`'s own default in place. |
 | `android-keystore-password`     | no       | `android`                                          | Password of `android-keystore-path`. Ignored when that is empty. |
@@ -320,7 +320,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.1 # v3.0.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.2 # v3.0.2
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -395,7 +395,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.1 # v3.0.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.2 # v3.0.2
 ```
 
 - `contents: read` — checkout.
@@ -434,7 +434,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.1 # v3.0.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.2 # v3.0.2
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]

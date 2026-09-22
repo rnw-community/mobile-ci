@@ -313,14 +313,14 @@ jobs:
 
             - name: Select the pinned Xcode toolchain
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.2 # v3.0.2
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
             - name: Restore the Xcode build cache
               id: cache
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.2 # v3.0.2
               with:
                   mode: restore
                   backend: ${{ inputs.cache-backend }}
@@ -335,7 +335,7 @@ jobs:
 
             - name: Run the Swift Package tests
               if: inputs.enable-swift-test
-              uses: rnw-community/mobile-ci/actions/swift-test@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/swift-test@v3.0.2 # v3.0.2
               with:
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   package-path: ${{ inputs.working-directory }}/${{ inputs.swift-package-path }}
@@ -345,7 +345,7 @@ jobs:
 
             - name: Compile the scheme's tests once
               if: inputs.enable-xcodebuild-test
-              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.0.2 # v3.0.2
               with:
                   mode: build
                   project: ${{ inputs.project }}
@@ -358,7 +358,7 @@ jobs:
 
             - name: Save the Xcode build cache
               if: success() && steps.cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.2 # v3.0.2
               with:
                   mode: save
                   backend: ${{ inputs.cache-backend }}
@@ -389,14 +389,14 @@ jobs:
 
             - name: Select the pinned Xcode toolchain
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.2 # v3.0.2
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
             - name: Restore the compiled test products
               id: cache
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.0.2 # v3.0.2
               with:
                   mode: restore
                   backend: ${{ inputs.cache-backend }}
@@ -430,7 +430,7 @@ jobs:
 
             - name: Lease an isolated simulator
               id: simulator
-              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.0.2 # v3.0.2
               with:
                   device-type: ${{ inputs.simulator-device-type }}
                   runtime: ${{ inputs.simulator-runtime }}
@@ -442,7 +442,7 @@ jobs:
             - name: Select the tests this pull request affects
               id: affected
               if: inputs.affected-tests-map != '' && github.event_name == 'pull_request'
-              uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v3.0.2 # v3.0.2
               with:
                   map-file: ${{ inputs.affected-tests-map }}
                   full-suite-paths: ${{ inputs.affected-tests-full-suite-paths }}
@@ -475,7 +475,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Run this shard's tests
-              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.0.2 # v3.0.2
               with:
                   mode: test
                   project: ${{ inputs.project }}
@@ -495,7 +495,7 @@ jobs:
 
             - name: Release the leased simulator
               if: always() && steps.simulator.outputs.lease-file != ''
-              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.0.2 # v3.0.2
               with:
                   mode: release
                   lease-file: ${{ steps.simulator.outputs.lease-file }}
@@ -521,7 +521,7 @@ jobs:
                   fetch-depth: ${{ inputs.checkout-fetch-depth }}
 
             - name: Select the pinned Xcode toolchain
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.2 # v3.0.2
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -547,7 +547,7 @@ jobs:
 
             - name: Install the Apple signing material
               id: signing
-              uses: rnw-community/mobile-ci/actions/apple-signing@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/apple-signing@v3.0.2 # v3.0.2
               with:
                   certificate-base64: ${{ secrets.apple-certificate-base64 }}
                   certificate-password: ${{ secrets.apple-certificate-password }}
@@ -557,7 +557,7 @@ jobs:
                   expected-application-identifier: ${{ inputs.team-id }}.${{ inputs.bundle-id }}
 
             - name: Archive and export the scheme
-              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v3.0.2 # v3.0.2
               with:
                   project: ${{ inputs.project }}
                   workspace: ${{ inputs.workspace }}
@@ -598,6 +598,6 @@ jobs:
 
             - name: Remove the Apple signing material
               if: always()
-              uses: rnw-community/mobile-ci/actions/apple-signing@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/apple-signing@v3.0.2 # v3.0.2
               with:
                   mode: remove
