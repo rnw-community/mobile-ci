@@ -73,15 +73,20 @@ inputs:
     required: false
     default: .
   parallel-testing:
-    description: Value for -parallel-testing-enabled.
+    description: >-
+      Value for -parallel-testing-enabled. 'NO' (the default) runs every test
+      on the destination simulator itself. 'YES' makes Xcode boot
+      `Clone 1 of <destination>` and run the tests there, so the job pays a
+      second simulator's memory; it is refused unless
+      parallel-testing-worker-count says how many workers that buys.
     required: false
-    default: 'YES'
+    default: 'NO'
   parallel-testing-worker-count:
     description: >-
       Value for -parallel-testing-worker-count, applied to the test run only.
       Each worker is a clone of the leased simulator, so N workers cost N times
       its memory; a slimmed lease keeps that affordable. Empty lets Xcode
-      choose.
+      choose, which is why parallel-testing 'YES' requires it.
     required: false
     default: ''
   screen-capture:
@@ -470,6 +475,29 @@ runs:
       run: |
         set -euo pipefail
         cd "$WORKING_DIRECTORY"
+        if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ] \
+          && ! printf '%s' "$PARALLEL_TESTING_WORKER_COUNT" | grep -qE '^[1-9][0-9]*$'; then
+          echo "::error::parallel-testing-worker-count '$PARALLEL_TESTING_WORKER_COUNT' must be a positive integer."
+          exit 1
+        fi
+        case "$PARALLEL_TESTING" in
+          NO)
+            if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ]; then
+              echo "::error::parallel-testing-worker-count '$PARALLEL_TESTING_WORKER_COUNT' is ignored by xcodebuild while -parallel-testing-enabled is 'NO'; set parallel-testing to 'YES' if you mean to buy that many simulator clones, or drop the worker count."
+              exit 1
+            fi
+            ;;
+          YES)
+            if [ -z "$PARALLEL_TESTING_WORKER_COUNT" ]; then
+              echo "::error::parallel-testing 'YES' without parallel-testing-worker-count makes Xcode boot 'Clone 1 of <destination>' and run every test on that clone, doubling simulator memory on a 7 GiB VM - the configuration measured at 2 shards x ~30 min with 4 timeouts against 71 tests in 20m18s on one simulator. 'YES' only makes sense with an explicit parallel-testing-worker-count on a 6x12 runner profile; leave it at 'NO' on a 4x7 one."
+              exit 1
+            fi
+            ;;
+          *)
+            echo "::error::parallel-testing must be 'YES' or 'NO' (got '$PARALLEL_TESTING')."
+            exit 1
+            ;;
+        esac
         args=()
         while IFS= read -r argument; do
           [ -n "$argument" ] || continue
@@ -528,10 +556,6 @@ runs:
         echo "result-bundle-path=$RESULT_BUNDLE_PATH" >> "$GITHUB_OUTPUT"
         args+=(-parallel-testing-enabled "$PARALLEL_TESTING" -resultBundlePath "$RESULT_BUNDLE_PATH")
         if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ]; then
-          if ! printf '%s' "$PARALLEL_TESTING_WORKER_COUNT" | grep -qE '^[1-9][0-9]*$'; then
-            echo "::error::parallel-testing-worker-count '$PARALLEL_TESTING_WORKER_COUNT' must be a positive integer."
-            exit 1
-          fi
           args+=(-parallel-testing-worker-count "$PARALLEL_TESTING_WORKER_COUNT")
         fi
         printf 'xcodebuild'

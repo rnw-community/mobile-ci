@@ -22,8 +22,16 @@ the section that matches your task; skip the other.
   reusable workflow, one file per workflow in `.github/workflows/`.
 - `docs/self-hosted-runners.md` — self-hosted host provisioning guide (macOS
   Xcode pools, Linux `linux-aarch64` Redroid hosts, prewarm manifest format).
-- `fixtures/` — minimal inputs `self-test.yml` runs this repo's own actions
-  against on the fleet (today: a two-test Swift Package for `swift-test`).
+- `fixtures/` — minimal inputs the tests and `self-test.yml` run this repo's
+  own actions against (a two-test Swift Package for `swift-test`, `simctl`
+  listings for `simulator-lease`, path-to-test maps for
+  `xcodebuild-affected-tests`).
+- `tests/` — `run-tests.sh` plus one `<action>_test.sh` per action under test.
+  Each suite extracts the step's `run:` body from the parsed `action.yml` and
+  executes it against `fixtures/` with stubbed binaries, so no test duplicates
+  the shell it is testing and a renamed step fails rather than drifts.
+  `self-test.yml`'s `unit-tests` job runs them and shellchecks every extracted
+  step script.
 - `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
   is slimmed against; the actions resolve `slim-profile: bundled` to it.
 - `scripts/slim-simulator.sh` — sourceable `slim_simulator` /
@@ -71,9 +79,15 @@ Run, and confirm clean, before saying a change is finished (see
 
 ```bash
 actionlint -color
+tests/run-tests.sh
 shellcheck <changed .sh files / run: blocks extracted as needed>
 zizmor --config .github/zizmor.yml .github/workflows actions
 ```
+
+A change to an action's `run:` logic comes with a case in `tests/`, and the
+case is proven red before the fix: every step script there is extracted from
+`action.yml` at run time, so a test that passes against the unfixed action is
+testing nothing.
 
 `actionlint` also schema-checks any `actions/*/action.yml` referenced by a
 local relative path from a workflow step. `self-test.yml`'s

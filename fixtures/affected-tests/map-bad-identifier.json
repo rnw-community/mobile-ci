@@ -1,0 +1,6 @@
+[
+    {
+        "paths": ["Sources/**"],
+        "tests": ["-only-testing:PonyUITests"]
+    }
+]

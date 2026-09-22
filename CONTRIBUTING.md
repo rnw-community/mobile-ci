@@ -23,7 +23,7 @@ floating on `v1` is handed a breaking change it did not opt into. Pin to an
 exact `vX.Y.Z` tag instead of a sliding tag only if you need to freeze against
 upstream drift entirely.
 
-**Release status:** `v2` is current; `v2.0.0` is the latest release and `v1`
+**Release status:** `v2` is current; `v2.3.0` is the latest release and `v1`
 remains frozen at `v1.23.1` (see [RELEASE.md](RELEASE.md) for the full
 procedure). Consumers pin to `@v2` for the latest compatible release or to an
 exact `@vX.Y.Z` tag to freeze the dependency entirely; pinning to `@main`
@@ -93,9 +93,15 @@ for the SHA-pin-then-restore workaround used on #103 and #105/#107.
 brew install actionlint shellcheck
 pip install --user zizmor
 actionlint -color
+tests/run-tests.sh
 shellcheck <changed .sh files / run: blocks extracted as needed>
 zizmor --config .github/zizmor.yml .github/workflows actions
 ```
+
+`tests/run-tests.sh` runs the action step tests: each suite extracts a step's
+`run:` body from the parsed `action.yml` and executes it against `fixtures/`
+with stubbed binaries. A change to `run:` logic comes with a case there, proven
+red against the unfixed action first.
 
 `actionlint` walks `.github/workflows/**` and, for any step using a local
 relative path, schema-checks the referenced `actions/*/action.yml` too. The

@@ -1,0 +1,13 @@
+{
+    "devices": {
+        "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+            {
+                "udid": "55555555-5555-5555-5555-555555555555",
+                "name": "mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0",
+                "state": "Booted",
+                "isAvailable": true,
+                "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4"
+            }
+        ]
+    }
+}

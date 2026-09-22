@@ -40,7 +40,7 @@ profile, repaired if it drifts, and measured into the job summary. The same
 profile is what [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh)
 applies on a developer's Mac, so a local run reproduces the CI simulator.
 
-Two ways to get a slim lease, in preference order:
+Three ways to get a slim lease, in preference order:
 
 1. **`template-device`** — clone a prewarmed, already-slimmed, **shut-down**
    device that the host image ships. `xcrun simctl clone` copies the launchd
@@ -54,7 +54,41 @@ Two ways to get a slim lease, in preference order:
    template that is *not* slim surfaces as an error rather than being silently
    repaired on every run. The action fails closed if the named template is
    booted — a template is provisioning state, never a job's device.
-2. **`slim-profile` alone** — the action creates a stock device and applies the
+2. **`template-strategy: auto`** — the same clone, without the consumer
+   knowing anything about the host image. The action looks for a shut-down,
+   available device on this host whose name starts with `mobile-ci-template-`
+   and whose **device type and runtime both match this lease**, verifies it
+   with `simslim verify --profile` before trusting it, and clones it. When no
+   such template exists, the lease is created and slimmed as usual and a
+   shut-down copy named
+   **`mobile-ci-template-<device-type-slug>-<runtime-slug>`** is left behind
+   for the next lease on that host — so the create-boot-slim cycle is paid once
+   per host instead of once per job. The slug is the name lowercased with every
+   run of non-alphanumeric characters replaced by `-`, so
+   `iPad Pro 11-inch (M4)` on `com.apple.CoreSimulator.SimRuntime.iOS-26-0`
+   gives `mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`.
+
+   The rules the action holds to:
+
+   - **Never more than one template per device type + runtime.** A template
+     that exists but fails `simslim verify` is neither cloned nor replaced —
+     it is reported as a `::warning::` and the host image is the place to fix
+     it.
+   - **A template is never a job's device.** `mode: release` refuses to delete
+     any device named `mobile-ci-template-*`, and a booted template is never
+     cloned.
+   - **`slim-profile` is required**, because an unverified template would hand
+     the tests a device nothing checked.
+   - Baking is host-local and idempotent, guarded by a lock directory under
+     `$HOME/.mobile-ci-simulator-templates`, so two concurrent jobs leave one
+     template, not two.
+
+   On a fleet whose VMs are fresh clones of a base image per job, the copy left
+   behind dies with the VM — the win there comes from **baking the templates
+   into the image**; see
+   [docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#templates-the-image-can-bake)
+   for the exact `simctl` recipe and naming rule.
+3. **`slim-profile` alone** — the action creates a stock device and applies the
    profile in-job with `simslim on`, which reboots it. That is why
    `slim-repair` defaults to `true` here and to `false` in `run-maestro-ios`:
    this action *creates* the device it leases, so "stock" is expected rather
@@ -76,6 +110,7 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`, which is unique per device. An explicit path is written with `noclobber`, so a second job cannot overwrite the first job's lease and make one `release` delete the other's device. |
 | `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`.                                         |
 | `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one.    |
+| `template-strategy`    | no       | `none`              | `auto` discovers the host's verified `mobile-ci-template-<device-type>-<runtime>` device for this lease, and leaves one behind when there is none. Mutually exclusive with `template-device`; requires `slim-profile`. |
 | `slim-profile`         | no       | `bundled`           | `bundled` uses this release's [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; `''` leases a stock device. |
 | `slim-repair`          | no       | `true`              | Apply the profile in-job (a reboot) when the lease does not match it.          |
 | `simslim-version`      | no       | `0.10.0`             | Pinned simslim CLI version.                                                    |
@@ -94,6 +129,7 @@ immediately instead of silently testing on something else.
 | `udid`       | UDID of the leased simulator.                   |
 | `name`       | Name of the created device.                     |
 | `lease-file` | Path of the JSON lease file.                    |
+| `template`   | Name of the template the lease was cloned from, empty when the device was created fresh. |
 | `slimmed`    | `true` when the lease was verified against `slim-profile`. |
 | `footprint`  | What `simslim measure` reported for the lease.  |
 
@@ -105,6 +141,7 @@ immediately instead of silently testing on something else.
   with:
       device-type: 'iPad Pro 11-inch (M4)'
       runtime: latest
+      template-strategy: auto
 
 - name: Test
   run: |

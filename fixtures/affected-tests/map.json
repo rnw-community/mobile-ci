@@ -1,0 +1,14 @@
+[
+    {
+        "paths": ["Sources/Maze/**", "Sources/Maze.swift"],
+        "tests": ["PonyUITests/MazeTests"]
+    },
+    {
+        "paths": ["Sources/Menu/**"],
+        "tests": ["PonyUITests/MenuTests/testStart", "PonyUITests/MenuTests/testResume"]
+    },
+    {
+        "paths": ["Resources/**/*.json", "Sources/Maze/**"],
+        "tests": ["PonyUITests/LevelLoadingTests"]
+    }
+]
