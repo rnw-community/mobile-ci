@@ -217,6 +217,16 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'with slim-repair false a stale template fails the job instead of being repaired'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME='' TEMPLATE_CLONED_FROM="$TEMPLATE" \
+    SLIM_REPAIR='false' SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simslim on' 'no repair reboot' \
+    && assert_contains "$(cat "$workspace/log")" "came from template '$TEMPLATE', so that template is stale" 'the error names the template'; then
+    pass_case
+fi
+
 case_start 'a clone that is already slim is neither repaired nor blamed on its template'
 workspace="$(slim_workspace)"
 slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME='' TEMPLATE_CLONED_FROM="$TEMPLATE"

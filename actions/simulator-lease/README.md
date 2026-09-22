@@ -117,7 +117,7 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one.    |
 | `template-strategy`    | no       | `none`              | `auto` clones the host's shut-down `mobile-ci-template-<device-type>-<runtime>` device for this lease (verifying the booted clone, not the template), and leaves one behind when there is none. Mutually exclusive with `template-device`; requires `slim-profile`. |
 | `slim-profile`         | no       | `bundled`           | `bundled` uses this release's [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; `''` leases a stock device. |
-| `slim-repair`          | no       | `true`              | Apply the profile in-job (a reboot) when the lease does not match it; a cloned template that produced a non-slim lease is also warned about as stale. |
+| `slim-repair`          | no       | `true`              | Apply the profile in-job (a reboot) when the lease does not match it; when enabled, a cloned template that produced a non-slim lease is also warned about as stale (with `false` the mismatch fails the job instead). |
 | `simslim-version`      | no       | `0.10.0`             | Pinned simslim CLI version.                                                    |
 | `simslim-sha256`       | no       | `eec00b27…f4a1d`    | Digest of that version's `macos-arm64` release asset.                          |
 
