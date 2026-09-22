@@ -319,13 +319,6 @@ on:
                 type: string
                 required: false
                 default: '17E202'
-            cache-profile:
-                description: >-
-                    Cache-key prefix distinguishing this consumer/app (iOS build job).
-                    Empty resolves to the config-path value, else 'ios-native-v1'.
-                type: string
-                required: false
-                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -538,14 +531,6 @@ on:
                 required: false
                 default: ''
             android-gradle-args:
-                type: string
-                required: false
-                default: ''
-            android-cache-profile:
-                description: >-
-                    Cache-key prefix distinguishing this consumer/app (Android build
-                    job). Empty resolves to the config-path value, else
-                    'android-native-v1'.
                 type: string
                 required: false
                 default: ''
@@ -781,8 +766,6 @@ jobs:
             build-env: ${{ steps.resolve.outputs.build-env }}
             install-command: ${{ steps.resolve.outputs.install-command }}
             build-command: ${{ steps.resolve.outputs.build-command }}
-            cache-profile: ${{ steps.resolve.outputs.cache-profile }}
-            android-cache-profile: ${{ steps.resolve.outputs.android-cache-profile }}
             android-gradle-task: ${{ steps.resolve.outputs.android-gradle-task }}
             android-gradle-args: ${{ steps.resolve.outputs.android-gradle-args }}
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
@@ -817,7 +800,7 @@ jobs:
                       "deeplink-confirm-title",
                       "deeplink-confirm-button","status-bar-override",
                       "apple-screenshot-slots","maestro-env","maestro-config","build-env",
-                      "install-command","build-command","cache-profile","android-cache-profile",
+                      "install-command","build-command",
                       "android-gradle-task","android-gradle-args","build-strategy",
                       "rct-use-prebuilt-rncore","rct-use-rn-dep","upload-screenshots","upload-command",
                       "screenshots-download-dir","publish-env","asc-dedupe-screenshots",
@@ -846,8 +829,6 @@ jobs:
                   IN_BUILD_ENV: ${{ inputs.build-env }}
                   IN_INSTALL_COMMAND: ${{ inputs.install-command }}
                   IN_BUILD_COMMAND: ${{ inputs.build-command }}
-                  IN_CACHE_PROFILE: ${{ inputs.cache-profile }}
-                  IN_ANDROID_CACHE_PROFILE: ${{ inputs.android-cache-profile }}
                   IN_ANDROID_GRADLE_TASK: ${{ inputs.android-gradle-task }}
                   IN_ANDROID_GRADLE_ARGS: ${{ inputs.android-gradle-args }}
                   IN_BUILD_STRATEGY: ${{ inputs.build-strategy }}
@@ -901,8 +882,6 @@ jobs:
                     'build-env|string|' \
                     'install-command|string|yarn install --immutable' \
                     'build-command|string|' \
-                    'cache-profile|string|ios-native-v1' \
-                    'android-cache-profile|string|android-native-v1' \
                     'android-gradle-task|string|assembleRelease' \
                     'android-gradle-args|string|' \
                     'build-strategy|string|auto' \
@@ -1349,7 +1328,7 @@ jobs:
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
             app-artifact-prefix: store-screenshots-app
             plan-artifact-prefix: store-screenshots-ios-plan
-            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}
+            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore == 'true' && '-rncore' || '' }}${{ needs.validate-manifest.outputs.rct-use-rn-dep == 'true' && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -1569,38 +1548,7 @@ jobs:
                   fi
                   eval "$PREBUILD_COMMAND"
 
-            - name: native-app-cache (restore)
-              id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: restore
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
-                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
-              run: |
-                  {
-                    echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
-                    echo "This host already holds the native app for key ${NATIVE_KEY}; the published base is written from it."
-                  } >> "$GITHUB_STEP_SUMMARY"
-
-            - name: Clean stale app before native build
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              shell: bash
-              env:
-                  APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
-              run: rm -rf "$APP_PATH"
-
             - name: setup-ccache-ios (restore)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: restore
@@ -1613,7 +1561,6 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.0 # v3.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
@@ -1630,23 +1577,11 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
-
-            - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: save
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
-                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Archive app for the capture job
               shell: bash
@@ -1906,31 +1841,7 @@ jobs:
                   PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
-            - name: native-app-cache (restore)
-              id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: restore
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ matrix.target.name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
-                  arch: arm64
-                  toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
-              run: |
-                  {
-                    echo "### Android build: ${TARGET_NAME} (warm — Gradle build skipped)"
-                    echo "This host already holds the APK for key ${NATIVE_KEY}; the published base is written from it."
-                  } >> "$GITHUB_STEP_SUMMARY"
-
             - name: build-android-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.0 # v3.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
@@ -1942,22 +1853,6 @@ jobs:
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
-            - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: save
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ matrix.target.name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
-                  arch: arm64
-                  toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-              with:
-                  name: store-screenshots-apk-${{ matrix.target.name }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
-                  retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0

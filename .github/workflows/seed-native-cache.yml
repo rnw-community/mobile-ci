@@ -226,7 +226,7 @@ jobs:
             timeout-minutes: ${{ inputs.plan-timeout-minutes }}
             app-artifact-prefix: ios-base-app
             plan-artifact-prefix: ios-base-plan
-            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}
+            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -477,6 +477,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
+              if: '!inputs.force-base'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
@@ -530,7 +531,7 @@ jobs:
                   key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
 
             - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
               uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
@@ -753,6 +754,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
+              if: '!inputs.force-base'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
@@ -781,7 +783,7 @@ jobs:
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
               uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save

@@ -158,6 +158,8 @@ on:
 
 permissions:
     contents: read
+    packages: read
+    actions: read
 
 jobs:
     plan:
@@ -334,21 +336,6 @@ jobs:
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
-
-            - name: Build workspace JS dependencies
-              if: inputs.build-command != ''
-              shell: bash
-              env:
-                  BUILD_COMMAND: ${{ inputs.build-command }}
-              run: eval "$BUILD_COMMAND"
-
-            - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
-              shell: bash
-              env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
-              run: eval "$PREBUILD_COMMAND"
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''

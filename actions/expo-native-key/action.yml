@@ -16,21 +16,21 @@ inputs:
     default: '.'
   flavor:
     description: >-
-      Build flavor the base is published for (e.g. e2e, preview). Folded into
-      the key and exported as FLAVOR for the fingerprint evaluation.
+      Build flavor the base is published for (e.g. e2e, preview). A segment of
+      the key's address and nothing else - it is deliberately not exported into
+      the fingerprint evaluation, because the native build does not export it
+      either and a key computed under an env the build never sees describes a
+      binary nobody produces. An app.config that branches on FLAVOR must name
+      it in extra-env here and in the caller's build-env alike.
     required: false
     default: e2e
-  brand:
-    description: >-
-      Brand the app is built as, exported as BRAND for the fingerprint
-      evaluation. Empty exports nothing.
-    required: false
-    default: ''
   extra-env:
     description: >-
       Newline-separated KEY=VALUE pairs exported for the fingerprint
-      evaluation, on top of BRAND/FLAVOR. Must be byte-identical to what the
-      repack and the warm-up pass, or the two will never agree on a key.
+      evaluation. Every variable the app.config branches on belongs here AND in
+      the caller's build-env, or the key describes one native surface while the
+      build produces another. Must be byte-identical to what the warm-up
+      passes, or the two will never agree on a key.
     required: false
     default: ''
   toolchain:
@@ -149,10 +149,7 @@ runs:
         platform: ${{ inputs.platform }}
         working-directory: ${{ inputs.working-directory }}
         fingerprint-version: ${{ inputs.fingerprint-version }}
-        extra-env: |
-          FLAVOR=${{ inputs.flavor }}
-          ${{ inputs.brand != '' && format('BRAND={0}', inputs.brand) || '' }}
-          ${{ inputs.extra-env }}
+        extra-env: ${{ inputs.extra-env }}
 
     - name: Compose the native key
       id: key

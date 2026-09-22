@@ -187,11 +187,6 @@ on:
                 type: string
                 required: false
                 default: ''
-            cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app.
-                type: string
-                required: false
-                default: android-native-v1
             turbo-version:
                 type: string
                 required: false
@@ -795,31 +790,7 @@ jobs:
                   PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
-            - name: native-app-cache (restore)
-              id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: restore
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
-                  arch: ${{ inputs.emulator-arch }}
-                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
-              run: |
-                  {
-                    echo "### Android build: ${TARGET_NAME} (warm — Gradle build skipped)"
-                    echo "This host already holds the APK for key ${NATIVE_KEY}; the published base is written from it."
-                  } >> "$GITHUB_STEP_SUMMARY"
-
             - name: build-android-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               id: build
               uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.0 # v3.0.0
               with:
@@ -831,23 +802,6 @@ jobs:
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
-
-            - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: save
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
-                  arch: ${{ inputs.emulator-arch }}
-                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-              with:
-                  name: android-e2e-app-${{ matrix.target.name }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
-                  retention-days: 1
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'

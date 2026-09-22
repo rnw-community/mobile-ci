@@ -184,7 +184,16 @@ runs:
             args+=(--android-build-tools-dir "$ANDROID_BUILD_TOOLS_DIR")
           fi
           if [ -n "$KEYSTORE_PATH" ]; then
-            args+=(--ks "$KEYSTORE_PATH")
+            keystore_path="$KEYSTORE_PATH"
+            case "$keystore_path" in
+              /*) ;;
+              *) keystore_path="${GITHUB_WORKSPACE:-$PWD}/$keystore_path" ;;
+            esac
+            if [ ! -f "$keystore_path" ]; then
+              echo "::error::No keystore at '$keystore_path'. A repacked APK signed with anything other than the key the base was signed with cannot be installed over it."
+              exit 1
+            fi
+            args+=(--ks "$keystore_path")
             if [ -n "$KEYSTORE_PASSWORD" ]; then
               args+=(--ks-pass env:KEYSTORE_PASSWORD)
             fi

@@ -10,7 +10,7 @@ published for it with [`expo-base-binary`](../../actions/expo-base-binary),
 and, when one exists, produce this commit's app from it with
 [`expo-repack`](../../actions/expo-repack) instead of compiling anything; the
 job's `native-targets` output is the set of targets whose key had no base) →
-**build** (one job per *remaining* target only — Xcode select, native-app-cache
+**build** (one job per *remaining* target only — Xcode select,
 restore, ccache, `xcodebuild`, artifact upload, and, on the default branch,
 publishing the base it just built) → **test** (one job per `targets` ×
 `shard-count` — download the `.app` the plan or the build produced, boot a
@@ -56,7 +56,6 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `shard-count`                 | no       | `2`                                        | Number of test shards per target. |
 | `xcode-version`               | no       | `26.4.1`                                   | Xcode version string, e.g. `26.4.1`. |
 | `xcode-build`                 | no       | `17E202`                                   | Xcode build number, e.g. `17E202`. |
-| `cache-profile`                | no       | `ios-native-v1`                            | Cache-key prefix distinguishing this consumer/app. |
 | `turbo-version`               | no       | `2.10.8`                                   | Pinned turbo npm version used by the detect job. |
 | `target-packages`             | no       | `''`                                       | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
@@ -77,7 +76,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `expo-use-precompiled-modules` | no     | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`             | no       | `2G`                                       | Bounded, compressed ccache maximum size. |
 | `build-env`                   | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `build-strategy`              | no       | `auto`                                     | How this pull request gets the binary its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript on the Linux pool; only a key with no published base, or an unusable base, reaches the Mac — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the build instead of quietly taking a Mac slot. `native` is the escape hatch and a regression — every pull request then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
+| `build-strategy`              | no       | `auto`                                     | How this pull request gets the binary its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript on the Linux pool; only a key with no published base reaches the Mac — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the build instead of quietly taking a Mac slot. `native` is the escape hatch and a regression — every pull request then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
 | `repack-runner-labels`        | no       | `["self-hosted","trf-linux-amd64-4x8"]`    | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the x86_64 Linux pool: a repack re-bundles JavaScript and rewrites an archive, so it needs no Xcode, no simulator and no Mac slot. |
 | `native-build-label`          | no       | `mobile: force native build`               | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
 | `base-backend`                | no       | `ghcr`                                     | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
@@ -153,16 +152,33 @@ request, without editing the caller, by applying the `native-build-label`
 label (default `mobile: force native build`); combining that label with
 `build-strategy: repack` fails closed instead of picking a winner.
 
+
+### Why the native build no longer reads a host cache
+
+A `native-app-cache` entry is keyed on the native key, and the native key
+deliberately excludes JavaScript. Restoring one and handing it to a Maestro or
+capture job would test whatever bundle the cached shell happened to carry —
+exactly the hole `repack-on-hit` existed to paper over in v2. The base binary
+store is the cross-run cache now, and what it holds is always repacked with
+this commit's JavaScript before anything installs it, so this job simply builds
+when it runs — and it only runs for a key nothing has published a base for.
+`seed-native-cache.yml` still keeps a host cache, because what it produces
+becomes a base to be repacked, never a test artifact. `cache-profile` is gone
+with it.
+
 ## Migrating from v2
 
 - **`repack-on-hit: true`** — delete the input. Repacking is now the default
   path, and a better one: v2 could only repack onto a shell this *same host*
   had cached, while v3 repacks a base published for the native key from any
   host, on Linux, before a Mac is involved at all.
-- **`repack-on-hit: false` (or unset)** — the default `build-strategy: auto`
-  is what you want; delete nothing and add nothing. If you genuinely need the
-  old "always compile" behaviour, set `build-strategy: native` — and treat it
-  as a regression to undo, not a setting to keep.
+- **`repack-on-hit: false`** — remove the input (it no longer exists and a
+  caller that still passes it fails workflow validation). The default
+  `build-strategy: auto` is what you want. It is *not* the same as v2: v2
+  compiled unless the same host held a cache entry, while `auto` repacks a
+  base published by any run. `build-strategy: native` compiles every target
+  every time — strictly worse than both, and a regression to undo rather than
+  a setting to keep.
 - **The calling job now needs `permissions:`** — see below. This is the one
   step that silently breaks a `repack-on-hit` caller that changed nothing else.
 - `repack-app-version` survives with the same default and now applies to every

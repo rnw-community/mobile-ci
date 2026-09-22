@@ -12,7 +12,7 @@ and, when one exists, produce this commit's APK from it with
 [`expo-repack`](../../actions/expo-repack) — re-bundled, zipaligned and
 re-signed — instead of running Gradle; the job's `native-targets` output is the
 set of targets whose key had no base) → **build** (one job per *remaining*
-target only — native-app-cache restore, `gradlew --no-daemon <gradle-task>`
+target only — `gradlew --no-daemon <gradle-task>`
 (default `assembleRelease`), artifact upload, and, on the default branch,
 publishing the base it just built) → **test** (one job per `targets` ×
 `shard-count` — download the `.apk` the plan or the build produced, boot
@@ -78,7 +78,6 @@ major release.
 | `cmdline-tools-version`         | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults (see `build-android-app` README). |
 | `gradle-task`                   | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
 | `gradle-args`                   | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
-| `cache-profile`                  | no       | `android-native-v1`                                | Cache-key prefix distinguishing this consumer/app. |
 | `turbo-version`                 | no       | `2.10.8`                                           | Pinned turbo npm version used by the detect job. |
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
@@ -86,7 +85,7 @@ major release.
 | `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator via `reactivecircus/android-emulator-runner` and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
-| `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only) — also used as the native-app-cache `arch` key segment for both drivers. |
+| `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
 | `emulator-ram-size`             | no       | `2048`                                             | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default; the shipped default is bounded because the default `runner-labels` pool is a memory-bounded 8 GiB container. Raise it only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
 | `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
@@ -102,7 +101,7 @@ major release.
 | `package-manager`               | no       | `''` (auto-detect)                                 | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`                 | no       | `''`                                               | Optional workspace JS build command run at repo root before the native build. |
 | `build-env`                     | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `build-strategy`                | no       | `auto`                                             | How this pull request gets the APK its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript; only a key with no published base, or an unusable base, runs Gradle — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to run Gradle at all: a missing base fails the build. `native` is the escape hatch and a regression — every pull request then rebuilds the APK, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
+| `build-strategy`                | no       | `auto`                                             | How this pull request gets the APK its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript; only a key with no published base runs Gradle — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to run Gradle at all: a missing base fails the build. `native` is the escape hatch and a regression — every pull request then rebuilds the APK, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
 | `repack-runner-labels`          | no       | `["self-hosted","trf-linux-amd64-4x8"]`            | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the same x86_64 Linux pool the Gradle build uses; a repack needs only Node, a JDK and the Android build-tools. |
 | `native-build-label`            | no       | `mobile: force native build`                       | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
 | `base-backend`                  | no       | `ghcr`                                             | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
@@ -192,16 +191,33 @@ device/emulator refuses to install it over one already there — that is why
 signs with. A consumer whose base is signed with something else must point
 these four inputs at it.
 
+
+### Why the native build no longer reads a host cache
+
+A `native-app-cache` entry is keyed on the native key, and the native key
+deliberately excludes JavaScript. Restoring one and handing it to a Maestro or
+capture job would test whatever bundle the cached shell happened to carry —
+exactly the hole `repack-on-hit` existed to paper over in v2. The base binary
+store is the cross-run cache now, and what it holds is always repacked with
+this commit's JavaScript before anything installs it, so this job simply builds
+when it runs — and it only runs for a key nothing has published a base for.
+`seed-native-cache.yml` still keeps a host cache, because what it produces
+becomes a base to be repacked, never a test artifact. `cache-profile` is gone
+with it.
+
 ## Migrating from v2
 
 - **`repack-on-hit: true`** — delete the input. Repacking is now the default
   path, and a better one: v2 could only repack onto a shell this *same host*
   had cached, while v3 repacks a base published for the native key from any
   host, before Gradle is involved at all.
-- **`repack-on-hit: false` (or unset)** — the default `build-strategy: auto`
-  is what you want; delete nothing and add nothing. If you genuinely need the
-  old "always run Gradle" behaviour, set `build-strategy: native` — and treat
-  it as a regression to undo, not a setting to keep.
+- **`repack-on-hit: false`** — remove the input (it no longer exists and a
+  caller that still passes it fails workflow validation). The default
+  `build-strategy: auto` is what you want. It is *not* the same as v2: v2
+  compiled unless the same host held a cache entry, while `auto` repacks a
+  base published by any run. `build-strategy: native` compiles every target
+  every time — strictly worse than both, and a regression to undo rather than
+  a setting to keep.
 - **The calling job now needs `permissions:`** — see below. This is the one
   step that silently breaks a `repack-on-hit` caller that changed nothing else.
 - `repack-app-version`, `android-build-tools-dir` and

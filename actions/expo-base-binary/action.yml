@@ -28,7 +28,9 @@ inputs:
   path:
     description: >-
       On publish, the base binary file to store. On fetch, the directory the
-      base is pulled into; the output `path` names the file that landed there.
+      base is placed in - created if absent, never emptied, so a caller-owned
+      directory is safe to name. The output `path` names the file that landed
+      there.
     required: true
   registry:
     description: OCI registry host for the ghcr backend.
@@ -270,14 +272,20 @@ runs:
         fi
         rm -f "$error_file"
 
-        rm -rf "$DESTINATION"
-        mkdir -p "$DESTINATION"
-        oras pull "$REFERENCE" --output "$DESTINATION"
-        base_path=$(find "$DESTINATION" -type f | LC_ALL=C sort | head -1)
-        if [ -z "$base_path" ]; then
+        scratch="$RUNNER_TEMP/expo-base-binary-pull.$$"
+        rm -rf "$scratch"
+        mkdir -p "$scratch"
+        oras pull "$REFERENCE" --output "$scratch"
+        pulled=$(find "$scratch" -type f | LC_ALL=C sort | head -1)
+        if [ -z "$pulled" ]; then
           echo "::error::$REFERENCE exists but pulled no file; a base that cannot be read is not a base."
+          rm -rf "$scratch"
           exit 1
         fi
+        mkdir -p "$DESTINATION"
+        base_path="$DESTINATION/$(basename "$pulled")"
+        cp "$pulled" "$base_path"
+        rm -rf "$scratch"
         {
           echo "found=true"
           echo "path=$base_path"
@@ -323,18 +331,24 @@ runs:
           exit 0
         fi
 
-        rm -rf "$DESTINATION"
-        mkdir -p "$DESTINATION"
+        scratch="$RUNNER_TEMP/expo-base-binary-unzip.$$"
+        rm -rf "$scratch"
+        mkdir -p "$scratch"
         archive="$RUNNER_TEMP/expo-base-binary-${ARTIFACT_NAME}.zip"
         rm -f "$archive"
         gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$archive"
-        unzip -q -o "$archive" -d "$DESTINATION"
+        unzip -q -o "$archive" -d "$scratch"
         rm -f "$archive"
-        base_path=$(find "$DESTINATION" -type f | LC_ALL=C sort | head -1)
-        if [ -z "$base_path" ]; then
+        unpacked=$(find "$scratch" -type f | LC_ALL=C sort | head -1)
+        if [ -z "$unpacked" ]; then
           echo "::error::Artifact $ARTIFACT_NAME ($artifact_id) unpacked to nothing; a base that cannot be read is not a base."
+          rm -rf "$scratch"
           exit 1
         fi
+        mkdir -p "$DESTINATION"
+        base_path="$DESTINATION/$(basename "$unpacked")"
+        cp "$unpacked" "$base_path"
+        rm -rf "$scratch"
         {
           echo "found=true"
           echo "path=$base_path"

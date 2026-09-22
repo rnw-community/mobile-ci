@@ -461,12 +461,17 @@ runs.
 Every config-loadable input whose old `default:` was a non-empty literal
 (`capture-mode`, `settle-seconds`, `deeplink-confirm-title`,
 `deeplink-confirm-button`, `screenshots-dir`, `install-command`,
-`cache-profile`, `android-cache-profile`, `android-gradle-task`,
+`android-gradle-task`,
 `build-strategy`, `screenshots-download-dir`, `asc-dedupe-version-state`) now
 declares
 `default: ''` and applies that literal at resolution time instead. **The
 effective default is unchanged** — a caller that passes no `config-path` and
 no value for these behaves exactly as before.
+
+`build-strategy` is the one exception to that guarantee: a caller with neither
+a `config-path` entry nor an explicit value resolves to `auto` and repacks a
+published base, where v2 compiled natively. That is the behaviour change this
+major exists for — see [Migrating from v2](#migrating-from-v2).
 
 **"Explicit" means "different from the declared default".** GitHub gives a
 called workflow no signal for *whether* an input was passed — the `inputs`
@@ -510,7 +515,7 @@ before this list is checked). Anything else fails closed:
 `deeplink-confirm-title`, `deeplink-confirm-button`,
 `status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
 `maestro-config`, `build-env`, `install-command`, `build-command`,
-`cache-profile`, `android-cache-profile`, `android-gradle-task`,
+`android-gradle-task`,
 `android-gradle-args`, `build-strategy`, `rct-use-prebuilt-rncore`,
 `rct-use-rn-dep`, `upload-screenshots`, `upload-command`,
 `screenshots-download-dir`, `publish-env`, `asc-dedupe-screenshots`,
@@ -601,7 +606,6 @@ resolved to before this feature existed.
     "seed-command": "node tests/app-tests/scripts/ci-seed-scene.ts",
     "settle-seconds": 5,
     "status-bar-override": true,
-    "cache-profile": "suuudokuuu-ios-prod-v1",
     "rct-use-prebuilt-rncore": true,
     "rct-use-rn-dep": true,
     "build-env": "APP_VARIANT=production\n",
@@ -705,7 +709,6 @@ loadable from `config-path`; for those, the declared `default:` in
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
 | `xcode-version`                     | no       | `26.4.1`                                  | Xcode version string. |
 | `xcode-build`                       | no       | `17E202`                                  | Xcode build number. |
-| `cache-profile`                     | no       | `ios-native-v1`                           | Cache-key prefix distinguishing this consumer/app (iOS build). **cfg** |
 | `expo-fingerprint-version`          | no       | `0.20.6`                                  | Pinned `@expo/fingerprint` npm version. |
 | `node-version`                      | no       | `22.x`                                    | Node version for `actions/setup-node`. |
 | `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. **cfg** |
@@ -735,7 +738,6 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
-| `android-cache-profile`             | no       | `android-native-v1`                       | Cache-key prefix for the Android build (`cache-profile` stays iOS-only). **cfg** |
 | `android-build-tools-version`       | no       | `35.0.0`                                  | Android build-tools version the `plan-android` repack job installs via `android-actions/setup-android`, for the `zipalign` and `apksigner` a repacked APK is aligned and signed with. The Gradle build installs whatever its `compileSdkVersion` resolves to; the repack job never runs Gradle, so it asks for build-tools explicitly. |
 | `android-build-tools-dir`           | no       | `''`                                     | Path to the build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Empty relies on what `android-build-tools-version` puts on `PATH`. |
 | `android-keystore-path`             | no       | `android/app/debug.keystore`              | Keystore, relative to `android-target`'s `appDir`, the repacked APK is signed with. The default is the React Native debug keystore an `expo prebuild` app ships and Gradle signs its release build with — sign the repack with anything else and the device refuses to install it over the base. These are the published debug-keystore constants, not secrets; a release key belongs in `native-publish.yml`, never here. Empty leaves `@expo/repack-app`'s own default in place. |
@@ -941,6 +943,19 @@ jobs:
 single differing byte gives this run a different native key, and every run
 takes a build slot again.
 
+## Why the native build no longer reads a host cache
+
+A `native-app-cache` entry is keyed on the native key, and the native key
+deliberately excludes JavaScript. Restoring one and handing it to a Maestro or
+capture job would test whatever bundle the cached shell happened to carry —
+exactly the hole `repack-on-hit` existed to paper over in v2. The base binary
+store is the cross-run cache now, and what it holds is always repacked with
+this commit's JavaScript before anything installs it, so this job simply builds
+when it runs — and it only runs for a key nothing has published a base for.
+`seed-native-cache.yml` still keeps a host cache, because what it produces
+becomes a base to be repacked, never a test artifact. `cache-profile` is gone
+with it.
+
 ## Migrating from v2
 
 - **`repack-on-hit: true`** — delete the input (and the key from your
@@ -949,10 +964,13 @@ takes a build slot again.
   this *same host* had cached, while v3 repacks a base published for the
   native key from any host, on Linux, before a Mac or a Gradle slot is
   involved at all.
-- **`repack-on-hit: false` (or unset)** — the default `build-strategy: auto`
-  is what you want; delete nothing and add nothing. If you genuinely need the
-  old "always compile" behaviour, set `build-strategy: native` — and treat it
-  as a regression to undo, not a setting to keep.
+- **`repack-on-hit: false`** — remove the input *and* the key from your
+  `config-path` file; neither exists any more, and a caller that still passes
+  it fails workflow validation or the config resolver. If it was already unset,
+  add nothing. The default `build-strategy: auto` is what you want; it is not
+  v2's behaviour (v2 compiled unless the same host held a cache entry), and
+  `build-strategy: native`, which compiles every run, is a regression to undo
+  rather than a setting to keep.
 - **The calling job now needs `permissions:`** — see
   [Permissions](#permissions). This is the one step that silently breaks a
   caller that changed nothing else: the run still goes green by compiling

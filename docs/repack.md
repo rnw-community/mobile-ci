@@ -51,8 +51,11 @@ folded in beside it:
 - **the mobile-ci build action** that produced the base (`build-ios-app` plus
   `setup-xcode-pinned` on ios, `build-android-app` on android), so changing how
   a base is built invalidates every base built the old way;
-- **the pinned toolchain** (`xcode-<version>-<build>`, `cmdline-<version>`), so
-  a Xcode bump is a new key rather than a silently mismatched base;
+- **the pinned toolchain** (`xcode-<version>-<build>`, `cmdline-<version>`),
+  together with the native-build switches that change what the toolchain
+  produces (`rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
+  `expo-use-precompiled-modules`), so neither an Xcode bump nor a flipped
+  switch can leave a base reachable that was built the other way;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
   invalidates every base published while it was in force.
 
@@ -78,6 +81,14 @@ say) lives in the base, not in the JavaScript bundle. Rotating it does not move
 the fingerprint, so every pull request keeps repacking onto a base carrying the
 old value. Rotate it and run the warm-up with `force-base: true` in the same
 change.
+
+**Env the key sees but the build does not.** `expo-native-key` exports
+`extra-env` while it fingerprints. Anything the app's `app.config` branches on
+must therefore appear in **both** the workflow's `fingerprint-env` and its
+`build-env`; a variable set for one and not the other gives a key describing a
+native surface no build produces. The key deliberately does not export
+`flavor` for exactly this reason — the native build does not export it either,
+so it is a segment of the address and nothing more.
 
 **Per-build values are excluded on purpose.** Versions, build numbers and the
 per-build `extra` section are `sourceSkips`, because including them would give
@@ -326,7 +337,8 @@ reason this risk does not transfer.
 | v2 | v3 |
 | -- | -- |
 | `repack-on-hit: true` | Delete it. Repacking a published base is the default and strictly better: the old input repacked the same host's cache entry and silently fell back to a full build. |
-| `repack-on-hit: false` (or unset) | `build-strategy: native` restores the old behaviour, and the docs above say why that is a regression. Prefer adding `fingerprint.config.js` and wiring the warm-up. |
+| `repack-on-hit: false` | Remove the input; it no longer exists. `auto` is what you want. It is not v2's behaviour — v2 compiled unless the same host held a cache entry — and `build-strategy: native`, which compiles every run, is worse than both. |
+| a `native-app-cache` hit standing in for a build | Gone from the e2e and screenshot workflows. A shell keyed on the native key carries whatever JavaScript it was built with, so it may seed a base but never a test artifact. `cache-profile` is removed with it; the warm-up keeps its cache. |
 | `actions/repack-app` used directly | [`actions/expo-repack`](../actions/expo-repack), which adds the config assertion, the no-embedded-bundle refusal, and the signature check. |
 | no `permissions:` on the calling job | Add the block above, or the first default-branch run fails at publish. |
 | nothing | Add `fingerprint.config.js` and read [the contract](#the-fingerprintconfigjs-contract). Without it the key still works, but the step warns, because the ignore list is the boundary and nobody stated it. |

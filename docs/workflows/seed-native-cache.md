@@ -119,8 +119,11 @@ on:
                 default: false
 ```
 
-`force-base` warns before it overwrites: every build that already repacked onto
-the previous base used different native code.
+`force-base` skips the `native-app-cache` restore as well as the base lookup.
+It has to: the native key is unchanged in both of the cases above, so a cache
+hit would republish exactly the binary the force is meant to replace. The run
+therefore always compiles, and warns before it overwrites — every build that
+already repacked onto the previous base used different native code.
 
 ## Example
 

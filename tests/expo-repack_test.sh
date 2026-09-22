@@ -159,6 +159,79 @@ else
     assert_contains "$(cat "$dir/log")" 'embeds no app.config' 'error message' && pass_case
 fi
 
+REPACK_STEP="Repack the base binary with this build's JavaScript"
+
+# repack_workspace — stubs npx so the argument vector handed to
+# @expo/repack-app is what gets asserted, and creates the output it promises.
+repack_workspace() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$REPACK_STEP")"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" npx '
+printf "%s\n" "$@" > "$NPX_ARGS_FILE"
+output=""
+previous=""
+for argument in "$@"; do
+    if [ "$previous" = --output ]; then output="$argument"; fi
+    previous="$argument"
+done
+mkdir -p "$output"
+exit 0'
+    mkdir -p "$dir/work/apps/mobile/android/app"
+    printf 'keystore\n' > "$dir/work/apps/mobile/android/app/debug.keystore"
+    printf '%s\n' "$dir"
+}
+
+repack() {
+    local dir="$1" keystore="$2"
+    run_step "$dir" \
+        PLATFORM=android \
+        SOURCE_APP="$dir/runner-temp/expo-repack/base/base.apk" \
+        REPACK_VERSION=0.7.2 \
+        REPACK_ENV='' \
+        ANDROID_BUILD_TOOLS_DIR='' \
+        KEYSTORE_PATH="$keystore" \
+        KEYSTORE_PASSWORD=android \
+        KEYSTORE_KEY_ALIAS=androiddebugkey \
+        KEYSTORE_KEY_PASSWORD=android \
+        VERBOSE=false \
+        GITHUB_WORKSPACE="$dir/work" \
+        NPX_ARGS_FILE="$dir/npx-args"
+}
+
+case_start 'a repository-relative keystore is resolved once, not twice'
+dir="$(repack_workspace)"
+repack "$dir" 'apps/mobile/android/app/debug.keystore'
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "the repack failed: $(cat "$dir/log")"
+else
+    signed_with="$(grep -A1 -Fx -- '--ks' "$dir/npx-args" | tail -1)"
+    assert_equals "$dir/work/apps/mobile/android/app/debug.keystore" "$signed_with" 'keystore handed to @expo/repack-app' \
+        && pass_case
+fi
+
+case_start 'an absolute keystore path is left alone'
+dir="$(repack_workspace)"
+repack "$dir" "$dir/work/apps/mobile/android/app/debug.keystore"
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "the repack failed: $(cat "$dir/log")"
+else
+    signed_with="$(grep -A1 -Fx -- '--ks' "$dir/npx-args" | tail -1)"
+    assert_equals "$dir/work/apps/mobile/android/app/debug.keystore" "$signed_with" 'keystore handed to @expo/repack-app' \
+        && pass_case
+fi
+
+case_start 'a keystore that is not there fails before the repack runs'
+dir="$(repack_workspace)"
+repack "$dir" 'apps/mobile/android/app/missing.keystore'
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'the repack ran with a keystore that does not exist'
+elif [ -f "$dir/npx-args" ]; then
+    fail_case 'the repack was invoked before the keystore was checked'
+else
+    assert_contains "$(cat "$dir/log")" 'No keystore at' 'error message' && pass_case
+fi
+
 case_start 'an unsigned repacked APK is refused'
 dir="$(new_workspace "$ACTION" "$SIGN_STEP")"
 out="$dir/runner-temp/expo-repack/out"

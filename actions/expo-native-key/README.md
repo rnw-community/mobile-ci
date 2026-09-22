@@ -2,9 +2,8 @@
 
 Computes the one key a base binary is published and looked up under. It is the
 `@expo/fingerprint` hash of the platform's native surface — evaluated under the
-same `BRAND`/`FLAVOR`/extra env every consumer of the key uses, so a warm-up and
-a pull request agree — folded together with three things a fingerprint cannot
-see on its own:
+same `extra-env` every consumer of the key uses, so a warm-up and a pull request
+agree — folded together with three things a fingerprint cannot see on its own:
 
 - the hash of the mobile-ci build action that produced the base
   (`build-ios-app` + `setup-xcode-pinned` on ios, `build-android-app` on
@@ -22,6 +21,13 @@ one fingerprint implementation, used by this action, `expo-fingerprint-guard.yml
 and `expo-ota-preview.yml` alike. An empty fingerprint fails the step: a base
 binary must never be stored or fetched under an empty key.
 
+`extra-env` is the one thing to get right twice: every variable the app's
+`app.config` branches on must appear both here and in the caller's `build-env`.
+A variable set for the fingerprint but not for the build gives a key that
+describes a native surface no build produces, and every run then repacks onto a
+base built from something else. The key deliberately does **not** export
+`flavor` for that reason — the native build does not export it either.
+
 Read [docs/repack.md](../../docs/repack.md) for the `fingerprint.config.js`
 contract and what the ignore list does and does not cover.
 
@@ -31,8 +37,7 @@ contract and what the ignore list does and does not cover.
 | ---------------------- | -------- | ----------------------- | ---------------------------------------------------------------------------------------- |
 | `platform`             | yes      | —                       | `ios` or `android`.                                                                       |
 | `working-directory`    | no       | `.`                     | App directory whose native surface is fingerprinted.                                      |
-| `flavor`               | no       | `e2e`                   | Flavor the base is published for. Folded into the key and exported as `FLAVOR`.           |
-| `brand`                | no       | `''`                    | Exported as `BRAND` for the fingerprint evaluation. Empty exports nothing.                |
+| `flavor`               | no       | `e2e`                   | Flavor the base is published for. A segment of the key's address; deliberately not exported. |
 | `extra-env`            | no       | `''`                    | Newline-separated `KEY=VALUE` exported for the fingerprint evaluation.                    |
 | `toolchain`            | no       | `''`                    | Pinned toolchain identity folded into the key.                                            |
 | `fingerprint-config`   | no       | `fingerprint.config.js` | Path, relative to `working-directory`, of the fingerprint config whose hash enters the key. |

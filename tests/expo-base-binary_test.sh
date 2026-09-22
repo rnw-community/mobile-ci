@@ -173,6 +173,20 @@ assert_equals 0 "$STEP_STATUS" 'fetch exit status' \
     && assert_equals 'base/Base.tar.gz' "$(step_output "$dir" path)" 'path' \
     && pass_case
 
+case_start 'a fetch never empties the directory it was pointed at'
+dir="$(new_workspace "$ACTION" "$FETCH_GHCR_STEP")"
+stub_oras "$dir"
+mkdir -p "$dir/work/base"
+printf 'someone else owns this\n' > "$dir/work/base/keep-me"
+run_step "$dir" ORAS_MANIFEST_MODE=present REFERENCE='ghcr.io/o/r/e2e-base:ios-e2e-k' DESTINATION=base
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "the fetch failed: $(cat "$dir/log")"
+elif [ ! -f "$dir/work/base/keep-me" ]; then
+    fail_case 'the fetch deleted a file it did not put there; a caller may name its checkout as the destination'
+else
+    assert_equals 'base/Base.tar.gz' "$(step_output "$dir" path)" 'path' && pass_case
+fi
+
 case_start 'a manifest that pulls no file is not a base'
 dir="$(new_workspace "$ACTION" "$FETCH_GHCR_STEP")"
 stub_oras "$dir"

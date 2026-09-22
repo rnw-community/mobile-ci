@@ -168,11 +168,6 @@ on:
                 type: string
                 required: false
                 default: '17E202'
-            cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app.
-                type: string
-                required: false
-                default: ios-native-v1
             turbo-version:
                 type: string
                 required: false
@@ -534,7 +529,7 @@ jobs:
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
             app-artifact-prefix: ios-e2e-app
             plan-artifact-prefix: ios-e2e-plan
-            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}
+            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -754,38 +749,7 @@ jobs:
                   fi
                   eval "$PREBUILD_COMMAND"
 
-            - name: native-app-cache (restore)
-              id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: restore
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
-                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
-
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
-              run: |
-                  {
-                    echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
-                    echo "This host already holds the native app for key ${NATIVE_KEY}; the published base is written from it."
-                  } >> "$GITHUB_STEP_SUMMARY"
-
-            - name: Clean stale app before native build
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              shell: bash
-              env:
-                  APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
-              run: rm -rf "$APP_PATH"
-
             - name: setup-ccache-ios (restore)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: restore
@@ -798,7 +762,6 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               id: build
               uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.0 # v3.0.0
               with:
@@ -816,23 +779,11 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
-
-            - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
-              with:
-                  mode: save
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
-                  toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Archive app for test jobs
               shell: bash

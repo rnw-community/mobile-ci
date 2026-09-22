@@ -58,6 +58,10 @@ runs:
               echo "::error::extra-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
               exit 1
               ;;
+            FINGERPRINT_PLATFORM|FINGERPRINT_VERSION|FINGERPRINT_EXTRA_ENV)
+              echo "::error::extra-env may not set '$name'; it is this step's own control variable, and overwriting it would fingerprint something other than what the inputs asked for."
+              exit 1
+              ;;
           esac
           export "${name}=${line#*=}"
         done <<< "$FINGERPRINT_EXTRA_ENV"
