@@ -134,7 +134,7 @@ runs:
         else
           merge_base="$(git merge-base "$base_sha" "$head_sha" || true)"
           [ -n "$merge_base" ] || merge_base="$base_sha"
-          if ! git -c core.quotePath=false diff --name-only "$merge_base" "$head_sha" > "$changed_files"; then
+          if ! git -c core.quotePath=false diff --name-only -z --no-renames "$merge_base" "$head_sha" > "$changed_files"; then
             undetermined="'git diff --name-only ${merge_base} ${head_sha}' failed, so the changed files are unknown."
           fi
         fi
@@ -166,10 +166,15 @@ runs:
         import sys
 
         map_file = os.environ['MAP_FILE']
+        # NUL-delimited, unstripped: a path may begin or end with a space, or hold
+        # a newline, and a path trimmed into a different path would be matched
+        # against a mapping that does not cover it. --no-renames keeps both sides
+        # of a rename, so moving a file from one entry's paths to another's runs
+        # both entries' tests rather than only the destination's.
         changed = [
-            line.strip()
-            for line in open(os.environ['CHANGED_FILES'], encoding='utf-8').read().splitlines()
-            if line.strip()
+            path
+            for path in open(os.environ['CHANGED_FILES'], encoding='utf-8').read().split('\0')
+            if path
         ]
         # A glob may contain a space ('My App.xcodeproj/**'), and a full-suite glob
         # that is split in half stops matching - which silently narrows a run

@@ -84,6 +84,30 @@ PonyUITests/MazeTests' "$(step_output "$workspace" only-testing)" 'only-testing 
     pass_case
 fi
 
+case_start 'a rename across two entries selects both sides, not just the destination'
+workspace="$(repo_workspace)"
+(
+    cd "$workspace/work"
+    git mv Sources/Maze/Maze.swift Sources/Menu/Maze.swift
+    git commit -qm 'move the maze under the menu'
+) >> "$workspace/git-log" 2>&1
+select_tests "$workspace"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'affected' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_contains "$(step_output "$workspace" only-testing)" 'PonyUITests/MazeTests' 'the vacated entry still runs' \
+    && assert_contains "$(step_output "$workspace" only-testing)" 'PonyUITests/MenuTests/testStart' 'the destination entry runs'; then
+    pass_case
+fi
+
+case_start 'a changed path that begins with a space is not trimmed into a mapped one'
+workspace="$(repo_workspace)"
+commit_change "$workspace" ' Sources/Menu/Menu.swift'
+select_tests "$workspace"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'all' "$(step_output "$workspace" mode)" 'mode'; then
+    pass_case
+fi
+
 case_start 'a changed file no entry claims runs the full suite'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift README.md
