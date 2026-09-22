@@ -1,0 +1,13 @@
+{
+    "devices": {
+        "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [
+            {
+                "udid": "44444444-4444-4444-4444-444444444444",
+                "name": "mobile-ci-template-ipad-pro-11-inch-m4-ios-18-5",
+                "state": "Shutdown",
+                "isAvailable": true,
+                "deviceTypeIdentifier": "com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4"
+            }
+        ]
+    }
+}

@@ -134,6 +134,17 @@ on:
                 type: string
                 required: false
                 default: ''
+            simulator-template-strategy:
+                description: >-
+                    `none` (the default) honours simulator-template-device only.
+                    `auto` clones the host's verified shut-down
+                    `mobile-ci-template-*` device for this device type and runtime
+                    when there is one, and otherwise leaves one behind after the
+                    lease has been slimmed, so the next job on that host pays
+                    seconds instead of a create-boot-slim cycle.
+                type: string
+                required: false
+                default: none
             simulator-slim-profile:
                 description: >-
                     `bundled` (the default) uses mobile-ci's own `profiles/ci.json`, so
@@ -406,6 +417,7 @@ jobs:
                   device-type: ${{ inputs.simulator-device-type }}
                   runtime: ${{ inputs.simulator-runtime }}
                   template-device: ${{ inputs.simulator-template-device }}
+                  template-strategy: ${{ inputs.simulator-template-strategy }}
                   slim-profile: ${{ inputs.simulator-slim-profile }}
                   slim-repair: ${{ inputs.simulator-slim-repair }}
 

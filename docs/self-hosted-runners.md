@@ -254,6 +254,88 @@ fail loudly rather than be repaired on every run. The action also refuses to
 clone a template that is booted — a template is provisioning state, never a
 job's device.
 
+### Templates the image can bake
+
+Naming a template in the consumer's workflow means the consumer has to know
+what the host image ships. `simulator-lease`'s `template-strategy: auto` (and
+`swift-ios.yml`'s `simulator-template-strategy: auto`) removes that coupling:
+the job looks for a **shut-down, available device whose name starts with
+`mobile-ci-template-` and whose device type and runtime both match the lease**,
+verifies it with `simslim verify --profile` and clones it. Nothing matches?
+The lease is created and slimmed exactly as before, and a shut-down copy is
+left behind for the next job on that host.
+
+**The naming rule is the contract between this repo and the image:**
+
+```text
+mobile-ci-template-<device-type-slug>-<runtime-slug>
+```
+
+where each slug is the name lowercased with every run of non-alphanumeric
+characters collapsed to a single `-`, and the runtime slug is taken from the
+last dot-separated component of the runtime identifier:
+
+| Device type             | Runtime identifier                                | Template name                                     |
+| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| `iPad Pro 11-inch (M4)` | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`  |
+| `iPhone 17 Pro`         | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-iphone-17-pro-ios-26-0`        |
+
+Only the prefix, the device type and the runtime are matched, so a template
+baked under the exact name above is found, and a template of another runtime
+or another device type is never cloned in its place.
+
+**On a fleet of one-job VM clones, bake it into the image.** The fleet
+([`vitalyiegorov/tart-runner-fleet`](https://github.com/vitalyiegorov/tart-runner-fleet))
+gives every job a fresh clone of a base image, so the copy a job leaves behind
+dies with the VM: the persistent win requires the template to exist in the base
+image. Add this to the image build right after its "Prewarm the simulators"
+and "Slim the simulators" steps (`docs/BASE_IMAGE.md`), once per device type
+the fleet's tenants lease:
+
+```sh
+export DEVELOPER_DIR=/Applications/Xcode_26.4.1.app/Contents/Developer
+profile=~/.fleet/simslim.fleet.json     # or mobile-ci's profiles/ci.json
+
+bake_template() {
+    device_type="$1"
+    device_type_id="$(xcrun simctl list devicetypes -j \
+        | jq -r --arg name "$device_type" '[.devicetypes[] | select(.name == $name) | .identifier] | first')"
+    runtime_id="$(xcrun simctl list runtimes -j \
+        | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))]
+                 | sort_by(.version | split(".") | map(tonumber)) | last.identifier')"
+    slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'; }
+    name="mobile-ci-template-$(slug "$device_type")-$(slug "${runtime_id##*.}")"
+
+    # One template per device type + runtime: never create a second.
+    if xcrun simctl list devices -j | jq -e --arg name "$name" \
+        '[.devices[][] | select(.name == $name)] | length > 0' > /dev/null; then
+        echo "$name already exists"; return 0
+    fi
+
+    udid="$(xcrun simctl create "$name" "$device_type_id" "$runtime_id")"
+    xcrun simctl boot "$udid"
+    xcrun simctl bootstatus "$udid" -b
+    simslim on "$udid" --profile "$profile" --boot-timeout 15m
+    simslim verify "$udid" --profile "$profile"
+    simslim measure "$udid"
+    xcrun simctl shutdown "$udid"          # a template is always shut down
+}
+
+bake_template 'iPad Pro 11-inch (M4)'
+bake_template 'iPhone 17 Pro'
+```
+
+`pony-labirinth` leases `iPad Pro 11-inch (M4)` on the newest installed iOS
+runtime, so the device the image must carry for it is
+**`mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`** (the runtime slug follows
+whatever `simctl` reports as newest — re-derive it with the snippet above
+rather than hard-coding `26-0` if the image's runtime changes).
+
+Leaving the template **shut down** is not cosmetic: the action refuses to clone
+a booted device, because a booted template is a device something else is using.
+Do not `simctl erase` a template afterwards — that resets it to stock, and the
+lease will fail `simslim verify` on the clone.
+
 **The fleet base image should ship these templates.** Measured inside
 pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
 simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,

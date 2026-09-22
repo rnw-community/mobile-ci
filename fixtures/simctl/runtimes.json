@@ -1,0 +1,19 @@
+{
+    "runtimes": [
+        {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+            "version": "18.5",
+            "isAvailable": true
+        },
+        {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.iOS-26-0",
+            "version": "26.0",
+            "isAvailable": true
+        },
+        {
+            "identifier": "com.apple.CoreSimulator.SimRuntime.tvOS-26-0",
+            "version": "26.0",
+            "isAvailable": true
+        }
+    ]
+}

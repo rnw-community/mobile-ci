@@ -39,9 +39,21 @@ inputs:
       of creating a fresh one. A prewarmed, already-slimmed template is cloned
       with its launchd disable overrides intact, so the lease comes up slim
       with no repair reboot. Empty (default) creates a stock device from
-      device-type + runtime.
+      device-type + runtime, unless template-strategy is `auto`.
     required: false
     default: ''
+  template-strategy:
+    description: >-
+      `none` (the default) honours template-device and nothing else. `auto`
+      needs no knowledge of the host image: it clones the shut-down
+      `mobile-ci-template-*` device whose device type and runtime match this
+      lease and which `simslim verify --profile` reports slim, and otherwise
+      creates the device as usual and leaves a shut-down, slimmed
+      `mobile-ci-template-<device-type>-<runtime>` copy behind for the next
+      lease on this host. Requires slim-profile, because an unverified template
+      would hand the tests a device nothing checked.
+    required: false
+    default: none
   slim-profile:
     description: >-
       `bundled` (the default) uses this release's own `profiles/ci.json`, which
@@ -98,6 +110,9 @@ outputs:
   lease-file:
     description: Path of the JSON lease file (udid, name, device type, runtime, created-at).
     value: ${{ steps.acquire.outputs.lease-file }}
+  template:
+    description: Name of the template device the lease was cloned from, empty when the device was created fresh.
+    value: ${{ steps.acquire.outputs.template }}
   slimmed:
     description: '`true` when the lease was verified against slim-profile.'
     value: ${{ steps.slim.outputs.slimmed || 'false' }}
@@ -118,129 +133,23 @@ runs:
           *) echo "::error::mode must be 'acquire' or 'release' (got '$MODE'); a mistyped mode would skip both steps and leak the leased device behind a green run."; exit 1 ;;
         esac
 
-    - name: Acquire an isolated simulator
-      if: inputs.mode == 'acquire'
-      id: acquire
+    - name: Resolve the slim profile
+      if: inputs.mode == 'acquire' && inputs.slim-profile != ''
+      id: profile
       shell: bash
       env:
-        DEVICE_TYPE: ${{ inputs.device-type }}
-        RUNTIME: ${{ inputs.runtime }}
-        NAME_PREFIX: ${{ inputs.name-prefix }}
-        TEMPLATE_DEVICE: ${{ inputs.template-device }}
-        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
-        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+        SLIM_PROFILE: ${{ inputs.slim-profile }}
       run: |
         set -euo pipefail
-        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to resolve the simulator device type and runtime but is not on PATH."; exit 1; }
-        command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
-        if [ -z "$DEVICE_TYPE" ]; then
-          echo "::error::device-type is required for mode 'acquire'; this action never guesses a device."
+        if [ "$SLIM_PROFILE" = 'bundled' ]; then
+          SLIM_PROFILE="$(cd "$GITHUB_ACTION_PATH/../.." 2>/dev/null && pwd)/profiles/ci.json"
+          echo "slim-profile 'bundled' resolved to this release's shipped profile '$SLIM_PROFILE'."
+        fi
+        if [ ! -f "$SLIM_PROFILE" ]; then
+          echo "::error::slim-profile '$SLIM_PROFILE' does not exist ('bundled' resolves to this release's profiles/ci.json, any other value against the checkout)."
           exit 1
         fi
-        case "$NAME_PREFIX" in
-          ''|*[!A-Za-z0-9._-]*) echo "::error::name-prefix '$NAME_PREFIX' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
-        esac
-        if ! printf '%s' "$BOOT_TIMEOUT_SECONDS" | grep -qE '^[1-9][0-9]*$'; then
-          echo "::error::boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive integer."
-          exit 1
-        fi
-
-        device_type_id=$(
-          xcrun simctl list devicetypes -j \
-            | jq -r --arg name "$DEVICE_TYPE" '[.devicetypes[] | select(.name == $name) | .identifier] | first // empty'
-        )
-        if [ -z "$device_type_id" ]; then
-          echo "::error::device-type '$DEVICE_TYPE' has no exact match among the installed simulator device types. Installed device types:"
-          xcrun simctl list devicetypes
-          exit 1
-        fi
-
-        if [ "$RUNTIME" = 'latest' ]; then
-          runtime_id=$(
-            xcrun simctl list runtimes -j \
-              | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier // empty'
-          )
-        else
-          runtime_id=$(
-            xcrun simctl list runtimes -j \
-              | jq -r --arg id "$RUNTIME" '[.runtimes[] | select(.isAvailable and .identifier == $id) | .identifier] | first // empty'
-          )
-        fi
-        if [ -z "$runtime_id" ] || [ "$runtime_id" = 'null' ]; then
-          echo "::error::No available iOS runtime matching '$RUNTIME' on this runner. Available runtimes:"
-          xcrun simctl list runtimes
-          exit 1
-        fi
-
-        device_name="${NAME_PREFIX}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
-        if [ -n "$TEMPLATE_DEVICE" ]; then
-          template_udid=$(
-            xcrun simctl list devices -j \
-              | jq -r --arg name "$TEMPLATE_DEVICE" --arg deviceType "$device_type_id" --arg runtime "$runtime_id" \
-                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.name == $name and .isAvailable == true and .deviceTypeIdentifier == $deviceType and .state == "Shutdown") | .udid] | first // empty'
-          )
-          if [ -z "$template_udid" ]; then
-            echo "::error::No shut-down device named '$TEMPLATE_DEVICE' of type '$device_type_id' on runtime '$runtime_id'. A clone of anything else would run the tests on a device the lease does not describe. Devices with that name:"
-            xcrun simctl list devices -j \
-              | jq -r --arg name "$TEMPLATE_DEVICE" '.devices | to_entries[] | .key as $runtime | .value[] | select(.name == $name) | "  \(.udid)  runtime=\($runtime)  type=\(.deviceTypeIdentifier)  state=\(.state)  available=\(.isAvailable)"'
-            exit 1
-          fi
-          echo "Cloning template device '$TEMPLATE_DEVICE' ($template_udid) into '$device_name'"
-          udid=$(xcrun simctl clone "$template_udid" "$device_name")
-        else
-          udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
-        fi
-        if ! printf '%s' "$udid" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
-          echo "::error::The leased device for '$device_name' has no UDID; simctl create/clone did not produce one."
-          exit 1
-        fi
-
-        lease_file="$LEASE_FILE_INPUT"
-        if [ -z "$lease_file" ]; then
-          lease_file="${RUNNER_TEMP}/simulator-lease-${udid}.json"
-        fi
-        lease_created=0
-        set -o noclobber
-        if ! {
-          mkdir -p "$(dirname "$lease_file")" \
-            && jq -n \
-              --arg udid "$udid" \
-              --arg name "$device_name" \
-              --arg deviceType "$device_type_id" \
-              --arg runtime "$runtime_id" \
-              --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
-              '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
-              > "$lease_file" \
-            && lease_created=1 \
-            && {
-              echo "udid=$udid"
-              echo "name=$device_name"
-              echo "lease-file=$lease_file"
-            } >> "$GITHUB_OUTPUT"
-        }; then
-          set +o noclobber
-          echo "::error::Could not record the lease for simulator '$udid' at '$lease_file'; deleting the device now rather than leaking one no release call can find. If the file already exists, another job on this runner owns that lease path - give this job a distinct lease-file."
-          xcrun simctl delete "$udid" 2>/dev/null || true
-          if [ "$lease_created" -eq 1 ]; then
-            rm -f "$lease_file"
-          fi
-          exit 1
-        fi
-        set +o noclobber
-
-        echo "Leased simulator $device_name ($udid) on $runtime_id"
-        xcrun simctl boot "$udid" || true
-        if perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" xcrun simctl bootstatus "$udid" -b; then
-          echo "Simulator $udid reported booted."
-        else
-          bootstatus_exit=$?
-          if [ "$bootstatus_exit" -eq 142 ]; then
-            echo "::error::xcrun simctl bootstatus timed out after ${BOOT_TIMEOUT_SECONDS}s waiting for simulator '$udid' to report booted; treating it as wedged."
-          else
-            echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
-          fi
-          exit 1
-        fi
+        echo "path=$SLIM_PROFILE" >> "$GITHUB_OUTPUT"
 
     - name: Install simslim
       if: inputs.mode == 'acquire' && inputs.slim-profile != ''
@@ -377,25 +286,196 @@ runs:
         echo "$job_dir" >> "$GITHUB_PATH"
         echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
 
+    - name: Acquire an isolated simulator
+      if: inputs.mode == 'acquire'
+      id: acquire
+      shell: bash
+      env:
+        DEVICE_TYPE: ${{ inputs.device-type }}
+        RUNTIME: ${{ inputs.runtime }}
+        NAME_PREFIX: ${{ inputs.name-prefix }}
+        TEMPLATE_DEVICE: ${{ inputs.template-device }}
+        TEMPLATE_STRATEGY: ${{ inputs.template-strategy }}
+        SLIM_PROFILE: ${{ steps.profile.outputs.path }}
+        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
+        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || { echo "::error::'jq' is required to resolve the simulator device type and runtime but is not on PATH."; exit 1; }
+        command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
+        if [ -z "$DEVICE_TYPE" ]; then
+          echo "::error::device-type is required for mode 'acquire'; this action never guesses a device."
+          exit 1
+        fi
+        case "$NAME_PREFIX" in
+          ''|*[!A-Za-z0-9._-]*) echo "::error::name-prefix '$NAME_PREFIX' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
+        esac
+        if ! printf '%s' "$BOOT_TIMEOUT_SECONDS" | grep -qE '^[1-9][0-9]*$'; then
+          echo "::error::boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive integer."
+          exit 1
+        fi
+        case "$TEMPLATE_STRATEGY" in
+          none|auto) ;;
+          *) echo "::error::template-strategy must be 'none' or 'auto' (got '$TEMPLATE_STRATEGY')."; exit 1 ;;
+        esac
+        if [ "$TEMPLATE_STRATEGY" = 'auto' ]; then
+          if [ -n "$TEMPLATE_DEVICE" ]; then
+            echo "::error::template-strategy 'auto' discovers the template itself, but template-device '$TEMPLATE_DEVICE' names one too; set exactly one of them."
+            exit 1
+          fi
+          if [ -z "$SLIM_PROFILE" ]; then
+            echo "::error::template-strategy 'auto' requires slim-profile: a discovered template is only cloned once 'simslim verify --profile' reports it slim, and a template is only left behind after this lease has been verified against that same profile."
+            exit 1
+          fi
+          command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step, so an auto-discovered template cannot be verified before the tests run on a clone of it."; exit 1; }
+        fi
+
+        device_type_id=$(
+          xcrun simctl list devicetypes -j \
+            | jq -r --arg name "$DEVICE_TYPE" '[.devicetypes[] | select(.name == $name) | .identifier] | first // empty'
+        )
+        if [ -z "$device_type_id" ]; then
+          echo "::error::device-type '$DEVICE_TYPE' has no exact match among the installed simulator device types. Installed device types:"
+          xcrun simctl list devicetypes
+          exit 1
+        fi
+
+        if [ "$RUNTIME" = 'latest' ]; then
+          runtime_id=$(
+            xcrun simctl list runtimes -j \
+              | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier // empty'
+          )
+        else
+          runtime_id=$(
+            xcrun simctl list runtimes -j \
+              | jq -r --arg id "$RUNTIME" '[.runtimes[] | select(.isAvailable and .identifier == $id) | .identifier] | first // empty'
+          )
+        fi
+        if [ -z "$runtime_id" ] || [ "$runtime_id" = 'null' ]; then
+          echo "::error::No available iOS runtime matching '$RUNTIME' on this runner. Available runtimes:"
+          xcrun simctl list runtimes
+          exit 1
+        fi
+
+        template_prefix='mobile-ci-template-'
+        slugify() {
+          printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'
+        }
+        template_name="${template_prefix}$(slugify "$DEVICE_TYPE")-$(slugify "${runtime_id##*.}")"
+        template_used=''
+        template_to_bake=''
+        if [ "$TEMPLATE_STRATEGY" = 'auto' ]; then
+          candidate=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg prefix "$template_prefix" --arg deviceType "$device_type_id" --arg runtime "$runtime_id" --arg exact "$template_name" \
+                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.isAvailable == true and .deviceTypeIdentifier == $deviceType and .state == "Shutdown" and (.name | startswith($prefix)))] | sort_by([(.name != $exact), .name]) | first | if . == null then "" else "\(.udid) \(.name)" end'
+          )
+          if [ -z "$candidate" ]; then
+            template_to_bake="$template_name"
+            echo "::notice::No shut-down '${template_prefix}' device of type '$device_type_id' on runtime '$runtime_id' exists on this host; creating the lease and leaving '$template_name' behind once it is slim."
+          else
+            candidate_udid="${candidate%% *}"
+            candidate_name="${candidate#* }"
+            if simslim verify "$candidate_udid" --profile "$SLIM_PROFILE"; then
+              TEMPLATE_DEVICE="$candidate_name"
+              echo "template-strategy 'auto' selected the verified slim template '$candidate_name' ($candidate_udid)."
+            else
+              echo "::warning::Template '$candidate_name' ($candidate_udid) does not match slim profile '$SLIM_PROFILE', so it is not cloned and not replaced - one template per device type and runtime is the rule. Re-bake it in the host image; this lease creates and slims its own device."
+            fi
+          fi
+        fi
+
+        device_name="${NAME_PREFIX}-${GITHUB_RUN_ID:-0}-${GITHUB_RUN_ATTEMPT:-0}-${RANDOM}"
+        if [ -n "$TEMPLATE_DEVICE" ]; then
+          template_udid=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg name "$TEMPLATE_DEVICE" --arg deviceType "$device_type_id" --arg runtime "$runtime_id" \
+                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.name == $name and .isAvailable == true and .deviceTypeIdentifier == $deviceType and .state == "Shutdown") | .udid] | first // empty'
+          )
+          if [ -z "$template_udid" ]; then
+            echo "::error::No shut-down device named '$TEMPLATE_DEVICE' of type '$device_type_id' on runtime '$runtime_id'. A clone of anything else would run the tests on a device the lease does not describe. Devices with that name:"
+            xcrun simctl list devices -j \
+              | jq -r --arg name "$TEMPLATE_DEVICE" '.devices | to_entries[] | .key as $runtime | .value[] | select(.name == $name) | "  \(.udid)  runtime=\($runtime)  type=\(.deviceTypeIdentifier)  state=\(.state)  available=\(.isAvailable)"'
+            exit 1
+          fi
+          echo "Cloning template device '$TEMPLATE_DEVICE' ($template_udid) into '$device_name'"
+          udid=$(xcrun simctl clone "$template_udid" "$device_name")
+          template_used="$TEMPLATE_DEVICE"
+        else
+          udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
+        fi
+        if ! printf '%s' "$udid" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+          echo "::error::The leased device for '$device_name' has no UDID; simctl create/clone did not produce one."
+          exit 1
+        fi
+
+        lease_file="$LEASE_FILE_INPUT"
+        if [ -z "$lease_file" ]; then
+          lease_file="${RUNNER_TEMP}/simulator-lease-${udid}.json"
+        fi
+        lease_created=0
+        set -o noclobber
+        if ! {
+          mkdir -p "$(dirname "$lease_file")" \
+            && jq -n \
+              --arg udid "$udid" \
+              --arg name "$device_name" \
+              --arg deviceType "$device_type_id" \
+              --arg runtime "$runtime_id" \
+              --arg createdAt "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+              '{udid: $udid, name: $name, deviceType: $deviceType, runtime: $runtime, createdAt: $createdAt}' \
+              > "$lease_file" \
+            && lease_created=1 \
+            && {
+              echo "udid=$udid"
+              echo "name=$device_name"
+              echo "lease-file=$lease_file"
+            } >> "$GITHUB_OUTPUT"
+        }; then
+          set +o noclobber
+          echo "::error::Could not record the lease for simulator '$udid' at '$lease_file'; deleting the device now rather than leaking one no release call can find. If the file already exists, another job on this runner owns that lease path - give this job a distinct lease-file."
+          xcrun simctl delete "$udid" 2>/dev/null || true
+          if [ "$lease_created" -eq 1 ]; then
+            rm -f "$lease_file"
+          fi
+          exit 1
+        fi
+        set +o noclobber
+        {
+          echo "template=$template_used"
+          echo "template-bake-name=$template_to_bake"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "Leased simulator $device_name ($udid) on $runtime_id"
+        xcrun simctl boot "$udid" || true
+        if perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" xcrun simctl bootstatus "$udid" -b; then
+          echo "Simulator $udid reported booted."
+        else
+          bootstatus_exit=$?
+          if [ "$bootstatus_exit" -eq 142 ]; then
+            echo "::error::xcrun simctl bootstatus timed out after ${BOOT_TIMEOUT_SECONDS}s waiting for simulator '$udid' to report booted; treating it as wedged."
+          else
+            echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
+          fi
+          exit 1
+        fi
+
     - name: Verify, repair and measure the lease's slim profile
       if: inputs.mode == 'acquire' && inputs.slim-profile != ''
       id: slim
       shell: bash
       env:
-        SLIM_PROFILE: ${{ inputs.slim-profile }}
+        SLIM_PROFILE: ${{ steps.profile.outputs.path }}
         SLIM_REPAIR: ${{ inputs.slim-repair }}
         SIMULATOR_UDID: ${{ steps.acquire.outputs.udid }}
+        TEMPLATE_BAKE_NAME: ${{ steps.acquire.outputs.template-bake-name }}
         BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
       run: |
         set -euo pipefail
         command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step."; exit 1; }
         test -n "$SIMULATOR_UDID" || { echo '::error::No leased UDID; the acquire step must run before the slim check.'; exit 1; }
-        if [ "$SLIM_PROFILE" = 'bundled' ]; then
-          SLIM_PROFILE="$(cd "$GITHUB_ACTION_PATH/../.." 2>/dev/null && pwd)/profiles/ci.json"
-          echo "slim-profile 'bundled' resolved to this release's shipped profile '$SLIM_PROFILE'."
-        fi
         if [ ! -f "$SLIM_PROFILE" ]; then
-          echo "::error::slim-profile '$SLIM_PROFILE' does not exist ('bundled' resolves to this release's profiles/ci.json, any other value against the checkout)."
+          echo "::error::The resolved slim profile '$SLIM_PROFILE' does not exist; the profile step must run before the slim check."
           exit 1
         fi
         if simslim verify "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
@@ -441,6 +521,45 @@ runs:
         } >> "$GITHUB_STEP_SUMMARY"
         rm -f "$measurement"
 
+        if [ -n "$TEMPLATE_BAKE_NAME" ]; then
+          template_lock="$HOME/.mobile-ci-simulator-templates/$TEMPLATE_BAKE_NAME.lock"
+          mkdir -p "$(dirname "$template_lock")"
+          if ! mkdir "$template_lock" 2>/dev/null; then
+            echo "::notice::Another job on this host is already baking the template '$TEMPLATE_BAKE_NAME'; this lease leaves it to that job."
+          else
+            existing=$(
+              xcrun simctl list devices -j \
+                | jq -r --arg name "$TEMPLATE_BAKE_NAME" '[.devices[][] | select(.name == $name) | .udid] | first // empty'
+            ) || existing=''
+            if [ -n "$existing" ]; then
+              echo "Template '$TEMPLATE_BAKE_NAME' ($existing) appeared on this host while the lease was slimming; never baking a second one."
+            else
+              echo "Baking the slim template '$TEMPLATE_BAKE_NAME' from this lease, so the next lease on this host clones it in seconds instead of creating, booting and slimming a device."
+              bake_failure=''
+              xcrun simctl shutdown "$SIMULATOR_UDID" || bake_failure='xcrun simctl shutdown'
+              template_udid=''
+              if [ -z "$bake_failure" ]; then
+                template_udid=$(xcrun simctl clone "$SIMULATOR_UDID" "$TEMPLATE_BAKE_NAME") || bake_failure='xcrun simctl clone'
+              fi
+              if [ -n "$bake_failure" ]; then
+                echo "::warning::'$bake_failure' failed, so no template was left behind; this lease is unaffected and the next one slims a fresh device again."
+              else
+                xcrun simctl shutdown "$template_udid" 2>/dev/null || true
+                echo "Left the shut-down template '$TEMPLATE_BAKE_NAME' ($template_udid) on this host."
+              fi
+              rmdir "$template_lock"
+              template_lock=''
+              echo "Re-booting the lease '$SIMULATOR_UDID' after the template copy."
+              xcrun simctl boot "$SIMULATOR_UDID" || true
+              if ! perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+                echo "::error::Simulator '$SIMULATOR_UDID' did not report booted within ${BOOT_TIMEOUT_SECONDS}s after the template copy; the lease is unusable."
+                exit 1
+              fi
+            fi
+            [ -z "$template_lock" ] || rmdir "$template_lock"
+          fi
+        fi
+
     - name: Release the leased simulator
       if: inputs.mode == 'release'
       shell: bash
@@ -473,6 +592,18 @@ runs:
             failures=$((failures + 1))
             continue
           fi
+          device_name=$(
+            xcrun simctl list devices -j \
+              | jq -r --arg udid "$udid" '[.devices[][] | select(.udid == $udid) | .name] | first // empty'
+          ) || device_name=''
+          [ -n "$device_name" ] || device_name=$(jq -r '.name // empty' "$lease")
+          case "$device_name" in
+            mobile-ci-template-*)
+              echo "::error::Simulator '$udid' is the host template '$device_name'; templates are provisioning state shared by every later job and are never deleted by 'mode: release'."
+              failures=$((failures + 1))
+              continue
+              ;;
+          esac
           echo "Releasing simulator $udid (lease $lease)"
           xcrun simctl shutdown "$udid" 2>/dev/null || true
           if ! xcrun simctl delete "$udid"; then
