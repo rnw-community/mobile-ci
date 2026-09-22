@@ -328,6 +328,32 @@ timing flake, because the guest was memory-bound before the second worker
 existed. Re-measure that only on a quiet host, on the 6x12 builder profile,
 after the encoder is gone.
 
+### One test job, one simulator
+
+`-parallel-testing-enabled YES` does not merely allow more workers: Xcode
+clones the destination simulator and runs the tests on
+`Clone 1 of <destination>` even with a single worker. A `simulator-lease` job
+then holds two simulators on a 7 GiB guest — the leased device it booted,
+slimmed and verified, and a clone `simslim` never saw.
+
+Measured on pony-labirinth
+([#155](https://github.com/rnw-community/mobile-ci/issues/155), 2026-09-22):
+with the clone, two shards ran ~30 minutes each and produced 4 timeout
+failures; the same 71 XCUITests finished in 20m18s on one simulator on the same
+host and VM class the same day.
+
+[`xcodebuild-test`](../actions/xcodebuild-test/README.md) therefore defaults
+`parallel-testing` to `'NO'`, and **fails the step** when a caller asks for
+`'YES'` without an explicit `parallel-testing-worker-count`. Nothing is needed
+on the host. Raise workers only on the 6x12 builder profile, on a slimmed
+lease, and measure the wall time before keeping it:
+
+```yaml
+with:
+    runs-on-json: '["self-hosted","trf-macos-arm64-6x12"]'
+    parallel-testing-worker-count: '2'
+```
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,

@@ -14,23 +14,43 @@ missing or unreadable result bundle: no evidence is never a pass.
 Every run adds `-skipMacroValidation -skipPackagePluginValidation` (a CI
 checkout can never answer Xcode's interactive macro/plugin trust prompt) and
 `-parallel-testing-enabled` with the caller's `parallel-testing` value, which
-defaults to `YES`. When a `Package.resolved` is found — at the
+defaults to `NO`. When a `Package.resolved` is found — at the
 working directory root, or inside the project/workspace's
 `xcshareddata/swiftpm/` — `-disableAutomaticPackageResolution` is added too, so
 a pinned dependency graph is never silently re-resolved mid-run.
 
-## Parallel workers and memory
+## Parallel testing boots a clone, so it is off by default
 
-`-parallel-testing-enabled` makes Xcode **clone the destination simulator**
-once per worker, so `parallel-testing-worker-count: 2` costs two simulators'
-memory, not one. On a 7 GiB CI VM a stock simulator already runs hundreds of
-RuntimeRoot daemons, and two of them will swap rather than go faster.
+`-parallel-testing-enabled YES` makes Xcode **clone the destination simulator**
+and run the tests on `Clone 1 of <destination>` — even with a single worker.
+The job then pays for two simulators: the leased one it booted, slimmed and
+verified, and a clone `simslim` never saw.
 
-Lease a *slim* device and the arithmetic changes: `simctl clone` copies the
-launchd disable overrides with the device, so every worker clone inherits the
-slimming — see [`simulator-lease`](../simulator-lease/README.md)'s
-`slim-profile` / `template-device`. Raise `parallel-testing-worker-count` only
-on a slimmed lease.
+Measured on a 4 CPU / 7 GiB VM
+([#155](https://github.com/rnw-community/mobile-ci/issues/155)): with the clone,
+two shards took ~30 minutes each and produced **4 timeout failures**; without
+it, the same 71 XCUITests finished in **20m18s** on one simulator. The VM was
+memory-bound before the clone existed, which is the same finding
+[#147](https://github.com/rnw-community/mobile-ci/issues/147) measured for the
+UI-test video encoder.
+
+So `parallel-testing` defaults to **`NO`**: the leased device *is* the
+isolation, and on one worker the clone buys nothing. Asking for `'YES'` with an
+empty `parallel-testing-worker-count` **fails the step** rather than silently
+booting a clone — `'YES'` only makes sense when the caller states how many
+workers it is buying, and only on a runner profile with the memory for them
+(the 6x12 builder profile, not the 4x7 test profile).
+
+```yaml
+with:
+    parallel-testing: 'YES'
+    parallel-testing-worker-count: '2' # required; each worker is one more simulator
+```
+
+Lease a *slim* device before raising it: `simctl clone` copies the launchd
+disable overrides with the device, so every worker clone inherits the slimming
+— see [`simulator-lease`](../simulator-lease/README.md)'s `slim-profile` /
+`template-device` / `template-strategy`.
 
 This action does nothing else about slimming: the lease owns the device's
 shape, and `destination-id` is all this action needs to know about it.
@@ -119,8 +139,8 @@ than the number of test identifiers is a configuration error, not a free pass.
 | `result-bundle-path` | no       | `build/TestResults.xcresult` | `.xcresult` path, relative to `working-directory`.                       |
 | `xcodebuild-args`    | no       | `''`                        | Extra arguments, e.g. `xcode-cache`'s `xcodebuild-args`. Word-split.      |
 | `working-directory`  | no       | `.`                         | Directory the project/workspace and result bundle resolve against.        |
-| `parallel-testing`   | no       | `YES`                       | Value for `-parallel-testing-enabled`.                                    |
-| `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator; raise it only on a slimmed lease. |
+| `parallel-testing`   | no       | `NO`                        | Value for `-parallel-testing-enabled`. `YES` boots `Clone 1 of <destination>` and is refused without an explicit `parallel-testing-worker-count`. |
+| `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator; raise it only on a slimmed lease, on a 6x12 profile. Required when `parallel-testing` is `YES`. |
 | `screen-capture`     | no       | `screenshots`               | `screenshots` or `screenRecording`, written into the `.xctestrun`. Video costs ~1 GB and a core on a 7 GiB guest. |
 | `artifact-name`      | no       | `xcresult-<scheme>-<shard-index>` | Name of the uploaded `.xcresult` artifact.                          |
 | `retention-days`     | no       | `7`                         | Retention for that artifact.                                              |

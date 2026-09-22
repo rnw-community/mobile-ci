@@ -57,6 +57,35 @@ jobs:
               shell: bash
               run: ~/.local/bin/zizmor --config .github/zizmor.yml .github/workflows actions
 
+    unit-tests:
+        name: Action step unit tests
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Install PyYAML
+              shell: bash
+              run: pip install --user 'PyYAML==6.0.2'
+
+            - name: Run the action step tests
+              shell: bash
+              run: tests/run-tests.sh
+
+            - name: Shellcheck the test harness and every extracted step script
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sudo apt-get update && sudo apt-get install -y shellcheck
+                  shellcheck -s bash tests/run-tests.sh tests/lib/*.sh tests/*_test.sh
+                  scratch="$RUNNER_TEMP/extracted-steps"
+                  rm -rf "$scratch"
+                  mkdir -p "$scratch"
+                  python3 tests/lib/extract-steps.py "$scratch"
+                  find "$scratch" -name '*.sh' -print0 \
+                    | xargs -0 shellcheck -s bash -S warning
+
     pin-check:
         name: Third-party SHA pin check
         runs-on: ubuntu-latest

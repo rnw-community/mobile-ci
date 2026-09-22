@@ -152,11 +152,22 @@ on:
                 type: string
                 required: false
                 default: 'true'
+            parallel-testing:
+                description: >-
+                    -parallel-testing-enabled for the test run. `NO` (the default)
+                    runs the tests on the leased simulator itself; `YES` makes Xcode
+                    boot a clone of it and needs an explicit
+                    parallel-testing-worker-count, on a runner profile with the
+                    memory for one simulator per worker.
+                type: string
+                required: false
+                default: 'NO'
             parallel-testing-worker-count:
                 description: >-
-                    -parallel-testing-worker-count for the test run. Each worker is a
+                    -parallel-testing-worker-count for the test run, required when
+                    parallel-testing is `YES` and refused otherwise. Each worker is a
                     clone of the leased simulator, so raise it only on a slimmed
-                    lease. Empty lets Xcode choose.
+                    lease on the 6x12 profile.
                 type: string
                 required: false
                 default: ''
@@ -411,6 +422,7 @@ jobs:
                   only-testing: ${{ inputs.only-testing }}
                   shard-index: ${{ matrix.shard }}
                   shard-count: ${{ steps.shards.outputs.count }}
+                  parallel-testing: ${{ inputs.parallel-testing }}
                   parallel-testing-worker-count: ${{ inputs.parallel-testing-worker-count }}
                   result-bundle-path: ${{ inputs.result-bundle-path-prefix }}${{ matrix.shard }}.xcresult
                   xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}

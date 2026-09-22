@@ -125,7 +125,8 @@ compiled products and pass.
 | `simulator-template-device` | `''`                      | Name of a shut-down, prewarmed device to `simctl clone` instead of creating one. A slimmed template clones slim. |
 | `simulator-slim-profile` | `bundled`                    | `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; empty leases a stock device. |
 | `simulator-slim-repair`  | `true`                       | Apply the profile in-job (a reboot) on drift. Set `false` with a slimmed template so an unslimmed one errors. |
-| `parallel-testing-worker-count` | `''`                  | `-parallel-testing-worker-count`. Each worker clones the leased simulator, so raise it only on a slimmed lease. |
+| `parallel-testing`       | `NO`                         | `-parallel-testing-enabled`. `YES` makes Xcode run the tests on `Clone 1 of <lease>`, a second simulator on the same guest, and is refused without `parallel-testing-worker-count` ([#155](https://github.com/rnw-community/mobile-ci/issues/155)). |
+| `parallel-testing-worker-count` | `''`                  | `-parallel-testing-worker-count`. Each worker clones the leased simulator, so raise it only on a slimmed lease on the 6x12 profile. Required when `parallel-testing` is `YES`, refused when it is `NO`. |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
 | `only-testing`           | `''`                         | Test identifiers to run (and to shard).                   |
 | `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. Must list every zero-based index exactly once — `[0, 0]` would run one shard twice, never run the other, and still report green, so it fails closed. |
