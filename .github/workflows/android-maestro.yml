@@ -803,6 +803,14 @@ jobs:
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
+            - name: Upload the APK for the test jobs
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: android-e2e-app-${{ matrix.target.name }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  if-no-files-found: error
+                  retention-days: 1
+
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
