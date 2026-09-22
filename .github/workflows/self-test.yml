@@ -181,12 +181,13 @@ jobs:
               run: |
                   set -euo pipefail
                   self_ref_rewrite='s#uses: rnw-community/mobile-ci/actions/([a-z0-9-]+)@[A-Za-z0-9._-]+#uses: ./actions/\1#'
+                  workflow_ref_rewrite='s#uses: rnw-community/mobile-ci/\.github/workflows/([a-z0-9-]+\.yml)@[A-Za-z0-9._-]+#uses: ./.github/workflows/\1#'
                   scratch="$RUNNER_TEMP/dry-lint"
                   rm -rf "$scratch"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard swift-ios; do
-                    sed -E "$self_ref_rewrite" \
+                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard expo-base-plan swift-ios; do
+                    sed -E -e "$self_ref_rewrite" -e "$workflow_ref_rewrite" \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done
                   # Composite actions self-reference each other too (action ->
@@ -199,7 +200,7 @@ jobs:
                   # rewrite buys no extra input-schema checking today - it is here so
                   # the scratch tree is uniformly self-reference-free and picks the
                   # coverage up for free if actionlint ever recurses.
-                  find "$scratch/actions" -name action.yml -exec sed -E -i "$self_ref_rewrite" {} +
+                  find "$scratch/actions" -name action.yml -exec sed -E -i -e "$self_ref_rewrite" -e "$workflow_ref_rewrite" {} +
                   if grep -rn --include='*.yml' 'uses: rnw-community/mobile-ci/' "$scratch"; then
                     echo "::error::A self-reference survived the scratch-copy rewrite above; the rewrite pattern no longer matches every self-reference form in use."
                     exit 1
