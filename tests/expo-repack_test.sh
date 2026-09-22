@@ -185,6 +185,16 @@ assert_equals 0 "$STEP_STATUS" "unpack exit status: $(cat "$dir/log")" \
     && assert_equals "$dir/sdk/build-tools/35.0.0" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir (newest holding both tools, compared as versions)' \
     && pass_case
 
+case_start 'an installed SDK with no usable build-tools is a named error, not a fall back to PATH'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+install_build_tools "$dir/sdk" 36.0.0 zipalign
+resolve_build_tools "$dir" android ANDROID_SDK_ROOT="$dir/sdk"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case "an SDK with no apksigner resolved to '$(step_output "$dir" build-tools-dir)', leaving PATH to decide"
+else
+    assert_contains "$(cat "$dir/log")" "$dir/sdk/build-tools" 'error names the SDK directory it searched' && pass_case
+fi
+
 case_start 'a build-tools version the SDK does not hold is a named error, not a bare apksigner'
 dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
 install_build_tools "$dir/sdk" 34.0.0
@@ -542,6 +552,22 @@ elif [ -f "$dir/npx-args" ]; then
     fail_case 'the repack was invoked before the keystore was checked'
 else
     assert_contains "$(cat "$dir/log")" 'No keystore at' 'error message' && pass_case
+fi
+
+case_start 'repack-env cannot replace the PATH the provided plutil is on'
+dir="$(repack_workspace)"
+run_step "$dir" \
+    PLATFORM=ios \
+    SOURCE_APP="$dir/runner-temp/expo-repack/base/Base.app" \
+    REPACK_VERSION=0.7.2 REPACK_ENV='PATH=/usr/bin:/bin' ANDROID_BUILD_TOOLS_DIR='' \
+    KEYSTORE_PATH='' KEYSTORE_PASSWORD='' KEYSTORE_KEY_ALIAS='' KEYSTORE_KEY_PASSWORD='' \
+    VERBOSE=false PLUTIL_SHIM_DIR="$dir/shim" NPX_ARGS_FILE="$dir/npx-args"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'a repack-env PATH hid the provided plutil from @expo/repack-app'
+elif [ -f "$dir/npx-args" ]; then
+    fail_case 'the repack ran before the PATH override was refused'
+else
+    assert_contains "$(cat "$dir/log")" "may not set 'PATH'" 'error message' && pass_case
 fi
 
 case_start 'the provided plutil is on the PATH @expo/repack-app spawns it from'

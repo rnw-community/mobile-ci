@@ -430,7 +430,8 @@ runs:
           count=$(jq -r --arg branch "$DEFAULT_BRANCH" '
             [.artifacts[]
               | select(.expired | not)
-              | select(.workflow_run.head_branch == $branch)] | length' "$listing")
+              | select(.workflow_run.head_branch == $branch)
+              | select(.workflow_run.head_repository_id == .workflow_run.repository_id)] | length' "$listing")
           rm -f "$listing"
           if [ "$count" -gt 0 ]; then
             exists=true

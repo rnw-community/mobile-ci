@@ -169,7 +169,8 @@ publish the same key: the first push after a native change runs both the
 warm-up and the default-branch e2e, both plan `found=false`, and both build.
 Whichever reaches `publish` second finds the address already warm. That is not a
 failure — it is the outcome both runs wanted — so the step succeeds with a
-notice naming the revision that published the base, and pushes nothing. What it
+notice naming who published the base (on `ghcr`, its revision and manifest
+digest), and pushes nothing. What it
 still refuses is an address holding something *else*: on `ghcr` the existing
 manifest's `artifactType` and its `platform`, `flavor` and `native-key`
 annotations must be exactly what this publish would write, or the step fails

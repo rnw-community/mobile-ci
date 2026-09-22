@@ -25,13 +25,15 @@ already in use must keep meaning the same binary.
 Publishing is **idempotent**. Two default-branch runs that build the same native
 key — the warm-up and the e2e run on the same push — both reach `publish`, and
 the second finds the address taken. That is the outcome both wanted, so the
-second run succeeds with a notice naming the revision that published it, and
-pushes nothing. On `ghcr` the existing manifest is checked first: its
+second run succeeds with a notice and pushes nothing — on `ghcr` the notice
+names the revision and manifest digest that published the base, on `artifact`
+it names the default-branch artifact. On `ghcr` the existing manifest is checked first: its
 `artifactType` and its `platform`, `flavor` and `native-key` annotations must
 be the ones this publish would write. Anything else at the address fails the
 step, because it is not this key's base and is still never overwritten without
-`force`. On `artifact` the name is the key, so a default-branch artifact already
-under it is this key's base. The binaries themselves are not compared: two
+`force`. On `artifact` the name is the key, so an artifact already under it —
+from a default-branch run of this repository, exactly the ones a fetch accepts —
+is this key's base. The binaries themselves are not compared: two
 native builds are not byte-identical, and the key is what says they are
 interchangeable.
 

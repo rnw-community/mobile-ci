@@ -55,7 +55,7 @@ provided rather than assumed:
 | `repack-env`              | no       | `''`     | Newline-separated `KEY=VALUE` exported for the re-bundle.                             |
 | `expect-config`           | no       | `''`     | Newline-separated `<dotted.path>=<value>` assertions on the embedded `app.config`.    |
 | `repack-version`          | no       | `0.7.2`  | Pinned `@expo/repack-app` npm version.                                                |
-| `android-build-tools-dir` | no       | `''`     | Build-tools directory holding `zipalign`/`apksigner`. Empty resolves it under `ANDROID_SDK_ROOT` (or `ANDROID_HOME`): the `android-build-tools-version` directory, else the newest installed one holding both tools; `PATH` only when no SDK is installed. |
+| `android-build-tools-dir` | no       | `''`     | Build-tools directory holding `zipalign`/`apksigner`. Empty resolves it under `ANDROID_SDK_ROOT` (or `ANDROID_HOME`): the `android-build-tools-version` directory, else the newest installed one holding both tools (none fails the step); `PATH` only when no SDK is installed. |
 | `android-build-tools-version` | no   | `''`     | Build-tools version resolved under the SDK when `android-build-tools-dir` is empty. A version the SDK does not hold fails the step, naming the path. |
 | `keystore-path`           | no       | `''`     | Android signing keystore. Empty leaves `@expo/repack-app`'s default in place.         |
 | `keystore-password`       | no       | `''`     | Keystore password.                                                                    |

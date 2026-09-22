@@ -369,6 +369,15 @@ else
         && pass_case
 fi
 
+case_start 'a fork artifact named for the default branch does not stop the default branch publishing'
+dir="$(publish_workspace)"
+stub_gh "$dir" '{"artifacts":[{"id":13,"expired":false,"created_at":"2026-01-03T00:00:00Z","workflow_run":{"head_branch":"main","repository_id":1,"head_repository_id":2}}]}'
+publish_guard "$dir" BACKEND=artifact REFERENCE=e2e-base-ios-e2e-k \
+    GH_ARTIFACTS_JSON="$dir/artifacts.json" GITHUB_REPOSITORY=o/r
+assert_equals 0 "$STEP_STATUS" "guard exit status: $(cat "$dir/log")" \
+    && assert_equals 'true' "$(step_output "$dir" publish)" 'publish (a fetch would refuse that artifact, so it is not a published base)' \
+    && pass_case
+
 case_start 'force re-uploads a default-branch artifact'
 dir="$(publish_workspace)"
 stub_gh "$dir" "$ARTIFACTS_ON_MAIN"

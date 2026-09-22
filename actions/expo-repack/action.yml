@@ -62,8 +62,8 @@ inputs:
       called from, so both uses name the same tools. Empty resolves it from
       the SDK under ANDROID_SDK_ROOT (or ANDROID_HOME) - the
       android-build-tools-version directory when that is set, else the newest
-      installed one holding both tools - and falls back to PATH only when no
-      SDK is installed at all.
+      installed one holding both tools, failing when there is none - and falls
+      back to PATH only when no SDK is installed at all.
     required: false
     default: ''
   android-build-tools-version:
@@ -176,10 +176,12 @@ runs:
               fi
             done > "$work/build-tools-candidates"
             build_tools_dir=$(sort -V "$work/build-tools-candidates" | tail -1)
+            if [ -z "$build_tools_dir" ]; then
+              echo "::error::An Android SDK is installed at '$sdk_root', but no directory under '$sdk_root/build-tools' holds both apksigner and zipalign. Install build-tools there, or set android-build-tools-dir or android-build-tools-version."
+              exit 1
+            fi
           fi
-          if [ -n "$build_tools_dir" ]; then
-            echo "Android build-tools resolved from the SDK: $build_tools_dir"
-          fi
+          echo "Android build-tools resolved from the SDK: $build_tools_dir"
         fi
 
         echo "source-app=$source_app" >> "$GITHUB_OUTPUT"
@@ -273,6 +275,10 @@ runs:
               exit 1
               ;;
           esac
+          if [ "$name" = PATH ] && [ -n "$PLUTIL_SHIM_DIR" ]; then
+            echo "::error::repack-env may not set 'PATH' on a host with no plutil: the stand-in @expo/repack-app converts the Info.plist with is on the PATH this step provides."
+            exit 1
+          fi
           case "$name" in
             PLATFORM|SOURCE_APP|REPACK_VERSION|REPACK_ENV|NODE_ENV|KEYSTORE_PATH|KEYSTORE_PASSWORD|KEYSTORE_KEY_ALIAS|KEYSTORE_KEY_PASSWORD|ANDROID_BUILD_TOOLS_DIR|VERBOSE|PLUTIL_SHIM_DIR)
               echo "::error::repack-env may not set '$name'; it is this step's own control variable, and overwriting it would repack something other than what the inputs asked for."
