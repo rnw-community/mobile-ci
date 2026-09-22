@@ -1,0 +1,285 @@
+name: xcodebuild-affected-tests
+description: >-
+  Turns a pull request's changed files into the `only-testing` list that covers
+  them, using a committed path-to-test map, so a PR runs the affected tests
+  instead of the whole suite. A push event, a changed file no mapping claims, a
+  touched full-suite path, or a base ref git cannot reach all select the full
+  suite — this action never narrows a run it cannot account for.
+inputs:
+  map-file:
+    description: >-
+      Repository-relative JSON file holding an array of
+      `{"paths": ["glob", ...], "tests": ["Target/Class", ...]}` entries. A
+      changed file selects the tests of every entry whose globs match it. `*`
+      and `?` stop at a path separator, `**/` spans directories.
+    required: true
+  base-ref:
+    description: >-
+      Commit the diff starts from. Empty resolves to the pull request's base
+      SHA; on any other event the run is `all`.
+    required: false
+    default: ''
+  head-ref:
+    description: >-
+      Commit the diff ends at. Empty resolves to the pull request's head SHA.
+    required: false
+    default: ''
+  full-suite-paths:
+    description: >-
+      Newline- or space-separated globs that force the full suite when touched,
+      e.g. the workflow that runs the tests, the `.xcodeproj`, or the test
+      target's own sources. A change to what runs the tests is never an
+      affected-tests decision.
+    required: false
+    default: ''
+  fallback:
+    description: >-
+      What to do when the changed files cannot be determined — an unreachable
+      base ref, a shallow checkout, a failed `git diff`. `all` (the default)
+      runs the full suite; `fail` fails the step instead.
+    required: false
+    default: all
+  working-directory:
+    description: Directory `map-file` and the git repository resolve against.
+    required: false
+    default: .
+outputs:
+  only-testing:
+    description: >-
+      Newline-separated test identifiers for `xcodebuild-test`'s `only-testing`
+      input. Empty when `mode` is `all`, which is exactly what that input means
+      by "the whole scheme".
+    value: ${{ steps.select.outputs.only-testing }}
+  mode:
+    description: '`affected` when the list is a selection, `all` when the full suite runs.'
+    value: ${{ steps.select.outputs.mode }}
+runs:
+  using: composite
+  steps:
+    - name: Select the tests the changed files affect
+      id: select
+      shell: bash
+      env:
+        MAP_FILE: ${{ inputs.map-file }}
+        BASE_REF: ${{ inputs.base-ref }}
+        HEAD_REF: ${{ inputs.head-ref }}
+        FULL_SUITE_PATHS: ${{ inputs.full-suite-paths }}
+        FALLBACK: ${{ inputs.fallback }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        case "$FALLBACK" in
+          all|fail) ;;
+          *) echo "::error::fallback must be 'all' or 'fail' (got '$FALLBACK')."; exit 1 ;;
+        esac
+        command -v python3 >/dev/null 2>&1 || { echo "::error::'python3' is required to read the affected-tests map but is not on PATH (see docs/self-hosted-runners.md)."; exit 1; }
+        test -n "$MAP_FILE" || { echo '::error::map-file is required; this action never guesses which tests cover a change.'; exit 1; }
+        if [ ! -f "$MAP_FILE" ]; then
+          echo "::error::No affected-tests map at '$MAP_FILE' (resolved against working-directory '$WORKING_DIRECTORY')."
+          exit 1
+        fi
+
+        base="$BASE_REF"
+        head="$HEAD_REF"
+        if [ -z "$base" ] || [ -z "$head" ]; then
+          if [ "${GITHUB_EVENT_NAME:-}" = 'pull_request' ] || [ "${GITHUB_EVENT_NAME:-}" = 'pull_request_target' ]; then
+            if [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
+              echo "::error::Event '${GITHUB_EVENT_NAME:-}' carries no readable event payload at '${GITHUB_EVENT_PATH:-}', so the pull request's base and head cannot be resolved; pass base-ref and head-ref explicitly."
+              exit 1
+            fi
+            [ -n "$base" ] || base="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
+            [ -n "$head" ] || head="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
+          else
+            echo "::notice::Event '${GITHUB_EVENT_NAME:-unknown}' is not a pull request, so the full suite runs; affected-test selection narrows a pull request, never a branch's own history."
+            {
+              printf 'mode=all\n'
+              printf 'only-testing<<ONLY_TESTING_EOF\nONLY_TESTING_EOF\n'
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo '### Affected tests'
+              echo
+              echo "Event \`${GITHUB_EVENT_NAME:-unknown}\` runs the **full suite**."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+        fi
+
+        changed_files="${RUNNER_TEMP:-/tmp}/affected-tests-changed-$$.txt"
+        rm -f "$changed_files"
+        undetermined=''
+        if ! base_sha="$(git rev-parse --verify --quiet "${base}^{commit}")"; then
+          undetermined="base-ref '${base}' is not a commit in this checkout; a shallow 'fetch-depth: 1' checkout has no base to diff against (use fetch-depth: 0)."
+        elif ! head_sha="$(git rev-parse --verify --quiet "${head}^{commit}")"; then
+          undetermined="head-ref '${head}' is not a commit in this checkout."
+        else
+          merge_base="$(git merge-base "$base_sha" "$head_sha" || true)"
+          [ -n "$merge_base" ] || merge_base="$base_sha"
+          if ! git diff --name-only "$merge_base" "$head_sha" > "$changed_files"; then
+            undetermined="'git diff --name-only ${merge_base} ${head_sha}' failed, so the changed files are unknown."
+          fi
+        fi
+
+        if [ -n "$undetermined" ]; then
+          rm -f "$changed_files"
+          if [ "$FALLBACK" = 'fail' ]; then
+            echo "::error::${undetermined} fallback is 'fail'."
+            exit 1
+          fi
+          echo "::warning::${undetermined} Running the full suite (fallback 'all')."
+          {
+            printf 'mode=all\n'
+            printf 'only-testing<<ONLY_TESTING_EOF\nONLY_TESTING_EOF\n'
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### Affected tests'
+            echo
+            echo "The changed files could not be determined, so the **full suite** runs: ${undetermined}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        CHANGED_FILES="$changed_files" python3 - <<'PYTHON'
+        import json
+        import os
+        import re
+        import sys
+
+        map_file = os.environ['MAP_FILE']
+        changed = [
+            line.strip()
+            for line in open(os.environ['CHANGED_FILES'], encoding='utf-8').read().splitlines()
+            if line.strip()
+        ]
+        full_suite_globs = os.environ['FULL_SUITE_PATHS'].replace('\t', ' ').replace(' ', '\n').split('\n')
+        full_suite_globs = [glob.strip() for glob in full_suite_globs if glob.strip()]
+
+        IDENTIFIER = re.compile(r'^[^\s/-][^\s/]*(/[^\s/]+){0,2}$')
+
+
+        def fail(message):
+            print(f'::error::{message}')
+            sys.exit(1)
+
+
+        def compile_glob(pattern):
+            out = []
+            index = 0
+            while index < len(pattern):
+                char = pattern[index]
+                index += 1
+                if char == '*':
+                    if index < len(pattern) and pattern[index] == '*':
+                        index += 1
+                        if index < len(pattern) and pattern[index] == '/':
+                            index += 1
+                            out.append('(?:.*/)?')
+                        else:
+                            out.append('.*')
+                    else:
+                        out.append('[^/]*')
+                elif char == '?':
+                    out.append('[^/]')
+                else:
+                    out.append(re.escape(char))
+            return re.compile('^' + ''.join(out) + '$')
+
+
+        try:
+            entries = json.loads(open(map_file, encoding='utf-8').read())
+        except (OSError, ValueError) as error:
+            fail(f"Affected-tests map '{map_file}' is not readable JSON: {error}")
+
+        if not isinstance(entries, list) or not entries:
+            fail(f"Affected-tests map '{map_file}' must be a non-empty JSON array of "
+                 '{"paths": [...], "tests": [...]} entries.')
+
+        compiled = []
+        for position, entry in enumerate(entries):
+            where = f"{map_file} entry {position}"
+            if not isinstance(entry, dict):
+                fail(f'{where} is not an object.')
+            paths = entry.get('paths')
+            tests = entry.get('tests')
+            for key, value in (('paths', paths), ('tests', tests)):
+                if not isinstance(value, list) or not value or not all(
+                    isinstance(item, str) and item.strip() for item in value
+                ):
+                    fail(f"{where} needs a non-empty '{key}' array of non-empty strings. "
+                         "An entry with no tests would skip a change silently; leave the path "
+                         'unmapped to get the full suite instead.')
+            for identifier in tests:
+                if not IDENTIFIER.match(identifier):
+                    fail(f"{where} declares the test identifier '{identifier}', which is not a "
+                         "'Target', 'Target/Class' or 'Target/Class/testMethod' name.")
+            compiled.append(([(glob, compile_glob(glob)) for glob in paths], tests))
+
+        full_suite_matchers = [(glob, compile_glob(glob)) for glob in full_suite_globs]
+
+        rows = []
+        selected = []
+        unmapped = []
+        full_suite_reason = ''
+        for path in changed:
+            triggered = [glob for glob, matcher in full_suite_matchers if matcher.match(path)]
+            if triggered:
+                rows.append((path, [f'full suite (`{triggered[0]}`)']))
+                if not full_suite_reason:
+                    full_suite_reason = f"`{path}` matches the full-suite path `{triggered[0]}`"
+                continue
+            matched = []
+            for matchers, tests in compiled:
+                if any(matcher.match(path) for _, matcher in matchers):
+                    matched.extend(tests)
+            if not matched:
+                unmapped.append(path)
+                rows.append((path, ['unmapped']))
+                continue
+            for identifier in matched:
+                if identifier not in selected:
+                    selected.append(identifier)
+            rows.append((path, matched))
+
+        if not changed:
+            mode = 'all'
+            reason = 'The diff is empty, so the full suite runs rather than nothing.'
+        elif full_suite_reason:
+            mode = 'all'
+            reason = f'{full_suite_reason}, so the full suite runs.'
+        elif unmapped:
+            mode = 'all'
+            listed = ', '.join(f'`{path}`' for path in unmapped[:10])
+            more = '' if len(unmapped) <= 10 else f' (+{len(unmapped) - 10} more)'
+            reason = (f"{len(unmapped)} changed file(s) no entry of `{map_file}` claims "
+                      f'({listed}{more}), so the full suite runs. Map them to keep the '
+                      'selection narrow — an unmapped file is never silently skipped.')
+        else:
+            mode = 'affected'
+            reason = (f'{len(selected)} test identifier(s) cover the {len(changed)} changed '
+                      f'file(s).')
+
+        only_testing = '' if mode == 'all' else '\n'.join(selected)
+
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
+            handle.write(f'mode={mode}\n')
+            handle.write('only-testing<<ONLY_TESTING_EOF\n')
+            if only_testing:
+                handle.write(only_testing + '\n')
+            handle.write('ONLY_TESTING_EOF\n')
+
+        with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as handle:
+            handle.write('### Affected tests\n\n')
+            handle.write(f'Mode: **{mode}**. {reason}\n\n')
+            if rows:
+                handle.write('| Changed file | Selects |\n| --- | --- |\n')
+                for path, tests in rows:
+                    handle.write(f'| `{path}` | {", ".join(tests)} |\n')
+                handle.write('\n')
+            if mode == 'affected':
+                handle.write('Running:\n\n')
+                for identifier in selected:
+                    handle.write(f'- `{identifier}`\n')
+
+        print(f'{mode}: {reason}')
+        PYTHON
+        rm -f "$changed_files"

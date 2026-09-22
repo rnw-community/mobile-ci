@@ -18,9 +18,14 @@ capture screenshots, not video](#ui-tests-capture-screenshots-not-video)). On
 Linux Redroid hosts, `redroid-container` needs it only when a prewarm manifest
 is present — it reads the manifest's `image` and `dataDir` with it.
 
-Missing `python3` does not fail a run: the rewrite is skipped with a warning
-and the run pays Xcode's UI-test video for that job. It is a pool-provisioning
-defect, not a test failure, so it is reported as one.
+Missing `python3` does not fail a run there: the rewrite is skipped with a
+warning and the run pays Xcode's UI-test video for that job. It is a
+pool-provisioning defect, not a test failure, so it is reported as one.
+
+[`xcodebuild-affected-tests`](../actions/xcodebuild-affected-tests/README.md)
+also needs it, and fails the step without it: that action decides which tests
+*not* to run, and a selector that cannot read its map must never be taken for
+"nothing is affected".
 
 ## Common to every pool: `jq`
 

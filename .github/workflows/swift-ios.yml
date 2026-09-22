@@ -191,6 +191,24 @@ on:
                 type: string
                 required: false
                 default: ''
+            affected-tests-map:
+                description: >-
+                    Repository-relative JSON map of path globs to test identifiers.
+                    Set it to run only the tests a pull request's changed files
+                    affect (`xcodebuild-affected-tests`); empty (the default) runs
+                    the full suite. Needs `checkout-fetch-depth: 0`, and a push
+                    event always runs the full suite.
+                type: string
+                required: false
+                default: ''
+            affected-tests-full-suite-paths:
+                description: >-
+                    Newline- or space-separated globs that force the full suite when
+                    touched, e.g. the `.xcodeproj` or the test target's own sources.
+                    Consulted only when affected-tests-map is set.
+                type: string
+                required: false
+                default: ''
             shards-json:
                 description: >-
                     JSON array of zero-based shard indices. The test job runs one
@@ -421,6 +439,15 @@ jobs:
                   slim-profile: ${{ inputs.simulator-slim-profile }}
                   slim-repair: ${{ inputs.simulator-slim-repair }}
 
+            - name: Select the tests this pull request affects
+              id: affected
+              if: inputs.affected-tests-map != '' && github.event_name == 'pull_request'
+              uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v2.2.0 # v2.2.0
+              with:
+                  map-file: ${{ inputs.affected-tests-map }}
+                  full-suite-paths: ${{ inputs.affected-tests-full-suite-paths }}
+                  working-directory: ${{ inputs.working-directory }}
+
             - name: Run this shard's tests
               uses: rnw-community/mobile-ci/actions/xcodebuild-test@v2.2.0 # v2.2.0
               with:
@@ -431,7 +458,7 @@ jobs:
                   configuration: ${{ inputs.configuration }}
                   destination-id: ${{ steps.simulator.outputs.udid }}
                   test-plan: ${{ inputs.test-plan }}
-                  only-testing: ${{ inputs.only-testing }}
+                  only-testing: ${{ steps.affected.outputs.only-testing != '' && steps.affected.outputs.only-testing || inputs.only-testing }}
                   shard-index: ${{ matrix.shard }}
                   shard-count: ${{ steps.shards.outputs.count }}
                   parallel-testing: ${{ inputs.parallel-testing }}

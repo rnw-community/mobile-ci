@@ -130,6 +130,8 @@ compiled products and pass.
 | `parallel-testing-worker-count` | `''`                  | `-parallel-testing-worker-count`. Each worker clones the leased simulator, so raise it only on a slimmed lease on the 6x12 profile. Required when `parallel-testing` is `YES`, refused when it is `NO`. |
 | `test-plan`              | `''`                         | `-testPlan` name.                                         |
 | `only-testing`           | `''`                         | Test identifiers to run (and to shard).                   |
+| `affected-tests-map`     | `''`                         | Repository-relative JSON map of path globs to test identifiers ([`xcodebuild-affected-tests`](../../actions/xcodebuild-affected-tests/README.md)). Set it and a **pull request** runs only the tests its changed files affect; a push, an unmapped file, a touched `affected-tests-full-suite-paths` glob or an unreachable base all run the full suite. Needs `checkout-fetch-depth: 0`. |
+| `affected-tests-full-suite-paths` | `''`                | Globs that force the full suite when touched, e.g. `**/*.pbxproj` or the test target's own sources. Consulted only when `affected-tests-map` is set. |
 | `shards-json`            | `[0]`                        | JSON array of shard indices; one `test` matrix leg each, and its length is the shard count. Must list every zero-based index exactly once — `[0, 0]` would run one shard twice, never run the other, and still report green, so it fails closed. |
 | `result-bundle-path-prefix` | `build/TestResults-`      | `.xcresult` path per shard: `<prefix><index>.xcresult`; each is uploaded as an artifact. |
 
