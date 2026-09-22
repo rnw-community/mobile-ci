@@ -37,6 +37,25 @@ else:
 PYTHON
 }
 
+extract_workflow_step_script() {
+    WORKFLOW_YML="$1" JOB_ID="$2" STEP_NAME="$3" python3 - <<'PYTHON'
+import os
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
+job = workflow['jobs'][os.environ['JOB_ID']]
+wanted = os.environ['STEP_NAME']
+for step in job['steps']:
+    if step.get('name') == wanted:
+        sys.stdout.write(step['run'])
+        break
+else:
+    sys.exit(f"no step named {wanted!r} in job {os.environ['JOB_ID']!r}")
+PYTHON
+}
+
 action_input_default() {
     ACTION_YML="$1" INPUT_NAME="$2" python3 - <<'PYTHON'
 import os
@@ -57,8 +76,22 @@ PYTHON
 # ./outputs and ./summary, a ./stub-bin on PATH and a ./work working directory.
 new_workspace() {
     local action_yml="$1" step_name="$2" dir
-    dir="$(mktemp -d "${TMPDIR:-/tmp}/mobile-ci-test-XXXXXX")"
+    dir="$(new_empty_workspace)"
     extract_step_script "$action_yml" "$step_name" > "$dir/step.sh"
+    printf '%s\n' "$dir"
+}
+
+# new_workflow_workspace <workflow.yml> <job id> <step name>
+new_workflow_workspace() {
+    local workflow_yml="$1" job_id="$2" step_name="$3" dir
+    dir="$(new_empty_workspace)"
+    extract_workflow_step_script "$workflow_yml" "$job_id" "$step_name" > "$dir/step.sh"
+    printf '%s\n' "$dir"
+}
+
+new_empty_workspace() {
+    local dir
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/mobile-ci-test-XXXXXX")"
     mkdir -p "$dir/stub-bin" "$dir/work" "$dir/runner-temp"
     : > "$dir/outputs"
     : > "$dir/summary"
