@@ -319,19 +319,97 @@ on:
                 type: string
                 required: false
                 default: ''
-            repack-on-hit:
+            build-strategy:
                 description: >-
-                    On a native-app-cache hit, run repack-app to inject a freshly
-                    exported JS bundle into the cached shell instead of reusing it
-                    unchanged. Falls back to a full native build if the repack fails.
-                type: boolean
+                    How this pull request gets the binary its Maestro shards
+                    install. `auto` (the default) computes the native key, looks
+                    up the base binary published for it, and repacks that base
+                    with this commit's JavaScript on the Linux pool; only a key
+                    with no published base, or an unusable base, reaches the Mac
+                    — and when it does on the default branch, the base it builds
+                    is published for the next run. `repack` refuses to compile
+                    native code at all: a missing base fails the build instead of
+                    quietly taking a Mac slot. `native` is the escape hatch and a
+                    regression — every pull request then compiles native code
+                    again, and that run publishes no base. See docs/repack.md.
+                type: string
                 required: false
-                default: false
+                default: auto
+            repack-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the repack job.
+                    The default is the x86_64 Linux pool: a repack re-bundles
+                    JavaScript and rewrites an archive, so it needs no Xcode, no
+                    simulator and no Mac slot.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
+            native-build-label:
+                description: >-
+                    Pull-request label forcing build-strategy: native for that one
+                    pull request. Set together with build-strategy: repack it
+                    fails closed rather than silently picking a winner.
+                type: string
+                required: false
+                default: 'mobile: force native build'
+            base-backend:
+                description: >-
+                    Where base binaries live: `ghcr` (default, an immutable OCI
+                    artifact needing packages:write to publish and packages:read
+                    to fetch) or `artifact` (workflow artifacts, default-branch
+                    runs only, needing actions:read). See expo-base-binary.
+                type: string
+                required: false
+                default: ghcr
+            base-flavor:
+                description: Flavor segment of the base binary's address.
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                description: >-
+                    Path, relative to a target's appDir, of the @expo/fingerprint
+                    config whose ignore list is the correctness boundary of every
+                    repack. Its hash is part of the native key. See docs/repack.md.
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported while the native key
+                    is computed, for an app.config that branches on env. Must be
+                    byte-identical to what the warm-up passes, or the two never
+                    agree on a key and every pull request takes a Mac slot.
+                type: string
+                required: false
+                default: ''
+            repack-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported for the re-bundle,
+                    so the consumer's app.config writes this build's API URL,
+                    version and build number into the repacked binary.
+                type: string
+                required: false
+                default: ''
+            expect-config:
+                description: >-
+                    Newline-separated <dotted.path>=<value> assertions the
+                    repacked binary's embedded app.config must satisfy exactly.
+                    Every value repack-env is expected to have rewritten belongs
+                    here: a config rewrite nobody checked is a repack nobody can
+                    trust.
+                type: string
+                required: false
+                default: ''
             repack-app-version:
-                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                description: Pinned @expo/repack-app npm version.
                 type: string
                 required: false
                 default: '0.7.2'
+            repack-timeout-minutes:
+                type: number
+                required: false
+                default: 30
             build-timeout-minutes:
                 type: number
                 required: false
@@ -355,6 +433,7 @@ jobs:
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
             shard-indices: ${{ steps.shard-indices.outputs.indices }}
+            build-strategy: ${{ steps.build-strategy.outputs.strategy }}
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -399,16 +478,368 @@ jobs:
                   indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
                   echo "indices=$indices" >> "$GITHUB_OUTPUT"
 
-    build:
-        name: Build (${{ matrix.target.name }})
+            - name: Resolve the build strategy
+              id: build-strategy
+              shell: bash
+              env:
+                  REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
+                  NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
+                  PULL_REQUEST_LABELS: ${{ github.event_name == 'pull_request' && toJSON(github.event.pull_request.labels.*.name) || '[]' }}
+              run: |
+                  set -euo pipefail
+                  case "$REQUESTED_STRATEGY" in
+                    auto|repack|native) ;;
+                    *)
+                      echo "::error::build-strategy must be 'auto', 'repack' or 'native'; got '$REQUESTED_STRATEGY'."
+                      exit 1
+                      ;;
+                  esac
+
+                  strategy="$REQUESTED_STRATEGY"
+                  labelled=false
+                  if [ -n "$NATIVE_BUILD_LABEL" ]; then
+                    labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")
+                  fi
+
+                  if [ "$labelled" = 'true' ]; then
+                    if [ "$REQUESTED_STRATEGY" = 'repack' ]; then
+                      echo "::error::build-strategy is 'repack', which forbids compiling native code, but this pull request carries the '$NATIVE_BUILD_LABEL' label, which demands it. Remove one of the two rather than letting the workflow pick a winner."
+                      exit 1
+                    fi
+                    strategy=native
+                    echo "::notice::'$NATIVE_BUILD_LABEL' is set on this pull request, so native code is compiled instead of a published base being repacked. No base binary is published by this run."
+                  fi
+
+                  if [ "$strategy" = 'native' ]; then
+                    echo "::warning::This run compiles native code for every target. That is the escape hatch, not the norm: it takes a full native build slot a repack would not have needed. See docs/repack.md."
+                  fi
+
+                  echo "strategy=$strategy" >> "$GITHUB_OUTPUT"
+                  echo "Build strategy: $strategy (requested '$REQUESTED_STRATEGY')."
+
+    plan:
+        name: Plan (${{ matrix.target.name }})
         needs: detect
         if: needs.detect.outputs.affected == 'true'
-        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
-        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        runs-on: ${{ fromJSON(inputs.repack-runner-labels) }}
+        timeout-minutes: ${{ inputs.repack-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: read
+            actions: read
         strategy:
             fail-fast: false
             matrix:
                 target: ${{ fromJSON(inputs.targets) }}
+        env:
+            APP_DIR: ${{ matrix.target.appDir }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: 'true'
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                    esac
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
+
+            - name: expo-native-key
+              id: native-key
+              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.0.0 # v3.0.0
+              with:
+                  platform: ios
+                  working-directory: ${{ matrix.target.appDir }}
+                  flavor: ${{ inputs.base-flavor }}
+                  extra-env: ${{ inputs.fingerprint-env }}
+                  toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}
+                  fingerprint-config: ${{ inputs.fingerprint-config }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: expo-base-binary (fetch)
+              id: base
+              if: needs.detect.outputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: fetch
+                  platform: ios
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ steps.native-key.outputs.key }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-cache/e2e-base/${{ matrix.target.name }}
+
+            - name: Refuse to compile native code under build-strategy repack
+              if: needs.detect.outputs.build-strategy == 'repack' && steps.base.outputs.found != 'true'
+              shell: bash
+              env:
+                  NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  REFERENCE: ${{ steps.base.outputs.reference }}
+              run: |
+                  set -euo pipefail
+                  echo "::error::build-strategy is 'repack', but no base binary is published at $REFERENCE for native key $NATIVE_KEY. Warm this key up on the default branch (seed-native-cache.yml), or switch this call to build-strategy: auto so the Mac builds and publishes one."
+                  exit 1
+
+            - name: expo-repack
+              if: steps.base.outputs.found == 'true'
+              uses: rnw-community/mobile-ci/actions/expo-repack@v3.0.0 # v3.0.0
+              with:
+                  platform: ios
+                  base-path: ${{ steps.base.outputs.path }}
+                  output-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+                  app-dir: ${{ matrix.target.appDir }}
+                  app-id: ${{ matrix.target.appId }}
+                  repack-env: ${{ inputs.repack-env }}
+                  expect-config: ${{ inputs.expect-config }}
+                  repack-version: ${{ inputs.repack-app-version }}
+
+            - name: Upload the repacked app for the test jobs
+              if: steps.base.outputs.found == 'true'
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ios-e2e-app-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+                  if-no-files-found: error
+                  retention-days: 1
+
+            - name: Record this target's plan
+              shell: bash
+              env:
+                  TARGET: ${{ toJSON(matrix.target) }}
+                  NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  BASE_FOUND: ${{ steps.base.outputs.found }}
+                  BASE_SOURCE: ${{ steps.base.outputs.source }}
+                  BASE_REFERENCE: ${{ steps.base.outputs.reference }}
+                  BUILD_STRATEGY: ${{ needs.detect.outputs.build-strategy }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p .ci-artifacts/plan
+                  target_name=$(jq -r '.name' <<< "$TARGET")
+                  needs_native=true
+                  if [ "$BASE_FOUND" = 'true' ]; then
+                    needs_native=false
+                  fi
+                  jq -n --argjson target "$TARGET" \
+                        --arg key "$NATIVE_KEY" \
+                        --argjson needsNative "$needs_native" \
+                     '$target + {nativeKey: $key, needsNative: $needsNative}' \
+                     > .ci-artifacts/plan/plan.json
+                  {
+                    if [ "$needs_native" = 'false' ]; then
+                      echo "### iOS ${target_name}: repacked on Linux, no Mac slot taken"
+                      echo "Base ${BASE_REFERENCE} (from ${BASE_SOURCE}) repacked with this commit's JavaScript."
+                    else
+                      echo "### iOS ${target_name}: native build needed"
+                      echo "Native key ${NATIVE_KEY} has no published base (strategy: ${BUILD_STRATEGY})."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Upload this target's plan
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ios-e2e-plan-${{ matrix.target.name }}
+                  path: .ci-artifacts/plan/plan.json
+                  if-no-files-found: error
+                  retention-days: 1
+
+    native-targets:
+        name: Targets still needing a native build
+        needs: [detect, plan]
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' }}
+        runs-on: ubuntu-latest
+        outputs:
+            targets: ${{ steps.collect.outputs.targets }}
+        steps:
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: ios-e2e-plan-*
+                  path: .ci-artifacts/plans
+
+            - name: Collect the targets whose native key has no base
+              id: collect
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.targets }}
+              run: |
+                  set -euo pipefail
+                  expected=$(jq 'length' <<< "$TARGETS")
+                  mapfile -d '' -t plans < <(find .ci-artifacts/plans -name plan.json -print0 | LC_ALL=C sort -z)
+                  if [ "${#plans[@]}" -ne "$expected" ]; then
+                    echo "::error::Expected one plan per target ($expected), found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
+                    exit 1
+                  fi
+                  targets=$(jq -sc 'map(select(.needsNative)) | map(del(.needsNative))' "${plans[@]}")
+                  echo "targets=$targets" >> "$GITHUB_OUTPUT"
+                  echo "Targets needing a native build: $(jq -r 'map(.name) | join(", ") | if . == "" then "(none)" else . end' <<< "$targets")"
+
+    build:
+        name: Build (${{ matrix.target.name }})
+        needs: [detect, native-targets]
+        if: ${{ !cancelled() && needs.native-targets.result == 'success' && needs.native-targets.outputs.targets != '[]' }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.native-targets.outputs.targets) }}
         env:
             APP_DIR: ${{ matrix.target.appDir }}
             IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
@@ -599,85 +1030,38 @@ jobs:
                   fi
                   eval "$PREBUILD_COMMAND"
 
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: ios
-                  working-directory: ${{ matrix.target.appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
-
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
-
-            - name: Repack fresh JS into cached native app
-              id: repack
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v2.3.0 # v2.3.0
-              with:
-                  platform: ios
-                  app-path: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
-                  app-id: ${{ matrix.target.appId }}
-                  app-dir: ${{ matrix.target.appDir }}
-                  repack-version: ${{ inputs.repack-app-version }}
-
-            - name: Determine whether a native build is needed
-              id: build-decision
-              shell: bash
-              env:
-                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
-                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
-              run: |
-                  set -euo pipefail
-                  need_build=true
-                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
-                    need_build=false
-                  fi
-                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
               run: |
                   {
                     echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
-                    if [ "$REPACK_ON_HIT" = "true" ]; then
-                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
-                    else
-                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
-                    fi
+                    echo "This host already holds the native app for key ${NATIVE_KEY}; the published base is written from it."
                   } >> "$GITHUB_STEP_SUMMARY"
 
-            - name: Report repack fallback
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-              run: |
-                  echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
-
             - name: Clean stale app before native build
-              if: steps.build-decision.outputs.need-build == 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
               shell: bash
               env:
                   APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
               run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
-              if: steps.build-decision.outputs.need-build == 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
               with:
                   mode: restore
@@ -690,7 +1074,7 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              if: steps.build-decision.outputs.need-build == 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
               id: build
               uses: rnw-community/mobile-ci/actions/build-ios-app@v2.3.0 # v2.3.0
               with:
@@ -708,7 +1092,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              if: steps.build-decision.outputs.need-build == 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
               with:
                   mode: save
@@ -717,14 +1101,14 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Archive app for test jobs
               shell: bash
@@ -742,10 +1126,31 @@ jobs:
                   path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
                   retention-days: 1
 
+            - name: expo-base-binary (publish)
+              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: ios
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+
+            - name: Report that this key is now warm
+              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  echo "### iOS ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo 'Pull requests on this native surface now repack instead of compiling.' >> "$GITHUB_STEP_SUMMARY"
+
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
-        needs: [detect, build]
-        if: needs.detect.outputs.affected == 'true'
+        needs: [detect, plan, native-targets, build]
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.native-targets.result == 'success' && needs.build.result != 'failure' }}
         runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
@@ -825,7 +1230,7 @@ jobs:
 
     status:
         name: iOS Maestro E2E result
-        needs: [detect, build, test]
+        needs: [detect, plan, native-targets, build, test]
         if: always()
         runs-on: ubuntu-latest
         steps:
@@ -834,6 +1239,9 @@ jobs:
               env:
                   DETECT_RESULT: ${{ needs.detect.result }}
                   DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  PLAN_RESULT: ${{ needs.plan.result }}
+                  NATIVE_TARGETS: ${{ needs.native-targets.outputs.targets }}
+                  NATIVE_TARGETS_RESULT: ${{ needs.native-targets.result }}
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
               run: |
@@ -856,7 +1264,24 @@ jobs:
                     summary "### iOS Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
                     exit 0
                   fi
-                  if [ "$BUILD_RESULT" != "success" ]; then
+                  if [ "$PLAN_RESULT" != "success" ]; then
+                    echo "Plan job did not succeed (result: $PLAN_RESULT)."
+                    summary "### iOS Maestro E2E: failed (plan job result: $PLAN_RESULT)"
+                    cancelled_hint "$PLAN_RESULT"
+                    exit 1
+                  fi
+                  if [ "$NATIVE_TARGETS_RESULT" != "success" ]; then
+                    echo "Native-target collection did not succeed (result: $NATIVE_TARGETS_RESULT)."
+                    summary "### iOS Maestro E2E: failed (native-targets job result: $NATIVE_TARGETS_RESULT)"
+                    cancelled_hint "$NATIVE_TARGETS_RESULT"
+                    exit 1
+                  fi
+                  if [ "$BUILD_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS" != '[]' ]; then
+                    echo "The native build was skipped while ${NATIVE_TARGETS} still needed one; a skipped build is not a build."
+                    summary "### iOS Maestro E2E: failed (native build skipped with targets still needing one)"
+                    exit 1
+                  fi
+                  if [ "$BUILD_RESULT" != "success" ] && [ "$BUILD_RESULT" != 'skipped' ]; then
                     echo "Build job did not succeed (result: $BUILD_RESULT)."
                     summary "### iOS Maestro E2E: failed (build job result: $BUILD_RESULT)"
                     cancelled_hint "$BUILD_RESULT"
