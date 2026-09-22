@@ -10,6 +10,7 @@ set -euo pipefail
 
 IOS_WORKFLOW="$REPO_ROOT/.github/workflows/ios-maestro.yml"
 ANDROID_WORKFLOW="$REPO_ROOT/.github/workflows/android-maestro.yml"
+SCREENSHOTS_WORKFLOW="$REPO_ROOT/.github/workflows/store-screenshots.yml"
 PLAN_WORKFLOW="$REPO_ROOT/.github/workflows/expo-base-plan.yml"
 STRATEGY_STEP='Resolve the build strategy'
 COLLECT_STEP='Collect the targets whose native key has no base'
@@ -27,11 +28,14 @@ resolve() {
         PULL_REQUEST_LABELS="$labels"
 }
 
-case_start 'both e2e workflows resolve the strategy with the same script'
+case_start 'every workflow that builds an Expo app resolves the strategy with the same script'
 ios_script="$(extract_workflow_step_script "$IOS_WORKFLOW" detect "$STRATEGY_STEP")"
 android_script="$(extract_workflow_step_script "$ANDROID_WORKFLOW" detect "$STRATEGY_STEP")"
+screenshots_script="$(extract_workflow_step_script "$SCREENSHOTS_WORKFLOW" validate-manifest "$STRATEGY_STEP")"
 if [ "$ios_script" != "$android_script" ]; then
     fail_case 'ios-maestro and android-maestro state the strategy rule differently, so a label can mean one thing on one platform and another on the other'
+elif [ "$ios_script" != "$screenshots_script" ]; then
+    fail_case 'store-screenshots states the strategy rule differently from the e2e workflows'
 else
     pass_case
 fi
