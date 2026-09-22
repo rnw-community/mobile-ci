@@ -43,6 +43,10 @@ label or a strategy means the same thing in every pipeline.
 key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash)>
 ```
 
+`toolchain` carries the target's own `workspace` and `scheme` as well as the
+pinned tool versions, so two targets that share an app directory and a
+fingerprint but build different schemes never share a base.
+
 `@expo/fingerprint` hashes the native surface: the app config, the dependency
 set, autolinking, config plugins, and — unless the config ignores them — the
 generated `ios/` and `android/` directories. Three things it cannot see are

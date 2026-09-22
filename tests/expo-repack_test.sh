@@ -45,7 +45,8 @@ unpack() {
     # GITHUB_WORKSPACE deliberately points somewhere else: this step runs in the
     # caller's own working directory, so a relative base-path must resolve
     # against that and not against the workspace variable.
-    run_step "$dir" PLATFORM="$platform" BASE_PATH="$base" GITHUB_WORKSPACE="$dir/elsewhere"
+    run_step "$dir" PLATFORM="$platform" BASE_PATH="$base" \
+        ANDROID_BUILD_TOOLS_DIR='' GITHUB_WORKSPACE="$dir/elsewhere"
 }
 
 case_start 'an iOS base with no embedded bundle is refused'
@@ -82,6 +83,24 @@ make_android_base "$dir" true
 unpack "$dir" android base.apk
 assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
     && assert_equals "$dir/work/base.apk" "$(cd "$dir/work" && readlink -f "$(step_output "$dir" source-app)")" 'source-app' \
+    && pass_case
+
+case_start 'a relative build-tools directory is resolved once, for both steps'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+make_android_base "$dir" true
+mkdir -p "$dir/work/tools/build-tools"
+run_step "$dir" PLATFORM=android BASE_PATH=base.apk \
+    ANDROID_BUILD_TOOLS_DIR=tools/build-tools GITHUB_WORKSPACE="$dir/elsewhere"
+assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
+    && assert_equals "$dir/work/tools/build-tools" "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
+    && pass_case
+
+case_start 'an empty build-tools directory stays empty so PATH still decides'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+make_android_base "$dir" true
+run_step "$dir" PLATFORM=android BASE_PATH=base.apk ANDROID_BUILD_TOOLS_DIR=''
+assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
+    && assert_equals '' "$(step_output "$dir" build-tools-dir)" 'build-tools-dir' \
     && pass_case
 
 case_start 'a base that is not a file at all is refused'

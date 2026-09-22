@@ -58,7 +58,9 @@ on:
                 description: >-
                     Pinned toolchain identity folded into the native key -
                     `xcode-<version>-<build>` on ios, `cmdline-<version>` on
-                    android.
+                    android. A target's own workspace and scheme are appended to
+                    it, so two targets that share an app directory and a
+                    fingerprint but build different schemes never share a base.
                 type: string
                 required: false
                 default: ''
@@ -360,7 +362,7 @@ jobs:
                   working-directory: ${{ matrix.target.appDir }}
                   flavor: ${{ inputs.base-flavor }}
                   extra-env: ${{ inputs.fingerprint-env }}
-                  toolchain: ${{ inputs.toolchain }}
+                  toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
                   fingerprint-config: ${{ inputs.fingerprint-config }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 

@@ -57,8 +57,10 @@ inputs:
   android-build-tools-dir:
     description: >-
       Android SDK build-tools directory holding zipalign and apksigner, passed
-      to @expo/repack-app and used for this action's signature verification.
-      Empty falls back to whatever is already on PATH.
+      to @expo/repack-app and used for this action's signature verification. A
+      relative path is resolved once, against the directory this action is
+      called from, so both uses name the same tools. Empty falls back to
+      whatever is already on PATH.
     required: false
     default: ''
   keystore-path:
@@ -97,6 +99,7 @@ runs:
       env:
         PLATFORM: ${{ inputs.platform }}
         BASE_PATH: ${{ inputs.base-path }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
       run: |
         set -euo pipefail
         case "$PLATFORM" in
@@ -138,7 +141,14 @@ runs:
           fi
         fi
 
+        build_tools_dir="$ANDROID_BUILD_TOOLS_DIR"
+        case "$build_tools_dir" in
+          ''|/*) ;;
+          *) build_tools_dir="$PWD/$build_tools_dir" ;;
+        esac
+
         echo "source-app=$source_app" >> "$GITHUB_OUTPUT"
+        echo "build-tools-dir=$build_tools_dir" >> "$GITHUB_OUTPUT"
         echo "Base binary accepted: $source_app"
 
     - name: Repack the base binary with this build's JavaScript
@@ -150,7 +160,7 @@ runs:
         SOURCE_APP: ${{ steps.base.outputs.source-app }}
         REPACK_VERSION: ${{ inputs.repack-version }}
         REPACK_ENV: ${{ inputs.repack-env }}
-        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ steps.base.outputs.build-tools-dir }}
         KEYSTORE_PATH: ${{ inputs.keystore-path }}
         KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
         KEYSTORE_KEY_ALIAS: ${{ inputs.keystore-key-alias }}
@@ -298,7 +308,7 @@ runs:
       shell: bash
       env:
         SOURCE_APP: ${{ steps.base.outputs.source-app }}
-        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ steps.base.outputs.build-tools-dir }}
       run: |
         set -euo pipefail
         work="$RUNNER_TEMP/expo-repack"
