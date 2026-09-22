@@ -438,6 +438,7 @@ lease, and measure the wall time before keeping it:
 ```yaml
 with:
     runs-on-json: '["self-hosted","trf-macos-arm64-6x12"]'
+    parallel-testing: 'YES'
     parallel-testing-worker-count: '2'
 ```
 

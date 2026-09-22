@@ -448,6 +448,32 @@ jobs:
                   full-suite-paths: ${{ inputs.affected-tests-full-suite-paths }}
                   working-directory: ${{ inputs.working-directory }}
 
+            - name: Resolve which test identifiers this shard starts from
+              id: selection
+              shell: bash
+              env:
+                  AFFECTED_MODE: ${{ steps.affected.outputs.mode }}
+                  AFFECTED_ONLY_TESTING: ${{ steps.affected.outputs.only-testing }}
+                  ONLY_TESTING: ${{ inputs.only-testing }}
+              run: |
+                  set -euo pipefail
+                  if [ "$AFFECTED_MODE" = 'affected' ]; then
+                    selected="$AFFECTED_ONLY_TESTING"
+                    if [ -z "$selected" ]; then
+                      echo "::error::xcodebuild-affected-tests reported mode 'affected' with an empty selection; a narrowed run with nothing in it would test nothing and still report green."
+                      exit 1
+                    fi
+                    echo 'Running the tests this pull request affects.'
+                  else
+                    selected="$ONLY_TESTING"
+                    echo "Running the full suite (affected-tests mode '${AFFECTED_MODE:-off}')."
+                  fi
+                  {
+                    printf 'only-testing<<ONLY_TESTING_EOF\n'
+                    [ -z "$selected" ] || printf '%s\n' "$selected"
+                    printf 'ONLY_TESTING_EOF\n'
+                  } >> "$GITHUB_OUTPUT"
+
             - name: Run this shard's tests
               uses: rnw-community/mobile-ci/actions/xcodebuild-test@v2.3.0 # v2.3.0
               with:
@@ -458,7 +484,7 @@ jobs:
                   configuration: ${{ inputs.configuration }}
                   destination-id: ${{ steps.simulator.outputs.udid }}
                   test-plan: ${{ inputs.test-plan }}
-                  only-testing: ${{ steps.affected.outputs.only-testing != '' && steps.affected.outputs.only-testing || inputs.only-testing }}
+                  only-testing: ${{ steps.selection.outputs.only-testing }}
                   shard-index: ${{ matrix.shard }}
                   shard-count: ${{ steps.shards.outputs.count }}
                   parallel-testing: ${{ inputs.parallel-testing }}

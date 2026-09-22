@@ -7,7 +7,8 @@ The output feeds [`xcodebuild-test`](../xcodebuild-test/README.md)'s existing
 else in the lane changes.
 
 **It never narrows a run it cannot account for.** A changed file no entry
-claims, a touched full-suite path, a push event, an empty diff, or a base ref
+claims, a touched full-suite path, any event that is not a pull request
+(`base-ref`/`head-ref` do not override that), an empty diff, or a base ref
 the checkout cannot reach all select `all`, and `all` means an empty
 `only-testing`, which is exactly how `xcodebuild-test` spells "the whole
 scheme". A map that is malformed — not an array, an entry with no tests, a test
@@ -16,7 +17,7 @@ that is a configuration defect and not a fact about the diff.
 
 ## The map file
 
-A repository-relative JSON file holding an array of entries. Each entry gives
+A JSON file, resolved against `working-directory`, holding an array of entries. Each entry gives
 the globs it owns and the test identifiers those paths are covered by:
 
 ```json
@@ -58,7 +59,7 @@ the globs it owns and the test identifiers those paths are covered by:
 
 | Name                | Required | Default | Description                                                                 |
 | ------------------- | -------- | ------- | ----------------------------------------------------------------------------- |
-| `map-file`          | yes      | —       | Repository-relative JSON map, resolved against `working-directory`.            |
+| `map-file`          | yes      | —       | Path to the JSON map, resolved against `working-directory` (not the repository root when they differ). |
 | `base-ref`          | no       | `''`    | Commit the diff starts from. Empty resolves to the pull request's base SHA.    |
 | `head-ref`          | no       | `''`    | Commit the diff ends at. Empty resolves to the pull request's head SHA.        |
 | `full-suite-paths`  | no       | `''`    | Newline- or space-separated globs that force the full suite when touched.      |

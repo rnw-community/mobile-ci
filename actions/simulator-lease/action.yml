@@ -309,6 +309,7 @@ runs:
         fi
         case "$NAME_PREFIX" in
           ''|*[!A-Za-z0-9._-]*) echo "::error::name-prefix '$NAME_PREFIX' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
+          mobile-ci-template-*) echo "::error::name-prefix '$NAME_PREFIX' is inside the reserved 'mobile-ci-template-' namespace, which 'mode: release' refuses to delete; a lease named from it would leak a simulator on this runner."; exit 1 ;;
         esac
         if ! printf '%s' "$BOOT_TIMEOUT_SECONDS" | grep -qE '^[1-9][0-9]*$'; then
           echo "::error::boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive integer."
@@ -524,9 +525,14 @@ runs:
         if [ -n "$TEMPLATE_BAKE_NAME" ]; then
           template_lock="$HOME/.mobile-ci-simulator-templates/$TEMPLATE_BAKE_NAME.lock"
           mkdir -p "$(dirname "$template_lock")"
+          if [ -d "$template_lock" ] && [ -n "$(find "$template_lock" -maxdepth 0 -mmin +60 2>/dev/null)" ]; then
+            echo "::warning::Removing the stale template lock '$template_lock' left behind by a terminated job; baking a template takes seconds, never an hour."
+            rm -rf "$template_lock"
+          fi
           if ! mkdir "$template_lock" 2>/dev/null; then
             echo "::notice::Another job on this host is already baking the template '$TEMPLATE_BAKE_NAME'; this lease leaves it to that job."
           else
+            trap 'rm -rf "$template_lock"' EXIT
             existing=$(
               xcrun simctl list devices -j \
                 | jq -r --arg name "$TEMPLATE_BAKE_NAME" '[.devices[][] | select(.name == $name) | .udid] | first // empty'
@@ -547,7 +553,8 @@ runs:
                 xcrun simctl shutdown "$template_udid" 2>/dev/null || true
                 echo "Left the shut-down template '$TEMPLATE_BAKE_NAME' ($template_udid) on this host."
               fi
-              rmdir "$template_lock"
+              rm -rf "$template_lock"
+              trap - EXIT
               template_lock=''
               echo "Re-booting the lease '$SIMULATOR_UDID' after the template copy."
               xcrun simctl boot "$SIMULATOR_UDID" || true
@@ -556,7 +563,10 @@ runs:
                 exit 1
               fi
             fi
-            [ -z "$template_lock" ] || rmdir "$template_lock"
+            if [ -n "$template_lock" ]; then
+              rm -rf "$template_lock"
+              trap - EXIT
+            fi
           fi
         fi
 

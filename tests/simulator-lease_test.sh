@@ -152,6 +152,15 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'a lease may not be named from the reserved template namespace'
+workspace="$(acquire_workspace)"
+acquire "$workspace" devices-no-template.json NAME_PREFIX='mobile-ci-template-job'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'reserved' 'error message' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl create' 'no device was created'; then
+    pass_case
+fi
+
 case_start 'an unknown template-strategy fails closed'
 workspace="$(acquire_workspace)"
 acquire "$workspace" devices-template.json TEMPLATE_STRATEGY='maybe'
@@ -225,6 +234,27 @@ slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
     && assert_contains "$(cat "$workspace/log")" 'never baking a second one' 'reason'; then
+    pass_case
+fi
+
+case_start 'a fresh lock from another job means this lease does not bake'
+workspace="$(slim_workspace)"
+mkdir -p "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
+slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
+    && assert_contains "$(cat "$workspace/log")" 'already baking' 'reason'; then
+    pass_case
+fi
+
+case_start 'a lock a terminated job left behind is reclaimed, not obeyed forever'
+workspace="$(slim_workspace)"
+mkdir -p "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
+touch -d '-2 hours' "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
+slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/simctl-log")" "simctl clone $CREATED_UDID $TEMPLATE" 'simctl log' \
+    && assert_equals 'false' "$([ -d "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock" ] && echo true || echo false)" 'the lock is released'; then
     pass_case
 fi
 

@@ -8,20 +8,22 @@ description: >-
 inputs:
   map-file:
     description: >-
-      Repository-relative JSON file holding an array of
+      JSON file, resolved against working-directory, holding an array of
       `{"paths": ["glob", ...], "tests": ["Target/Class", ...]}` entries. A
       changed file selects the tests of every entry whose globs match it. `*`
       and `?` stop at a path separator, `**/` spans directories.
     required: true
   base-ref:
     description: >-
-      Commit the diff starts from. Empty resolves to the pull request's base
-      SHA; on any other event the run is `all`.
+      Commit the diff starts from, on a pull request event. Empty resolves to
+      the pull request's base SHA. Any other event runs the full suite
+      whatever these two say.
     required: false
     default: ''
   head-ref:
     description: >-
-      Commit the diff ends at. Empty resolves to the pull request's head SHA.
+      Commit the diff ends at, on a pull request event. Empty resolves to the
+      pull request's head SHA.
     required: false
     default: ''
   full-suite-paths:
@@ -82,16 +84,10 @@ runs:
 
         base="$BASE_REF"
         head="$HEAD_REF"
-        if [ -z "$base" ] || [ -z "$head" ]; then
-          if [ "${GITHUB_EVENT_NAME:-}" = 'pull_request' ] || [ "${GITHUB_EVENT_NAME:-}" = 'pull_request_target' ]; then
-            if [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
-              echo "::error::Event '${GITHUB_EVENT_NAME:-}' carries no readable event payload at '${GITHUB_EVENT_PATH:-}', so the pull request's base and head cannot be resolved; pass base-ref and head-ref explicitly."
-              exit 1
-            fi
-            [ -n "$base" ] || base="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
-            [ -n "$head" ] || head="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
-          else
-            echo "::notice::Event '${GITHUB_EVENT_NAME:-unknown}' is not a pull request, so the full suite runs; affected-test selection narrows a pull request, never a branch's own history."
+        case "${GITHUB_EVENT_NAME:-}" in
+          pull_request|pull_request_target) ;;
+          *)
+            echo "::notice::Event '${GITHUB_EVENT_NAME:-unknown}' is not a pull request, so the full suite runs; affected-test selection narrows a pull request, never a branch's own history - base-ref and head-ref do not change that."
             {
               printf 'mode=all\n'
               printf 'only-testing<<ONLY_TESTING_EOF\nONLY_TESTING_EOF\n'
@@ -102,7 +98,15 @@ runs:
               echo "Event \`${GITHUB_EVENT_NAME:-unknown}\` runs the **full suite**."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
+            ;;
+        esac
+        if [ -z "$base" ] || [ -z "$head" ]; then
+          if [ ! -f "${GITHUB_EVENT_PATH:-}" ]; then
+            echo "::error::Event '${GITHUB_EVENT_NAME:-}' carries no readable event payload at '${GITHUB_EVENT_PATH:-}', so the pull request's base and head cannot be resolved; pass base-ref and head-ref explicitly."
+            exit 1
           fi
+          [ -n "$base" ] || base="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["base"]["sha"])')"
+          [ -n "$head" ] || head="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
         fi
 
         for ref in "$base" "$head"; do

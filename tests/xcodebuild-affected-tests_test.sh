@@ -117,6 +117,16 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'explicit refs on a push still run the full suite'
+workspace="$(repo_workspace)"
+commit_change "$workspace" Sources/Menu/Menu.swift
+select_tests "$workspace" GITHUB_EVENT_NAME='push'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'all' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_equals '' "$(step_output "$workspace" only-testing)" 'only-testing'; then
+    pass_case
+fi
+
 case_start "an empty base-ref resolves the pull request's base and head from the event payload"
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
