@@ -164,7 +164,16 @@ runs:
             for line in open(os.environ['CHANGED_FILES'], encoding='utf-8').read().splitlines()
             if line.strip()
         ]
-        full_suite_globs = os.environ['FULL_SUITE_PATHS'].replace('\t', ' ').replace(' ', '\n').split('\n')
+        # A glob may contain a space ('My App.xcodeproj/**'), and a full-suite glob
+        # that is split in half stops matching - which silently narrows a run
+        # instead of widening it. So a multi-line value is one glob per line, and
+        # only a single-line value is split on whitespace.
+        raw_full_suite_paths = os.environ['FULL_SUITE_PATHS']
+        full_suite_globs = (
+            raw_full_suite_paths.splitlines()
+            if '\n' in raw_full_suite_paths
+            else raw_full_suite_paths.split()
+        )
         full_suite_globs = [glob.strip() for glob in full_suite_globs if glob.strip()]
 
         IDENTIFIER = re.compile(r'^[^\s/-][^\s/]*(/[^\s/]+){0,2}$')

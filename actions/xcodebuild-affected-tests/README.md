@@ -62,7 +62,7 @@ the globs it owns and the test identifiers those paths are covered by:
 | `map-file`          | yes      | —       | Path to the JSON map, resolved against `working-directory` (not the repository root when they differ). |
 | `base-ref`          | no       | `''`    | Commit the diff starts from. Empty resolves to the pull request's base SHA.    |
 | `head-ref`          | no       | `''`    | Commit the diff ends at. Empty resolves to the pull request's head SHA.        |
-| `full-suite-paths`  | no       | `''`    | Newline- or space-separated globs that force the full suite when touched.      |
+| `full-suite-paths`  | no       | `''`    | Globs that force the full suite when touched: one per line, or space-separated on a single line. Write a glob containing a space (`My App.xcodeproj/**`) on its own line. |
 | `fallback`          | no       | `all`   | `all` runs the full suite when the changed files cannot be determined; `fail` fails the step. |
 | `working-directory` | no       | `.`     | Directory `map-file` and the git repository resolve against.                   |
 

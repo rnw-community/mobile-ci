@@ -104,6 +104,19 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+# The changed file is mapped, so only the full-suite glob can widen this run -
+# a glob split in half would leave it at 'affected'.
+case_start 'a full-suite glob containing a space is one glob, not two'
+workspace="$(repo_workspace)"
+commit_change "$workspace" 'Sources/Menu/Main Menu.swift'
+select_tests "$workspace" FULL_SUITE_PATHS='Sources/Menu/Main Menu.swift
+.github/workflows/**'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'all' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_contains "$(cat "$workspace/summary")" 'full suite' 'the reason is stated'; then
+    pass_case
+fi
+
 case_start 'a push event runs the full suite without consulting git at all'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
