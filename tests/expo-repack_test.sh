@@ -232,38 +232,66 @@ else
     assert_contains "$(cat "$dir/log")" 'No keystore at' 'error message' && pass_case
 fi
 
+# sign_workspace <bundled: true|false> — a repacked APK laid out where the
+# verify step looks for it, with an apksigner stub whose reported certificate
+# per APK comes from SIGNER_<basename> so base and repack can differ.
+sign_workspace() {
+    local dir bundled="$1"
+    dir="$(new_workspace "$ACTION" "$SIGN_STEP")"
+    mkdir -p "$dir/runner-temp/expo-repack/out" "$dir/runner-temp/expo-repack/base" "$dir/staging/assets"
+    if [ "$bundled" = true ]; then
+        printf 'var bundle = 1\n' > "$dir/staging/assets/index.android.bundle"
+    else
+        printf 'placeholder\n' > "$dir/staging/assets/placeholder"
+    fi
+    (cd "$dir/staging" && zip -q -r "$dir/runner-temp/expo-repack/out/base.apk" .)
+    cp "$dir/runner-temp/expo-repack/out/base.apk" "$dir/runner-temp/expo-repack/base/base.apk"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" apksigner '
+apk="${!#}"
+case "$apk" in
+    */out/*) digest="$REPACKED_DIGEST" ;;
+    *) digest="$BASE_DIGEST" ;;
+esac
+if [ -z "$digest" ]; then exit 1; fi
+echo "Signer #1 certificate DN: CN=Android Debug"
+echo "Signer #1 certificate SHA-256 digest: $digest"
+exit 0'
+    printf '%s\n' "$dir"
+}
+
+verify() {
+    local dir="$1"
+    shift
+    run_step "$dir" SOURCE_APP="$dir/runner-temp/expo-repack/base/base.apk" ANDROID_BUILD_TOOLS_DIR='' "$@"
+}
+
 case_start 'an unsigned repacked APK is refused'
-dir="$(new_workspace "$ACTION" "$SIGN_STEP")"
-out="$dir/runner-temp/expo-repack/out"
-mkdir -p "$out" "$dir/staging/assets"
-printf 'var bundle = 1\n' > "$dir/staging/assets/index.android.bundle"
-(cd "$dir/staging" && zip -q -r "$out/base.apk" .)
-stub "$dir" apksigner 'echo "jar signature not found" >&2; exit 1'
-run_step "$dir" SOURCE_APP="$dir/runner-temp/expo-repack/base/base.apk" ANDROID_BUILD_TOOLS_DIR=''
+dir="$(sign_workspace true)"
+verify "$dir" REPACKED_DIGEST='' BASE_DIGEST=aa11
 if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'an APK apksigner rejected was handed on'
 else
     pass_case
 fi
 
-case_start 'a signed repacked APK that kept its bundle passes'
-dir="$(new_workspace "$ACTION" "$SIGN_STEP")"
-out="$dir/runner-temp/expo-repack/out"
-mkdir -p "$out" "$dir/staging/assets"
-printf 'var bundle = 1\n' > "$dir/staging/assets/index.android.bundle"
-(cd "$dir/staging" && zip -q -r "$out/base.apk" .)
-stub "$dir" apksigner 'echo "Signer #1 certificate DN: CN=Android Debug"; exit 0'
-run_step "$dir" SOURCE_APP="$dir/runner-temp/expo-repack/base/base.apk" ANDROID_BUILD_TOOLS_DIR=''
+case_start 'a repack signed by a different key than the base is refused'
+dir="$(sign_workspace true)"
+verify "$dir" REPACKED_DIGEST=bb22 BASE_DIGEST=aa11
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'an APK no device could install over the base was handed on; a valid signature is not the right signature'
+else
+    assert_contains "$(cat "$dir/log")" 'signed by a different certificate' 'error message' && pass_case
+fi
+
+case_start 'a repack signed with the base key and keeping its bundle passes'
+dir="$(sign_workspace true)"
+verify "$dir" REPACKED_DIGEST=aa11 BASE_DIGEST=aa11
 assert_equals 0 "$STEP_STATUS" 'verify exit status' && pass_case
 
-case_start 'a signed APK that lost its bundle is refused'
-dir="$(new_workspace "$ACTION" "$SIGN_STEP")"
-out="$dir/runner-temp/expo-repack/out"
-mkdir -p "$out" "$dir/staging/assets"
-printf 'placeholder\n' > "$dir/staging/assets/placeholder"
-(cd "$dir/staging" && zip -q -r "$out/base.apk" .)
-stub "$dir" apksigner 'exit 0'
-run_step "$dir" SOURCE_APP="$dir/runner-temp/expo-repack/base/base.apk" ANDROID_BUILD_TOOLS_DIR=''
+case_start 'a correctly signed APK that lost its bundle is refused'
+dir="$(sign_workspace false)"
+verify "$dir" REPACKED_DIGEST=aa11 BASE_DIGEST=aa11
 if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'an APK with no JavaScript bundle was handed on'
 else

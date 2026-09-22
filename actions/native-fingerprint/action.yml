@@ -43,6 +43,7 @@ runs:
         FINGERPRINT_EXTRA_ENV: ${{ inputs.extra-env }}
       run: |
         set -euo pipefail
+        extra_env=()
         while IFS= read -r line; do
           [ -n "$line" ] || continue
           case "$line" in
@@ -63,7 +64,7 @@ runs:
               exit 1
               ;;
           esac
-          export "${name}=${line#*=}"
+          extra_env+=("$line")
         done <<< "$FINGERPRINT_EXTRA_ENV"
         run_token="$$-${RANDOM}"
         out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-${run_token}.json"
@@ -74,7 +75,8 @@ runs:
         # give the generate one retry that bypasses any local/cached resolution
         # with a fresh npm cache and --prefer-online.
         generate() {
-          npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file" 2> "$error_file"
+          env ${extra_env[@]+"${extra_env[@]}"} \
+            npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file" 2> "$error_file"
         }
         report_stderr() {
           if [ -s "$error_file" ]; then

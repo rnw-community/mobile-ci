@@ -390,6 +390,10 @@ runs:
           fi
           rm -f "$error_file"
         else
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "::error::default-branch is empty, so whether this address already holds a base cannot be told apart from an artifact some branch happens to have uploaded. Pass it explicitly."
+            exit 1
+          fi
           listing="$RUNNER_TEMP/expo-base-binary-publish-artifacts.$$.json"
           if ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=100" > "$listing"; then
             echo "::error::The artifacts API query for $ARTIFACT_NAME failed; publishing blind could duplicate a base under an address that already means something else."

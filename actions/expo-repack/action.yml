@@ -106,6 +106,10 @@ runs:
             exit 1
             ;;
         esac
+        case "$BASE_PATH" in
+          /*) ;;
+          *) BASE_PATH="${GITHUB_WORKSPACE:-$PWD}/$BASE_PATH" ;;
+        esac
         if [ ! -f "$BASE_PATH" ]; then
           echo "::error::No base binary at '$BASE_PATH'."
           exit 1
@@ -154,6 +158,7 @@ runs:
         VERBOSE: ${{ inputs.verbose }}
       run: |
         set -euo pipefail
+        repack_env=()
         while IFS= read -r line; do
           [ -n "$line" ] || continue
           case "$line" in
@@ -170,7 +175,13 @@ runs:
               exit 1
               ;;
           esac
-          export "${name}=${line#*=}"
+          case "$name" in
+            PLATFORM|SOURCE_APP|REPACK_VERSION|REPACK_ENV|NODE_ENV|KEYSTORE_PATH|KEYSTORE_PASSWORD|KEYSTORE_KEY_ALIAS|KEYSTORE_KEY_PASSWORD|ANDROID_BUILD_TOOLS_DIR|VERBOSE)
+              echo "::error::repack-env may not set '$name'; it is this step's own control variable, and overwriting it would repack something other than what the inputs asked for."
+              exit 1
+              ;;
+          esac
+          repack_env+=("$line")
         done <<< "$REPACK_ENV"
 
         work="$RUNNER_TEMP/expo-repack"
@@ -209,7 +220,8 @@ runs:
           args+=(--verbose)
         fi
 
-        npx --yes "@expo/repack-app@${REPACK_VERSION}" "${args[@]}" .
+        env ${repack_env[@]+"${repack_env[@]}"} \
+          npx --yes "@expo/repack-app@${REPACK_VERSION}" "${args[@]}" .
         if [ ! -e "$output" ]; then
           echo "::error::@expo/repack-app exited 0 but wrote nothing to $output."
           exit 1
@@ -299,12 +311,31 @@ runs:
           echo "::error::apksigner was not found at '$apksigner_bin'. A repacked APK whose signature nobody verified cannot be installed on the emulator; install the Android build-tools, or set android-build-tools-dir."
           exit 1
         fi
-        "$apksigner_bin" verify --print-certs "$output" > /dev/null
+        signer_digests() {
+          "$apksigner_bin" verify --print-certs "$1" \
+            | grep -iE 'certificate SHA-256 digest' \
+            | sed -E 's/.*digest:[[:space:]]*//' \
+            | LC_ALL=C sort
+        }
+        repacked_signers=$(signer_digests "$output")
+        if [ -z "$repacked_signers" ]; then
+          echo "::error::apksigner reported no signer certificate for the repacked APK, so it is unsigned or unreadable."
+          exit 1
+        fi
+        base_signers=$(signer_digests "$SOURCE_APP")
+        if [ -z "$base_signers" ]; then
+          echo "::error::apksigner reported no signer certificate for the base APK, so what the repack must match cannot be established."
+          exit 1
+        fi
+        if [ "$repacked_signers" != "$base_signers" ]; then
+          echo "::error::The repacked APK is signed by a different certificate than the base it was built from, so a device refuses to install it over the base. Point keystore-path at the key the base was signed with."
+          exit 1
+        fi
         if ! unzip -Z1 "$output" | grep -Fxq 'assets/index.android.bundle'; then
           echo "::error::The repacked APK lost its embedded JavaScript bundle."
           exit 1
         fi
-        echo "Repacked APK is signed and carries assets/index.android.bundle."
+        echo "Repacked APK carries the base's signer and assets/index.android.bundle."
 
     - name: Package the repacked binary
       id: package

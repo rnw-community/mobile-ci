@@ -50,8 +50,8 @@ JavaScript.
 **The one thing a consumer must add** is a `permissions:` block on the job that
 calls the workflow. A reusable workflow can only narrow the token its caller
 granted, never add a scope, so in a repository whose default workflow token is
-read-only the base is never published and every run quietly compiles natively
-again:
+read-only no default-branch run can publish a base, and a native key nothing
+has warmed yet never gets warmed:
 
 ```yaml
 jobs:
@@ -62,6 +62,14 @@ jobs:
             actions: read
         uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
 ```
+
+A read-only token does **not** mean nothing works. A base that is already
+published stays readable, so pull requests keep repacking; what fails is the
+publish step on a default-branch run, and the effect is that a *newly moved*
+native key never gets warmed — every run on that key compiles natively until
+the permission is granted. A store that cannot be read at all is different
+again: `expo-base-binary` fails the lookup closed rather than reporting an
+absent base, because an unreadable store is not an empty one.
 
 Read [docs/repack.md](docs/repack.md) for the whole contract — what
 `fingerprint.config.js` must ignore and must not, how a key is warmed, and the

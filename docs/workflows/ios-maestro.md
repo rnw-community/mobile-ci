@@ -344,9 +344,15 @@ workflow's job-level `permissions:` can only *narrow* the token its caller
 granted — it can never add a scope. The `plan` job asks for `packages: read` +
 `actions: read` and the `build` job for `packages: write`, but in a repository
 whose default workflow token permission is **read** (the GitHub default for new
-organisations) those requests resolve to nothing and publishing the base fails.
-The repository still builds natively on every run and never warms a key, which
-looks like "repacking does not work" rather than like a permissions problem.
+organisations) those requests resolve to nothing.
+
+What that costs depends on the scope. Without `packages: write`, a base that is
+already published is still fetched and repacked — only the publish on a
+default-branch run fails, so a *newly moved* native key never gets warmed and
+every run on it compiles until the permission is granted. Without read access
+at all, `expo-base-binary` fails the lookup closed rather than calling the
+store empty: an unreadable store is not an absent base. Neither reads as a
+permissions problem from the outside, which is why it is called out here.
 
 Grant them on the job that calls this workflow:
 

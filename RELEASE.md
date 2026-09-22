@@ -136,7 +136,7 @@ being cut) that consumers pin to in practice. **No
      fi
      if printf '%s\n' "$content" \
        | grep 'uses: rnw-community/mobile-ci/' \
-       | grep -vE "rnw-community/mobile-ci/(actions/[a-z0-9-]+|\.github/workflows/[a-z0-9-]+\.yml)@${tag_re}( # ${tag_re})?\$"; then
+       | grep -vE "rnw-community/mobile-ci/(actions/[a-z0-9-]+|\.github/workflows/[a-z0-9-]+\.yml)@${tag_re} # ${tag_re}\$"; then
        echo "::error::${path} has a self-reference not pinned to ${tag}"
        check_status=1
      fi
