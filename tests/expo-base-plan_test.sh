@@ -141,4 +141,71 @@ else
     assert_contains "$(cat "$dir/log")" 'Expected one plan per target' 'error message' && pass_case
 fi
 
+case_start 'the repack resolves the same build-tools version the plan job installs (#163)'
+problem="$(PLAN_WORKFLOW="$PLAN_WORKFLOW" python3 - <<'PYTHON'
+import os
+import yaml
+
+steps = yaml.safe_load(open(os.environ['PLAN_WORKFLOW'], encoding='utf-8'))['jobs']['plan']['steps']
+by_name = {step.get('name'): step for step in steps}
+installed = by_name['Set up Android SDK for the repack']['with']['packages']
+repack = by_name['expo-repack']['with']
+if 'build-tools;${{ inputs.android-build-tools-version }}' not in installed:
+    print(f'the SDK step installs {installed!r}, not android-build-tools-version')
+elif repack.get('android-build-tools-version') != '${{ inputs.android-build-tools-version }}':
+    print(f"expo-repack resolves build-tools version {repack.get('android-build-tools-version')!r}, not the one the SDK step installed")
+PYTHON
+)"
+if [ -n "$problem" ]; then
+    fail_case "$problem"
+else
+    pass_case
+fi
+
+case_start 'every job that publishes a base serializes on its native key, and only when it publishes (#162)'
+problem="$(REPO_ROOT="$REPO_ROOT" python3 - <<'PYTHON'
+import os
+import re
+import yaml
+
+problems = []
+checked = 0
+for name in ('ios-maestro', 'android-maestro', 'store-screenshots', 'seed-native-cache'):
+    path = os.path.join(os.environ['REPO_ROOT'], '.github', 'workflows', f'{name}.yml')
+    for job_id, job in yaml.safe_load(open(path, encoding='utf-8'))['jobs'].items():
+        publish = [step for step in job.get('steps', []) if step.get('name') == 'expo-base-binary (publish)']
+        if not publish:
+            continue
+        checked += 1
+        where = f'{name}.yml job {job_id}'
+        platform = publish[0]['with']['platform']
+        concurrency = job.get('concurrency') or {}
+        group = str(concurrency.get('group', ''))
+        if concurrency.get('cancel-in-progress') is not False:
+            problems.append(f'{where}: cancel-in-progress must be false, or a second build cancels the first')
+        match = re.fullmatch(
+            r"\$\{\{ \((?P<cond>.+)\) && format\('expo-base-publish-\{0\}-(?P<platform>[a-z]+)-\{1\}-\{2\}', github\.repository, inputs\.base-flavor, matrix\.target\.nativeKey\)"
+            r" \|\| format\('expo-base-build-\{0\}-\{1\}-(?P<job>[a-z]+)-\{2\}', github\.run_id, github\.run_attempt, matrix\.target\.name\) \}\}",
+            group,
+        )
+        if not match:
+            problems.append(f'{where}: concurrency group {group!r} is not keyed on the native key')
+            continue
+        if match['cond'] != publish[0]['if']:
+            problems.append(f"{where}: joins the publish group when {match['cond']!r} but publishes when {publish[0]['if']!r}")
+        if match['platform'] != platform:
+            problems.append(f"{where}: publishes {platform} but serializes on the {match['platform']} group")
+        if match['job'] != platform:
+            problems.append(f"{where}: its non-publishing group is not distinct per platform")
+if checked != 6:
+    problems.append(f'expected 6 publishing jobs, found {checked}')
+print('; '.join(problems))
+PYTHON
+)"
+if [ -n "$problem" ]; then
+    fail_case "$problem"
+else
+    pass_case
+fi
+
 finish_suite

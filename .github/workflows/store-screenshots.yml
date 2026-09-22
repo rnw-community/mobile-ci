@@ -547,8 +547,9 @@ on:
             android-build-tools-dir:
                 description: >-
                     Path to the Android SDK build-tools directory holding zipalign
-                    and apksigner, used by the repack job. Leave empty to rely on
-                    what android-build-tools-version puts on PATH.
+                    and apksigner, used by the repack job. Leave empty to use the
+                    android-build-tools-version directory the repack job installs
+                    under the SDK.
                 type: string
                 required: false
                 default: ''
@@ -1354,6 +1355,9 @@ jobs:
             contents: read
             packages: write
             actions: read
+        concurrency:
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
@@ -1669,6 +1673,9 @@ jobs:
             contents: read
             packages: write
             actions: read
+        concurrency:
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:

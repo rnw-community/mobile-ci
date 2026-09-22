@@ -24,6 +24,25 @@ There is no fallback to the base's own JavaScript. A broken repack fails the
 build, which is the only way the artifact a Maestro shard installs can be
 trusted to be this commit's app.
 
+## Running on Linux
+
+The repack is meant for a Linux host with no Xcode, and two tools it needs are
+provided rather than assumed:
+
+- **`plutil` (ios).** `@expo/repack-app` converts the base's `Info.plist` with
+  `plutil -convert xml1 <file>` before reading it and `plutil -convert binary1
+  <file>` after writing it. On a host with no `plutil` the action puts a
+  `python3` stand-in on the repack's `PATH` implementing exactly those two
+  in-place conversions with `plistlib`; any other `plutil` invocation fails,
+  naming itself, so a future `@expo/repack-app` needing more is caught rather
+  than mishandled. A host with a real `plutil` keeps it. The host needs
+  `python3`.
+- **`apksigner` and `zipalign` (android).** With `android-build-tools-dir`
+  empty, the build-tools directory is resolved under the SDK
+  `android-actions/setup-android` installed (`ANDROID_SDK_ROOT`, or
+  `ANDROID_HOME`) — the `android-build-tools-version` directory when set — and
+  used both by `@expo/repack-app` and by the signature check.
+
 ## Inputs
 
 | Name                      | Required | Default  | Description                                                                          |
@@ -36,7 +55,8 @@ trusted to be this commit's app.
 | `repack-env`              | no       | `''`     | Newline-separated `KEY=VALUE` exported for the re-bundle.                             |
 | `expect-config`           | no       | `''`     | Newline-separated `<dotted.path>=<value>` assertions on the embedded `app.config`.    |
 | `repack-version`          | no       | `0.7.2`  | Pinned `@expo/repack-app` npm version.                                                |
-| `android-build-tools-dir` | no       | `''`     | Build-tools directory holding `zipalign`/`apksigner`. Empty falls back to `PATH`.     |
+| `android-build-tools-dir` | no       | `''`     | Build-tools directory holding `zipalign`/`apksigner`. Empty resolves it under `ANDROID_SDK_ROOT` (or `ANDROID_HOME`): the `android-build-tools-version` directory, else the newest installed one holding both tools; `PATH` only when no SDK is installed. |
+| `android-build-tools-version` | no   | `''`     | Build-tools version resolved under the SDK when `android-build-tools-dir` is empty. A version the SDK does not hold fails the step, naming the path. |
 | `keystore-path`           | no       | `''`     | Android signing keystore. Empty leaves `@expo/repack-app`'s default in place.         |
 | `keystore-password`       | no       | `''`     | Keystore password.                                                                    |
 | `keystore-key-alias`      | no       | `''`     | Keystore key alias.                                                                   |

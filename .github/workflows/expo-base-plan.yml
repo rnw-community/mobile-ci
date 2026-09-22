@@ -409,6 +409,7 @@ jobs:
                   expect-config: ${{ inputs.expect-config }}
                   repack-version: ${{ inputs.repack-app-version }}
                   android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+                  android-build-tools-version: ${{ inputs.android-build-tools-version }}
                   keystore-path: ${{ (inputs.platform == 'android' && inputs.android-keystore-path != '') && format('{0}/{1}', matrix.target.appDir, inputs.android-keystore-path) || '' }}
                   keystore-password: ${{ inputs.android-keystore-password }}
                   keystore-key-alias: ${{ inputs.android-keystore-key-alias }}

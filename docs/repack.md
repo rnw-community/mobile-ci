@@ -159,10 +159,32 @@ needs `actions: read`. Workflow artifacts expire, so a key goes cold and costs a
 native build again; use this backend only where publishing packages is not an
 option.
 
-A published base is **immutable**. `publish` refuses an address that already
-holds one unless `force: true` is set, because a key already in use has to keep
-meaning the same binary. `force` warns, loudly, that every build which already
-repacked onto the previous base used different native code.
+A published base is **immutable**. `publish` never overwrites an address that
+already holds one unless `force: true` is set, because a key already in use has
+to keep meaning the same binary. `force` warns, loudly, that every build which
+already repacked onto the previous base used different native code.
+
+Publishing is also **idempotent**, because the recommended wiring makes two runs
+publish the same key: the first push after a native change runs both the
+warm-up and the default-branch e2e, both plan `found=false`, and both build.
+Whichever reaches `publish` second finds the address already warm. That is not a
+failure — it is the outcome both runs wanted — so the step succeeds with a
+notice naming the revision that published the base, and pushes nothing. What it
+still refuses is an address holding something *else*: on `ghcr` the existing
+manifest's `artifactType` and its `platform`, `flavor` and `native-key`
+annotations must be exactly what this publish would write, or the step fails
+without touching it. The binaries are not compared — two native builds are
+never byte-identical, and the key is the claim that they are interchangeable.
+
+The native build jobs that can publish (`ios-maestro.yml`, `android-maestro.yml`,
+`store-screenshots.yml` and the warm-up) share one concurrency group per
+repository, platform, flavor and native key, with `cancel-in-progress: false`,
+so the warm-up and the e2e run do not compile the same key on two Macs at once:
+the second waits, builds, and finds the base published. Only a default-branch
+build that publishes joins that group; a pull request's native build never waits
+on one. GitHub keeps at most one job *pending* per group, so a third build of the
+same key queued behind the first two cancels the pending one — it shows as
+cancelled, not failed, and a re-run finds the base and repacks.
 
 A fetch that finds nothing reports `found=false`, and that is the signal to
 build natively. A fetch that *cannot tell* — an unauthorized registry, a failing
@@ -222,6 +244,25 @@ default the React Native debug keystore at `android/app/debug.keystore` that
 Gradle signs its release build with. Sign the repack with anything else and the
 emulator refuses to install it over the base. `apksigner verify` runs afterwards,
 and the embedded bundle is checked one more time.
+
+### What the Linux repack host has to provide
+
+The repack runs on the Linux pool by default, and the two tools it needs that a
+Linux host does not naturally have are handled by `expo-repack` itself — no
+consumer `build-command` shim and no `android-build-tools-dir` are needed:
+
+- **`plutil` (ios).** `@expo/repack-app` converts the base's `Info.plist` with
+  macOS `plutil -convert xml1` before reading it and `plutil -convert binary1`
+  after writing it. On a host with no `plutil`, `expo-repack` puts a `python3`
+  stand-in on the repack's `PATH` that implements exactly those two in-place
+  conversions with `plistlib` and fails on any other invocation. The host needs
+  `python3`; a host with a real `plutil` keeps it.
+- **`apksigner` and `zipalign` (android).** The plan job installs
+  `build-tools;<android-build-tools-version>` with `android-actions/setup-android`,
+  which puts neither tool on `PATH`. `expo-repack` resolves
+  `$ANDROID_SDK_ROOT/build-tools/<android-build-tools-version>` itself and hands
+  it to both `@expo/repack-app` and the signature check. Set
+  `android-build-tools-dir` only to use build-tools from somewhere else.
 
 ## The strategy
 

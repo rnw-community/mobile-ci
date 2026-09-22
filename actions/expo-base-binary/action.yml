@@ -365,6 +365,9 @@ runs:
         REFERENCE: ${{ steps.address.outputs.reference }}
         ARTIFACT_NAME: ${{ steps.address.outputs.artifact-name }}
         SOURCE_PATH: ${{ inputs.path }}
+        PLATFORM: ${{ inputs.platform }}
+        FLAVOR: ${{ inputs.flavor }}
+        KEY: ${{ inputs.key }}
         FORCE: ${{ inputs.force }}
         GH_TOKEN: ${{ inputs.token }}
         DEFAULT_BRANCH: ${{ inputs.default-branch }}
@@ -376,19 +379,43 @@ runs:
         fi
 
         exists=false
+        mismatch=''
+        published_by=''
         if [ "$BACKEND" = ghcr ]; then
           error_file="$RUNNER_TEMP/expo-base-binary-publish.$$.err"
+          manifest_file="$RUNNER_TEMP/expo-base-binary-publish.$$.json"
           status=0
-          oras manifest fetch "$REFERENCE" > /dev/null 2> "$error_file" || status=$?
+          oras manifest fetch "$REFERENCE" > "$manifest_file" 2> "$error_file" || status=$?
           if [ "$status" -eq 0 ]; then
             exists=true
+            if ! mismatch=$(jq -r \
+                --arg platform "$PLATFORM" --arg flavor "$FLAVOR" --arg key "$KEY" '
+                  (.annotations // {}) as $a
+                  | if .artifactType != "application/vnd.rnw-community.mobile-ci.e2e-base.v1"
+                    then "artifactType is \(.artifactType // "absent"), so it is not the base this action publishes"
+                    else [
+                      (if $a["dev.rnw-community.mobile-ci.platform"] != $platform then "platform is \($a["dev.rnw-community.mobile-ci.platform"] // "absent"), not \($platform)" else empty end),
+                      (if $a["dev.rnw-community.mobile-ci.flavor"] != $flavor then "flavor is \($a["dev.rnw-community.mobile-ci.flavor"] // "absent"), not \($flavor)" else empty end),
+                      (if $a["dev.rnw-community.mobile-ci.native-key"] != $key then "native-key is \($a["dev.rnw-community.mobile-ci.native-key"] // "absent"), not \($key)" else empty end)
+                    ] | join("; ")
+                    end' "$manifest_file"); then
+              echo "::error::$REFERENCE exists but its manifest is unreadable, so whether it is this key's base cannot be told; publishing over it could replace a base other builds are already repacking onto."
+              rm -f "$error_file" "$manifest_file"
+              exit 1
+            fi
+            published_by=$(jq -r '.annotations["org.opencontainers.image.revision"] // "an unrecorded revision"' "$manifest_file")
+            if command -v sha256sum >/dev/null 2>&1; then
+              published_by="$published_by, manifest sha256:$(sha256sum "$manifest_file" | cut -d' ' -f1)"
+            else
+              published_by="$published_by, manifest sha256:$(shasum -a 256 "$manifest_file" | cut -d' ' -f1)"
+            fi
           elif ! grep -qiE 'not found|NAME_UNKNOWN|MANIFEST_UNKNOWN|404' "$error_file"; then
             echo "::error::Could not determine whether $REFERENCE already exists (oras exited $status); publishing blind could overwrite a base other builds are already repacking onto."
             cat "$error_file" >&2
-            rm -f "$error_file"
+            rm -f "$error_file" "$manifest_file"
             exit 1
           fi
-          rm -f "$error_file"
+          rm -f "$error_file" "$manifest_file"
         else
           if [ -z "$DEFAULT_BRANCH" ]; then
             echo "::error::default-branch is empty, so whether this address already holds a base cannot be told apart from an artifact some branch happens to have uploaded. Pass it explicitly."
@@ -405,12 +432,20 @@ runs:
               | select(.expired | not)
               | select(.workflow_run.head_branch == $branch)] | length' "$listing")
           rm -f "$listing"
-          [ "$count" -gt 0 ] && exists=true
+          if [ "$count" -gt 0 ]; then
+            exists=true
+            published_by="a $DEFAULT_BRANCH run's artifact named for this key"
+          fi
         fi
 
         if [ "$exists" = true ] && [ "$FORCE" != 'true' ]; then
-          echo "::error::$REFERENCE already holds a base binary. A published base is immutable: the key that addresses it must keep meaning the same binary. Re-publish with force: true only when the base is known to be wrong (see docs/repack.md)."
-          exit 1
+          if [ -n "$mismatch" ]; then
+            echo "::error::$REFERENCE already holds something other than the base for this key ($mismatch). A published base is immutable, so it is not overwritten; re-publish with force: true only when the base is known to be wrong (see docs/repack.md)."
+            exit 1
+          fi
+          echo "::notice::$REFERENCE is already warm: another run already published the base for native key $KEY ($published_by). A published base is immutable, so it is kept and this build's binary is not pushed."
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+          exit 0
         fi
         if [ "$exists" = true ]; then
           echo "::warning::Overwriting the base binary at $REFERENCE because force was set; every build that already repacked onto the previous one used different native code."
