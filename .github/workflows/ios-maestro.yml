@@ -520,7 +520,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.1 # v3.0.1
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@4d1900bf176df507fda54dd43569fd6f94221f9b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
         with:
             platform: ios
             targets: ${{ inputs.targets }}
