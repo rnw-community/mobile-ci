@@ -396,20 +396,97 @@ on:
                 type: string
                 required: false
                 default: ''
-            repack-on-hit:
+            build-strategy:
                 description: >-
-                    On a native-app-cache hit (either platform), run repack-app to
-                    inject a freshly exported JS bundle into the cached shell instead
-                    of reusing it unchanged. Falls back to a full native build if the
-                    repack fails. Left at its default, a config-path value wins.
-                type: boolean
+                    How this run gets the binaries its capture jobs install, on
+                    both platforms. `auto` (the default) computes the native key,
+                    looks up the base binary published for it, and repacks that
+                    base with this commit's JavaScript on the Linux pool; only a
+                    key with no published base, or an unusable base, reaches the
+                    build job — and when it does on the default branch, the base
+                    it builds is published for the next run. `repack` refuses to
+                    compile native code at all: a missing base fails the build
+                    instead of quietly taking a build slot. `native` is the escape
+                    hatch and a regression — every run then compiles native code
+                    again, and that run publishes no base. See docs/repack.md.
+                    Empty resolves to the config-path value, else 'auto'.
+                type: string
                 required: false
-                default: false
+                default: ''
+            repack-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the plan/repack
+                    jobs of both platforms. The default is the x86_64 Linux pool: a
+                    repack re-bundles JavaScript and rewrites an archive, so it
+                    needs no Xcode, no Gradle and no build slot.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
+            native-build-label:
+                description: >-
+                    Pull-request label forcing build-strategy: native for that one
+                    pull request. Set together with build-strategy: repack it fails
+                    closed rather than silently picking a winner.
+                type: string
+                required: false
+                default: 'mobile: force native build'
+            base-backend:
+                description: >-
+                    Where base binaries live: `ghcr` (default, an immutable OCI
+                    artifact needing packages:write to publish and packages:read to
+                    fetch) or `artifact` (workflow artifacts, default-branch runs
+                    only, needing actions:read). See expo-base-binary.
+                type: string
+                required: false
+                default: ghcr
+            base-flavor:
+                description: Flavor segment of the base binary's address.
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                description: >-
+                    Path, relative to a target's appDir, of the @expo/fingerprint
+                    config whose ignore list is the correctness boundary of every
+                    repack. Its hash is part of the native key. See docs/repack.md.
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported while the native key
+                    is computed, for an app.config that branches on env. Must be
+                    byte-identical to what the warm-up passes, or the two never
+                    agree on a key and every run takes a build slot.
+                type: string
+                required: false
+                default: ''
+            repack-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported for the re-bundle, so
+                    the consumer's app.config writes this build's API URL, version
+                    and build number into the repacked binary.
+                type: string
+                required: false
+                default: ''
+            expect-config:
+                description: >-
+                    Newline-separated <dotted.path>=<value> assertions the repacked
+                    binary's embedded app.config must satisfy exactly. Every value
+                    repack-env is expected to have rewritten belongs here: a config
+                    rewrite nobody checked is a repack nobody can trust.
+                type: string
+                required: false
+                default: ''
             repack-app-version:
-                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                description: Pinned @expo/repack-app npm version.
                 type: string
                 required: false
                 default: '0.7.2'
+            repack-timeout-minutes:
+                type: number
+                required: false
+                default: 30
             build-timeout-minutes:
                 description: iOS build job timeout.
                 type: number
@@ -474,21 +551,50 @@ on:
                 default: ''
             android-build-tools-version:
                 description: >-
-                    Android build-tools version installed via
-                    android-actions/setup-android on a native-app-cache hit, used
-                    only when repack-on-hit is true - same rationale as
-                    android-maestro.yml's input of the same name.
+                    Android build-tools version the repack job installs via
+                    android-actions/setup-android, for the zipalign and apksigner a
+                    repacked APK is aligned and signed with. The Gradle build
+                    installs whatever its compileSdkVersion resolves to; the repack
+                    job never runs Gradle, so it asks for build-tools explicitly.
                 type: string
                 required: false
                 default: '35.0.0'
             android-build-tools-dir:
                 description: >-
-                    Path to the Android SDK build-tools directory for repack-app's
-                    aapt2 validation, used only when repack-on-hit is true. Leave
-                    empty to rely on an aapt2 already on PATH.
+                    Path to the Android SDK build-tools directory holding zipalign
+                    and apksigner, used by the repack job. Leave empty to rely on
+                    what android-build-tools-version puts on PATH.
                 type: string
                 required: false
                 default: ''
+            android-keystore-path:
+                description: >-
+                    Keystore, relative to android-target's appDir, the repacked APK
+                    is signed with. The default is the React Native debug keystore
+                    an `expo prebuild` app ships and Gradle signs its release build
+                    with - sign the repack with anything else and the device
+                    refuses to install it over the base. These are the published
+                    debug-keystore constants, not secrets; a release key belongs in
+                    native-publish.yml, never here. Empty leaves @expo/repack-app's
+                    own default in place.
+                type: string
+                required: false
+                default: android/app/debug.keystore
+            android-keystore-password:
+                description: Password of android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: android
+            android-keystore-key-alias:
+                description: Key alias inside android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: androiddebugkey
+            android-keystore-key-password:
+                description: Key password inside android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: android
             android-build-timeout-minutes:
                 type: number
                 required: false
@@ -679,7 +785,7 @@ jobs:
             android-cache-profile: ${{ steps.resolve.outputs.android-cache-profile }}
             android-gradle-task: ${{ steps.resolve.outputs.android-gradle-task }}
             android-gradle-args: ${{ steps.resolve.outputs.android-gradle-args }}
-            repack-on-hit: ${{ steps.resolve.outputs.repack-on-hit }}
+            build-strategy: ${{ steps.build-strategy.outputs.strategy }}
             rct-use-prebuilt-rncore: ${{ steps.resolve.outputs.rct-use-prebuilt-rncore }}
             rct-use-rn-dep: ${{ steps.resolve.outputs.rct-use-rn-dep }}
             upload-screenshots: ${{ steps.resolve.outputs.upload-screenshots }}
@@ -702,7 +808,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v3.0.0 # v3.0.0
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
@@ -712,7 +818,7 @@ jobs:
                       "deeplink-confirm-button","status-bar-override",
                       "apple-screenshot-slots","maestro-env","maestro-config","build-env",
                       "install-command","build-command","cache-profile","android-cache-profile",
-                      "android-gradle-task","android-gradle-args","repack-on-hit",
+                      "android-gradle-task","android-gradle-args","build-strategy",
                       "rct-use-prebuilt-rncore","rct-use-rn-dep","upload-screenshots","upload-command",
                       "screenshots-download-dir","publish-env","asc-dedupe-screenshots",
                       "asc-dedupe-version-state","asc-dedupe-app-id","asc-fail-on-duplicates"]
@@ -744,7 +850,7 @@ jobs:
                   IN_ANDROID_CACHE_PROFILE: ${{ inputs.android-cache-profile }}
                   IN_ANDROID_GRADLE_TASK: ${{ inputs.android-gradle-task }}
                   IN_ANDROID_GRADLE_ARGS: ${{ inputs.android-gradle-args }}
-                  IN_REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
+                  IN_BUILD_STRATEGY: ${{ inputs.build-strategy }}
                   IN_RCT_USE_PREBUILT_RNCORE: ${{ inputs.rct-use-prebuilt-rncore }}
                   IN_RCT_USE_RN_DEP: ${{ inputs.rct-use-rn-dep }}
                   IN_UPLOAD_SCREENSHOTS: ${{ inputs.upload-screenshots }}
@@ -799,7 +905,7 @@ jobs:
                     'android-cache-profile|string|android-native-v1' \
                     'android-gradle-task|string|assembleRelease' \
                     'android-gradle-args|string|' \
-                    'repack-on-hit|bool|false' \
+                    'build-strategy|string|auto' \
                     'rct-use-prebuilt-rncore|bool|false' \
                     'rct-use-rn-dep|bool|false' \
                     'upload-screenshots|bool|false' \
@@ -1187,16 +1293,96 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
                   echo "capture-manifest OK: $ios_count iOS + $android_count Android entries, capture-mode=$CAPTURE_MODE."
 
-    build-ios:
-        name: Build iOS (${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).name || 'skipped' }})
+            - name: Resolve the build strategy
+              id: build-strategy
+              shell: bash
+              env:
+                  REQUESTED_STRATEGY: ${{ steps.resolve.outputs.build-strategy }}
+                  NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
+                  PULL_REQUEST_LABELS: ${{ github.event_name == 'pull_request' && toJSON(github.event.pull_request.labels.*.name) || '[]' }}
+              run: |
+                  set -euo pipefail
+                  case "$REQUESTED_STRATEGY" in
+                    auto|repack|native) ;;
+                    *)
+                      echo "::error::build-strategy must be 'auto', 'repack' or 'native'; got '$REQUESTED_STRATEGY'."
+                      exit 1
+                      ;;
+                  esac
+
+                  strategy="$REQUESTED_STRATEGY"
+                  labelled=false
+                  if [ -n "$NATIVE_BUILD_LABEL" ]; then
+                    labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")
+                  fi
+
+                  if [ "$labelled" = 'true' ]; then
+                    if [ "$REQUESTED_STRATEGY" = 'repack' ]; then
+                      echo "::error::build-strategy is 'repack', which forbids compiling native code, but this pull request carries the '$NATIVE_BUILD_LABEL' label, which demands it. Remove one of the two rather than letting the workflow pick a winner."
+                      exit 1
+                    fi
+                    strategy=native
+                    echo "::notice::'$NATIVE_BUILD_LABEL' is set on this pull request, so native code is compiled instead of a published base being repacked. No base binary is published by this run."
+                  fi
+
+                  if [ "$strategy" = 'native' ]; then
+                    echo "::warning::This run compiles native code for every target. That is the escape hatch, not the norm: it takes a full native build slot a repack would not have needed. See docs/repack.md."
+                  fi
+
+                  echo "strategy=$strategy" >> "$GITHUB_OUTPUT"
+                  echo "Build strategy: $strategy (requested '$REQUESTED_STRATEGY')."
+
+    plan-ios:
+        name: Plan the ios build strategy
         needs: validate-manifest
         if: needs.validate-manifest.outputs.has-ios == 'true'
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        with:
+            platform: ios
+            targets: ${{ format('[{0}]', needs.validate-manifest.outputs.ios-target) }}
+            build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
+            runner-labels: ${{ inputs.repack-runner-labels }}
+            timeout-minutes: ${{ inputs.repack-timeout-minutes }}
+            app-artifact-prefix: store-screenshots-app
+            plan-artifact-prefix: store-screenshots-ios-plan
+            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}
+            base-backend: ${{ inputs.base-backend }}
+            base-flavor: ${{ inputs.base-flavor }}
+            fingerprint-config: ${{ inputs.fingerprint-config }}
+            fingerprint-env: ${{ inputs.fingerprint-env }}
+            expo-fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+            repack-env: ${{ inputs.repack-env }}
+            expect-config: ${{ inputs.expect-config }}
+            repack-app-version: ${{ inputs.repack-app-version }}
+            node-version: ${{ inputs.node-version }}
+            install-command: ${{ needs.validate-manifest.outputs.install-command }}
+            enable-corepack: ${{ inputs.enable-corepack }}
+            package-manager: ${{ inputs.package-manager }}
+            build-command: ${{ needs.validate-manifest.outputs.build-command }}
+            build-env: ${{ needs.validate-manifest.outputs.build-env }}
+
+    build-ios:
+        name: Build iOS (${{ matrix.target.name }})
+        needs: [validate-manifest, plan-ios]
+        if: ${{ !cancelled() && needs.plan-ios.result == 'success' && needs.plan-ios.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+            APP_DIR: ${{ matrix.target.appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
 
         steps:
             - name: Checkout repository
@@ -1350,7 +1536,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.0 # v3.0.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1363,11 +1549,11 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: fromJSON(needs.validate-manifest.outputs.ios-target).prebuildCommand != ''
-              working-directory: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
                   RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
                   RCT_USE_RN_DEP_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
@@ -1383,136 +1569,89 @@ jobs:
                   fi
                   eval "$PREBUILD_COMMAND"
 
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: ios
-                  working-directory: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
-
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
-                  path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
-
-            - name: Repack fresh JS into cached native app
-              id: repack
-              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v2.3.0 # v2.3.0
-              with:
-                  platform: ios
-                  app-path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
-                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
-                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
-                  repack-version: ${{ inputs.repack-app-version }}
-
-            - name: Determine whether a native build is needed
-              id: build-decision
-              shell: bash
-              env:
-                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
-                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
-              run: |
-                  set -euo pipefail
-                  need_build=true
-                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
-                    need_build=false
-                  fi
-                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
               run: |
                   {
                     echo "### iOS build: ${TARGET_NAME} (warm — native build skipped)"
-                    if [ "$REPACK_ON_HIT" = "true" ]; then
-                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
-                    else
-                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
-                    fi
+                    echo "This host already holds the native app for key ${NATIVE_KEY}; the published base is written from it."
                   } >> "$GITHUB_STEP_SUMMARY"
 
-            - name: Report repack fallback
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-              run: |
-                  echo "### iOS build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
-
             - name: Clean stale app before native build
-              if: steps.build-decision.outputs.need-build == 'true'
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
               shell: bash
               env:
-                  APP_PATH: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  APP_PATH: .ci-cache/ios-native-app/${{ matrix.target.name }}/Base.app
               run: rm -rf "$APP_PATH"
 
             - name: setup-ccache-ios (restore)
-              if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.0 # v3.0.0
               with:
-                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appDir }}
-                  workspace: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).workspace }}
-                  scheme: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).scheme }}
+                  app-dir: ${{ matrix.target.appDir }}
+                  workspace: ${{ matrix.target.workspace }}
+                  scheme: ${{ matrix.target.scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  pods-cache-key: pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.target.name }}-${{ runner.os }}-
                   rct-use-prebuilt-rncore: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', fromJSON(needs.validate-manifest.outputs.ios-target).appDir)) }}
+                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
-                  path: .ci-cache/ios-native-app/${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
+                  profile: ${{ needs.validate-manifest.outputs.cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Archive app for the capture job
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  TARGET_NAME: ${{ matrix.target.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -1521,18 +1660,86 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}.tar.gz
+                  name: store-screenshots-app-${{ matrix.target.name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ matrix.target.name }}.tar.gz
                   retention-days: 1
+            - name: expo-base-binary (publish)
+              if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: ios
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-artifacts/store-screenshots-app-${{ matrix.target.name }}.tar.gz
 
-    build-android:
-        name: Build Android (${{ needs.validate-manifest.outputs.android-target != '' && fromJSON(needs.validate-manifest.outputs.android-target).name || 'skipped' }})
+            - name: Report that this key is now warm
+              if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  echo "### iOS ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo 'Runs on this native surface now repack instead of compiling.' >> "$GITHUB_STEP_SUMMARY"
+
+    plan-android:
+        name: Plan the android build strategy
         needs: validate-manifest
         if: needs.validate-manifest.outputs.has-android == 'true'
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        with:
+            platform: android
+            targets: ${{ format('[{0}]', needs.validate-manifest.outputs.android-target) }}
+            build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
+            runner-labels: ${{ inputs.repack-runner-labels }}
+            timeout-minutes: ${{ inputs.repack-timeout-minutes }}
+            app-artifact-prefix: store-screenshots-apk
+            plan-artifact-prefix: store-screenshots-android-plan
+            toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
+            base-backend: ${{ inputs.base-backend }}
+            base-flavor: ${{ inputs.base-flavor }}
+            fingerprint-config: ${{ inputs.fingerprint-config }}
+            fingerprint-env: ${{ inputs.fingerprint-env }}
+            expo-fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+            repack-env: ${{ inputs.repack-env }}
+            expect-config: ${{ inputs.expect-config }}
+            repack-app-version: ${{ inputs.repack-app-version }}
+            cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
+            android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+            android-build-tools-version: ${{ inputs.android-build-tools-version }}
+            android-keystore-path: ${{ inputs.android-keystore-path }}
+            android-keystore-password: ${{ inputs.android-keystore-password }}
+            android-keystore-key-alias: ${{ inputs.android-keystore-key-alias }}
+            android-keystore-key-password: ${{ inputs.android-keystore-key-password }}
+            node-version: ${{ inputs.node-version }}
+            install-command: ${{ needs.validate-manifest.outputs.install-command }}
+            enable-corepack: ${{ inputs.enable-corepack }}
+            package-manager: ${{ inputs.package-manager }}
+            build-command: ${{ needs.validate-manifest.outputs.build-command }}
+            build-env: ${{ needs.validate-manifest.outputs.build-env }}
+
+    build-android:
+        name: Build Android (${{ matrix.target.name }})
+        needs: [validate-manifest, plan-android]
+        if: ${{ !cancelled() && needs.plan-android.result == 'success' && needs.plan-android.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.android-build-runner-labels != '' && inputs.android-build-runner-labels || (inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.android-build-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
+            APP_DIR: ${{ matrix.target.appDir }}
 
         steps:
             - name: Checkout repository
@@ -1692,126 +1899,90 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: fromJSON(needs.validate-manifest.outputs.android-target).prebuildCommand != ''
-              working-directory: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ fromJSON(needs.validate-manifest.outputs.android-target).prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
-
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: android
-                  working-directory: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
-                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ matrix.target.name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
                   arch: arm64
                   toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
-
-            - name: Set up Android SDK (for repack-app validation)
-              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-              with:
-                  cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
-                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
-
-            - name: Repack fresh JS into cached native app
-              id: repack
-              if: needs.validate-manifest.outputs.repack-on-hit == 'true' && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v2.3.0 # v2.3.0
-              with:
-                  platform: android
-                  app-path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
-                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
-                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
-                  repack-version: ${{ inputs.repack-app-version }}
-                  android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
-
-            - name: Determine whether a native build is needed
-              id: build-decision
-              shell: bash
-              env:
-                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
-                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
-              run: |
-                  set -euo pipefail
-                  need_build=true
-                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
-                    need_build=false
-                  fi
-                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
+              if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
               env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  REPACK_ON_HIT: ${{ needs.validate-manifest.outputs.repack-on-hit }}
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
               run: |
                   {
-                    echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
-                    if [ "$REPACK_ON_HIT" = "true" ]; then
-                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
-                    else
-                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
-                    fi
+                    echo "### Android build: ${TARGET_NAME} (warm — Gradle build skipped)"
+                    echo "This host already holds the APK for key ${NATIVE_KEY}; the published base is written from it."
                   } >> "$GITHUB_STEP_SUMMARY"
 
-            - name: Report repack fallback
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-              run: |
-                  echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
-
             - name: build-android-app
-              if: steps.build-decision.outputs.need-build == 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true'
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.0 # v3.0.0
               with:
-                  app-dir: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
+                  app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
                   gradle-task: ${{ needs.validate-manifest.outputs.android-gradle-task }}
                   gradle-args: ${{ needs.validate-manifest.outputs.android-gradle-args }}
-                  output-dir: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  gradle-cache-key: gradle-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', fromJSON(needs.validate-manifest.outputs.android-target).appDir), format('{0}/android/**/*.gradle*', fromJSON(needs.validate-manifest.outputs.android-target).appDir), format('{0}/package.json', fromJSON(needs.validate-manifest.outputs.android-target).appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
-                      gradle-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ runner.os }}-
+                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
-                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
+                  profile: ${{ needs.validate-manifest.outputs.android-cache-profile }}-${{ matrix.target.name }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
                   arch: arm64
                   toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  path: .ci-cache/android-native-app/${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
+                  name: store-screenshots-apk-${{ matrix.target.name }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
                   retention-days: 1
+            - name: expo-base-binary (publish)
+              if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: android
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+
+            - name: Report that this key is now warm
+              if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  echo "### Android ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo 'Runs on this native surface now repack instead of running Gradle.' >> "$GITHUB_STEP_SUMMARY"
 
     capture-ios:
         name: Capture iOS (${{ matrix.entry.device }})
-        needs: [validate-manifest, build-ios]
-        if: needs.validate-manifest.outputs.has-ios == 'true'
+        needs: [validate-manifest, plan-ios, build-ios]
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && needs.build-ios.result != 'failure' }}
         runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
@@ -1836,7 +2007,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.0 # v3.0.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1854,7 +2025,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v3.0.0 # v3.0.0
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
@@ -1903,8 +2074,8 @@ jobs:
 
     capture-android:
         name: Capture Android (${{ matrix.entry.device }})
-        needs: [validate-manifest, build-android]
-        if: needs.validate-manifest.outputs.has-android == 'true'
+        needs: [validate-manifest, plan-android, build-android]
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-android == 'true' && needs.plan-android.result == 'success' && needs.build-android.result != 'failure' }}
         runs-on: ${{ fromJSON(inputs.android-capture-runner-labels) }}
         timeout-minutes: ${{ inputs.android-capture-timeout-minutes }}
         strategy:
@@ -1925,7 +2096,7 @@ jobs:
 
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.0 # v3.0.0
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -1937,7 +2108,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3.0.0 # v3.0.0
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
@@ -1979,7 +2150,7 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.0 # v3.0.0
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -2323,7 +2494,7 @@ jobs:
               # against 'true' here - unlike a raw boolean input, whose
               # `== 'true'` comparison is always false and needs truthiness.
               if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
-              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v3.0.0 # v3.0.0
               with:
                   app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}
@@ -2341,7 +2512,7 @@ jobs:
 
     status:
         name: Store screenshots result
-        needs: [validate-manifest, build-ios, build-android, capture-ios, capture-android, upload]
+        needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-android, upload]
         if: always()
         runs-on: ubuntu-latest
         steps:
@@ -2351,7 +2522,11 @@ jobs:
                   VALIDATE_RESULT: ${{ needs.validate-manifest.result }}
                   HAS_IOS: ${{ needs.validate-manifest.outputs.has-ios }}
                   HAS_ANDROID: ${{ needs.validate-manifest.outputs.has-android }}
+                  PLAN_IOS_RESULT: ${{ needs.plan-ios.result }}
+                  NATIVE_TARGETS_IOS: ${{ needs.plan-ios.outputs.native-targets }}
                   BUILD_IOS_RESULT: ${{ needs.build-ios.result }}
+                  PLAN_ANDROID_RESULT: ${{ needs.plan-android.result }}
+                  NATIVE_TARGETS_ANDROID: ${{ needs.plan-android.outputs.native-targets }}
                   BUILD_ANDROID_RESULT: ${{ needs.build-android.result }}
                   CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
@@ -2368,13 +2543,19 @@ jobs:
                   if [ "$VALIDATE_RESULT" != "success" ]; then
                     fail "capture-manifest/capture-scenes validation failed." "$VALIDATE_RESULT"
                   fi
-                  # Honest-skip semantics: a platform's build/capture results
-                  # must be success when the manifest has entries for it;
-                  # 'skipped' is only acceptable for a platform with no
-                  # entries at all.
+                  # Honest-skip semantics: a platform's plan/capture results
+                  # must be success when the manifest has entries for it, and
+                  # its build job may only be 'skipped' when the plan found a
+                  # published base for every target it names.
                   ran_platforms=''
                   if [ "$HAS_IOS" = 'true' ]; then
-                    if [ "$BUILD_IOS_RESULT" != "success" ]; then
+                    if [ "$PLAN_IOS_RESULT" != "success" ]; then
+                      fail "iOS plan job did not succeed (result: $PLAN_IOS_RESULT) despite the manifest having iOS entries." "$PLAN_IOS_RESULT"
+                    fi
+                    if [ "$BUILD_IOS_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS_IOS" != '[]' ]; then
+                      fail "The iOS build was skipped while ${NATIVE_TARGETS_IOS} still needed one; a skipped build is not a build." "$BUILD_IOS_RESULT"
+                    fi
+                    if [ "$BUILD_IOS_RESULT" != "success" ] && [ "$BUILD_IOS_RESULT" != 'skipped' ]; then
                       fail "iOS build job did not succeed (result: $BUILD_IOS_RESULT) despite the manifest having iOS entries." "$BUILD_IOS_RESULT"
                     fi
                     if [ "$CAPTURE_IOS_RESULT" != "success" ]; then
@@ -2382,10 +2563,16 @@ jobs:
                     fi
                     ran_platforms="$ran_platforms ios"
                   else
-                    echo "iOS: no manifest entries - build-ios/capture-ios skipped."
+                    echo "iOS: no manifest entries - plan-ios/build-ios/capture-ios skipped."
                   fi
                   if [ "$HAS_ANDROID" = 'true' ]; then
-                    if [ "$BUILD_ANDROID_RESULT" != "success" ]; then
+                    if [ "$PLAN_ANDROID_RESULT" != "success" ]; then
+                      fail "Android plan job did not succeed (result: $PLAN_ANDROID_RESULT) despite the manifest having Android entries." "$PLAN_ANDROID_RESULT"
+                    fi
+                    if [ "$BUILD_ANDROID_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS_ANDROID" != '[]' ]; then
+                      fail "The Android build was skipped while ${NATIVE_TARGETS_ANDROID} still needed one; a skipped build is not a build." "$BUILD_ANDROID_RESULT"
+                    fi
+                    if [ "$BUILD_ANDROID_RESULT" != "success" ] && [ "$BUILD_ANDROID_RESULT" != 'skipped' ]; then
                       fail "Android build job did not succeed (result: $BUILD_ANDROID_RESULT) despite the manifest having Android entries." "$BUILD_ANDROID_RESULT"
                     fi
                     if [ "$CAPTURE_ANDROID_RESULT" != "success" ]; then
@@ -2393,7 +2580,7 @@ jobs:
                     fi
                     ran_platforms="$ran_platforms android"
                   else
-                    echo "Android: no manifest entries - build-android/capture-android skipped."
+                    echo "Android: no manifest entries - plan-android/build-android/capture-android skipped."
                   fi
                   if [ "$UPLOAD_ENABLED" = "true" ] && [ "$UPLOAD_RESULT" != "success" ]; then
                     fail "Upload job failed." "$UPLOAD_RESULT"
