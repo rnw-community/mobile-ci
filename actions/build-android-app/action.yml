@@ -114,7 +114,7 @@ runs:
           exit 1
         fi
         apk_path="${apks[0]}"
-        unzip -l "$apk_path" | grep -q 'assets/index.android.bundle'
+        unzip -l "$apk_path" | grep -F 'assets/index.android.bundle' > /dev/null
         mkdir -p "$OUTPUT_DIR"
         cp "$apk_path" "$OUTPUT_DIR/app-release.apk"
         echo "app-path=$OUTPUT_DIR/app-release.apk" >> "$GITHUB_OUTPUT"

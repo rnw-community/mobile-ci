@@ -3,19 +3,31 @@
 `workflow_call` reusable workflow: Android Maestro e2e on self-hosted
 runners, defaulting to the `avd` driver on an x86_64 Linux KVM pool.
 
-Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
-`ubuntu-latest`) → **build** (one job per `targets` entry — native
-fingerprint, native-app-cache restore, optional repack-on-hit, `gradlew
---no-daemon <gradle-task>` (default `assembleRelease`), artifact upload) →
-**test** (one job per `targets` ×
-`shard-count` — download the built `.apk`, boot Redroid or an AVD emulator
-per `android-driver`, run a Maestro flow shard) → **status** (aggregates
-detect/build/test into a single required check). `build` and `test` default
-to the self-hosted x86_64 Linux pool (`["self-hosted","trf-linux-amd64-4x8"]`
-— 4 vCPU / 8 GiB, `/dev/kvm`), which is the host shape the default `avd`
-driver needs; `detect` and `status` always run on `ubuntu-latest`. Linux jobs
+**detect** (turbo-affected gate, shard-index computation, and build-strategy
+resolution, hosted `ubuntu-latest`) → **plan** (one leg per `targets` entry, on
+the repack pool — compute the native key with
+[`expo-native-key`](../../actions/expo-native-key), look up the base binary
+published for it with [`expo-base-binary`](../../actions/expo-base-binary),
+and, when one exists, produce this commit's APK from it with
+[`expo-repack`](../../actions/expo-repack) — re-bundled, zipaligned and
+re-signed — instead of running Gradle; the job's `native-targets` output is the
+set of targets whose key had no base) → **build** (one job per *remaining*
+target only — `gradlew --no-daemon <gradle-task>`
+(default `assembleRelease`), artifact upload, and, on the default branch,
+publishing the base it just built) → **test** (one job per `targets` ×
+`shard-count` — download the `.apk` the plan or the build produced, boot
+Redroid or an AVD emulator per `android-driver`, run a Maestro flow shard) →
+**status** (aggregates every job into a single required check). `plan`, `build`
+and `test` default to the self-hosted x86_64 Linux pool
+(`["self-hosted","trf-linux-amd64-4x8"]` — 4 vCPU / 8 GiB, `/dev/kvm`), which
+is the host shape the default `avd` driver needs; `detect` and `status` always
+run on `ubuntu-latest`. Linux jobs
 belong on a Linux node — see
 [self-hosted-runners.md#which-pool-a-job-belongs-on](../self-hosted-runners.md#which-pool-a-job-belongs-on).
+
+The normal outcome of a pull request is that **Gradle never runs**: the plan
+job repacks a published base. See [Build strategy](#build-strategy) below and
+[docs/repack.md](../repack.md).
 
 The `status` job reports three distinct outcomes, in its log and in
 `$GITHUB_STEP_SUMMARY`: **passed**, **failed** (naming the job and result
@@ -23,7 +35,8 @@ that broke the run, with a `::notice::` hint when a `cancelled` result
 likely means a hit timeout), and **skipped** — every build/test leg skipped
 because the target packages were untouched, reported explicitly as "zero
 Maestro flows ran (not a pass)" rather than blending into a green check
-silently.
+silently. A `build` job that was *skipped* while the plan still listed targets
+needing one is reported as a failure too — a skipped build is not a build.
 
 ## Migrating a Redroid caller (default change)
 
@@ -65,7 +78,6 @@ major release.
 | `cmdline-tools-version`         | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults (see `build-android-app` README). |
 | `gradle-task`                   | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
 | `gradle-args`                   | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
-| `cache-profile`                  | no       | `android-native-v1`                                | Cache-key prefix distinguishing this consumer/app. |
 | `turbo-version`                 | no       | `2.10.8`                                           | Pinned turbo npm version used by the detect job. |
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
@@ -73,7 +85,7 @@ major release.
 | `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator via `reactivecircus/android-emulator-runner` and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
-| `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only) — also used as the native-app-cache `arch` key segment for both drivers. |
+| `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
 | `emulator-ram-size`             | no       | `2048`                                             | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default; the shipped default is bounded because the default `runner-labels` pool is a memory-bounded 8 GiB container. Raise it only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
 | `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
@@ -89,15 +101,128 @@ major release.
 | `package-manager`               | no       | `''` (auto-detect)                                 | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`                 | no       | `''`                                               | Optional workspace JS build command run at repo root before the native build. |
 | `build-env`                     | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `repack-on-hit`                 | no       | `false`                                            | On a native-app-cache hit, run `repack-app` to inject a freshly exported JS bundle into the cached shell instead of reusing it unchanged. Falls back to a full native build if the repack fails. |
-| `repack-app-version`            | no       | `0.7.2`                                            | Pinned `@expo/repack-app` npm version, used only when `repack-on-hit` is true. |
-| `android-build-tools-dir`       | no       | `''`                                               | Path to the Android SDK build-tools directory, used by `repack-app` (its `--android-build-tools-dir` and `aapt2` validation) when `repack-on-hit` is true. Leave empty to rely on an `aapt2` already on `PATH` (see `android-build-tools-version`, which populates `PATH` via `setup-android` on a cache hit when `repack-on-hit` is true). |
-| `android-build-tools-version`   | no       | `35.0.0`                                           | Android build-tools version installed via `android-actions/setup-android` on a native-app-cache hit, used only when `repack-on-hit` is true. `build-android-app`'s own Gradle build (cache-miss path) installs whatever build-tools its `compileSdkVersion` resolves to, but that path never runs on a cache hit, so `repack-app`'s `aapt2` validation needs build-tools requested explicitly instead. |
+| `build-strategy`                | no       | `auto`                                             | How this pull request gets the APK its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript; only a key with no published base runs Gradle — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to run Gradle at all: a missing base fails the build. `native` is the escape hatch and a regression — every pull request then rebuilds the APK, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
+| `repack-runner-labels`          | no       | `["self-hosted","trf-linux-amd64-4x8"]`            | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the same x86_64 Linux pool the Gradle build uses; a repack needs only Node, a JDK and the Android build-tools. |
+| `native-build-label`            | no       | `mobile: force native build`                       | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
+| `base-backend`                  | no       | `ghcr`                                             | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
+| `base-flavor`                   | no       | `e2e`                                              | Flavor segment of the base binary's address. |
+| `fingerprint-config`            | no       | `fingerprint.config.js`                            | Path, relative to a target's `appDir`, of the `@expo/fingerprint` config whose ignore list is the correctness boundary of every repack. Its hash is part of the native key. See [docs/repack.md](../repack.md). |
+| `fingerprint-env`               | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs exported while the native key is computed, for an `app.config` that branches on env. Must be byte-identical to what the warm-up passes, or the two never agree on a key and every pull request rebuilds the APK. |
+| `repack-env`                    | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs exported for the re-bundle, so the consumer's `app.config` writes this build's API URL, version and build number into the repacked APK. |
+| `expect-config`                 | no       | `''`                                               | Newline-separated `<dotted.path>=<value>` assertions the repacked APK's embedded `app.config` must satisfy exactly. Every value `repack-env` is expected to have rewritten belongs here: a config rewrite nobody checked is a repack nobody can trust. |
+| `repack-app-version`            | no       | `0.7.2`                                            | Pinned `@expo/repack-app` npm version. |
+| `repack-timeout-minutes`        | no       | `30`                                               | `plan`/repack job timeout. |
+| `android-build-tools-dir`       | no       | `''`                                               | Path to the Android SDK build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Leave empty to rely on what `android-build-tools-version` puts on `PATH`. |
+| `android-build-tools-version`   | no       | `35.0.0`                                           | Android build-tools version the repack job installs via `android-actions/setup-android`, for the `zipalign` and `apksigner` a repacked APK is aligned and signed with. The Gradle build installs whatever its `compileSdkVersion` resolves to; the repack job never runs Gradle, so it asks for build-tools explicitly. |
+| `android-keystore-path`         | no       | `android/app/debug.keystore`                       | Keystore, relative to a target's `appDir`, the repacked APK is signed with. The default is the React Native debug keystore an `expo prebuild` app ships and Gradle signs its release build with — sign the repack with anything else and the emulator refuses to install it over the base. These are the published debug-keystore constants, not secrets; a release key belongs in [`native-publish.yml`](native-publish.md), never here. Empty leaves `@expo/repack-app`'s own default in place. |
+| `android-keystore-password`     | no       | `android`                                          | Password of `android-keystore-path`. Ignored when that is empty. |
+| `android-keystore-key-alias`    | no       | `androiddebugkey`                                  | Key alias inside `android-keystore-path`. Ignored when that is empty. |
+| `android-keystore-key-password` | no       | `android`                                          | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `build-timeout-minutes`         | no       | `60`                                               | Build job timeout. |
-| `test-timeout-minutes`          | no       | `60`                                               | Test job timeout. |
+| `test-timeout-minutes`          | no       | `75`                                               | Test job timeout. |
 
-No `secrets:` block — this workflow never touches a signing credential or an
-Expo/EAS token.
+No `secrets:` block — this workflow never touches a release signing credential
+or an Expo/EAS token. The `android-keystore-*` inputs default to the published
+React Native **debug** keystore constants, which are not secrets; a release key
+belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
+**token permission** the caller grants; see [Permissions](#permissions).
+
+## Build strategy
+
+A pull request should not rebuild the APK. Its native surface is almost always
+identical to the default branch's, so the only thing that actually changed is
+JavaScript — and swapping JavaScript into an already-built APK is minutes, not
+a full Gradle build. Three actions state that:
+[`expo-native-key`](../../actions/expo-native-key) computes the one key a base
+is addressed by, [`expo-base-binary`](../../actions/expo-base-binary) fetches
+or publishes the base under that key, and
+[`expo-repack`](../../actions/expo-repack) turns the base into this commit's
+APK — re-bundled, config-rewritten, asserted, zipaligned, re-signed with
+`android-keystore-path` and verified with `apksigner`. The whole contract,
+including what `fingerprint.config.js` must ignore and what it must not, is in
+[docs/repack.md](../repack.md).
+
+**`auto` (the default).** The `plan` job computes the target's native key and
+asks for the base published under it.
+
+- *First run on a new native surface (no base yet).* The lookup reports
+  `found=false`, the target lands in the plan's `native-targets` output, and
+  the `build` job runs Gradle exactly as v2 did. When that run is on the default branch, it then
+  **publishes** the APK it built as the base for that key. The **next** run —
+  every pull request on that same native surface — finds the base and repacks,
+  running no Gradle at all. A `found=false` is the signal to build; a lookup
+  that *cannot tell* (registry error, artifacts API failure) fails the job
+  instead, because an unreadable store is not an absent base.
+- *Every subsequent run.* The base is found, `expo-repack` re-bundles this
+  commit's JavaScript into it, the assertions in `expect-config` are checked,
+  the APK is re-signed, and it is uploaded for the test shards. The `build`
+  job's matrix is empty.
+
+A pull request never publishes a base: publishing only happens when
+`github.ref_name` is the repository's default branch. So after a change that
+moves the native surface — an Expo or React Native upgrade, a new native
+module — warm the new key by letting this workflow run once on the default
+branch (the merge itself, or a `workflow_dispatch`/scheduled run of your
+caller on it); the first pull request afterwards already repacks. Only that
+first run pays for a Gradle build.
+
+A dedicated warm-up is cheaper than letting the full e2e pipeline do it:
+[`seed-native-cache.yml`](seed-native-cache.md) plans on Linux, builds only the
+keys with no base, publishes them, and runs no Maestro shards at all. Wire it on
+a default-branch push with a `paths:` filter — see
+[docs/repack.md](../repack.md#the-warm-up).
+
+**`repack`.** The same lookup, but running Gradle is forbidden: a missing base
+fails the `plan` job with the key it looked for, rather than quietly queueing a
+native build.
+
+**`native`.** Every target runs Gradle and the run publishes no base. This is
+the escape hatch, and using it is a **regression**: it is the v2 behaviour, it
+costs a full native build per pull request, and the run emits a `::warning::`
+saying so. Reach for it only to prove a repack-specific suspicion, and take it
+back out. The same escape hatch is available per pull request, without editing
+the caller, by applying the `native-build-label` label (default `mobile: force
+native build`); combining that label with `build-strategy: repack` fails closed
+instead of picking a winner.
+
+A repacked APK must be signed with the **same** key as the base, or the
+device/emulator refuses to install it over one already there — that is why
+`android-keystore-path` defaults to the debug keystore Gradle's release build
+signs with. A consumer whose base is signed with something else must point
+these four inputs at it.
+
+
+### Why the native build no longer reads a host cache
+
+A `native-app-cache` entry is keyed on the native key, and the native key
+deliberately excludes JavaScript. Restoring one and handing it to a Maestro or
+capture job would test whatever bundle the cached shell happened to carry —
+exactly the hole `repack-on-hit` existed to paper over in v2. The base binary
+store is the cross-run cache now, and what it holds is always repacked with
+this commit's JavaScript before anything installs it, so this job simply builds
+when it runs — and it only runs for a key nothing has published a base for.
+`seed-native-cache.yml` still keeps a host cache, because what it produces
+becomes a base to be repacked, never a test artifact. `cache-profile` is gone
+with it.
+
+## Migrating from v2
+
+- **`repack-on-hit: true`** — delete the input. Repacking is now the default
+  path, and a better one: v2 could only repack onto a shell this *same host*
+  had cached, while v3 repacks a base published for the native key from any
+  host, before Gradle is involved at all.
+- **`repack-on-hit: false`** — remove the input (it no longer exists and a
+  caller that still passes it fails workflow validation). The default
+  `build-strategy: auto` is what you want. It is *not* the same as v2: v2
+  compiled unless the same host held a cache entry, while `auto` repacks a
+  base published by any run. `build-strategy: native` compiles every target
+  every time — strictly worse than both, and a regression to undo rather than
+  a setting to keep.
+- **The calling job now needs `permissions:`** — see below. This is the one
+  step that silently breaks a `repack-on-hit` caller that changed nothing else.
+- `repack-app-version`, `android-build-tools-dir` and
+  `android-build-tools-version` survive with the same defaults, now scoped to
+  the `plan`/repack job instead of to a native-app-cache hit.
 
 ## Between-flows recovery
 
@@ -253,8 +378,42 @@ the failure message points you at.
 
 ## Permissions
 
-`contents: read` is sufficient in the caller workflow; this workflow does not
-write to the repository.
+**The calling job must declare its own `permissions:` block.** A reusable
+workflow's job-level `permissions:` can only *narrow* the token its caller
+granted — it can never add a scope. The `plan` job asks for `packages: read` +
+`actions: read` and the `build` job for `packages: write`, but in a repository
+whose default workflow token permission is **read** (the GitHub default for new
+organisations) those requests resolve to nothing and publishing the base fails.
+The repository then runs Gradle on every run and never warms a key, which looks
+like "repacking does not work" rather than like a permissions problem.
+
+Grant them on the job that calls this workflow:
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.0 # v3.0.0
+```
+
+- `contents: read` — checkout.
+- `packages: write` — publishing the base binary to GHCR from a default-branch
+  run (`base-backend: ghcr`, the default). `packages: read` alone is enough for
+  a repository whose keys are published by something else, but then a key this
+  repository does not already have a base for can never be warmed by this
+  workflow.
+- `actions: read` — the `artifact` backend's cross-run artifact lookup; harmless
+  and recommended on the `ghcr` backend too.
+
+With `base-backend: artifact` no package scope is needed at all —
+`contents: read` + `actions: read` suffices — at the cost of workflow artifacts
+expiring, so a key can go cold and cost a native build again.
+
+This workflow still never writes to the repository and never needs a release
+signing credential or an Expo/EAS token.
 
 ## Example
 
@@ -271,11 +430,28 @@ concurrency:
     cancel-in-progress: true
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v1.7.0 # v1.7.0
+        # Required: a reusable workflow can only narrow what the caller grants.
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.0 # v3.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
             flows-dir: apps/mobile/e2e/flows
             target-packages: |
                 @myorg/mobile-app
+            # build-strategy: auto is the default — repack a published base,
+            # run Gradle only for a native key that has none.
+            repack-env: |
+                API_URL=https://staging.example.com
+                APP_VERSION=1.2.3
+            expect-config: |
+                extra.apiUrl=https://staging.example.com
+                version=1.2.3
 ```
+
+`fingerprint-env` must pass exactly what the default-branch warm-up passes; a
+single differing byte gives the pull request a different native key, and every
+pull request runs Gradle again.

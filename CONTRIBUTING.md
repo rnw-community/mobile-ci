@@ -15,10 +15,10 @@ concrete evidence (file/line, command output, or spec reference).
 
 This repo follows semver on git tags (`v1.2.3`), plus a sliding major tag
 per major (`v1`, `v2`, ...) that consumers should pin to in their `uses:`
-lines (`rnw-community/mobile-ci/actions/build-ios-app@v2`). A release moves
+lines (`rnw-community/mobile-ci/actions/build-ios-app@v3`). A release moves
 only its own major's sliding tag, the same convention `actions/checkout`,
 `actions/setup-node`, and most of the official GitHub Actions follow: cutting
-`v2.0.0` moves `v2` and leaves `v1` frozen at the last `v1.x.y`, so nothing
+`v3.0.0` moves `v3` and leaves `v2` frozen at the last `v2.x.y`, so nothing
 floating on `v1` is handed a breaking change it did not opt into. Pin to an
 exact `vX.Y.Z` tag instead of a sliding tag only if you need to freeze against
 upstream drift entirely.

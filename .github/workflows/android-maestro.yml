@@ -187,11 +187,6 @@ on:
                 type: string
                 required: false
                 default: ''
-            cache-profile:
-                description: Cache-key prefix distinguishing this consumer/app.
-                type: string
-                required: false
-                default: android-native-v1
             turbo-version:
                 type: string
                 required: false
@@ -331,40 +326,140 @@ on:
                 type: string
                 required: false
                 default: ''
-            repack-on-hit:
+            build-strategy:
                 description: >-
-                    On a native-app-cache hit, run repack-app to inject a freshly
-                    exported JS bundle into the cached shell instead of reusing it
-                    unchanged. Falls back to a full native build if the repack fails.
-                type: boolean
+                    How this pull request gets the APK its Maestro shards install.
+                    `auto` (the default) computes the native key, looks up the base
+                    binary published for it, and repacks that base with this
+                    commit's JavaScript; only a key with no published base, or an
+                    unusable base, runs Gradle — and when it does on the default
+                    branch, the base it builds is published for the next run.
+                    `repack` refuses to run Gradle at all: a missing base fails the
+                    build. `native` is the escape hatch and a regression — every
+                    pull request then rebuilds the APK, and that run publishes no
+                    base. See docs/repack.md.
+                type: string
                 required: false
-                default: false
+                default: auto
+            repack-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the repack job. The
+                    default is the same x86_64 Linux pool the Gradle build uses; a
+                    repack needs only Node, a JDK and the Android build-tools.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
+            native-build-label:
+                description: >-
+                    Pull-request label forcing build-strategy: native for that one
+                    pull request. Set together with build-strategy: repack it fails
+                    closed rather than silently picking a winner.
+                type: string
+                required: false
+                default: 'mobile: force native build'
+            base-backend:
+                description: >-
+                    Where base binaries live: `ghcr` (default, an immutable OCI
+                    artifact needing packages:write to publish and packages:read to
+                    fetch) or `artifact` (workflow artifacts, default-branch runs
+                    only, needing actions:read). See expo-base-binary.
+                type: string
+                required: false
+                default: ghcr
+            base-flavor:
+                description: Flavor segment of the base binary's address.
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                description: >-
+                    Path, relative to a target's appDir, of the @expo/fingerprint
+                    config whose ignore list is the correctness boundary of every
+                    repack. Its hash is part of the native key. See docs/repack.md.
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported while the native key
+                    is computed, for an app.config that branches on env. Must be
+                    byte-identical to what the warm-up passes, or the two never
+                    agree on a key and every pull request rebuilds the APK.
+                type: string
+                required: false
+                default: ''
+            repack-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported for the re-bundle, so
+                    the consumer's app.config writes this build's API URL, version
+                    and build number into the repacked APK.
+                type: string
+                required: false
+                default: ''
+            expect-config:
+                description: >-
+                    Newline-separated <dotted.path>=<value> assertions the repacked
+                    APK's embedded app.config must satisfy exactly. Every value
+                    repack-env is expected to have rewritten belongs here: a config
+                    rewrite nobody checked is a repack nobody can trust.
+                type: string
+                required: false
+                default: ''
             repack-app-version:
-                description: Pinned @expo/repack-app npm version, used only when repack-on-hit is true.
+                description: Pinned @expo/repack-app npm version.
                 type: string
                 required: false
                 default: '0.7.2'
+            repack-timeout-minutes:
+                type: number
+                required: false
+                default: 30
             android-build-tools-dir:
                 description: >-
-                    Path to the Android SDK build-tools directory, used by repack-app
-                    (its --android-build-tools-dir and aapt2 validation) when
-                    repack-on-hit is true. Leave empty to rely on an aapt2 already on
-                    PATH (see android-build-tools-version, which populates PATH via
-                    setup-android on a cache hit when repack-on-hit is true).
+                    Path to the Android SDK build-tools directory holding zipalign
+                    and apksigner, used by the repack job. Leave empty to rely on
+                    what android-build-tools-version puts on PATH.
                 type: string
                 required: false
                 default: ''
             android-build-tools-version:
                 description: >-
-                    Android build-tools version installed via android-actions/setup-android
-                    on a native-app-cache hit, used only when repack-on-hit is true.
-                    build-android-app's own Gradle build (cache-miss path) installs
-                    whatever build-tools its compileSdkVersion resolves to, but that
-                    path never runs on a cache hit, so repack-app's aapt2 validation
-                    needs build-tools requested explicitly instead.
+                    Android build-tools version the repack job installs via
+                    android-actions/setup-android, for the zipalign and apksigner a
+                    repacked APK is aligned and signed with. The Gradle build
+                    installs whatever its compileSdkVersion resolves to; the repack
+                    job never runs Gradle, so it asks for build-tools explicitly.
                 type: string
                 required: false
                 default: '35.0.0'
+            android-keystore-path:
+                description: >-
+                    Keystore, relative to a target's appDir, the repacked APK is
+                    signed with. The default is the React Native debug keystore an
+                    `expo prebuild` app ships and Gradle signs its release build
+                    with - sign the repack with anything else and the emulator
+                    refuses to install it over the base. These are the published
+                    debug-keystore constants, not secrets; a release key belongs in
+                    native-publish.yml, never here. Empty leaves @expo/repack-app's
+                    own default in place.
+                type: string
+                required: false
+                default: android/app/debug.keystore
+            android-keystore-password:
+                description: Password of android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: android
+            android-keystore-key-alias:
+                description: Key alias inside android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: androiddebugkey
+            android-keystore-key-password:
+                description: Key password inside android-keystore-path. Ignored when that is empty.
+                type: string
+                required: false
+                default: android
             build-timeout-minutes:
                 type: number
                 required: false
@@ -388,6 +483,7 @@ jobs:
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
             shard-indices: ${{ steps.shard-indices.outputs.indices }}
+            build-strategy: ${{ steps.build-strategy.outputs.strategy }}
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -396,7 +492,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v2.3.0 # v2.3.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.0.0 # v3.0.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -432,16 +528,100 @@ jobs:
                   indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
                   echo "indices=$indices" >> "$GITHUB_OUTPUT"
 
-    build:
-        name: Build (${{ matrix.target.name }})
+            - name: Resolve the build strategy
+              id: build-strategy
+              shell: bash
+              env:
+                  REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
+                  NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
+                  PULL_REQUEST_LABELS: ${{ github.event_name == 'pull_request' && toJSON(github.event.pull_request.labels.*.name) || '[]' }}
+              run: |
+                  set -euo pipefail
+                  case "$REQUESTED_STRATEGY" in
+                    auto|repack|native) ;;
+                    *)
+                      echo "::error::build-strategy must be 'auto', 'repack' or 'native'; got '$REQUESTED_STRATEGY'."
+                      exit 1
+                      ;;
+                  esac
+
+                  strategy="$REQUESTED_STRATEGY"
+                  labelled=false
+                  if [ -n "$NATIVE_BUILD_LABEL" ]; then
+                    labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")
+                  fi
+
+                  if [ "$labelled" = 'true' ]; then
+                    if [ "$REQUESTED_STRATEGY" = 'repack' ]; then
+                      echo "::error::build-strategy is 'repack', which forbids compiling native code, but this pull request carries the '$NATIVE_BUILD_LABEL' label, which demands it. Remove one of the two rather than letting the workflow pick a winner."
+                      exit 1
+                    fi
+                    strategy=native
+                    echo "::notice::'$NATIVE_BUILD_LABEL' is set on this pull request, so native code is compiled instead of a published base being repacked. No base binary is published by this run."
+                  fi
+
+                  if [ "$strategy" = 'native' ]; then
+                    echo "::warning::This run compiles native code for every target. That is the escape hatch, not the norm: it takes a full native build slot a repack would not have needed. See docs/repack.md."
+                  fi
+
+                  echo "strategy=$strategy" >> "$GITHUB_OUTPUT"
+                  echo "Build strategy: $strategy (requested '$REQUESTED_STRATEGY')."
+
+
+    plan:
+        name: Plan the build strategy
         needs: detect
         if: needs.detect.outputs.affected == 'true'
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        with:
+            platform: android
+            targets: ${{ inputs.targets }}
+            build-strategy: ${{ needs.detect.outputs.build-strategy }}
+            runner-labels: ${{ inputs.repack-runner-labels }}
+            timeout-minutes: ${{ inputs.repack-timeout-minutes }}
+            app-artifact-prefix: android-e2e-app
+            plan-artifact-prefix: android-e2e-plan
+            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+            base-backend: ${{ inputs.base-backend }}
+            base-flavor: ${{ inputs.base-flavor }}
+            fingerprint-config: ${{ inputs.fingerprint-config }}
+            fingerprint-env: ${{ inputs.fingerprint-env }}
+            expo-fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+            repack-env: ${{ inputs.repack-env }}
+            expect-config: ${{ inputs.expect-config }}
+            repack-app-version: ${{ inputs.repack-app-version }}
+            cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+            android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+            android-build-tools-version: ${{ inputs.android-build-tools-version }}
+            android-keystore-path: ${{ inputs.android-keystore-path }}
+            android-keystore-password: ${{ inputs.android-keystore-password }}
+            android-keystore-key-alias: ${{ inputs.android-keystore-key-alias }}
+            android-keystore-key-password: ${{ inputs.android-keystore-key-password }}
+            node-version: ${{ inputs.node-version }}
+            install-command: ${{ inputs.install-command }}
+            enable-corepack: ${{ inputs.enable-corepack }}
+            package-manager: ${{ inputs.package-manager }}
+            build-command: ${{ inputs.build-command }}
+            build-env: ${{ inputs.build-env }}
+
+    build:
+        name: Build (${{ matrix.target.name }})
+        needs: [detect, plan]
+        if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.targets) }}
+                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
         env:
             APP_DIR: ${{ matrix.target.appDir }}
 
@@ -610,94 +790,9 @@ jobs:
                   PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: android
-                  working-directory: ${{ matrix.target.appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
-
-            - name: native-app-cache (restore)
-              id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
-              with:
-                  mode: restore
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
-                  arch: ${{ inputs.emulator-arch }}
-                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
-
-            # Needed only when repack-on-hit is true: build-android-app's own
-            # Gradle build (cache-miss path) installs whatever build-tools its
-            # compileSdkVersion resolves to, but repack-app's aapt2 validation
-            # below needs apksigner/aapt2 without ever invoking Gradle, so
-            # build-tools is requested here explicitly instead.
-            - name: Set up Android SDK (for repack-app validation)
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
-              with:
-                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
-                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
-
-            - name: Repack fresh JS into cached native app
-              id: repack
-              if: inputs.repack-on-hit && steps.native-app-cache.outputs.cache-hit == 'true'
-              continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/repack-app@v2.3.0 # v2.3.0
-              with:
-                  platform: android
-                  app-path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  app-dir: ${{ matrix.target.appDir }}
-                  repack-version: ${{ inputs.repack-app-version }}
-                  android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
-
-            - name: Determine whether a native build is needed
-              id: build-decision
-              shell: bash
-              env:
-                  CACHE_HIT: ${{ steps.native-app-cache.outputs.cache-hit }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
-                  REPACK_OUTCOME: ${{ steps.repack.outcome }}
-              run: |
-                  set -euo pipefail
-                  need_build=true
-                  if [ "$CACHE_HIT" = "true" ] && { [ "$REPACK_ON_HIT" != "true" ] || [ "$REPACK_OUTCOME" = "success" ]; }; then
-                    need_build=false
-                  fi
-                  echo "need-build=$need_build" >> "$GITHUB_OUTPUT"
-
-            - name: Report cache hit
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build != 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  REPACK_ON_HIT: ${{ inputs.repack-on-hit }}
-              run: |
-                  {
-                    echo "### Android build: ${TARGET_NAME} (warm — native build skipped)"
-                    if [ "$REPACK_ON_HIT" = "true" ]; then
-                      echo "Native fingerprint hit; repack-app injected a fresh JS bundle into the cached shell."
-                    else
-                      echo "Native fingerprint hit; embedded JS bundle dates from when this shell was cached."
-                    fi
-                  } >> "$GITHUB_STEP_SUMMARY"
-
-            - name: Report repack fallback
-              if: steps.native-app-cache.outputs.cache-hit == 'true' && steps.build-decision.outputs.need-build == 'true'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-              run: |
-                  echo "### Android build: ${TARGET_NAME} (repack-on-hit failed — falling back to a full native build)" >> "$GITHUB_STEP_SUMMARY"
-
             - name: build-android-app
-              if: steps.build-decision.outputs.need-build == 'true'
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.0 # v3.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -708,27 +803,39 @@ jobs:
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
-            - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
-              with:
-                  mode: save
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
-                  arch: ${{ inputs.emulator-arch }}
-                  toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
-
-            - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+            - name: Upload the APK for the test jobs
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
                   name: android-e2e-app-${{ matrix.target.name }}
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  if-no-files-found: error
                   retention-days: 1
+
+            - name: expo-base-binary (publish)
+              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: android
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+
+            - name: Report that this key is now warm
+              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  echo "### Android ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo 'Pull requests on this native surface now repack instead of running Gradle.' >> "$GITHUB_STEP_SUMMARY"
 
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
-        needs: [detect, build]
-        if: needs.detect.outputs.affected == 'true'
+        needs: [detect, plan, build]
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.build.result != 'failure' }}
         runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
@@ -779,7 +886,7 @@ jobs:
 
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v3.0.0 # v3.0.0
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e-${{ strategy.job-index }}
@@ -810,7 +917,7 @@ jobs:
 
             - name: run-maestro-android
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v3.0.0 # v3.0.0
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
@@ -842,7 +949,7 @@ jobs:
 
     status:
         name: Android Maestro E2E result
-        needs: [detect, build, test]
+        needs: [detect, plan, build, test]
         if: always()
         runs-on: ubuntu-latest
         steps:
@@ -851,6 +958,8 @@ jobs:
               env:
                   DETECT_RESULT: ${{ needs.detect.result }}
                   DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  PLAN_RESULT: ${{ needs.plan.result }}
+                  NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
               run: |
@@ -873,7 +982,18 @@ jobs:
                     summary "### Android Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
                     exit 0
                   fi
-                  if [ "$BUILD_RESULT" != "success" ]; then
+                  if [ "$PLAN_RESULT" != "success" ]; then
+                    echo "Plan job did not succeed (result: $PLAN_RESULT)."
+                    summary "### Android Maestro E2E: failed (plan job result: $PLAN_RESULT)"
+                    cancelled_hint "$PLAN_RESULT"
+                    exit 1
+                  fi
+                  if [ "$BUILD_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS" != '[]' ]; then
+                    echo "The native build was skipped while ${NATIVE_TARGETS} still needed one; a skipped build is not a build."
+                    summary "### Android Maestro E2E: failed (native build skipped with targets still needing one)"
+                    exit 1
+                  fi
+                  if [ "$BUILD_RESULT" != "success" ] && [ "$BUILD_RESULT" != 'skipped' ]; then
                     echo "Build job did not succeed (result: $BUILD_RESULT)."
                     summary "### Android Maestro E2E: failed (build job result: $BUILD_RESULT)"
                     cancelled_hint "$BUILD_RESULT"

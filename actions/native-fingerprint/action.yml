@@ -14,6 +14,15 @@ inputs:
     description: Pinned @expo/fingerprint npm version.
     required: false
     default: '0.20.6'
+  extra-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs exported for the fingerprint
+      evaluation only, so an app.config.js that branches on env (brand,
+      flavor) is fingerprinted under the same env every consumer of the key
+      uses. Rejects (fails closed) any line without '=' or whose name does
+      not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
 outputs:
   hash:
     description: The computed native fingerprint hash.
@@ -31,8 +40,32 @@ runs:
       env:
         FINGERPRINT_VERSION: ${{ inputs.fingerprint-version }}
         FINGERPRINT_PLATFORM: ${{ inputs.platform }}
+        FINGERPRINT_EXTRA_ENV: ${{ inputs.extra-env }}
       run: |
         set -euo pipefail
+        extra_env=()
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            *=*) ;;
+            *)
+              echo "::error::extra-env line '$line' is missing '='; expected KEY=VALUE."
+              exit 1
+              ;;
+          esac
+          name="${line%%=*}"
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::extra-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+              exit 1
+              ;;
+            FINGERPRINT_PLATFORM|FINGERPRINT_VERSION|FINGERPRINT_EXTRA_ENV)
+              echo "::error::extra-env may not set '$name'; it is this step's own control variable, and overwriting it would fingerprint something other than what the inputs asked for."
+              exit 1
+              ;;
+          esac
+          extra_env+=("$line")
+        done <<< "$FINGERPRINT_EXTRA_ENV"
         run_token="$$-${RANDOM}"
         out_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-${run_token}.json"
         error_file="$RUNNER_TEMP/native-fingerprint-${FINGERPRINT_PLATFORM}-${run_token}.err"
@@ -42,7 +75,8 @@ runs:
         # give the generate one retry that bypasses any local/cached resolution
         # with a fresh npm cache and --prefer-online.
         generate() {
-          npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file" 2> "$error_file"
+          env ${extra_env[@]+"${extra_env[@]}"} \
+            npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$FINGERPRINT_PLATFORM" > "$out_file" 2> "$error_file"
         }
         report_stderr() {
           if [ -s "$error_file" ]; then

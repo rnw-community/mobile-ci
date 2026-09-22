@@ -108,6 +108,11 @@ stub() {
 # run_step <workspace> [VAR=value ...]
 # Runs the extracted step with the workspace's stubs first on PATH. Stdout and
 # stderr land in <workspace>/log; the exit status is returned in STEP_STATUS.
+# The runner variables a step may read are always set, never inherited: a suite
+# that passed locally only because GITHUB_WORKSPACE happened to be unset, and
+# failed on a runner where it is not, is a suite testing the environment.
+# Anything passed by the caller overrides these, since env takes the last
+# assignment for a name.
 run_step() {
     local dir="$1"
     shift
@@ -118,6 +123,7 @@ run_step() {
             GITHUB_OUTPUT="$dir/outputs" \
             GITHUB_STEP_SUMMARY="$dir/summary" \
             RUNNER_TEMP="$dir/runner-temp" \
+            GITHUB_WORKSPACE="$dir/work" \
             "$@" \
             bash "$dir/step.sh"
     ) > "$dir/log" 2>&1 || STEP_STATUS=$?

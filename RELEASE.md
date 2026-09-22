@@ -21,10 +21,16 @@ being cut) that consumers pin to in practice. **No
    still call the *previous* release's code. For example, releasing `v1.3.1`
    after `v1.3.0`:
 
+   A self-reference is either to an action
+   (`rnw-community/mobile-ci/actions/<name>@<tag>`) or, since v3.0.0, to a
+   reusable workflow (`rnw-community/mobile-ci/.github/workflows/<name>.yml@<tag>`
+   — `expo-base-plan.yml` is called that way by four workflows). Both forms
+   must be bumped.
+
    ```bash
    while IFS= read -r f; do
-     perl -pi -e 's{(rnw-community/mobile-ci/actions/[a-z0-9-]+)\@v1\.3\.0(?:\s*#\s*v1\.3\.0)?}{$1\@v1.3.1 # v1.3.1}' "$f"
-   done < <(grep -rl 'rnw-community/mobile-ci/actions/' \
+     perl -pi -e 's{(rnw-community/mobile-ci/(?:actions/[a-z0-9-]+|\.github/workflows/[a-z0-9-]+\.yml))\@v1\.3\.0(?:\s*#\s*v1\.3\.0)?}{$1\@v1.3.1 # v1.3.1}' "$f"
+   done < <(grep -rl 'rnw-community/mobile-ci/' \
      --include='*.yml' .github/workflows actions \
      | grep -v '^\.github/workflows/self-test\.yml$')
    ```
@@ -32,7 +38,7 @@ being cut) that consumers pin to in practice. **No
    Then confirm nothing was left behind — this must print nothing:
 
    ```bash
-   grep -rn 'rnw-community/mobile-ci/actions/' --include='*.yml' \
+   grep -rn 'uses: rnw-community/mobile-ci/' --include='*.yml' \
      .github/workflows actions \
      | grep -v -e '^\.github/workflows/self-test\.yml:' -e '^\.github/workflows/release\.yml:' \
      | grep -v '@v1\.3\.1 # v1\.3\.1$'
@@ -97,11 +103,13 @@ being cut) that consumers pin to in practice. **No
 7. **Verify release self-consistency**: every self-reference-bearing file in
    the tagged commit must point at that same tag — the reusable workflows
    (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
-   `store-screenshots.yml`, `swift-ios.yml`, `expo-ota-preview.yml`,
-   `expo-fingerprint-guard.yml`; `native-publish.yml` and
-   `native-dev-release.yml` have none) **and** the composite actions that call
-   sibling actions (`run-maestro-android-redroid/action.yml` →
-   `redroid-container`). Fail
+   `store-screenshots.yml`, `expo-base-plan.yml`, `swift-ios.yml`,
+   `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`; `native-publish.yml`
+   and `native-dev-release.yml` have none) **and** the composite actions that
+   call sibling actions (`run-maestro-android-redroid/action.yml` →
+   `redroid-container`, `expo-native-key/action.yml` → `native-fingerprint`).
+   The reusable-workflow self-references (four workflows →
+   `expo-base-plan.yml`) are checked by the same loop. Fail
    closed: any reference whose tag or trailing comment does not match the
    release is a broken release, not a warning.
 
@@ -113,20 +121,22 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/android-maestro.yml \
                .github/workflows/seed-native-cache.yml \
                .github/workflows/store-screenshots.yml \
+               .github/workflows/expo-base-plan.yml \
                .github/workflows/swift-ios.yml \
                .github/workflows/expo-ota-preview.yml \
                .github/workflows/expo-fingerprint-guard.yml \
+               actions/expo-native-key/action.yml \
                actions/run-maestro-android-redroid/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
        --jq '.content' | base64 -d)"
-     if ! printf '%s\n' "$content" | grep -q 'rnw-community/mobile-ci/actions/'; then
+     if ! printf '%s\n' "$content" | grep -q 'uses: rnw-community/mobile-ci/'; then
        echo "::error::${path}: no self-references found at ${tag}"
        check_status=1
        continue
      fi
      if printf '%s\n' "$content" \
-       | grep 'rnw-community/mobile-ci/actions/' \
-       | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag_re}( # ${tag_re})?\$"; then
+       | grep 'uses: rnw-community/mobile-ci/' \
+       | grep -vE "rnw-community/mobile-ci/(actions/[a-z0-9-]+|\.github/workflows/[a-z0-9-]+\.yml)@${tag_re} # ${tag_re}\$"; then
        echo "::error::${path} has a self-reference not pinned to ${tag}"
        check_status=1
      fi
@@ -145,7 +155,7 @@ being cut) that consumers pin to in practice. **No
    `grep -rl` (minus `self-test.yml`) as step 1:
 
    ```bash
-   grep -rl 'rnw-community/mobile-ci/actions/' --include='*.yml' \
+   grep -rl 'uses: rnw-community/mobile-ci/' --include='*.yml' \
      .github/workflows actions \
      | grep -v '^\.github/workflows/self-test\.yml$'
    ```

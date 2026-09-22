@@ -1,0 +1,499 @@
+name: expo-base-plan
+
+on:
+    workflow_call:
+        inputs:
+            platform:
+                description: '`ios` or `android`.'
+                type: string
+                required: true
+            targets:
+                description: >-
+                    JSON array of build targets. Each element is passed through to
+                    the caller's native build job unchanged, with the native key
+                    added as nativeKey.
+                type: string
+                required: true
+            build-strategy:
+                description: >-
+                    `auto` (look up a base and repack it when one exists),
+                    `repack` (refuse to hand any target to a native build), or
+                    `native` (compute the key, look up nothing, hand every target
+                    to the native build). Resolved by the caller, never here.
+                type: string
+                required: false
+                default: auto
+            repack:
+                description: >-
+                    Repack the base when one is found (the default). The warm-up
+                    sets it false: it is looking for a key with no base, not
+                    producing this commit's binary, and a repack nobody consumes
+                    is a repack nobody checked.
+                type: boolean
+                required: false
+                default: true
+            runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels. A repack needs Node, a
+                    JDK on android, and no simulator, no Xcode and no Mac slot.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
+            timeout-minutes:
+                type: number
+                required: false
+                default: 30
+            app-artifact-prefix:
+                description: >-
+                    Artifact-name prefix the caller's test/capture job already
+                    downloads the app under; the repacked binary is uploaded as
+                    `<prefix>-<target name>`.
+                type: string
+                required: true
+            plan-artifact-prefix:
+                description: Artifact-name prefix for this workflow's own per-target plan files.
+                type: string
+                required: true
+            toolchain:
+                description: >-
+                    Pinned toolchain identity folded into the native key -
+                    `xcode-<version>-<build>` on ios, `cmdline-<version>` on
+                    android. A target's own workspace and scheme are appended to
+                    it, so two targets that share an app directory and a
+                    fingerprint but build different schemes never share a base.
+                type: string
+                required: false
+                default: ''
+            base-backend:
+                type: string
+                required: false
+                default: ghcr
+            base-flavor:
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                type: string
+                required: false
+                default: ''
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            repack-env:
+                type: string
+                required: false
+                default: ''
+            expect-config:
+                type: string
+                required: false
+                default: ''
+            repack-app-version:
+                type: string
+                required: false
+                default: '0.7.2'
+            cmdline-tools-version:
+                description: Android cmdline-tools version the repack job installs. Ignored on ios.
+                type: string
+                required: false
+                default: '12266719'
+            android-build-tools-dir:
+                type: string
+                required: false
+                default: ''
+            android-build-tools-version:
+                type: string
+                required: false
+                default: '35.0.0'
+            android-keystore-path:
+                description: Keystore, relative to a target's appDir, the repacked APK is signed with.
+                type: string
+                required: false
+                default: android/app/debug.keystore
+            android-keystore-password:
+                type: string
+                required: false
+                default: android
+            android-keystore-key-alias:
+                type: string
+                required: false
+                default: androiddebugkey
+            android-keystore-key-password:
+                type: string
+                required: false
+                default: android
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            package-manager:
+                type: string
+                required: false
+                default: ''
+            build-command:
+                type: string
+                required: false
+                default: ''
+            build-env:
+                type: string
+                required: false
+                default: ''
+        outputs:
+            native-targets:
+                description: >-
+                    JSON array of the targets whose native key has no published
+                    base, each carrying its nativeKey. `[]` means no expensive
+                    runner has to be claimed at all.
+                value: ${{ jobs.collect.outputs.targets }}
+
+permissions:
+    contents: read
+    packages: read
+    actions: read
+
+jobs:
+    plan:
+        name: Plan (${{ matrix.target.name }})
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+        env:
+            APP_DIR: ${{ matrix.target.appDir }}
+
+        steps:
+            - name: Validate platform
+              shell: bash
+              env:
+                  PLATFORM: ${{ inputs.platform }}
+              run: |
+                  set -euo pipefail
+                  case "$PLATFORM" in
+                    ios|android) ;;
+                    *)
+                      echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+                      exit 1
+                      ;;
+                  esac
+
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply build-env
+              if: inputs.build-env != ''
+              shell: bash
+              env:
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  while IFS= read -r line; do
+                    [ -z "$line" ] && continue
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::build-env line '$line' is missing '='; expected KEY=VALUE."
+                        exit 1
+                        ;;
+                    esac
+                    name="${line%%=*}"
+                    case "$name" in
+                      ''|[!A-Za-z_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      *[!A-Za-z0-9_]*)
+                        echo "::error::build-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    echo "$line" >> "$GITHUB_ENV"
+                  done <<< "$BUILD_ENV"
+
+            - name: Resolve package manager
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: 'true'
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                    esac
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  cache: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
+
+            - name: expo-native-key
+              id: native-key
+              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.0.0 # v3.0.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  working-directory: ${{ matrix.target.appDir }}
+                  flavor: ${{ inputs.base-flavor }}
+                  extra-env: ${{ inputs.fingerprint-env }}
+                  toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
+                  fingerprint-config: ${{ inputs.fingerprint-config }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: expo-base-binary (fetch)
+              id: base
+              if: inputs.build-strategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: fetch
+                  platform: ${{ inputs.platform }}
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ steps.native-key.outputs.key }}
+                  backend: ${{ inputs.base-backend }}
+                  path: .ci-cache/e2e-base/${{ matrix.target.name }}
+
+            - name: Refuse to compile native code under build-strategy repack
+              if: inputs.build-strategy == 'repack' && steps.base.outputs.found != 'true'
+              shell: bash
+              env:
+                  NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  REFERENCE: ${{ steps.base.outputs.reference }}
+              run: |
+                  set -euo pipefail
+                  echo "::error::build-strategy is 'repack', which forbids compiling native code, but no base binary is published at $REFERENCE for native key $NATIVE_KEY. Warm this key up on the default branch (seed-native-cache.yml), or switch this call to build-strategy: auto so a native build produces and publishes one."
+                  exit 1
+
+            - name: Set up Android SDK for the repack
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
+              uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+              with:
+                  cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+                  packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
+
+            - name: expo-repack
+              if: inputs.repack && steps.base.outputs.found == 'true'
+              uses: rnw-community/mobile-ci/actions/expo-repack@v3.0.0 # v3.0.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  base-path: ${{ steps.base.outputs.path }}
+                  output-path: ${{ inputs.platform == 'ios' && format('.ci-artifacts/{0}-{1}/{0}-{1}.tar.gz', inputs.app-artifact-prefix, matrix.target.name) || format('.ci-artifacts/{0}-{1}/app-release.apk', inputs.app-artifact-prefix, matrix.target.name) }}
+                  app-dir: ${{ matrix.target.appDir }}
+                  app-id: ${{ matrix.target.appId }}
+                  repack-env: ${{ inputs.repack-env }}
+                  expect-config: ${{ inputs.expect-config }}
+                  repack-version: ${{ inputs.repack-app-version }}
+                  android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
+                  keystore-path: ${{ (inputs.platform == 'android' && inputs.android-keystore-path != '') && format('{0}/{1}', matrix.target.appDir, inputs.android-keystore-path) || '' }}
+                  keystore-password: ${{ inputs.android-keystore-password }}
+                  keystore-key-alias: ${{ inputs.android-keystore-key-alias }}
+                  keystore-key-password: ${{ inputs.android-keystore-key-password }}
+
+            - name: Upload the repacked app for the jobs that consume it
+              if: inputs.repack && steps.base.outputs.found == 'true'
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ${{ inputs.app-artifact-prefix }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/${{ inputs.app-artifact-prefix }}-${{ matrix.target.name }}/
+                  if-no-files-found: error
+                  retention-days: 1
+
+            - name: Record this target's plan
+              shell: bash
+              env:
+                  PLATFORM: ${{ inputs.platform }}
+                  TARGET: ${{ toJSON(matrix.target) }}
+                  NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  BASE_FOUND: ${{ steps.base.outputs.found }}
+                  BASE_SOURCE: ${{ steps.base.outputs.source }}
+                  BASE_REFERENCE: ${{ steps.base.outputs.reference }}
+                  BUILD_STRATEGY: ${{ inputs.build-strategy }}
+                  REPACKED: ${{ inputs.repack }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p .ci-artifacts/plan
+                  target_name=$(jq -r '.name' <<< "$TARGET")
+                  needs_native=true
+                  if [ "$BASE_FOUND" = 'true' ]; then
+                    needs_native=false
+                  fi
+                  jq -n --argjson target "$TARGET" \
+                        --arg key "$NATIVE_KEY" \
+                        --argjson needsNative "$needs_native" \
+                     '$target + {nativeKey: $key, needsNative: $needsNative}' \
+                     > .ci-artifacts/plan/plan.json
+                  {
+                    if [ "$needs_native" = 'false' ] && [ "$REPACKED" = 'true' ]; then
+                      echo "### ${PLATFORM} ${target_name}: repacked, no native build slot taken"
+                      echo "Base ${BASE_REFERENCE} (from ${BASE_SOURCE}) repacked with this commit's JavaScript."
+                    elif [ "$needs_native" = 'false' ]; then
+                      echo "### ${PLATFORM} ${target_name}: already warm"
+                      echo "Base ${BASE_REFERENCE} (from ${BASE_SOURCE}) already covers native key ${NATIVE_KEY}."
+                    else
+                      echo "### ${PLATFORM} ${target_name}: native build needed"
+                      echo "Native key ${NATIVE_KEY} has no published base (strategy: ${BUILD_STRATEGY})."
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Upload this target's plan
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/plan/plan.json
+                  if-no-files-found: error
+                  retention-days: 1
+
+    collect:
+        name: Targets still needing a native build
+        needs: plan
+        if: ${{ !cancelled() && needs.plan.result == 'success' }}
+        runs-on: ubuntu-latest
+        outputs:
+            targets: ${{ steps.collect.outputs.targets }}
+        steps:
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: ${{ inputs.plan-artifact-prefix }}-*
+                  path: .ci-artifacts/plans
+
+            - name: Collect the targets whose native key has no base
+              id: collect
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.targets }}
+              run: |
+                  set -euo pipefail
+                  expected=$(jq 'length' <<< "$TARGETS")
+                  mapfile -d '' -t plans < <(find .ci-artifacts/plans -name plan.json -print0 | LC_ALL=C sort -z)
+                  if [ "${#plans[@]}" -ne "$expected" ]; then
+                    echo "::error::Expected one plan per target ($expected), found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
+                    exit 1
+                  fi
+                  targets=$(jq -sc 'map(select(.needsNative)) | map(del(.needsNative))' "${plans[@]}")
+                  echo "targets=$targets" >> "$GITHUB_OUTPUT"
+                  echo "Targets needing a native build: $(jq -r 'map(.name) | join(", ") | if . == "" then "(none)" else . end' <<< "$targets")"

@@ -1,0 +1,191 @@
+name: expo-native-key
+description: >-
+  Computes the one key a published base binary is stored under: the platform's
+  @expo/fingerprint hash under the consumer's build env, folded together with
+  the hash of the mobile-ci build action that produced the base, the pinned
+  toolchain identity, and the hash of the fingerprint ignore config. Any input
+  that can change the native shell without changing the fingerprint therefore
+  still changes the key. Fails closed on an empty fingerprint.
+inputs:
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  working-directory:
+    description: Directory containing the app whose native surface is fingerprinted.
+    required: false
+    default: '.'
+  flavor:
+    description: >-
+      Build flavor the base is published for (e.g. e2e, preview). A segment of
+      the key's address and nothing else - it is deliberately not exported into
+      the fingerprint evaluation, because the native build does not export it
+      either and a key computed under an env the build never sees describes a
+      binary nobody produces. An app.config that branches on FLAVOR must name
+      it in extra-env here and in the caller's build-env alike.
+    required: false
+    default: e2e
+  extra-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs exported for the fingerprint
+      evaluation. Every variable the app.config branches on belongs here AND in
+      the caller's build-env, or the key describes one native surface while the
+      build produces another. Must be byte-identical to what the warm-up
+      passes, or the two will never agree on a key.
+    required: false
+    default: ''
+  toolchain:
+    description: >-
+      Pinned toolchain identity folded into the key - `xcode-<version>-<build>`
+      on ios, `cmdline-<version>` on android. A base built with a different
+      toolchain gets a different key instead of being repacked onto.
+    required: false
+    default: ''
+  fingerprint-config:
+    description: >-
+      Path, relative to working-directory, of the @expo/fingerprint config
+      whose ignore list is the correctness boundary (see docs/repack.md). Its
+      hash is folded into the key, so relaxing an ignore rule invalidates every
+      base published under the old one. A missing file warns and contributes
+      the literal `none`.
+    required: false
+    default: fingerprint.config.js
+  fingerprint-version:
+    description: Pinned @expo/fingerprint npm version.
+    required: false
+    default: '0.20.6'
+outputs:
+  key:
+    description: The native key - `<fingerprint>-<12 hex of the build identity>`.
+    value: ${{ steps.key.outputs.key }}
+  fingerprint:
+    description: The bare @expo/fingerprint hash, without the build identity.
+    value: ${{ steps.fingerprint.outputs.hash }}
+  config-hash:
+    description: SHA-256 of the fingerprint config, or `none` when the file is absent.
+    value: ${{ steps.build-identity.outputs.config-hash }}
+  build-action-hash:
+    description: SHA-256 of the mobile-ci build action(s) that produce this platform's base.
+    value: ${{ steps.build-identity.outputs.build-action-hash }}
+runs:
+  using: composite
+  steps:
+    - name: Hash the build action and the fingerprint config
+      id: build-identity
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        FINGERPRINT_CONFIG: ${{ inputs.fingerprint-config }}
+        ACTIONS_ROOT: ${{ github.action_path }}/..
+      run: |
+        set -euo pipefail
+        case "$PLATFORM" in
+          ios|android) ;;
+          *)
+            echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+            exit 1
+            ;;
+        esac
+
+        sha256_stdin() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | cut -d' ' -f1
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 | cut -d' ' -f1
+          else
+            echo "::error::Neither sha256sum nor shasum is available, so no component of the native key can be hashed."
+            return 1
+          fi
+        }
+
+        directory_digest() {
+          local root="$1" file
+          find "$root" -type f ! -name '.DS_Store' -print0 \
+            | LC_ALL=C sort -z \
+            | while IFS= read -r -d '' file; do
+                printf '%s %s\n' "${file#"$root"/}" "$(sha256_stdin < "$file")"
+              done \
+            | sha256_stdin
+        }
+
+        if [ "$PLATFORM" = ios ]; then
+          action_dirs="build-ios-app setup-xcode-pinned"
+        else
+          action_dirs="build-android-app"
+        fi
+
+        build_action_list="$RUNNER_TEMP/expo-native-key-build-actions.$$"
+        : > "$build_action_list"
+        for name in $action_dirs; do
+          dir="$ACTIONS_ROOT/$name"
+          if [ ! -d "$dir" ]; then
+            echo "::error::Cannot hash the mobile-ci build action: '$name' is not a directory next to expo-native-key. The key would lose the component that invalidates a base when the build action changes."
+            exit 1
+          fi
+          printf '%s %s\n' "$name" "$(directory_digest "$dir")" >> "$build_action_list"
+        done
+        build_action_hash=$(sha256_stdin < "$build_action_list")
+        rm -f "$build_action_list"
+        if [ -z "$build_action_hash" ]; then
+          echo "::error::The build-action hash came out empty."
+          exit 1
+        fi
+
+        config_path="$WORKING_DIRECTORY/$FINGERPRINT_CONFIG"
+        if [ -f "$config_path" ]; then
+          config_hash=$(sha256_stdin < "$config_path")
+        else
+          config_hash=none
+          echo "::warning::No fingerprint config at '$config_path'. Packages @expo/fingerprint ignores by default can change native code without changing the key, so a repack can land on a stale base - see docs/repack.md for the contract this file is meant to state."
+        fi
+
+        echo "build-action-hash=$build_action_hash" >> "$GITHUB_OUTPUT"
+        echo "config-hash=$config_hash" >> "$GITHUB_OUTPUT"
+
+    - name: native-fingerprint
+      id: fingerprint
+      uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.0 # v3.0.0
+      with:
+        platform: ${{ inputs.platform }}
+        working-directory: ${{ inputs.working-directory }}
+        fingerprint-version: ${{ inputs.fingerprint-version }}
+        extra-env: ${{ inputs.extra-env }}
+
+    - name: Compose the native key
+      id: key
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        FLAVOR: ${{ inputs.flavor }}
+        TOOLCHAIN: ${{ inputs.toolchain }}
+        FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
+        BUILD_ACTION_HASH: ${{ steps.build-identity.outputs.build-action-hash }}
+        CONFIG_HASH: ${{ steps.build-identity.outputs.config-hash }}
+      run: |
+        set -euo pipefail
+        if [ -z "$FINGERPRINT" ]; then
+          echo "::error::@expo/fingerprint produced an empty hash; a base binary must never be published or fetched under an empty key."
+          exit 1
+        fi
+
+        sha256_stdin() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | cut -d' ' -f1
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 | cut -d' ' -f1
+          else
+            echo "::error::Neither sha256sum nor shasum is available, so the native key cannot be composed."
+            return 1
+          fi
+        }
+
+        identity=$(printf '%s\n' "$PLATFORM" "$FLAVOR" "$TOOLCHAIN" "$BUILD_ACTION_HASH" "$CONFIG_HASH" | sha256_stdin)
+        if [ -z "$identity" ]; then
+          echo "::error::The build identity came out empty."
+          exit 1
+        fi
+
+        key="${FINGERPRINT}-$(printf '%s' "$identity" | cut -c1-12)"
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+        echo "Native key ($PLATFORM/$FLAVOR): $key"
+        echo "  fingerprint=$FINGERPRINT toolchain=${TOOLCHAIN:-none} build-action=$BUILD_ACTION_HASH config=$CONFIG_HASH"

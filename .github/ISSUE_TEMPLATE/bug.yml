@@ -12,7 +12,9 @@ body:
               - actions/build-ios-app
               - actions/native-app-cache
               - actions/native-fingerprint
-              - actions/repack-app
+              - actions/expo-native-key
+              - actions/expo-base-binary
+              - actions/expo-repack
               - actions/run-maestro-android
               - actions/run-maestro-android-redroid
               - actions/run-maestro-ios
@@ -22,6 +24,8 @@ body:
               - .github/workflows/ios-maestro.yml
               - .github/workflows/android-maestro.yml
               - .github/workflows/seed-native-cache.yml
+              - .github/workflows/expo-base-plan.yml
+              - .github/workflows/store-screenshots.yml
               - .github/workflows/native-publish.yml
               - .github/workflows/native-dev-release.yml
               - .github/workflows/pr-closed-cleanup-reusable.yml

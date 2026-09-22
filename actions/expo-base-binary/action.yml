@@ -1,0 +1,452 @@
+name: expo-base-binary
+description: >-
+  Fetches or publishes the base binary a repack starts from, addressed by the
+  native key alone. The default `ghcr` backend stores it as an immutable OCI
+  artifact (`oras push`/`oras pull`), so no retention clock and no artifacts-API
+  heuristics decide whether a pull request can skip a native build; the
+  `artifact` backend keeps the same contract on workflow artifacts for
+  repositories that cannot publish packages. A fetch that finds nothing reports
+  `found=false`; a fetch that cannot tell fails the job.
+inputs:
+  mode:
+    description: '`fetch` or `publish`.'
+    required: true
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  key:
+    description: Native key from expo-native-key. Empty fails closed.
+    required: true
+  flavor:
+    description: Build flavor segment of the base's address.
+    required: false
+    default: e2e
+  backend:
+    description: '`ghcr` (default, an immutable OCI artifact) or `artifact` (workflow artifacts).'
+    required: false
+    default: ghcr
+  path:
+    description: >-
+      On publish, the base binary file to store. On fetch, the directory the
+      base is placed in - created if absent, never emptied, so a caller-owned
+      directory is safe to name. The output `path` names the file that landed
+      there.
+    required: true
+  registry:
+    description: OCI registry host for the ghcr backend.
+    required: false
+    default: ghcr.io
+  repository:
+    description: >-
+      `<owner>/<repo>` the base is stored under. Lowercased before use, as OCI
+      names must be.
+    required: false
+    default: ${{ github.repository }}
+  image-name:
+    description: Repository path appended after `<registry>/<repository>/`.
+    required: false
+    default: e2e-base
+  token:
+    description: >-
+      Token used to log in to the registry (ghcr backend, needs
+      `packages: write` to publish and `packages: read` to fetch) or to query
+      the artifacts API (artifact backend, needs `actions: read`).
+    required: false
+    default: ${{ github.token }}
+  default-branch:
+    description: >-
+      The only branch whose workflow artifacts the `artifact` backend accepts a
+      base from, so a pull request can never repack onto a base another pull
+      request built. Ignored by the ghcr backend, which is written only by the
+      warm-up.
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+  force:
+    description: >-
+      Publish over an address that already holds a base. Off by default: a
+      published base is immutable, because a key that is already in use must
+      keep meaning the same binary.
+    required: false
+    default: 'false'
+  oras-version:
+    description: >-
+      Pinned oras CLI version. An `oras` of exactly this version already on
+      PATH is reused; otherwise the release asset for the runner's OS/arch is
+      downloaded and checked against oras-checksums.
+    required: false
+    default: '1.3.4'
+  oras-checksums:
+    description: >-
+      Newline-separated `<os>_<arch>=<sha256>` entries for the
+      `oras_<oras-version>_<os>_<arch>.tar.gz` release assets. A runner whose
+      OS/arch has no entry here refuses to download rather than trust an
+      unverified binary. Bump together with oras-version.
+    required: false
+    default: |
+      linux_amd64=f27adb935022d94df8dc77719c322dda592c78a0d57a6f7dcdd8d900b248c454
+      linux_arm64=15702c6e3a4a56a8bd8ac5c17efdbcab56d9bada661ccbcf017f5b10c1d89399
+      darwin_amd64=5e964f3d5a36eb9499a9d3e252a86b09e7adf3e6f6447eec56fd249c6702af7e
+      darwin_arm64=217761a9500242ff473de8656b5aca21136ff39e17e9e61fd8936bbfd902704c
+outputs:
+  found:
+    description: '`true` when a fetch produced a base binary.'
+    value: ${{ steps.fetch-ghcr.outputs.found || steps.fetch-artifact.outputs.found }}
+  path:
+    description: Path of the fetched base binary; empty when none was found.
+    value: ${{ steps.fetch-ghcr.outputs.path || steps.fetch-artifact.outputs.path }}
+  source:
+    description: '`ghcr`, `artifact`, or `none` when nothing was found.'
+    value: ${{ steps.fetch-ghcr.outputs.source || steps.fetch-artifact.outputs.source }}
+  reference:
+    description: The OCI reference (ghcr) or artifact name (artifact) the base is addressed by.
+    value: ${{ steps.address.outputs.reference }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the base address
+      id: address
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BACKEND: ${{ inputs.backend }}
+        PLATFORM: ${{ inputs.platform }}
+        FLAVOR: ${{ inputs.flavor }}
+        KEY: ${{ inputs.key }}
+        REGISTRY: ${{ inputs.registry }}
+        REPOSITORY: ${{ inputs.repository }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          fetch|publish) ;;
+          *)
+            echo "::error::mode must be 'fetch' or 'publish'; got '$MODE'."
+            exit 1
+            ;;
+        esac
+        case "$BACKEND" in
+          ghcr|artifact) ;;
+          *)
+            echo "::error::backend must be 'ghcr' or 'artifact'; got '$BACKEND'."
+            exit 1
+            ;;
+        esac
+        case "$PLATFORM" in
+          ios|android) ;;
+          *)
+            echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+            exit 1
+            ;;
+        esac
+        if [ -z "$KEY" ]; then
+          echo "::error::key is empty; a base binary is addressed by its native key and must never be stored or looked up without one."
+          exit 1
+        fi
+        if [ -z "$FLAVOR" ]; then
+          echo "::error::flavor is empty; it is part of the base's address."
+          exit 1
+        fi
+        case "${PLATFORM}-${FLAVOR}-${KEY}" in
+          *[!A-Za-z0-9._-]*)
+            echo "::error::The address '${PLATFORM}-${FLAVOR}-${KEY}' contains a character an OCI tag and an artifact name cannot both carry; platform, flavor and key must match [A-Za-z0-9._-]."
+            exit 1
+            ;;
+        esac
+
+        tag="${PLATFORM}-${FLAVOR}-${KEY}"
+        artifact_name="e2e-base-${tag}"
+        repository_lower=$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')
+        image_lower=$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')
+        if [ "$BACKEND" = ghcr ]; then
+          reference="${REGISTRY}/${repository_lower}/${image_lower}:${tag}"
+        else
+          reference="$artifact_name"
+        fi
+        {
+          echo "tag=$tag"
+          echo "artifact-name=$artifact_name"
+          echo "reference=$reference"
+        } >> "$GITHUB_OUTPUT"
+        echo "Base binary address ($BACKEND, $MODE): $reference"
+
+    - name: Provision oras
+      if: inputs.backend == 'ghcr'
+      shell: bash
+      env:
+        ORAS_VERSION: ${{ inputs.oras-version }}
+        ORAS_CHECKSUMS: ${{ inputs.oras-checksums }}
+      run: |
+        set -euo pipefail
+        if command -v oras >/dev/null 2>&1 && oras version 2>/dev/null | grep -qE "^Version:[[:space:]]+${ORAS_VERSION}\$"; then
+          echo "Reusing the oras ${ORAS_VERSION} already on PATH."
+          exit 0
+        fi
+
+        case "$(uname -s)" in
+          Linux) os=linux ;;
+          Darwin) os=darwin ;;
+          *)
+            echo "::error::oras is not available for $(uname -s); the ghcr backend cannot run on this runner. Use backend: artifact."
+            exit 1
+            ;;
+        esac
+        case "$(uname -m)" in
+          x86_64|amd64) arch=amd64 ;;
+          arm64|aarch64) arch=arm64 ;;
+          *)
+            echo "::error::oras is not available for $(uname -m); the ghcr backend cannot run on this runner. Use backend: artifact."
+            exit 1
+            ;;
+        esac
+
+        expected=''
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            "${os}_${arch}="*) expected="${line#*=}" ;;
+          esac
+        done <<< "$ORAS_CHECKSUMS"
+        if [ -z "$expected" ]; then
+          echo "::error::No oras is on PATH and oras-checksums has no ${os}_${arch} entry for version ${ORAS_VERSION}, so no verified binary can be installed. Add the checksum of oras_${ORAS_VERSION}_${os}_${arch}.tar.gz, or preinstall oras ${ORAS_VERSION} on the runner."
+          exit 1
+        fi
+
+        install_dir="$RUNNER_TEMP/expo-base-binary-oras"
+        rm -rf "$install_dir"
+        mkdir -p "$install_dir"
+        asset="oras_${ORAS_VERSION}_${os}_${arch}.tar.gz"
+        curl -fsSL -o "$install_dir/$asset" \
+          "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/${asset}"
+        if command -v sha256sum >/dev/null 2>&1; then
+          actual=$(sha256sum "$install_dir/$asset" | cut -d' ' -f1)
+        else
+          actual=$(shasum -a 256 "$install_dir/$asset" | cut -d' ' -f1)
+        fi
+        if [ "$actual" != "$expected" ]; then
+          echo "::error::$asset hashes to $actual, not the pinned $expected."
+          exit 1
+        fi
+        tar -xzf "$install_dir/$asset" -C "$install_dir" oras
+        chmod +x "$install_dir/oras"
+        echo "$install_dir" >> "$GITHUB_PATH"
+        echo "Installed oras ${ORAS_VERSION} (${os}_${arch}) into $install_dir."
+
+    - name: Log in to the registry
+      if: inputs.backend == 'ghcr' && inputs.token != ''
+      shell: bash
+      env:
+        REGISTRY: ${{ inputs.registry }}
+        REGISTRY_TOKEN: ${{ inputs.token }}
+        REGISTRY_USER: ${{ github.actor }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$REGISTRY_TOKEN" | oras login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+
+    - name: Fetch the base binary from the registry
+      id: fetch-ghcr
+      if: inputs.mode == 'fetch' && inputs.backend == 'ghcr'
+      shell: bash
+      env:
+        REFERENCE: ${{ steps.address.outputs.reference }}
+        DESTINATION: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        error_file="$RUNNER_TEMP/expo-base-binary-fetch.$$.err"
+        status=0
+        oras manifest fetch "$REFERENCE" > /dev/null 2> "$error_file" || status=$?
+        if [ "$status" -ne 0 ]; then
+          if grep -qiE 'not found|NAME_UNKNOWN|MANIFEST_UNKNOWN|404' "$error_file"; then
+            {
+              echo "found=false"
+              echo "path="
+              echo "source=none"
+            } >> "$GITHUB_OUTPUT"
+            echo "::notice::No base binary published at $REFERENCE yet; this build has to produce one."
+            rm -f "$error_file"
+            exit 0
+          fi
+          echo "::error::Could not determine whether $REFERENCE exists (oras exited $status). An unreadable registry is not an absent base."
+          cat "$error_file" >&2
+          rm -f "$error_file"
+          exit 1
+        fi
+        rm -f "$error_file"
+
+        scratch="$RUNNER_TEMP/expo-base-binary-pull.$$"
+        rm -rf "$scratch"
+        mkdir -p "$scratch"
+        oras pull "$REFERENCE" --output "$scratch"
+        pulled=$(find "$scratch" -type f | LC_ALL=C sort | head -1)
+        if [ -z "$pulled" ]; then
+          echo "::error::$REFERENCE exists but pulled no file; a base that cannot be read is not a base."
+          rm -rf "$scratch"
+          exit 1
+        fi
+        mkdir -p "$DESTINATION"
+        base_path="$DESTINATION/$(basename "$pulled")"
+        cp "$pulled" "$base_path"
+        rm -rf "$scratch"
+        {
+          echo "found=true"
+          echo "path=$base_path"
+          echo "source=ghcr"
+        } >> "$GITHUB_OUTPUT"
+        echo "Pulled the base binary $REFERENCE into $base_path."
+
+    - name: Fetch the base binary from workflow artifacts
+      id: fetch-artifact
+      if: inputs.mode == 'fetch' && inputs.backend == 'artifact'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ARTIFACT_NAME: ${{ steps.address.outputs.artifact-name }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        DESTINATION: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        if [ -z "$DEFAULT_BRANCH" ]; then
+          echo "::error::default-branch is empty, so an artifact built by a pull request cannot be told apart from one built by the default branch. Pass it explicitly."
+          exit 1
+        fi
+        listing="$RUNNER_TEMP/expo-base-binary-artifacts.$$.json"
+        if ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=100" > "$listing"; then
+          echo "::error::The artifacts API query for $ARTIFACT_NAME failed. An unreadable API is not an absent base."
+          rm -f "$listing"
+          exit 1
+        fi
+        artifact_id=$(jq -r --arg branch "$DEFAULT_BRANCH" '
+          [.artifacts[]
+            | select(.expired | not)
+            | select(.workflow_run.head_branch == $branch)
+            | select(.workflow_run.head_repository_id == .workflow_run.repository_id)]
+          | sort_by(.created_at) | last | .id // empty' "$listing")
+        rm -f "$listing"
+        if [ -z "$artifact_id" ]; then
+          {
+            echo "found=false"
+            echo "path="
+            echo "source=none"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::No $DEFAULT_BRANCH-built artifact named $ARTIFACT_NAME; this build has to produce one."
+          exit 0
+        fi
+
+        scratch="$RUNNER_TEMP/expo-base-binary-unzip.$$"
+        rm -rf "$scratch"
+        mkdir -p "$scratch"
+        archive="$RUNNER_TEMP/expo-base-binary-${ARTIFACT_NAME}.zip"
+        rm -f "$archive"
+        gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$archive"
+        unzip -q -o "$archive" -d "$scratch"
+        rm -f "$archive"
+        unpacked=$(find "$scratch" -type f | LC_ALL=C sort | head -1)
+        if [ -z "$unpacked" ]; then
+          echo "::error::Artifact $ARTIFACT_NAME ($artifact_id) unpacked to nothing; a base that cannot be read is not a base."
+          rm -rf "$scratch"
+          exit 1
+        fi
+        mkdir -p "$DESTINATION"
+        base_path="$DESTINATION/$(basename "$unpacked")"
+        cp "$unpacked" "$base_path"
+        rm -rf "$scratch"
+        {
+          echo "found=true"
+          echo "path=$base_path"
+          echo "source=artifact"
+        } >> "$GITHUB_OUTPUT"
+        echo "Downloaded the base binary $ARTIFACT_NAME into $base_path."
+
+    - name: Refuse to overwrite a published base
+      id: publish-guard
+      if: inputs.mode == 'publish'
+      shell: bash
+      env:
+        BACKEND: ${{ inputs.backend }}
+        REFERENCE: ${{ steps.address.outputs.reference }}
+        ARTIFACT_NAME: ${{ steps.address.outputs.artifact-name }}
+        SOURCE_PATH: ${{ inputs.path }}
+        FORCE: ${{ inputs.force }}
+        GH_TOKEN: ${{ inputs.token }}
+        DEFAULT_BRANCH: ${{ inputs.default-branch }}
+      run: |
+        set -euo pipefail
+        if [ ! -f "$SOURCE_PATH" ]; then
+          echo "::error::publish was asked for '$SOURCE_PATH', which is not a file."
+          exit 1
+        fi
+
+        exists=false
+        if [ "$BACKEND" = ghcr ]; then
+          error_file="$RUNNER_TEMP/expo-base-binary-publish.$$.err"
+          status=0
+          oras manifest fetch "$REFERENCE" > /dev/null 2> "$error_file" || status=$?
+          if [ "$status" -eq 0 ]; then
+            exists=true
+          elif ! grep -qiE 'not found|NAME_UNKNOWN|MANIFEST_UNKNOWN|404' "$error_file"; then
+            echo "::error::Could not determine whether $REFERENCE already exists (oras exited $status); publishing blind could overwrite a base other builds are already repacking onto."
+            cat "$error_file" >&2
+            rm -f "$error_file"
+            exit 1
+          fi
+          rm -f "$error_file"
+        else
+          if [ -z "$DEFAULT_BRANCH" ]; then
+            echo "::error::default-branch is empty, so whether this address already holds a base cannot be told apart from an artifact some branch happens to have uploaded. Pass it explicitly."
+            exit 1
+          fi
+          listing="$RUNNER_TEMP/expo-base-binary-publish-artifacts.$$.json"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ARTIFACT_NAME}&per_page=100" > "$listing"; then
+            echo "::error::The artifacts API query for $ARTIFACT_NAME failed; publishing blind could duplicate a base under an address that already means something else."
+            rm -f "$listing"
+            exit 1
+          fi
+          count=$(jq -r --arg branch "$DEFAULT_BRANCH" '
+            [.artifacts[]
+              | select(.expired | not)
+              | select(.workflow_run.head_branch == $branch)] | length' "$listing")
+          rm -f "$listing"
+          [ "$count" -gt 0 ] && exists=true
+        fi
+
+        if [ "$exists" = true ] && [ "$FORCE" != 'true' ]; then
+          echo "::error::$REFERENCE already holds a base binary. A published base is immutable: the key that addresses it must keep meaning the same binary. Re-publish with force: true only when the base is known to be wrong (see docs/repack.md)."
+          exit 1
+        fi
+        if [ "$exists" = true ]; then
+          echo "::warning::Overwriting the base binary at $REFERENCE because force was set; every build that already repacked onto the previous one used different native code."
+        fi
+        echo "publish=true" >> "$GITHUB_OUTPUT"
+
+    - name: Publish the base binary to the registry
+      if: inputs.mode == 'publish' && inputs.backend == 'ghcr' && steps.publish-guard.outputs.publish == 'true'
+      shell: bash
+      env:
+        REFERENCE: ${{ steps.address.outputs.reference }}
+        SOURCE_PATH: ${{ inputs.path }}
+        PLATFORM: ${{ inputs.platform }}
+        FLAVOR: ${{ inputs.flavor }}
+        KEY: ${{ inputs.key }}
+      run: |
+        set -euo pipefail
+        source_dir=$(cd "$(dirname "$SOURCE_PATH")" && pwd)
+        source_file=$(basename "$SOURCE_PATH")
+        cd "$source_dir"
+        oras push "$REFERENCE" \
+          --artifact-type application/vnd.rnw-community.mobile-ci.e2e-base.v1 \
+          --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+          --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+          --annotation "dev.rnw-community.mobile-ci.platform=${PLATFORM}" \
+          --annotation "dev.rnw-community.mobile-ci.flavor=${FLAVOR}" \
+          --annotation "dev.rnw-community.mobile-ci.native-key=${KEY}" \
+          "${source_file}:application/octet-stream"
+        echo "Published $source_file as $REFERENCE."
+
+    - name: Publish the base binary as a workflow artifact
+      if: inputs.mode == 'publish' && inputs.backend == 'artifact' && steps.publish-guard.outputs.publish == 'true'
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+          name: ${{ steps.address.outputs.artifact-name }}
+          path: ${{ inputs.path }}
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true

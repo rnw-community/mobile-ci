@@ -121,6 +121,77 @@ on:
                 type: string
                 required: false
                 default: 2G
+            plan-runner-labels:
+                description: >-
+                    JSON array of self-hosted runner labels for the plan jobs,
+                    which compute each target's native key and ask whether a base
+                    binary is already published for it. The default is the x86_64
+                    Linux pool, so a push that changes no native surface costs
+                    Linux minutes and claims no Mac.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
+            plan-timeout-minutes:
+                type: number
+                required: false
+                default: 30
+            publish-base:
+                description: >-
+                    Publish the native app this run builds as the base binary pull
+                    requests repack (see docs/repack.md). On by default: warming a
+                    host cache nobody else can reach is half the job. Publishing
+                    needs packages: write on the calling job for the ghcr backend,
+                    or actions: read for the artifact one.
+                type: boolean
+                required: false
+                default: true
+            force-base:
+                description: >-
+                    Rebuild and re-publish every target's base even when its native
+                    key already has one. The escape hatch for the case a
+                    fingerprint cannot see - an ignored package that changed native
+                    code, or a rotated embedded secret. It overwrites a base other
+                    builds are already repacking onto, so say why in the run.
+                type: boolean
+                required: false
+                default: false
+            base-backend:
+                description: '`ghcr` (default) or `artifact`. See expo-base-binary.'
+                type: string
+                required: false
+                default: ghcr
+            base-flavor:
+                description: Flavor segment of the base binary's address.
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                description: >-
+                    Path, relative to a target's appDir, of the @expo/fingerprint
+                    config whose ignore list is the correctness boundary of every
+                    repack. Its hash is part of the native key. See docs/repack.md.
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                description: >-
+                    Newline-separated KEY=VALUE pairs exported while the native key
+                    is computed. Must be byte-identical to what the e2e workflows
+                    pass, or the warm-up publishes under a key no pull request ever
+                    looks up.
+                type: string
+                required: false
+                default: ''
+            repack-app-version:
+                description: Pinned @expo/repack-app npm version used by the plan jobs.
+                type: string
+                required: false
+                default: '0.7.2'
+            android-build-tools-version:
+                description: Android build-tools version the plan job installs.
+                type: string
+                required: false
+                default: '35.0.0'
             ios-timeout-minutes:
                 type: number
                 required: false
@@ -138,15 +209,84 @@ permissions:
     contents: read
 
 jobs:
+    plan-ios:
+        name: Plan iOS warm-up
+        if: inputs.ios-targets != '[]'
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        with:
+            platform: ios
+            targets: ${{ inputs.ios-targets }}
+            build-strategy: ${{ inputs.force-base && 'native' || 'auto' }}
+            repack: false
+            runner-labels: ${{ inputs.plan-runner-labels }}
+            timeout-minutes: ${{ inputs.plan-timeout-minutes }}
+            app-artifact-prefix: ios-base-app
+            plan-artifact-prefix: ios-base-plan
+            toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
+            base-backend: ${{ inputs.base-backend }}
+            base-flavor: ${{ inputs.base-flavor }}
+            fingerprint-config: ${{ inputs.fingerprint-config }}
+            fingerprint-env: ${{ inputs.fingerprint-env }}
+            expo-fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+            repack-app-version: ${{ inputs.repack-app-version }}
+            node-version: ${{ inputs.node-version }}
+            install-command: ${{ inputs.install-command }}
+            enable-corepack: ${{ inputs.enable-corepack }}
+            package-manager: ${{ inputs.package-manager }}
+            build-command: ${{ inputs.build-command }}
+            build-env: ${{ inputs.build-env }}
+
+    plan-android:
+        name: Plan Android warm-up
+        if: inputs.android-targets != '[]'
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        with:
+            platform: android
+            targets: ${{ inputs.android-targets }}
+            build-strategy: ${{ inputs.force-base && 'native' || 'auto' }}
+            repack: false
+            runner-labels: ${{ inputs.plan-runner-labels }}
+            timeout-minutes: ${{ inputs.plan-timeout-minutes }}
+            app-artifact-prefix: android-base-app
+            plan-artifact-prefix: android-base-plan
+            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+            base-backend: ${{ inputs.base-backend }}
+            base-flavor: ${{ inputs.base-flavor }}
+            fingerprint-config: ${{ inputs.fingerprint-config }}
+            fingerprint-env: ${{ inputs.fingerprint-env }}
+            expo-fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+            repack-app-version: ${{ inputs.repack-app-version }}
+            cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+            android-build-tools-version: ${{ inputs.android-build-tools-version }}
+            node-version: ${{ inputs.node-version }}
+            install-command: ${{ inputs.install-command }}
+            enable-corepack: ${{ inputs.enable-corepack }}
+            package-manager: ${{ inputs.package-manager }}
+            build-command: ${{ inputs.build-command }}
+            build-env: ${{ inputs.build-env }}
+
     seed-ios:
         name: Seed iOS native app (${{ matrix.target.name }})
-        if: inputs.ios-targets != '[]'
+        needs: plan-ios
+        if: ${{ !cancelled() && needs.plan-ios.result == 'success' && needs.plan-ios.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
         timeout-minutes: ${{ inputs.ios-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.ios-targets) }}
+                target: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
         env:
             IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
             CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
@@ -302,7 +442,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.0 # v3.0.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -335,33 +475,26 @@ jobs:
                   fi
                   eval "$PREBUILD_COMMAND"
 
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: ios
-                  working-directory: ${{ matrix.target.appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
-
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              if: '!inputs.force-base'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
-              run: echo 'Canonical native app already exists for this fingerprint — nothing to seed.'
+              run: echo 'This host already holds the native app for the key; the base is published from it without rebuilding.'
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -374,7 +507,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.0 # v3.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -391,32 +524,69 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
 
             - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
                   arch: arm64
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
+
+            - name: Archive the base binary
+              if: inputs.publish-base
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: |
+                  set -euo pipefail
+                  test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
+                  mkdir -p .ci-artifacts
+                  tar -czf ".ci-artifacts/ios-base-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
+
+            - name: expo-base-binary (publish)
+              if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: ios
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  force: ${{ inputs.force-base }}
+                  path: .ci-artifacts/ios-base-app-${{ matrix.target.name }}.tar.gz
+
+            - name: Explain why no base was published
+              if: inputs.publish-base && github.ref_name != github.event.repository.default_branch
+              shell: bash
+              env:
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  set -euo pipefail
+                  echo "::warning::This warm-up ran off the default branch, so the base binary for native key ${NATIVE_KEY} was built but not published. A base every pull request repacks onto is only trustworthy when the default branch produced it."
 
     seed-android:
         name: Seed Android native app (${{ matrix.target.name }})
-        if: inputs.android-targets != '[]'
+        needs: plan-android
+        if: ${{ !cancelled() && needs.plan-android.result == 'success' && needs.plan-android.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
         timeout-minutes: ${{ inputs.android-timeout-minutes }}
+        permissions:
+            contents: read
+            packages: write
+            actions: read
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.android-targets) }}
+                target: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
 
         steps:
             - name: Checkout repository
@@ -582,33 +752,26 @@ jobs:
                   PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
-            - name: native-fingerprint
-              id: fingerprint
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v2.3.0 # v2.3.0
-              with:
-                  platform: android
-                  working-directory: ${{ matrix.target.appDir }}
-                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
-
             - name: native-app-cache (restore)
               id: native-app-cache
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              if: '!inputs.force-base'
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
 
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true'
               shell: bash
-              run: echo 'Canonical native app already exists for this fingerprint — nothing to seed.'
+              run: echo 'This host already holds the APK for the key; the base is published from it without rebuilding.'
 
             - name: build-android-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v2.3.0 # v2.3.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.0 # v3.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -620,12 +783,33 @@ jobs:
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v2.3.0 # v2.3.0
+              if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.0.0 # v3.0.0
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ steps.fingerprint.outputs.hash }}
+                  fingerprint: ${{ matrix.target.nativeKey }}
+
+            - name: expo-base-binary (publish)
+              if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              with:
+                  mode: publish
+                  platform: android
+                  flavor: ${{ inputs.base-flavor }}
+                  key: ${{ matrix.target.nativeKey }}
+                  backend: ${{ inputs.base-backend }}
+                  force: ${{ inputs.force-base }}
+                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+
+            - name: Explain why no base was published
+              if: inputs.publish-base && github.ref_name != github.event.repository.default_branch
+              shell: bash
+              env:
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: |
+                  set -euo pipefail
+                  echo "::warning::This warm-up ran off the default branch, so the base binary for native key ${NATIVE_KEY} was built but not published. A base every pull request repacks onto is only trustworthy when the default branch produced it."
