@@ -47,11 +47,12 @@ inputs:
       `none` (the default) honours template-device and nothing else. `auto`
       needs no knowledge of the host image: it clones the shut-down
       `mobile-ci-template-*` device whose device type and runtime match this
-      lease and which `simslim verify --profile` reports slim, and otherwise
-      creates the device as usual and leaves a shut-down, slimmed
+      lease, trusting it by name and verifying the booted clone rather than the
+      shut-down template, which `simslim verify` cannot read; when there is no
+      such device it creates the device as usual and leaves a shut-down, slimmed
       `mobile-ci-template-<device-type>-<runtime>` copy behind for the next
-      lease on this host. Requires slim-profile, because an unverified template
-      would hand the tests a device nothing checked.
+      lease on this host. Requires slim-profile, because a clone nothing
+      verified after boot would hand the tests a device nothing checked.
     required: false
     default: none
   slim-profile:
@@ -73,10 +74,11 @@ inputs:
       which applies the missing delta and reboots, then is re-verified; a
       second mismatch still fails. The default differs because this action
       *creates* the device it leases: a freshly created device is always stock,
-      so drift is expected rather than a provisioning defect. Set it to 'false'
-      together with template-device once the host image ships slimmed
-      templates, so a stock template surfaces as an error instead of being
-      repaired on every run.
+      so drift is expected rather than a provisioning defect. With a cloned
+      template the repair also warns that the template is stale, and the
+      template is left in place. Set it to 'false' together with
+      template-device once the host image ships slimmed templates, so a stock
+      template surfaces as an error instead of being repaired on every run.
     required: false
     default: 'true'
   simslim-version:
@@ -325,10 +327,10 @@ runs:
             exit 1
           fi
           if [ -z "$SLIM_PROFILE" ]; then
-            echo "::error::template-strategy 'auto' requires slim-profile: a discovered template is only cloned once 'simslim verify --profile' reports it slim, and a template is only left behind after this lease has been verified against that same profile."
+            echo "::error::template-strategy 'auto' requires slim-profile: the clone of a discovered template is verified against it once booted, and a template is only left behind after this lease has been verified against that same profile."
             exit 1
           fi
-          command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step, so an auto-discovered template cannot be verified before the tests run on a clone of it."; exit 1; }
+          command -v simslim >/dev/null 2>&1 || { echo "::error::'simslim' is not on PATH after the install step, so the clone of an auto-discovered template cannot be verified before the tests run on it."; exit 1; }
         fi
 
         device_type_id=$(
@@ -369,19 +371,21 @@ runs:
           candidate=$(
             xcrun simctl list devices -j \
               | jq -r --arg prefix "$template_prefix" --arg deviceType "$device_type_id" --arg runtime "$runtime_id" --arg exact "$template_name" \
-                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.isAvailable == true and .deviceTypeIdentifier == $deviceType and .state == "Shutdown" and (.name | startswith($prefix)))] | sort_by([(.name != $exact), .name]) | first | if . == null then "" else "\(.udid) \(.name)" end'
+                '[.devices | to_entries[] | select(.key == $runtime) | .value[] | select(.isAvailable == true and .deviceTypeIdentifier == $deviceType and (.name | startswith($prefix)))] | sort_by([(.state != "Shutdown"), (.name != $exact), .name]) | first | if . == null then "" else "\(.state) \(.udid) \(.name)" end'
           )
           if [ -z "$candidate" ]; then
             template_to_bake="$template_name"
-            echo "::notice::No shut-down '${template_prefix}' device of type '$device_type_id' on runtime '$runtime_id' exists on this host; creating the lease and leaving '$template_name' behind once it is slim."
+            echo "::notice::No '${template_prefix}' device of type '$device_type_id' on runtime '$runtime_id' exists on this host; creating the lease and leaving '$template_name' behind once it is slim."
           else
-            candidate_udid="${candidate%% *}"
-            candidate_name="${candidate#* }"
-            if simslim verify "$candidate_udid" --profile "$SLIM_PROFILE"; then
+            candidate_state="${candidate%% *}"
+            candidate_rest="${candidate#* }"
+            candidate_udid="${candidate_rest%% *}"
+            candidate_name="${candidate_rest#* }"
+            if [ "$candidate_state" = 'Shutdown' ]; then
               TEMPLATE_DEVICE="$candidate_name"
-              echo "template-strategy 'auto' selected the verified slim template '$candidate_name' ($candidate_udid)."
+              echo "template-strategy 'auto' selected the shut-down template '$candidate_name' ($candidate_udid) by prefix, device type and runtime; 'simslim verify' runs on the booted clone, because it compares a booted device."
             else
-              echo "::warning::Template '$candidate_name' ($candidate_udid) does not match slim profile '$SLIM_PROFILE', so it is not cloned and not replaced - one template per device type and runtime is the rule. Re-bake it in the host image; this lease creates and slims its own device."
+              echo "::warning::Template '$candidate_name' ($candidate_udid) is '$candidate_state', so something else is using it; it is not cloned and not replaced - one template per device type and runtime is the rule. This lease creates and slims its own device."
             fi
           fi
         fi
@@ -469,6 +473,7 @@ runs:
         SLIM_PROFILE: ${{ steps.profile.outputs.path }}
         SLIM_REPAIR: ${{ inputs.slim-repair }}
         SIMULATOR_UDID: ${{ steps.acquire.outputs.udid }}
+        TEMPLATE_CLONED_FROM: ${{ steps.acquire.outputs.template }}
         TEMPLATE_BAKE_NAME: ${{ steps.acquire.outputs.template-bake-name }}
         BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
       run: |
@@ -482,9 +487,12 @@ runs:
         if simslim verify "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
           echo "Leased simulator $SIMULATOR_UDID already matches slim profile '$SLIM_PROFILE'."
         elif [ "$SLIM_REPAIR" != 'true' ]; then
-          echo "::error::Leased simulator '$SIMULATOR_UDID' does not match slim profile '$SLIM_PROFILE' and slim-repair is not 'true'. With template-device set, this means the host's template is not slimmed - fix the image rather than paying for a repair reboot on every run."
+          echo "::error::Leased simulator '$SIMULATOR_UDID' does not match slim profile '$SLIM_PROFILE' and slim-repair is not 'true'. ${TEMPLATE_CLONED_FROM:+The clone came from template '$TEMPLATE_CLONED_FROM', so that template is stale: }fix the host image rather than paying for a repair reboot on every run."
           exit 1
         else
+          if [ -n "$TEMPLATE_CLONED_FROM" ]; then
+            echo "::warning::This lease was cloned from template '$TEMPLATE_CLONED_FROM', and the booted clone does not match '$SLIM_PROFILE', so that template is stale; re-bake it in the host image with 'simslim on' and 'simslim verify' while the device is booted. It is left in place - one template per device type and runtime is the rule - and this lease repairs its own clone."
+          fi
           echo "::notice::Leased simulator '$SIMULATOR_UDID' is not slim yet; applying '$SLIM_PROFILE' with 'simslim on' (this reboots the device)."
           if ! simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
             echo "::error::'simslim on' failed to apply '$SLIM_PROFILE' to '$SIMULATOR_UDID'."

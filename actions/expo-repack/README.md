@@ -52,7 +52,7 @@ trusted to be this commit's app.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-repack@v3.0.0 # v3.0.0
+- uses: rnw-community/mobile-ci/actions/expo-repack@v3.0.1 # v3.0.1
   with:
       platform: ios
       base-path: ${{ steps.base.outputs.path }}

@@ -346,10 +346,18 @@ Naming a template in the consumer's workflow means the consumer has to know
 what the host image ships. `simulator-lease`'s `template-strategy: auto` (and
 `swift-ios.yml`'s `simulator-template-strategy: auto`) removes that coupling:
 the job looks for a **shut-down, available device whose name starts with
-`mobile-ci-template-` and whose device type and runtime both match the lease**,
-verifies it with `simslim verify --profile` and clones it. Nothing matches?
-The lease is created and slimmed exactly as before, and a shut-down copy is
-left behind for the next job on that host.
+`mobile-ci-template-` and whose device type and runtime both match the lease**
+and clones it. Nothing matches? The lease is created and slimmed exactly as
+before, and a shut-down copy is left behind for the next job on that host.
+
+The template is **trusted by name, device type and runtime**; the device that
+gets `simslim verify --profile`-ed is the **booted clone**, which the lease
+boots anyway. That is why the bake script below verifies **while the device is
+booted**: `simslim verify` compares a booted simulator and reports a mismatch
+for any shut-down one, so the image build is the only place a template's slim
+state can be proven, and a template the image did not verify booted will be
+caught later as a non-slim clone (repaired in-job, with a `::warning::` naming
+the template as stale — never deleted or replaced by a job).
 
 **The naming rule is the contract between this repo and the image:**
 
@@ -407,7 +415,7 @@ bake_template() {
     xcrun simctl boot "$udid"
     xcrun simctl bootstatus "$udid" -b
     simslim on "$udid" --profile "$profile" --boot-timeout 15m
-    simslim verify "$udid" --profile "$profile"
+    simslim verify "$udid" --profile "$profile"   # booted: verify reads a booted device only
     simslim measure "$udid"
     xcrun simctl shutdown "$udid"          # a template is always shut down
 }
@@ -422,10 +430,12 @@ runtime, so the device the image must carry for it is
 whatever `simctl` reports as newest — re-derive it with the snippet above
 rather than hard-coding `26-0` if the image's runtime changes).
 
-Leaving the template **shut down** is not cosmetic: the action refuses to clone
-a booted device, because a booted template is a device something else is using.
-Do not `simctl erase` a template afterwards — that resets it to stock, and the
-lease will fail `simslim verify` on the clone.
+Leaving the template **shut down** is not cosmetic: the action refuses a booted
+template — neither cloning nor replacing it — because a booted template is a
+device something else is using.
+Do not `simctl erase` a template afterwards — that resets it to stock, so every
+clone of it fails `simslim verify` once booted and pays a repair reboot, and
+the job warns that the template is stale.
 
 **The fleet base image should ship these templates.** Measured inside
 pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased

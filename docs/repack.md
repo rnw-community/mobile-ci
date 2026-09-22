@@ -286,7 +286,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.0.0 # v3.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.0.1 # v3.0.1
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -319,7 +319,7 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.1 # v3.0.1
         with: ...
 ```
 
