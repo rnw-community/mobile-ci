@@ -437,7 +437,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.0.0 # v3.0.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.0.1 # v3.0.1
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -520,7 +520,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.0 # v3.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.1 # v3.0.1
         with:
             platform: ios
             targets: ${{ inputs.targets }}
@@ -716,7 +716,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.1 # v3.0.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -750,7 +750,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.1 # v3.0.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -763,7 +763,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.1 # v3.0.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -779,7 +779,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.1 # v3.0.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -803,7 +803,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.1 # v3.0.1
               with:
                   mode: publish
                   platform: ios
@@ -857,7 +857,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.1 # v3.0.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -874,7 +874,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v3.0.0 # v3.0.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v3.0.1 # v3.0.1
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}

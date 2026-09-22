@@ -396,7 +396,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.0 # v3.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.1 # v3.0.1
 ```
 
 - `contents: read` — checkout.
@@ -435,7 +435,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.0 # v3.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.0.1 # v3.0.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
