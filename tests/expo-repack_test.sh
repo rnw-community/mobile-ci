@@ -42,7 +42,10 @@ make_android_base() {
 
 unpack() {
     local dir="$1" platform="$2" base="$3"
-    run_step "$dir" PLATFORM="$platform" BASE_PATH="$base"
+    # GITHUB_WORKSPACE deliberately points somewhere else: this step runs in the
+    # caller's own working directory, so a relative base-path must resolve
+    # against that and not against the workspace variable.
+    run_step "$dir" PLATFORM="$platform" BASE_PATH="$base" GITHUB_WORKSPACE="$dir/elsewhere"
 }
 
 case_start 'an iOS base with no embedded bundle is refused'

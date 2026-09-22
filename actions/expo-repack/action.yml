@@ -108,7 +108,7 @@ runs:
         esac
         case "$BASE_PATH" in
           /*) ;;
-          *) BASE_PATH="${GITHUB_WORKSPACE:-$PWD}/$BASE_PATH" ;;
+          *) BASE_PATH="$PWD/$BASE_PATH" ;;
         esac
         if [ ! -f "$BASE_PATH" ]; then
           echo "::error::No base binary at '$BASE_PATH'."
