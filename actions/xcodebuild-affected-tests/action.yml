@@ -105,6 +105,15 @@ runs:
           fi
         fi
 
+        for ref in "$base" "$head"; do
+          case "$ref" in
+            -*|*' '*|'')
+              echo "::error::base-ref/head-ref must be a plain git revision; '$ref' would be read by git as an option."
+              exit 1
+              ;;
+          esac
+        done
+
         changed_files="${RUNNER_TEMP:-/tmp}/affected-tests-changed-$$.txt"
         rm -f "$changed_files"
         undetermined=''
@@ -115,7 +124,7 @@ runs:
         else
           merge_base="$(git merge-base "$base_sha" "$head_sha" || true)"
           [ -n "$merge_base" ] || merge_base="$base_sha"
-          if ! git diff --name-only "$merge_base" "$head_sha" > "$changed_files"; then
+          if ! git -c core.quotePath=false diff --name-only "$merge_base" "$head_sha" > "$changed_files"; then
             undetermined="'git diff --name-only ${merge_base} ${head_sha}' failed, so the changed files are unknown."
           fi
         fi

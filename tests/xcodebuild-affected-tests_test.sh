@@ -160,6 +160,26 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'a base-ref git would read as an option fails closed'
+workspace="$(repo_workspace)"
+commit_change "$workspace" Sources/Menu/Menu.swift
+select_tests "$workspace" BASE_REF='--upload-pack=touch /tmp/pwned'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'would be read by git as an option' 'error message'; then
+    pass_case
+fi
+
+case_start 'a changed path with a space or a non-ASCII name is matched, not quoted'
+workspace="$(repo_workspace)"
+commit_change "$workspace" 'Sources/Menu/Main Menu.swift' 'Sources/Menu/Ünicode.swift'
+select_tests "$workspace"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'affected' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_equals 'PonyUITests/MenuTests/testStart
+PonyUITests/MenuTests/testResume' "$(step_output "$workspace" only-testing)" 'only-testing'; then
+    pass_case
+fi
+
 case_start 'a missing map file fails the step rather than quietly running everything'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
