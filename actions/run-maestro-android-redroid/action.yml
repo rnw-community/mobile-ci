@@ -202,7 +202,7 @@ runs:
   using: composite
   steps:
     - name: Start Redroid container
-      uses: rnw-community/mobile-ci/actions/redroid-container@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.2 # v3.0.2
       with:
           mode: start
           container-name: ${{ inputs.container-name }}
@@ -906,7 +906,7 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      uses: rnw-community/mobile-ci/actions/redroid-container@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.2 # v3.0.2
       with:
           mode: teardown
           container-name: ${{ inputs.container-name }}

@@ -144,7 +144,7 @@ runs:
 
     - name: native-fingerprint
       id: fingerprint
-      uses: rnw-community/mobile-ci/actions/native-fingerprint@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.2 # v3.0.2
       with:
         platform: ${{ inputs.platform }}
         working-directory: ${{ inputs.working-directory }}

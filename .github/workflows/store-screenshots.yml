@@ -792,7 +792,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v3.0.2 # v3.0.2
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
@@ -1320,7 +1320,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@4d1900bf176df507fda54dd43569fd6f94221f9b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.2 # v3.0.2
         with:
             platform: ios
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.ios-target) }}
@@ -1519,7 +1519,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.2 # v3.0.2
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1553,7 +1553,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.2 # v3.0.2
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1565,7 +1565,7 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              uses: rnw-community/mobile-ci/actions/build-ios-app@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.0.2 # v3.0.2
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1581,7 +1581,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.0.2 # v3.0.2
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1604,7 +1604,7 @@ jobs:
                   retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.2 # v3.0.2
               with:
                   mode: publish
                   platform: ios
@@ -1631,7 +1631,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@4d1900bf176df507fda54dd43569fd6f94221f9b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.0.2 # v3.0.2
         with:
             platform: android
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.android-target) }}
@@ -1849,7 +1849,7 @@ jobs:
               run: eval "$PREBUILD_COMMAND"
 
             - name: build-android-app
-              uses: rnw-community/mobile-ci/actions/build-android-app@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.0.2 # v3.0.2
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
@@ -1870,7 +1870,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.2 # v3.0.2
               with:
                   mode: publish
                   platform: android
@@ -1917,7 +1917,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.0.2 # v3.0.2
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1935,7 +1935,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v3.0.2 # v3.0.2
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
@@ -2006,7 +2006,7 @@ jobs:
 
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.2 # v3.0.2
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -2018,7 +2018,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3.0.2 # v3.0.2
               with:
                   android-serial: ${{ steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
@@ -2060,7 +2060,7 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.0.2 # v3.0.2
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -2404,7 +2404,7 @@ jobs:
               # against 'true' here - unlike a raw boolean input, whose
               # `== 'true'` comparison is always false and needs truthiness.
               if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
-              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v3.0.2 # v3.0.2
               with:
                   app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}

@@ -76,7 +76,7 @@ failure) fails the job: an unreadable store is not an absent base.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.1 # v3.0.1
+- uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.2 # v3.0.2
   id: base
   with:
       mode: fetch
