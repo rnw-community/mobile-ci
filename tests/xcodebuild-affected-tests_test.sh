@@ -21,7 +21,8 @@ repo_workspace() {
         git init -q -b main
         git config user.email fixture@example.com
         git config user.name Fixture
-        mkdir -p Sources/Maze Sources/Menu Resources/levels 'Pony.xcodeproj'
+        mkdir -p Sources/Maze Sources/Menu Resources/levels 'Pony.xcodeproj' ci
+        cp "$MAPS"/*.json ci/
         echo base > Sources/Maze/Maze.swift
         echo base > Sources/Menu/Menu.swift
         echo base > Resources/levels/one.json
@@ -51,7 +52,7 @@ select_tests() {
     local dir="$1"
     shift
     run_step "$dir" \
-        MAP_FILE="$MAPS/map.json" \
+        MAP_FILE='ci/map.json' \
         BASE_REF='main~1' \
         HEAD_REF='main' \
         FULL_SUITE_PATHS='' \
@@ -94,6 +95,48 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'changing the map itself runs the full suite'
+workspace="$(repo_workspace)"
+(
+    cd "$workspace/work"
+    printf '[{"paths": ["Sources/Menu/**"], "tests": ["PonyUITests/MenuTests"]}]' > ci/map.json
+    echo changed >> Sources/Menu/Menu.swift
+    git add -A
+    git commit -qm 'remap the menu'
+) >> "$workspace/git-log" 2>&1
+select_tests "$workspace"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'all' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_equals '' "$(step_output "$workspace" only-testing)" 'only-testing'; then
+    pass_case
+fi
+
+case_start 'a map git does not track fails the step'
+workspace="$(repo_workspace)"
+commit_change "$workspace" Sources/Menu/Menu.swift
+cp "$MAPS/map.json" "$workspace/work/untracked-map.json"
+select_tests "$workspace" MAP_FILE='untracked-map.json'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'not tracked by git' 'error message'; then
+    pass_case
+fi
+
+case_start 'a test identifier named like the output delimiter survives the output'
+workspace="$(repo_workspace)"
+(
+    cd "$workspace/work"
+    printf '[{"paths": ["Sources/Menu/**"], "tests": ["ONLY_TESTING_EOF"]}]' > ci/delimiter-map.json
+    git add -A
+    git commit -qm delimiter-map
+) >> "$workspace/git-log" 2>&1
+commit_change "$workspace" Sources/Menu/Menu.swift
+select_tests "$workspace" MAP_FILE='ci/delimiter-map.json'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'affected' "$(step_output "$workspace" mode)" 'mode' \
+    && assert_equals 'ONLY_TESTING_EOF' "$(step_output "$workspace" only-testing)" 'only-testing'; then
+    pass_case
+fi
+
 case_start 'a touched full-suite path runs the full suite'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift 'Pony.xcodeproj/project.pbxproj'
@@ -121,7 +164,7 @@ case_start 'a push event runs the full suite without consulting git at all'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
 run_step "$workspace" \
-    MAP_FILE="$MAPS/map.json" \
+    MAP_FILE='ci/map.json' \
     BASE_REF='' HEAD_REF='' FULL_SUITE_PATHS='' FALLBACK='all' WORKING_DIRECTORY='.' \
     GITHUB_EVENT_NAME='push'
 if assert_equals 0 "$STEP_STATUS" 'step status' \
@@ -147,7 +190,7 @@ base_sha="$(git -C "$workspace/work" rev-parse main~1)"
 head_sha="$(git -C "$workspace/work" rev-parse main)"
 printf '{"pull_request":{"base":{"sha":"%s"},"head":{"sha":"%s"}}}' "$base_sha" "$head_sha" > "$workspace/event.json"
 run_step "$workspace" \
-    MAP_FILE="$MAPS/map.json" \
+    MAP_FILE='ci/map.json' \
     BASE_REF='' HEAD_REF='' FULL_SUITE_PATHS='' FALLBACK='all' WORKING_DIRECTORY='.' \
     GITHUB_EVENT_NAME='pull_request' GITHUB_EVENT_PATH="$workspace/event.json"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
@@ -215,7 +258,7 @@ fi
 case_start 'an entry with no tests is refused, because it would skip a change silently'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
-select_tests "$workspace" MAP_FILE="$MAPS/map-empty-tests.json"
+select_tests "$workspace" MAP_FILE='ci/map-empty-tests.json'
 if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" "non-empty 'tests' array" 'error message'; then
     pass_case
@@ -224,7 +267,7 @@ fi
 case_start 'a test identifier xcodebuild would read as a flag is refused'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
-select_tests "$workspace" MAP_FILE="$MAPS/map-bad-identifier.json"
+select_tests "$workspace" MAP_FILE='ci/map-bad-identifier.json'
 if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" 'is not a' 'error message'; then
     pass_case
@@ -233,7 +276,7 @@ fi
 case_start 'a map that is not an array is refused'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift
-select_tests "$workspace" MAP_FILE="$MAPS/map-not-an-array.json"
+select_tests "$workspace" MAP_FILE='ci/map-not-an-array.json'
 if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" 'non-empty JSON array' 'error message'; then
     pass_case

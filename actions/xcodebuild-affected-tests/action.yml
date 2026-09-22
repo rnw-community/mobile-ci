@@ -109,6 +109,12 @@ runs:
           [ -n "$head" ] || head="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
         fi
 
+        map_repo_path="$(git ls-files --full-name -- "$MAP_FILE" | head -n 1)"
+        if [ -z "$map_repo_path" ]; then
+          echo "::error::'$MAP_FILE' is not tracked by git, so a change to the map itself could not be detected and a removed mapping would silently stop running its tests. Commit the map."
+          exit 1
+        fi
+
         for ref in "$base" "$head"; do
           case "$ref" in
             -*|*' '*|'')
@@ -152,10 +158,11 @@ runs:
           exit 0
         fi
 
-        CHANGED_FILES="$changed_files" python3 - <<'PYTHON'
+        CHANGED_FILES="$changed_files" MAP_REPO_PATH="$map_repo_path" python3 - <<'PYTHON'
         import json
         import os
         import re
+        import secrets
         import sys
 
         map_file = os.environ['MAP_FILE']
@@ -175,6 +182,10 @@ runs:
             else raw_full_suite_paths.split()
         )
         full_suite_globs = [glob.strip() for glob in full_suite_globs if glob.strip()]
+        # The map is read from the working tree, so a pull request that removes a
+        # mapping would be judged by the map that no longer covers the file it
+        # just orphaned. A change to the map is a full-suite change.
+        full_suite_globs.insert(0, os.environ['MAP_REPO_PATH'])
 
         IDENTIFIER = re.compile(r'^[^\s/-][^\s/]*(/[^\s/]+){0,2}$')
 
@@ -282,12 +293,16 @@ runs:
 
         only_testing = '' if mode == 'all' else '\n'.join(selected)
 
+        # A delimiter no selected value can collide with: an identifier literally
+        # named ONLY_TESTING_EOF would otherwise end the multiline output early
+        # and hand the caller a truncated selection.
+        delimiter = 'ONLY_TESTING_EOF_' + secrets.token_hex(16)
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as handle:
             handle.write(f'mode={mode}\n')
-            handle.write('only-testing<<ONLY_TESTING_EOF\n')
+            handle.write(f'only-testing<<{delimiter}\n')
             if only_testing:
                 handle.write(only_testing + '\n')
-            handle.write('ONLY_TESTING_EOF\n')
+            handle.write(f'{delimiter}\n')
 
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as handle:
             handle.write('### Affected tests\n\n')

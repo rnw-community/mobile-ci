@@ -41,7 +41,9 @@ the globs it owns and the test identifiers those paths are covered by:
 ```
 
 - A test identifier is `Target`, `Target/Class` or `Target/Class/testMethod` —
-  the same shape `xcodebuild -only-testing:` takes.
+  the same shape `xcodebuild -only-testing:` takes. Any of them is safe to
+  select: the multiline output uses a random delimiter, so an identifier that
+  happens to look like one cannot truncate the list.
 - Globs are matched against repository-relative paths: `*` and `?` stop at a
   `/`, `**/` spans directories, everything else is literal. A directory is
   written `Dir/**`, never bare `Dir`.
@@ -51,6 +53,11 @@ the globs it owns and the test identifiers those paths are covered by:
   `tests` array is refused: leave a path unmapped and it widens the run to the
   full suite, which is the honest answer for "nothing here knows what covers
   it".
+- **The map file is always a full-suite path.** A pull request that edits the
+  map is judged by the map it just changed, so a mapping it removed would
+  orphan the very files it stopped covering. Any change to `map-file` runs
+  everything; the map must therefore be tracked by git, and an untracked one
+  fails the step.
 - `full-suite-paths` is the other half of the contract: the workflow that runs
   the tests, the `.xcodeproj`, the test target's own sources. A change to what
   runs the tests is never an affected-tests decision.
