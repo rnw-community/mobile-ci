@@ -85,6 +85,27 @@ assert_equals 0 "$STEP_STATUS" 'unpack exit status' \
     && assert_equals "$dir/work/base.apk" "$(cd "$dir/work" && readlink -f "$(step_output "$dir" source-app)")" 'source-app' \
     && pass_case
 
+case_start 'a large APK listing does not read as a missing bundle'
+dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
+make_android_base "$dir" true
+# The bundle is named first and tens of thousands of entries follow. A `grep -q`
+# here would match, close the pipe, kill unzip with SIGPIPE, and - under
+# pipefail - report the bundle as absent on exactly the large apps that have one.
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$dir" unzip '
+printf "assets/index.android.bundle\n"
+index=0
+while [ "$index" -lt 60000 ]; do
+    printf "res/drawable/padding-entry-with-a-long-enough-name-%06d.xml\n" "$index"
+    index=$((index + 1))
+done'
+unpack "$dir" android base.apk
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "a base whose listing is larger than a pipe buffer was refused: $(cat "$dir/log")"
+else
+    pass_case
+fi
+
 case_start 'a relative build-tools directory is resolved once, for both steps'
 dir="$(new_workspace "$ACTION" "$UNPACK_STEP")"
 make_android_base "$dir" true

@@ -135,7 +135,7 @@ runs:
           fi
         else
           source_app="$BASE_PATH"
-          if ! unzip -Z1 "$source_app" | grep -Fxq 'assets/index.android.bundle'; then
+          if ! unzip -Z1 "$source_app" | grep -Fx 'assets/index.android.bundle' > /dev/null; then
             echo "::error::The base APK has no embedded assets/index.android.bundle, so it is a Debug build that loads JavaScript from a dev server. Repacking it would produce a binary whose JavaScript nobody controls; rebuild the base in Release."
             exit 1
           fi
@@ -341,7 +341,7 @@ runs:
           echo "::error::The repacked APK is signed by a different certificate than the base it was built from, so a device refuses to install it over the base. Point keystore-path at the key the base was signed with."
           exit 1
         fi
-        if ! unzip -Z1 "$output" | grep -Fxq 'assets/index.android.bundle'; then
+        if ! unzip -Z1 "$output" | grep -Fx 'assets/index.android.bundle' > /dev/null; then
           echo "::error::The repacked APK lost its embedded JavaScript bundle."
           exit 1
         fi

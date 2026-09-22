@@ -1636,7 +1636,7 @@ jobs:
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
             app-artifact-prefix: store-screenshots-apk
             plan-artifact-prefix: store-screenshots-android-plan
-            toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}
+            toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}

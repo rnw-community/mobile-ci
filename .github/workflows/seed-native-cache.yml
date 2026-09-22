@@ -257,7 +257,7 @@ jobs:
             timeout-minutes: ${{ inputs.plan-timeout-minutes }}
             app-artifact-prefix: android-base-app
             plan-artifact-prefix: android-base-plan
-            toolchain: cmdline-${{ inputs.cmdline-tools-version }}
+            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}

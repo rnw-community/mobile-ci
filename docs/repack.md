@@ -43,9 +43,11 @@ label or a strategy means the same thing in every pipeline.
 key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash)>
 ```
 
-`toolchain` carries the target's own `workspace` and `scheme` as well as the
-pinned tool versions, so two targets that share an app directory and a
-fingerprint but build different schemes never share a base.
+`toolchain` carries the target's own `workspace` and `scheme` as well, so two
+targets that share an app directory and a fingerprint but build different
+schemes never share a base. None of it reaches the published address as text —
+it is hashed into the twelve hex characters — so a Gradle task with colons or
+an argument list with spaces is fine.
 
 `@expo/fingerprint` hashes the native surface: the app config, the dependency
 set, autolinking, config plugins, and — unless the config ignores them — the
@@ -55,11 +57,12 @@ folded in beside it:
 - **the mobile-ci build action** that produced the base (`build-ios-app` plus
   `setup-xcode-pinned` on ios, `build-android-app` on android), so changing how
   a base is built invalidates every base built the old way;
-- **the pinned toolchain** (`xcode-<version>-<build>`, `cmdline-<version>`),
-  together with the native-build switches that change what the toolchain
-  produces (`rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
-  `expo-use-precompiled-modules`), so neither an Xcode bump nor a flipped
-  switch can leave a base reachable that was built the other way;
+- **the pinned toolchain and everything that changes what it produces** — the
+  Xcode version and build with `rct-use-prebuilt-rncore`, `rct-use-rn-dep` and
+  `expo-use-precompiled-modules` on ios, the cmdline-tools version with
+  `gradle-task` and `gradle-args` on android — so neither a toolchain bump nor
+  a flipped switch nor a changed Gradle task can leave a base reachable that
+  was built the other way;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
   invalidates every base published while it was in force.
 
