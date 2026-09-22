@@ -135,6 +135,29 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+# A path containing a newline can match no glob at all (the compiled patterns
+# never cross a newline), so it lands in the unmapped bucket and widens the run.
+# The map's own path is read NUL-delimited for the same reason: a quoted
+# "ci/map\nwith-newline.json" would be a full-suite glob matching nothing.
+case_start 'a map whose own path contains a newline still widens the run'
+workspace="$(repo_workspace)"
+map_with_newline="$(printf 'ci/map\nwith-newline.json')"
+(
+    cd "$workspace/work"
+    printf '[{"paths": ["Sources/Menu/**", "ci/**"], "tests": ["PonyUITests/MenuTests"]}]' > "$map_with_newline"
+    git add -A
+    git commit -qm 'a self-claiming map, at a path with a newline in it'
+    printf '[{"paths": ["Sources/Menu/**", "ci/**"], "tests": ["PonyUITests/MenuTests/testStart"]}]' > "$map_with_newline"
+    echo changed >> Sources/Menu/Menu.swift
+    git add -A
+    git commit -qm 'remap the menu'
+) >> "$workspace/git-log" 2>&1
+select_tests "$workspace" MAP_FILE="$map_with_newline"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'all' "$(step_output "$workspace" mode)" 'mode'; then
+    pass_case
+fi
+
 case_start 'a map git does not track fails the step'
 workspace="$(repo_workspace)"
 commit_change "$workspace" Sources/Menu/Menu.swift

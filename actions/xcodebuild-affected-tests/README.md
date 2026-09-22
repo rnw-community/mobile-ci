@@ -46,7 +46,14 @@ the globs it owns and the test identifiers those paths are covered by:
   happens to look like one cannot truncate the list.
 - Globs are matched against repository-relative paths: `*` and `?` stop at a
   `/`, `**/` spans directories, everything else is literal. A directory is
-  written `Dir/**`, never bare `Dir`.
+  written `Dir/**`, never bare `Dir`. No wildcard crosses a newline, so a
+  pathname containing one is always unmapped — and therefore always runs the
+  full suite.
+- Leading and trailing whitespace is trimmed from each glob you write (in the
+  map and in `full-suite-paths`), because a stray trailing space in YAML is a
+  far more common accident than a path that genuinely starts or ends with one.
+  Match such a path with `?` in that position (`?Sources/Menu.swift`).
+  Pathnames from the diff are never trimmed.
 - A file may be claimed by several entries; the union runs, deduplicated, in
   changed-file order and then map order.
 - **There is no "these paths need no tests" entry.** An entry with an empty

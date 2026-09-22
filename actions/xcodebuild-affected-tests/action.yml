@@ -109,7 +109,7 @@ runs:
           [ -n "$head" ] || head="$(python3 -c 'import json,os,sys; print(json.load(open(os.environ["GITHUB_EVENT_PATH"]))["pull_request"]["head"]["sha"])')"
         fi
 
-        map_repo_path="$(git ls-files --full-name -- "$MAP_FILE" | head -n 1)"
+        map_repo_path="$(git ls-files -z --full-name -- "$MAP_FILE" | python3 -c 'import sys; entries = [entry for entry in sys.stdin.buffer.read().split(b"\0") if entry]; sys.stdout.buffer.write(entries[0] if entries else b"")')"
         if [ -z "$map_repo_path" ]; then
           echo "::error::'$MAP_FILE' is not tracked by git, so a change to the map itself could not be detected and a removed mapping would silently stop running its tests. Commit the map."
           exit 1
