@@ -356,7 +356,7 @@ jobs:
 
             - name: expo-native-key
               id: native-key
-              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/expo-native-key@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   platform: ${{ inputs.platform }}
                   working-directory: ${{ matrix.target.appDir }}
@@ -369,7 +369,7 @@ jobs:
             - name: expo-base-binary (fetch)
               id: base
               if: inputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   mode: fetch
                   platform: ${{ inputs.platform }}
@@ -398,7 +398,7 @@ jobs:
 
             - name: expo-repack
               if: inputs.repack && steps.base.outputs.found == 'true'
-              uses: rnw-community/mobile-ci/actions/expo-repack@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/expo-repack@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   platform: ${{ inputs.platform }}
                   base-path: ${{ steps.base.outputs.path }}

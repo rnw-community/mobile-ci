@@ -304,7 +304,7 @@ jobs:
             - name: Compute iOS runtime version
               if: contains(inputs.platforms, 'ios') && inputs.runtime-version-ios == ''
               id: fingerprint-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   platform: ios
                   working-directory: ${{ inputs.app-dir }}
@@ -312,7 +312,7 @@ jobs:
             - name: Compute Android runtime version
               if: contains(inputs.platforms, 'android') && inputs.runtime-version-android == ''
               id: fingerprint-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   platform: android
                   working-directory: ${{ inputs.app-dir }}
@@ -412,7 +412,7 @@ jobs:
 
             - name: Generate Expo Updates manifests
               id: manifest
-              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
@@ -444,7 +444,7 @@ jobs:
 
             - name: Publish to GitHub Release
               if: inputs.publish
-              uses: rnw-community/mobile-ci/actions/github-release-publish@v3.0.1 # v3.0.1
+              uses: rnw-community/mobile-ci/actions/github-release-publish@044cdcfc8a21cc57207b0bbd9d158d9b3065a75b # fix/163-162-repack-linux-and-idempotent-publish fleet-validation pin
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
