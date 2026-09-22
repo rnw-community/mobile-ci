@@ -298,6 +298,10 @@ and "Slim the simulators" steps (`docs/BASE_IMAGE.md`), once per device type
 the fleet's tenants lease:
 
 ```sh
+# errexit matters here: a failed 'simslim on' or 'simslim verify' followed by a
+# successful 'simctl shutdown' would otherwise bake a stock template the lease
+# refuses to clone, and the image build would report success.
+set -euo pipefail
 export DEVELOPER_DIR=/Applications/Xcode_26.4.1.app/Contents/Developer
 profile=~/.fleet/simslim.fleet.json     # or mobile-ci's profiles/ci.json
 
@@ -314,7 +318,8 @@ bake_template() {
     # One template per device type + runtime: never create a second.
     if xcrun simctl list devices -j | jq -e --arg name "$name" \
         '[.devices[][] | select(.name == $name)] | length > 0' > /dev/null; then
-        echo "$name already exists"; return 0
+        echo "$name already exists"
+        return 0
     fi
 
     udid="$(xcrun simctl create "$name" "$device_type_id" "$runtime_id")"
