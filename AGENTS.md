@@ -22,6 +22,9 @@ the section that matches your task; skip the other.
   reusable workflow, one file per workflow in `.github/workflows/`.
 - `docs/self-hosted-runners.md` — self-hosted host provisioning guide (macOS
   Xcode pools, Linux `linux-aarch64` Redroid hosts, prewarm manifest format).
+- `docs/repack.md` — why a pull request no longer compiles native code, the
+  native key's correctness boundary, the `fingerprint.config.js` contract, and
+  the permissions every consumer's calling job needs.
 - `fixtures/` — minimal inputs the tests and `self-test.yml` run this repo's
   own actions against (a two-test Swift Package for `swift-test`, `simctl`
   listings for `simulator-lease`, path-to-test maps for
@@ -53,7 +56,7 @@ the section that matches your task; skip the other.
   workflow.
 - **Fail closed.** A detection, parse, or validation error must fail the
   step/job, never silently report success or "unaffected"/"skip". See
-  `turbo-affected` and `repack-app` for the pattern.
+  `turbo-affected` and `expo-repack` for the pattern.
 - Every third-party `uses:` (anything not `rnw-community/mobile-ci/...`) is
   pinned to a full commit SHA with a trailing `# vX.Y.Z` comment. Dependabot
   opens the bump PRs; never hand-edit a SHA without updating its comment.
@@ -160,6 +163,14 @@ procedure.
 
 ## B. USING this repo from a consumer project
 
+**A pull request does not compile native code by default.** From v3.0.0 the
+e2e and screenshot workflows compute a native fingerprint key on Linux, fetch
+the base binary published for it, and repack it with this commit's JavaScript;
+only a key with no published base reaches a Mac or a Gradle build. The calling
+job must grant `permissions: {contents: read, packages: write, actions: read}`,
+or the first default-branch run fails at publish. Read
+[docs/repack.md](docs/repack.md) before wiring or debugging any Expo pipeline.
+
 Prefer the **reusable workflows** over composing raw actions unless you
 already have a working pipeline and are adopting one piece at a time (à la
 carte tier — see [README.md](README.md#pick-your-tier)):
@@ -167,7 +178,13 @@ carte tier — see [README.md](README.md#pick-your-tier)):
 - `ios-maestro.yml` — iOS Maestro e2e.
 - `android-maestro.yml` — Android Maestro e2e (`avd` driver on an x86_64
   Linux KVM pool by default; `redroid` for a `linux-aarch64` pool).
-- `seed-native-cache.yml` — proactively warms the native-app cache.
+- `seed-native-cache.yml` — the warm-up: publishes the base binary every
+  pull request repacks, and warms the native-app cache. Wire it on a
+  default-branch push with a `paths:` filter (see
+  [docs/repack.md](docs/repack.md#the-warm-up)).
+- `expo-base-plan.yml` — the shared "does this commit have to compile native
+  code?" decision the e2e, screenshot and warm-up workflows call. Not normally
+  called directly by a consumer.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
 - `native-dev-release.yml` — dev-profile build published to a GitHub Release.
 - `expo-ota-preview.yml` — EAS-free, tokenless OTA JS preview for development

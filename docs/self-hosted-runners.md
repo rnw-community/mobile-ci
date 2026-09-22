@@ -53,6 +53,7 @@ twice: once in its own runtime and once in the iOS build it displaced.
 | `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
 | Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro on the `avd` driver | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
 | Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
+| `expo-base-plan.yml`'s plan/repack job (`expo-native-key`, `expo-base-binary`, `expo-repack`) | x86_64 Linux | re-bundles JavaScript and rewrites an archive: no Xcode, no simulator, no emulator, no KVM — see [The Linux repack pool](#the-linux-repack-pool-expo-e2e-and-screenshot-runs) |
 | Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
 
 This repo's own defaults follow that rule: `android-maestro.yml`'s
@@ -68,6 +69,86 @@ Redroid-capable Linux pool: `capture-screenshots-android` drives a
 Label names are a property of your fleet, not of this repo. The defaults name
 the labels of the fleet this repo is developed against; on another fleet,
 override them to whatever labels carry the same host shape.
+
+## The Linux repack pool (Expo e2e and screenshot runs)
+
+A pull request does not compile native code for an Expo e2e or screenshot run
+any more. `expo-base-plan.yml`'s `plan` job — the shared decision
+`ios-maestro.yml`, `android-maestro.yml`, `store-screenshots.yml` and
+`seed-native-cache.yml` all call — computes the native key with
+[`expo-native-key`](../actions/expo-native-key/README.md), fetches the base
+binary published for it with
+[`expo-base-binary`](../actions/expo-base-binary/README.md), and turns that base
+into this commit's binary with
+[`expo-repack`](../actions/expo-repack/README.md). Only a key with no published
+base reaches a Mac (iOS) or a Gradle build (Android). The contract is in
+[repack.md](repack.md).
+
+Per [Which pool a job belongs on](#which-pool-a-job-belongs-on), that job
+belongs on the **x86_64 Linux pool**: it re-bundles JavaScript and rewrites an
+archive. `["self-hosted","trf-linux-amd64-4x8"]` is the default
+`repack-runner-labels` value in every caller.
+
+**What a repack host needs:**
+
+- **Node and the repository's package manager.** The job installs JS
+  dependencies and runs Metro exactly as a build job does — `actions/setup-node`
+  provisions Node, `jq` resolves the manager (see
+  [Common to every pool: `jq`](#common-to-every-pool-jq)), and a `pnpm`
+  consumer still needs its version declared in the root `package.json`.
+- **`jq`, `unzip`, `tar`, `curl`.** `unzip` reads and asserts the APK's
+  embedded bundle and `app.config`, `tar` unpacks and repacks the iOS `.app`
+  archive, `curl` fetches the pinned `oras` when one has to be downloaded, and
+  `jq` carries the per-target plan between the `plan` and `native-targets`
+  jobs.
+- **Android only: a JDK 17 on the host.** Nothing in the repack job installs
+  one, and both `sdkmanager` and `apksigner` are Java programs. The Android
+  build-tools themselves (`zipalign`, `apksigner`) are *not* a host
+  prerequisite: the job installs
+  `platform-tools build-tools;<android-build-tools-version>` itself through
+  `android-actions/setup-android`.
+
+**What a repack host does not need:** no Xcode, no simulator, no emulator, no
+`/dev/kvm`, no `binder_linux`, no privileged container. A repack never boots a
+device and never compiles native code; that is the entire point of moving it
+off the Mac.
+
+**`hermesc` does not have to be on `PATH`.** Metro and `@expo/repack-app`
+resolve the `hermesc` shipped inside the repository's own `react-native`
+package, which is also the only copy whose bytecode version is guaranteed to
+match the base binary's runtime. Installing a system-wide Hermes compiler on
+the image buys nothing and risks a mismatch.
+
+**`oras` is verified, not assumed.** `expo-base-binary` reuses an `oras`
+already on `PATH` only when it is *exactly* the pinned version — `1.3.4` at the
+time of writing; the authority is `oras-version`'s default in
+[`actions/expo-base-binary/action.yml`](../actions/expo-base-binary/action.yml).
+Otherwise it downloads that release's asset for the runner's OS and
+architecture and checks it against the action's `oras-checksums` before running
+it; an OS/arch with no checksum entry fails the step by name rather than
+executing an unverified binary. Preinstalling the pinned `oras` on the image
+saves one download per job — it is an optimisation, not a host requirement.
+
+### What the macOS pool is still for
+
+The macOS pool does not go away; its role shrinks to two things:
+
+- **the rare native-change build.** When a native key has no published base —
+  an Expo or React Native upgrade, a new native module, a changed
+  `fingerprint.config.js` — the Mac compiles it, and a default-branch run then
+  publishes that base so the next pull request repacks instead.
+- **the Maestro and screenshot-capture shards.** They install and drive an iOS
+  Simulator, and a Simulator only exists on macOS. Nothing about the repack
+  default changes that.
+
+That second role is why the sizing advice above still applies to the macOS
+pool, and the first is why [`xcode-cache`](../actions/xcode-cache/README.md)
+ships a persistent `local` backend. A native-change build on this fleet is not
+the near-cold build it would be on a hosted runner, where a 10 GB repository
+cache quota evicts DerivedData, the Swift Package clones and the Xcode 26
+compilation cache between runs: the Mac keeps its compile cache on the host, in
+a directory every VM mounts, so the one build that does reach a Mac starts warm
+from the last one that did.
 
 ## macOS pools (iOS)
 

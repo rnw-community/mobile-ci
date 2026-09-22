@@ -2,15 +2,26 @@
 
 `workflow_call` reusable workflow: iOS Maestro e2e on self-hosted runners.
 
-Four jobs: **detect** (turbo-affected gate + shard-index computation, hosted
-`ubuntu-latest`) →
-**build** (one job per `targets` entry — Xcode select, native fingerprint,
-native-app-cache restore, optional repack-on-hit, ccache, `xcodebuild`,
-artifact upload) → **test** (one job per `targets` × `shard-count` — download
-the built `.app`, boot a Simulator, run a Maestro flow shard) → **status**
-(aggregates detect/build/test into a single required check). `build` and
-`test` run on self-hosted macOS by default; `detect` and `status` always run
-on `ubuntu-latest`.
+**detect** (turbo-affected gate, shard-index computation, and build-strategy
+resolution, hosted `ubuntu-latest`) → **plan** (one leg per `targets` entry, on
+the Linux repack pool — compute the native key with
+[`expo-native-key`](../../actions/expo-native-key), look up the base binary
+published for it with [`expo-base-binary`](../../actions/expo-base-binary),
+and, when one exists, produce this commit's app from it with
+[`expo-repack`](../../actions/expo-repack) instead of compiling anything; the
+job's `native-targets` output is the set of targets whose key had no base) →
+**build** (one job per *remaining* target only — Xcode select, native-app-cache
+restore, ccache, `xcodebuild`, artifact upload, and, on the default branch,
+publishing the base it just built) → **test** (one job per `targets` ×
+`shard-count` — download the `.app` the plan or the build produced, boot a
+Simulator, run a Maestro flow shard) → **status** (aggregates every job into a
+single required check). `build` and `test` run on self-hosted macOS by default
+and `plan` on the self-hosted Linux pool; `detect` and `status` always run on
+`ubuntu-latest`.
+
+The normal outcome of a pull request is that **no Mac slot is taken at all**:
+the plan job repacks a published base on Linux. See
+[Build strategy](#build-strategy) below and [docs/repack.md](../repack.md).
 
 The `status` job reports three distinct outcomes, in its log and in
 `$GITHUB_STEP_SUMMARY`: **passed**, **failed** (naming the job and result
@@ -18,7 +29,8 @@ that broke the run, with a `::notice::` hint when a `cancelled` result
 likely means a hit timeout), and **skipped** — every build/test leg skipped
 because the target packages were untouched, reported explicitly as "zero
 Maestro flows ran (not a pass)" rather than blending into a green check
-silently.
+silently. A `build` job that was *skipped* while the plan still listed targets
+needing one is reported as a failure too — a skipped build is not a build.
 
 ## Inputs
 
@@ -65,13 +77,96 @@ silently.
 | `expo-use-precompiled-modules` | no     | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the `expo prebuild` step, `pod install`, and the build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`             | no       | `2G`                                       | Bounded, compressed ccache maximum size. |
 | `build-env`                   | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
-| `repack-on-hit`               | no       | `false`                                    | On a native-app-cache hit, run `repack-app` to inject a freshly exported JS bundle into the cached shell instead of reusing it unchanged. Falls back to a full native build if the repack fails. |
-| `repack-app-version`          | no       | `0.7.2`                                    | Pinned `@expo/repack-app` npm version, used only when `repack-on-hit` is true. |
+| `build-strategy`              | no       | `auto`                                     | How this pull request gets the binary its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript on the Linux pool; only a key with no published base, or an unusable base, reaches the Mac — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the build instead of quietly taking a Mac slot. `native` is the escape hatch and a regression — every pull request then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
+| `repack-runner-labels`        | no       | `["self-hosted","trf-linux-amd64-4x8"]`    | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the x86_64 Linux pool: a repack re-bundles JavaScript and rewrites an archive, so it needs no Xcode, no simulator and no Mac slot. |
+| `native-build-label`          | no       | `mobile: force native build`               | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
+| `base-backend`                | no       | `ghcr`                                     | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
+| `base-flavor`                 | no       | `e2e`                                      | Flavor segment of the base binary's address. |
+| `fingerprint-config`          | no       | `fingerprint.config.js`                    | Path, relative to a target's `appDir`, of the `@expo/fingerprint` config whose ignore list is the correctness boundary of every repack. Its hash is part of the native key. See [docs/repack.md](../repack.md). |
+| `fingerprint-env`             | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs exported while the native key is computed, for an `app.config` that branches on env. Must be byte-identical to what the warm-up passes, or the two never agree on a key and every pull request takes a Mac slot. |
+| `repack-env`                  | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs exported for the re-bundle, so the consumer's `app.config` writes this build's API URL, version and build number into the repacked binary. |
+| `expect-config`               | no       | `''`                                       | Newline-separated `<dotted.path>=<value>` assertions the repacked binary's embedded `app.config` must satisfy exactly. Every value `repack-env` is expected to have rewritten belongs here: a config rewrite nobody checked is a repack nobody can trust. |
+| `repack-app-version`          | no       | `0.7.2`                                    | Pinned `@expo/repack-app` npm version. |
+| `repack-timeout-minutes`      | no       | `30`                                       | `plan`/repack job timeout. |
 | `build-timeout-minutes`       | no       | `60`                                       | Build job timeout. |
-| `test-timeout-minutes`        | no       | `45`                                       | Test job timeout. |
+| `test-timeout-minutes`        | no       | `75`                                       | Test job timeout. |
 
 No `secrets:` block — this workflow never touches a signing credential or an
-Expo/EAS token.
+Expo/EAS token. It does need a **token permission** the caller grants; see
+[Permissions](#permissions).
+
+## Build strategy
+
+A pull request should not compile native code. Its native surface is almost
+always identical to the default branch's, so the only thing that actually
+changed is JavaScript — and swapping JavaScript into an already-built binary is
+a Linux job measured in minutes, not a Mac build measured in tens of them.
+Three actions state that: [`expo-native-key`](../../actions/expo-native-key)
+computes the one key a base is addressed by,
+[`expo-base-binary`](../../actions/expo-base-binary) fetches or publishes the
+base under that key, and [`expo-repack`](../../actions/expo-repack) turns the
+base into this commit's binary and asserts the result. The whole contract,
+including what `fingerprint.config.js` must ignore and what it must not, is in
+[docs/repack.md](../repack.md).
+
+**`auto` (the default).** The `plan` job computes the target's native key and
+asks for the base published under it.
+
+- *First run on a new native surface (no base yet).* The lookup reports
+  `found=false`, the target lands in the plan's `native-targets` output, and
+  the `build` job compiles it on the Mac exactly as v2 did. When that run is on the default
+  branch, it then **publishes** the base binary it built under that key. The
+  **next** run — every pull request on that same native surface — finds the
+  base and repacks, taking no Mac slot at all. A `found=false` is the signal to
+  build; a lookup that *cannot tell* (registry error, artifacts API failure)
+  fails the job instead, because an unreadable store is not an absent base.
+- *Every subsequent run.* The base is found, `expo-repack` re-bundles this
+  commit's JavaScript into it on the Linux pool, the assertions in
+  `expect-config` are checked, and the repacked app is uploaded for the test
+  shards. The `build` job's matrix is empty and no Mac is touched.
+
+A pull request never publishes a base: publishing only happens when
+`github.ref_name` is the repository's default branch. So after a change that
+moves the native surface — an Expo or React Native upgrade, a new native
+module — warm the new key by letting this workflow run once on the default
+branch (the merge itself, or a `workflow_dispatch`/scheduled run of your
+caller on it); the first pull request afterwards already repacks. Only that
+first run pays for a Mac.
+
+A dedicated warm-up is cheaper than letting the full e2e pipeline do it:
+[`seed-native-cache.yml`](seed-native-cache.md) plans on Linux, builds only the
+keys with no base, publishes them, and runs no Maestro shards at all. Wire it on
+a default-branch push with a `paths:` filter — see
+[docs/repack.md](../repack.md#the-warm-up).
+
+**`repack`.** The same lookup, but compiling native code is forbidden: a
+missing base fails the `plan` job with the key it looked for, rather than
+quietly queueing a Mac build. Use it where a Mac slot is a scarce resource you
+would rather see a red check than silently consume.
+
+**`native`.** Every target compiles native code and the run publishes no base.
+This is the escape hatch, and using it is a **regression**: it is the v2
+behaviour, it costs a full native build per pull request, and the run emits a
+`::warning::` saying so. Reach for it only to prove a repack-specific
+suspicion, and take it back out. The same escape hatch is available per pull
+request, without editing the caller, by applying the `native-build-label`
+label (default `mobile: force native build`); combining that label with
+`build-strategy: repack` fails closed instead of picking a winner.
+
+## Migrating from v2
+
+- **`repack-on-hit: true`** — delete the input. Repacking is now the default
+  path, and a better one: v2 could only repack onto a shell this *same host*
+  had cached, while v3 repacks a base published for the native key from any
+  host, on Linux, before a Mac is involved at all.
+- **`repack-on-hit: false` (or unset)** — the default `build-strategy: auto`
+  is what you want; delete nothing and add nothing. If you genuinely need the
+  old "always compile" behaviour, set `build-strategy: native` — and treat it
+  as a regression to undo, not a setting to keep.
+- **The calling job now needs `permissions:`** — see below. This is the one
+  step that silently breaks a `repack-on-hit` caller that changed nothing else.
+- `repack-app-version` survives with the same default and now applies to every
+  repack, not just a cache hit.
 
 ## Between-flows recovery
 
@@ -228,8 +323,42 @@ the failure message points you at.
 
 ## Permissions
 
-`contents: read` is sufficient in the caller workflow; this workflow does not
-write to the repository.
+**The calling job must declare its own `permissions:` block.** A reusable
+workflow's job-level `permissions:` can only *narrow* the token its caller
+granted — it can never add a scope. The `plan` job asks for `packages: read` +
+`actions: read` and the `build` job for `packages: write`, but in a repository
+whose default workflow token permission is **read** (the GitHub default for new
+organisations) those requests resolve to nothing and publishing the base fails.
+The repository still builds natively on every run and never warms a key, which
+looks like "repacking does not work" rather than like a permissions problem.
+
+Grant them on the job that calls this workflow:
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
+```
+
+- `contents: read` — checkout.
+- `packages: write` — publishing the base binary to GHCR from a default-branch
+  run (`base-backend: ghcr`, the default). `packages: read` alone is enough for
+  a repository whose keys are published by something else, but then a key this
+  repository does not already have a base for can never be warmed by this
+  workflow.
+- `actions: read` — the `artifact` backend's cross-run artifact lookup; harmless
+  and recommended on the `ghcr` backend too.
+
+With `base-backend: artifact` no package scope is needed at all —
+`contents: read` + `actions: read` suffices — at the cost of workflow artifacts
+expiring, so a key can go cold and cost a native build again.
+
+This workflow still never writes to the repository and never needs a signing
+credential or an Expo/EAS token.
 
 ## Example
 
@@ -248,7 +377,12 @@ concurrency:
     cancel-in-progress: true
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.7.0 # v1.7.0
+        # Required: a reusable workflow can only narrow what the caller grants.
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -256,4 +390,16 @@ jobs:
             target-packages: |
                 @myorg/mobile-app
             build-command: yarn build --filter=@myorg/mobile-app
+            # build-strategy: auto is the default — repack on Linux, compile
+            # on a Mac only for a native key with no published base.
+            repack-env: |
+                API_URL=https://staging.example.com
+                APP_VERSION=1.2.3
+            expect-config: |
+                extra.apiUrl=https://staging.example.com
+                version=1.2.3
 ```
+
+`fingerprint-env` must pass exactly what the default-branch warm-up passes; a
+single differing byte gives the pull request a different native key, and every
+pull request takes a Mac slot again.

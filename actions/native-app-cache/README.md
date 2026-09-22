@@ -15,7 +15,7 @@ re-saves the same key.
 A restore hit only guarantees the native surface (package.json, native
 folders, autolinking config) is unchanged — it does **not** by itself
 guarantee the embedded JS bundle reflects the current commit's
-application-layer JS. Pair every restore hit with the `repack-app` action
+application-layer JS. Pair every restore hit with the `expo-repack` action
 (injects a freshly exported JS bundle into the cached shell before install)
 so a JS-only change is always tested against its own JS; `ios-maestro.yml` /
 `android-maestro.yml` do this when their `repack-on-hit` input is enabled.

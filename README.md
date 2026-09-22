@@ -21,11 +21,53 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 or cut a dev release, and only for the platforms you enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v2` is current; `v1` stays frozen at `v1.23.1`) that moves with
-the latest release of that major — pin to an exact tag or a full commit SHA
-for reproducibility, or `@v2` to float. See
+per major (`v3` is current, at `v3.0.0`; `v1` stays frozen at `v1.23.1`) that
+moves with the latest release of that major — pin to an exact tag or a full
+commit SHA for reproducibility, or `@v3` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
+
+## A pull request no longer compiles native code
+
+**New in `v3.0.0`, and the default.** An Expo/React Native e2e or screenshot
+run used to build the app on a Mac (iOS) or through Gradle (Android) on every
+pull request. It no longer does. `ios-maestro.yml`, `android-maestro.yml` and
+`store-screenshots.yml` now compute the **native fingerprint key** of the
+target's native surface on Linux, fetch the **base binary** published for that
+key, and **repack** it with this commit's JavaScript — on the x86_64 Linux
+pool, in minutes. Only a key with *no* published base reaches a Mac or a Gradle
+build, and a default-branch run then publishes the base it built, so the next
+pull request repacks again.
+
+Three actions state that, and nothing else changes for a caller:
+[`expo-native-key`](actions/expo-native-key/README.md) computes the key,
+[`expo-base-binary`](actions/expo-base-binary/README.md) fetches or publishes
+the base under it, and [`expo-repack`](actions/expo-repack/README.md) produces
+this commit's binary from that base and asserts the result — a repack that
+cannot be verified fails the build rather than shipping the base's own
+JavaScript.
+
+**The one thing a consumer must add** is a `permissions:` block on the job that
+calls the workflow. A reusable workflow can only narrow the token its caller
+granted, never add a scope, so in a repository whose default workflow token is
+read-only the base is never published and every run quietly compiles natively
+again:
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
+```
+
+Read [docs/repack.md](docs/repack.md) for the whole contract — what
+`fingerprint.config.js` must ignore and must not, how a key is warmed, and the
+`build-strategy` escape hatches (`repack` refuses to compile at all; `native`
+is the old v2 behaviour and a regression). The host side is in
+[docs/self-hosted-runners.md](docs/self-hosted-runners.md#the-linux-repack-pool-expo-e2e-and-screenshot-runs).
 
 ## Quick start
 
@@ -41,7 +83,12 @@ on:
         branches: [main]
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.7.0 # v1.7.0
+        # Required: a reusable workflow can only narrow what the caller grants.
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.0 # v3.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -88,7 +135,9 @@ full input reference, and the same doc's siblings under
 | [`xcode-archive-upload`](actions/xcode-archive-upload/README.md) | `xcodebuild archive` + `-exportArchive` straight to App Store Connect with an ASC API key, or local export only. |
 | [`build-ios-app`](actions/build-ios-app/README.md)               | Release, ad-hoc-signed (entitlements preserved) iOS Simulator `.app` via `xcodebuild`, embedded jsbundle verified. |
 | [`build-android-app`](actions/build-android-app/README.md)       | Release `.apk` via `gradlew`, embedded JS bundle verified, pinned `cmdline-tools-version`. |
-| [`repack-app`](actions/repack-app/README.md)                     | Inject a freshly exported JS bundle into a cached native shell without a full native rebuild. |
+| [`expo-native-key`](actions/expo-native-key/README.md)           | The one key a base binary is published and looked up under: `@expo/fingerprint` of the native surface, folded with the build action, the pinned toolchain and the fingerprint config's hash. |
+| [`expo-base-binary`](actions/expo-base-binary/README.md)         | Fetch or publish the immutable base binary for a native key — GHCR OCI artifact (default) or default-branch workflow artifact. An unreadable store is never an absent base. |
+| [`expo-repack`](actions/expo-repack/README.md)                   | Turn a published base into this commit's binary without compiling native code: re-bundle the JS, rewrite the embedded Expo config, assert it, re-sign on Android. |
 | [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners (`android-maestro.yml`'s `android-driver: redroid`). |
@@ -108,9 +157,10 @@ input/output table and a usage example.
 
 | Workflow                          | Composes                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `setup-xcode-pinned` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-ios` \| cache miss: `setup-ccache-ios` → `build-ios-app` → `run-maestro-ios` |
-| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `native-fingerprint` → `native-app-cache` → cache hit: (`repack-app`, if enabled) → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) \| cache miss: `build-android-app` → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) |
-| [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The build half of both pipelines above, without the detect/test jobs — populates the native-app cache on a schedule or dispatch. |
+| [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `run-maestro-ios` \| no base for the key: `setup-xcode-pinned` → `native-app-cache` → `setup-ccache-ios` → `build-ios-app` → `expo-base-binary` publish (default branch) → `run-maestro-ios` |
+| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) \| no base for the key: `native-app-cache` → `build-android-app` → `expo-base-binary` publish (default branch) → the same Maestro step |
+| [`expo-base-plan.yml`](.github/workflows/expo-base-plan.yml)  | The shared decision the e2e and screenshot workflows call, not something a consumer normally calls directly: one leg per target on the Linux pool — `expo-native-key` → `expo-base-binary` fetch → `expo-repack` when a base exists, and a `native-targets` output naming the keys that still need a Mac or a Gradle build. |
+| [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The warm-up: builds natively for every key that has no base yet and **publishes the base binary** pull requests repack, on a schedule or dispatch. Run it on the default branch after a native change so the next pull request takes no Mac slot. |
 | [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `build` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `xcodebuild-test` `mode: build` → `xcode-cache` save) → `test` (one matrix shard per `shards-json` entry: `xcode-cache` restore → `simulator-lease` → optional `xcodebuild-affected-tests` on a pull request → `xcodebuild-test` `mode: test`), both secretless, then an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). N shards share one compile through the restored DerivedData cache. |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
@@ -272,9 +322,10 @@ builds on your own runner.
 Every action and reusable workflow here assumes a self-hosted fleet with
 Xcode already installed (iOS) and `binder_linux` loaded (Redroid Android).
 See [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for host
-provisioning: macOS Xcode pools, Linux `linux-aarch64` Redroid hosts, the
-Redroid prewarm manifest format, and the repo variables this repo's own
-maintainer-only fleet self-test job reads.
+provisioning: the x86_64 Linux pool the repack path runs on, macOS Xcode
+pools, Linux `linux-aarch64` Redroid hosts, the Redroid prewarm manifest
+format, and the repo variables this repo's own maintainer-only fleet self-test
+job reads.
 
 ## Repo practices
 
@@ -289,7 +340,7 @@ maintainer-only fleet self-test job reads.
 
 **Versioning note:** examples in this README and the per-action/per-workflow
 docs use a floating major tag or `@main` for readability. A major tag such as
-`@v2` floats to the latest release of that major and `@main` can change
+`@v3` floats to the latest release of that major and `@main` can change
 without a deprecation window — pin to an exact `vX.Y.Z` tag or a full commit
 SHA when you need reproducibility.
 

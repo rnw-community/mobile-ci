@@ -15,15 +15,22 @@ modes:
   screenshot) or a **Maestro flow** (for scenes that need real interaction).
   Required for Android.
 
-Seven jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
-the optional [config file](#config-file), then fails closed on a malformed
-`capture-manifest`/`capture-scenes` or any mode/target cross-check — every
-downstream job reads its resolved values from this job's outputs) →
-**build-ios** (same build-job shape as `ios-maestro.yml`'s
-`build` job for the single `ios-target`; runs only when the manifest has iOS
-entries) and **build-android** (same build-job shape as
-`android-maestro.yml`'s `build` job for the single `android-target`; runs
-only when the manifest has Android entries) → **capture-ios** (one job per
+Nine jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
+the optional [config file](#config-file) — including `build-strategy` — then
+fails closed on a malformed `capture-manifest`/`capture-scenes` or any
+mode/target cross-check; every downstream job reads its resolved values from
+this job's outputs) → **plan-ios** and **plan-android** (each calls the
+reusable [`expo-base-plan.yml`](../../.github/workflows/expo-base-plan.yml) on
+the Linux repack pool for its single target — compute the native key with
+[`expo-native-key`](../../actions/expo-native-key), look up the base binary
+published for it with [`expo-base-binary`](../../actions/expo-base-binary),
+and, when one exists, produce this run's binary from it with
+[`expo-repack`](../../actions/expo-repack) instead of compiling anything; each
+job's `native-targets` output is the set of targets whose key had no base) →
+**build-ios** (same build-job shape as `ios-maestro.yml`'s `build` job, and it
+runs **only** when `plan-ios` found no base for the `ios-target`; on the
+default branch it publishes the base it just built) and **build-android** (the
+same, from `plan-android` and the `android-target`) → **capture-ios** (one job per
 iOS manifest entry — download the built `.app`, boot that entry's pinned
 simulator once via [`capture-screenshots-ios`](../../actions/capture-screenshots-ios/README.md),
 loop `locales x appearances x scenes` on it, optional
@@ -40,9 +47,15 @@ stay skipped — merges every `raw-screenshots-*` artifact, optionally
 validates iOS resolutions against `apple-screenshot-slots`, runs a
 consumer-owned `upload-command`, and optionally verifies/repairs App Store
 Connect duplicates via `asc-dedupe-screenshots`) → **status** (single required check with
-honest-skip semantics: a platform's build/capture jobs must succeed whenever
-the manifest has entries for it — `skipped` only passes for a platform with
-no entries).
+honest-skip semantics: a platform's plan and capture jobs must succeed
+whenever the manifest has entries for it, and its build job may be `skipped`
+only when the plan found a published base for every target it names — a
+skipped build with a non-empty `native-targets` is a failure; `skipped`
+across the board only passes for a platform with no entries).
+
+The normal outcome of a run is that **no build slot is taken at all**: the
+plan job repacks a published base on Linux and the capture jobs install what
+it uploaded. See [Build strategy](#build-strategy) below.
 
 ## capture-manifest
 
@@ -449,7 +462,8 @@ Every config-loadable input whose old `default:` was a non-empty literal
 (`capture-mode`, `settle-seconds`, `deeplink-confirm-title`,
 `deeplink-confirm-button`, `screenshots-dir`, `install-command`,
 `cache-profile`, `android-cache-profile`, `android-gradle-task`,
-`screenshots-download-dir`, `asc-dedupe-version-state`) now declares
+`build-strategy`, `screenshots-download-dir`, `asc-dedupe-version-state`) now
+declares
 `default: ''` and applies that literal at resolution time instead. **The
 effective default is unchanged** — a caller that passes no `config-path` and
 no value for these behaves exactly as before.
@@ -466,9 +480,9 @@ equivalent of `github.event.inputs`, which only exists for
   omitting `upload-command`, so an explicitly empty string **cannot**
   override a non-empty config value. To turn a config-file value off, remove
   its key from the config file rather than blanking it in `with:`.
-- **Booleans:** the seven boolean keys (`status-bar-override`,
-  `repack-on-hit`, `rct-use-prebuilt-rncore`, `rct-use-rn-dep`,
-  `upload-screenshots`, `asc-dedupe-screenshots`, `asc-fail-on-duplicates`)
+- **Booleans:** the six boolean keys (`status-bar-override`,
+  `rct-use-prebuilt-rncore`, `rct-use-rn-dep`, `upload-screenshots`,
+  `asc-dedupe-screenshots`, `asc-fail-on-duplicates`)
   follow the same rule: passing the **non-default** value wins over the
   config file, leaving the input at its declared default lets the config file
   decide. Pass `status-bar-override: false` to override a config file that
@@ -497,7 +511,7 @@ before this list is checked). Anything else fails closed:
 `status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
 `maestro-config`, `build-env`, `install-command`, `build-command`,
 `cache-profile`, `android-cache-profile`, `android-gradle-task`,
-`android-gradle-args`, `repack-on-hit`, `rct-use-prebuilt-rncore`,
+`android-gradle-args`, `build-strategy`, `rct-use-prebuilt-rncore`,
 `rct-use-rn-dep`, `upload-screenshots`, `upload-command`,
 `screenshots-download-dir`, `publish-env`, `asc-dedupe-screenshots`,
 `asc-dedupe-version-state`, `asc-dedupe-app-id`, `asc-fail-on-duplicates`.
@@ -588,7 +602,6 @@ resolved to before this feature existed.
     "settle-seconds": 5,
     "status-bar-override": true,
     "cache-profile": "suuudokuuu-ios-prod-v1",
-    "repack-on-hit": true,
     "rct-use-prebuilt-rncore": true,
     "rct-use-rn-dep": true,
     "build-env": "APP_VARIANT=production\n",
@@ -704,8 +717,17 @@ loadable from `config-path`; for those, the declared `default:` in
 | `expo-use-precompiled-modules`      | no       | `false`                                    | Exports `EXPO_USE_PRECOMPILED_MODULES=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). |
 | `ccache-max-size`                   | no       | `2G`                                     | Bounded, compressed ccache maximum size (iOS build). |
 | `build-env`                         | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each build job. Fails closed on a malformed line. **cfg** |
-| `repack-on-hit`                     | no       | `false`                                    | On a native-app-cache hit (either platform), run `repack-app` instead of reusing the cached shell unchanged. **cfg** |
-| `repack-app-version`                | no       | `0.7.2`                                    | Pinned `@expo/repack-app` npm version, used only when `repack-on-hit` is true. |
+| `build-strategy`                    | no       | `auto`                                    | How this run gets the binaries its capture jobs install, on both platforms. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this run's JavaScript on the Linux pool; only a key with no published base reaches a build job — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the plan job instead of quietly taking a build slot. `native` is the escape hatch and a regression — every run then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy). **cfg** |
+| `repack-runner-labels`              | no       | `["self-hosted","trf-linux-amd64-4x8"]`   | JSON array of self-hosted runner labels for the `plan-ios`/`plan-android` repack jobs of both platforms. The default is the x86_64 Linux pool: a repack re-bundles JavaScript and rewrites an archive, so it needs no Xcode, no Gradle and no build slot. |
+| `native-build-label`                | no       | `mobile: force native build`              | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. Only a `pull_request` event carries labels; on `workflow_dispatch`/`schedule` runs it is inert. |
+| `base-backend`                      | no       | `ghcr`                                    | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
+| `base-flavor`                       | no       | `e2e`                                     | Flavor segment of the base binary's address. |
+| `fingerprint-config`                | no       | `fingerprint.config.js`                   | Path, relative to a target's `appDir`, of the `@expo/fingerprint` config whose ignore list is the correctness boundary of every repack. Its hash is part of the native key. |
+| `fingerprint-env`                   | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs exported while the native key is computed, for an `app.config` that branches on env. Must be byte-identical to what the warm-up (`seed-native-cache.yml`) and the e2e workflows pass, or the two never agree on a key and every run takes a build slot. |
+| `repack-env`                        | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs exported for the re-bundle, so the consumer's `app.config` writes this build's API URL, version and build number into the repacked binary. |
+| `expect-config`                     | no       | `''`                                     | Newline-separated `<dotted.path>=<value>` assertions the repacked binary's embedded `app.config` must satisfy exactly. Every value `repack-env` is expected to have rewritten belongs here: a config rewrite nobody checked is a repack nobody can trust. |
+| `repack-app-version`                | no       | `0.7.2`                                    | Pinned `@expo/repack-app` npm version, used by both plan/repack jobs. |
+| `repack-timeout-minutes`            | no       | `30`                                      | Timeout of each plan/repack job (`plan-ios` and `plan-android` alike). |
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
@@ -714,8 +736,12 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
 | `android-cache-profile`             | no       | `android-native-v1`                       | Cache-key prefix for the Android build (`cache-profile` stays iOS-only). **cfg** |
-| `android-build-tools-version`       | no       | `35.0.0`                                  | Build-tools installed on a cache hit for repack-app's aapt2 validation; used only when `repack-on-hit` is true. |
-| `android-build-tools-dir`           | no       | `''`                                     | Explicit build-tools dir for repack-app; used only when `repack-on-hit` is true. |
+| `android-build-tools-version`       | no       | `35.0.0`                                  | Android build-tools version the `plan-android` repack job installs via `android-actions/setup-android`, for the `zipalign` and `apksigner` a repacked APK is aligned and signed with. The Gradle build installs whatever its `compileSdkVersion` resolves to; the repack job never runs Gradle, so it asks for build-tools explicitly. |
+| `android-build-tools-dir`           | no       | `''`                                     | Path to the build-tools directory holding `zipalign` and `apksigner`, used by the repack job. Empty relies on what `android-build-tools-version` puts on `PATH`. |
+| `android-keystore-path`             | no       | `android/app/debug.keystore`              | Keystore, relative to `android-target`'s `appDir`, the repacked APK is signed with. The default is the React Native debug keystore an `expo prebuild` app ships and Gradle signs its release build with — sign the repack with anything else and the device refuses to install it over the base. These are the published debug-keystore constants, not secrets; a release key belongs in `native-publish.yml`, never here. Empty leaves `@expo/repack-app`'s own default in place. |
+| `android-keystore-password`         | no       | `android`                                 | Password of `android-keystore-path`. Ignored when that is empty. |
+| `android-keystore-key-alias`        | no       | `androiddebugkey`                         | Key alias inside `android-keystore-path`. Ignored when that is empty. |
+| `android-keystore-key-password`     | no       | `android`                                 | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `android-build-timeout-minutes`     | no       | `60`                                      | Android build job timeout. |
 | `android-capture-timeout-minutes`   | no       | `90`                                      | Android capture job timeout. |
 | `redroid-image`                     | no       | `redroid/redroid:15.0.0_64only-latest`    | Redroid image tag, used on a prewarm-manifest miss. Must resolve to API 33+. |
@@ -732,6 +758,70 @@ loadable from `config-path`; for those, the declared `default:` in
 | `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). **cfg** |
 | `asc-dedupe-app-id`                 | no       | `''` (→ `ios-target.appId`)               | Bundle id of the ASC app whose listing is deduped; set it when the capture build uses a suffixed/e2e bundle id. **cfg** |
 | `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. **cfg** |
+
+## Build strategy
+
+A screenshot run should not compile native code. Its native surface is almost
+always identical to the default branch's, so the only thing that actually
+changed is JavaScript — and swapping JavaScript into an already-built binary
+is a Linux job measured in minutes, not a Mac or Gradle build measured in tens
+of them. Three actions state that:
+[`expo-native-key`](../../actions/expo-native-key) computes the one key a base
+is addressed by, [`expo-base-binary`](../../actions/expo-base-binary) fetches
+or publishes the base under that key, and
+[`expo-repack`](../../actions/expo-repack) turns the base into this run's
+binary and asserts the result against `expect-config`. Both platforms follow
+the identical rule, and it is the same rule `ios-maestro.yml`,
+`android-maestro.yml` and `seed-native-cache.yml` apply — a base warmed by one
+is repacked by the others, as long as `fingerprint-env`, `fingerprint-config`,
+`base-flavor` and the pinned toolchain match byte for byte.
+
+**`auto` (the default).** `plan-ios` / `plan-android` compute the target's
+native key and ask for the base published under it.
+
+- *First run on a new native surface (no base yet).* The lookup reports
+  `found=false`, the target lands in the plan's `native-targets` output, and
+  the platform's `build` job compiles it exactly as v1.x did — `build-ios` on
+  the macOS pool, `build-android` on `android-build-runner-labels`. When that
+  run is on the default branch, the build job then **publishes** the base
+  binary it built under that key. The **next** run on that same native
+  surface finds the base and repacks, taking no build slot at all. A
+  `found=false` is the signal to build; a lookup that *cannot tell* (registry
+  error, artifacts API failure) fails the job instead, because an unreadable
+  store is not an absent base.
+- *Every subsequent run.* The base is found, `expo-repack` re-bundles this
+  run's JavaScript into it on the Linux pool, the assertions in
+  `expect-config` are checked, and the repacked binary is uploaded under the
+  very artifact name the capture jobs already download
+  (`store-screenshots-app-<target>` on iOS, `store-screenshots-apk-<target>`
+  on Android). The build job's matrix is empty and no Mac or Gradle slot is
+  touched.
+
+Publishing only happens when `github.ref_name` is the repository's default
+branch, and never under `build-strategy: native`. So after a change that moves
+the native surface — an Expo or React Native upgrade, a new native module —
+warm the new key on the default branch first, ideally with
+[`seed-native-cache.yml`](seed-native-cache.md), which exists for exactly
+that; the next screenshot run already repacks.
+
+**`repack`.** The same lookup, but compiling native code is forbidden: a
+missing base fails the plan job with the key it looked for, rather than
+quietly queueing a Mac or Gradle build. Use it where a build slot is a scarce
+resource you would rather see a red check than silently consume.
+
+**`native`.** Every target compiles native code and the run publishes no
+base. This is the escape hatch, and using it is a **regression**: it is the
+v1.x behaviour, it costs a full native build per run, and the run emits a
+`::warning::` saying so. Reach for it only to prove a repack-specific
+suspicion, and take it back out. The same escape hatch is available per pull
+request, without editing the caller, by applying the `native-build-label`
+label (default `mobile: force native build`); combining that label with
+`build-strategy: repack` fails closed instead of picking a winner.
+
+Because `build-strategy` is a [config-file](#config-file) key like any other,
+the resolution order is the usual one — explicit `with:` value > `config-path`
+value > the built-in `auto` — and the `validate-manifest` job logs which of
+the three it took.
 
 ## Secrets
 
@@ -751,8 +841,42 @@ pipelines themselves need no secrets at all.
 
 ## Permissions
 
-`contents: read` is sufficient in the caller workflow; this workflow does not
-write to the repository.
+**The calling job must declare its own `permissions:` block.** A reusable
+workflow's job-level `permissions:` can only *narrow* the token its caller
+granted — it can never add a scope. The plan jobs ask for `packages: read` +
+`actions: read` and the build jobs for `packages: write`, but in a repository
+whose default workflow token permission is **read** (the GitHub default for
+new organisations) those requests resolve to nothing and publishing the base
+fails. The repository then builds natively on every run and never warms a key,
+which looks like "repacking does not work" rather than like a permissions
+problem.
+
+Grant them on the job that calls this workflow:
+
+```yaml
+jobs:
+    screenshots:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.0.0 # v3.0.0
+```
+
+- `contents: read` — checkout.
+- `packages: write` — publishing the base binary to GHCR from a default-branch
+  run (`base-backend: ghcr`, the default). `packages: read` alone is enough
+  for a repository whose bases are published by something else (a
+  `seed-native-cache.yml` warm-up, say), but then a key this repository does
+  not already have a base for can never be warmed by this workflow.
+- `actions: read` — the `artifact` backend's cross-run artifact lookup;
+  harmless and recommended on the `ghcr` backend too.
+
+With `base-backend: artifact` no package scope is needed at all —
+`contents: read` + `actions: read` suffices — at the cost of workflow
+artifacts expiring, so a key can go cold and cost a native build again.
+
+This workflow still never writes to the repository.
 
 ## Example
 
@@ -769,6 +893,11 @@ on:
         - cron: '0 4 * * 1'
 jobs:
     screenshots:
+        # Required: a reusable workflow can only narrow what the caller grants.
+        permissions:
+            contents: read
+            packages: write
+            actions: read
         uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@<full-commit-sha>
         with:
             ios-target: >-
@@ -794,11 +923,48 @@ jobs:
             upload-screenshots: true
             upload-command: bundle exec fastlane ios ios_screenshots
             asc-dedupe-screenshots: true
+            # build-strategy: auto is the default — repack a published base on
+            # Linux, and compile only a native key that has none.
+            repack-env: |
+                API_URL=https://staging.example.com
+                APP_VERSION=1.2.3
+            expect-config: |
+                extra.apiUrl=https://staging.example.com
+                version=1.2.3
         secrets:
             ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
             ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
             ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
 ```
+
+`fingerprint-env` must pass exactly what the default-branch warm-up passes; a
+single differing byte gives this run a different native key, and every run
+takes a build slot again.
+
+## Migrating from v2
+
+- **`repack-on-hit: true`** — delete the input (and the key from your
+  `config-path` file, where it now fails closed as an unknown key). Repacking
+  is the default path now, and a better one: v2 could only repack onto a shell
+  this *same host* had cached, while v3 repacks a base published for the
+  native key from any host, on Linux, before a Mac or a Gradle slot is
+  involved at all.
+- **`repack-on-hit: false` (or unset)** — the default `build-strategy: auto`
+  is what you want; delete nothing and add nothing. If you genuinely need the
+  old "always compile" behaviour, set `build-strategy: native` — and treat it
+  as a regression to undo, not a setting to keep.
+- **The calling job now needs `permissions:`** — see
+  [Permissions](#permissions). This is the one step that silently breaks a
+  caller that changed nothing else: the run still goes green by compiling
+  natively, and no key is ever warmed.
+- `repack-app-version`, `android-build-tools-version` and
+  `android-build-tools-dir` survive with the same defaults, and now apply to
+  every repack rather than only to a native-app-cache hit.
+- New, all optional: `build-strategy` (also a config-file key),
+  `repack-runner-labels`, `native-build-label`, `base-backend`, `base-flavor`,
+  `fingerprint-config`, `fingerprint-env`, `repack-env`, `expect-config`,
+  `repack-timeout-minutes`, and the four `android-keystore-*` inputs. Every
+  value `repack-env` rewrites should be asserted in `expect-config`.
 
 ## Migrating from v1.5.x
 
