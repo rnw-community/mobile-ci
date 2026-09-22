@@ -280,8 +280,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        # @main until the release that ships pre-flow-command, then pin to that tag
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@main
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.1 # v3.0.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
