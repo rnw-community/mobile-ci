@@ -1,0 +1,322 @@
+name: expo-repack
+description: >-
+  Turns a published base binary into this build's binary without compiling
+  native code: `@expo/repack-app --embed-bundle-assets` re-bundles the
+  JavaScript with the repository's own Metro and Hermes, swaps the bundle and
+  assets into the simulator `.app` or the APK, and rewrites the embedded Expo
+  config with this build's values. The result is asserted to carry exactly
+  those values before it is handed on, and a base with no embedded bundle is
+  refused: a repack that cannot be proven current fails the build rather than
+  shipping the base's own JavaScript.
+inputs:
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  base-path:
+    description: >-
+      The base binary to repack: a `.tar.gz` holding one simulator `.app` on
+      ios, an `.apk` on android. Left untouched; the repack is written to
+      output-path.
+    required: true
+  output-path:
+    description: >-
+      Where the repacked binary is written - a `.tar.gz` holding the `.app` on
+      ios, an `.apk` on android, so it is byte-for-byte the shape the test job
+      already consumes.
+    required: true
+  app-dir:
+    description: App/project directory @expo/repack-app runs against.
+    required: false
+    default: '.'
+  app-id:
+    description: >-
+      Expected bundle identifier (ios) or package name (android). Asserted
+      against the repacked binary's embedded config.
+    required: true
+  repack-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs exported for the re-bundle, so the
+      consumer's app.config reads this build's API URL, version and build
+      number. Rejects (fails closed) any line without '=' or whose name does
+      not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  expect-config:
+    description: >-
+      Newline-separated `<dotted.path>=<value>` assertions the repacked
+      binary's embedded app.config must satisfy exactly, e.g.
+      `version=1.4.0` or `extra.apiUrl=https://staging.example.com`. Every
+      value repack-env is expected to have rewritten belongs here: a config
+      rewrite nobody checked is a repack nobody can trust.
+    required: false
+    default: ''
+  repack-version:
+    description: Pinned @expo/repack-app npm version.
+    required: false
+    default: '0.7.2'
+  android-build-tools-dir:
+    description: >-
+      Android SDK build-tools directory holding zipalign and apksigner, passed
+      to @expo/repack-app and used for this action's signature verification.
+      Empty falls back to whatever is already on PATH.
+    required: false
+    default: ''
+  keystore-path:
+    description: >-
+      Android signing keystore the repacked APK is signed with - the same debug
+      keystore the base was signed with, or the emulator refuses the upgrade.
+      Empty leaves @expo/repack-app's own default in place.
+    required: false
+    default: ''
+  keystore-password:
+    description: Android keystore password. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  keystore-key-alias:
+    description: Android keystore key alias. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  keystore-key-password:
+    description: Android keystore key password. Ignored when keystore-path is empty.
+    required: false
+    default: ''
+  verbose:
+    description: Passes --verbose to @expo/repack-app.
+    required: false
+    default: 'false'
+outputs:
+  app-path:
+    description: Path to the repacked binary (the same path as output-path).
+    value: ${{ steps.package.outputs.app-path }}
+runs:
+  using: composite
+  steps:
+    - name: Unpack the base binary
+      id: base
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        BASE_PATH: ${{ inputs.base-path }}
+      run: |
+        set -euo pipefail
+        case "$PLATFORM" in
+          ios|android) ;;
+          *)
+            echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+            exit 1
+            ;;
+        esac
+        if [ ! -f "$BASE_PATH" ]; then
+          echo "::error::No base binary at '$BASE_PATH'."
+          exit 1
+        fi
+
+        work="$RUNNER_TEMP/expo-repack"
+        rm -rf "$work"
+        mkdir -p "$work/base" "$work/out" "$work/scratch"
+
+        if [ "$PLATFORM" = ios ]; then
+          tar -xzf "$BASE_PATH" -C "$work/base"
+          source_app=$(find "$work/base" -maxdepth 2 -name '*.app' -type d | LC_ALL=C sort | head -1)
+          if [ -z "$source_app" ]; then
+            echo "::error::'$BASE_PATH' holds no .app directory, so it is not an iOS simulator base binary."
+            exit 1
+          fi
+          if [ ! -f "$source_app/main.jsbundle" ]; then
+            echo "::error::The base .app has no embedded main.jsbundle, so it is a Debug build that loads JavaScript from a dev server. Repacking it would produce a binary whose JavaScript nobody controls; rebuild the base in Release."
+            exit 1
+          fi
+        else
+          source_app="$BASE_PATH"
+          if ! unzip -Z1 "$source_app" | grep -Fxq 'assets/index.android.bundle'; then
+            echo "::error::The base APK has no embedded assets/index.android.bundle, so it is a Debug build that loads JavaScript from a dev server. Repacking it would produce a binary whose JavaScript nobody controls; rebuild the base in Release."
+            exit 1
+          fi
+        fi
+
+        echo "source-app=$source_app" >> "$GITHUB_OUTPUT"
+        echo "Base binary accepted: $source_app"
+
+    - name: Repack the base binary with this build's JavaScript
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        NODE_ENV: production
+        PLATFORM: ${{ inputs.platform }}
+        SOURCE_APP: ${{ steps.base.outputs.source-app }}
+        REPACK_VERSION: ${{ inputs.repack-version }}
+        REPACK_ENV: ${{ inputs.repack-env }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+        KEYSTORE_PATH: ${{ inputs.keystore-path }}
+        KEYSTORE_PASSWORD: ${{ inputs.keystore-password }}
+        KEYSTORE_KEY_ALIAS: ${{ inputs.keystore-key-alias }}
+        KEYSTORE_KEY_PASSWORD: ${{ inputs.keystore-key-password }}
+        VERBOSE: ${{ inputs.verbose }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            *=*) ;;
+            *)
+              echo "::error::repack-env line '$line' is missing '='; expected KEY=VALUE."
+              exit 1
+              ;;
+          esac
+          name="${line%%=*}"
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::repack-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+              exit 1
+              ;;
+          esac
+          export "${name}=${line#*=}"
+        done <<< "$REPACK_ENV"
+
+        work="$RUNNER_TEMP/expo-repack"
+        output="$work/out/$(basename "$SOURCE_APP")"
+
+        args=(--platform "$PLATFORM" --source-app "$SOURCE_APP" --output "$output")
+        args+=(--working-directory "$work/scratch")
+        args+=(--embed-bundle-assets)
+        if [ "$PLATFORM" = android ]; then
+          if [ -n "$ANDROID_BUILD_TOOLS_DIR" ]; then
+            args+=(--android-build-tools-dir "$ANDROID_BUILD_TOOLS_DIR")
+          fi
+          if [ -n "$KEYSTORE_PATH" ]; then
+            args+=(--ks "$KEYSTORE_PATH")
+            if [ -n "$KEYSTORE_PASSWORD" ]; then
+              args+=(--ks-pass env:KEYSTORE_PASSWORD)
+            fi
+            if [ -n "$KEYSTORE_KEY_ALIAS" ]; then
+              args+=(--ks-key-alias "$KEYSTORE_KEY_ALIAS")
+            fi
+            if [ -n "$KEYSTORE_KEY_PASSWORD" ]; then
+              args+=(--ks-key-pass env:KEYSTORE_KEY_PASSWORD)
+            fi
+          fi
+        fi
+        if [ "$VERBOSE" = 'true' ]; then
+          args+=(--verbose)
+        fi
+
+        npx --yes "@expo/repack-app@${REPACK_VERSION}" "${args[@]}" .
+        if [ ! -e "$output" ]; then
+          echo "::error::@expo/repack-app exited 0 but wrote nothing to $output."
+          exit 1
+        fi
+
+    - name: Assert the repacked binary carries this build's config
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        SOURCE_APP: ${{ steps.base.outputs.source-app }}
+        APP_ID: ${{ inputs.app-id }}
+        EXPECT_CONFIG: ${{ inputs.expect-config }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/expo-repack"
+        output="$work/out/$(basename "$SOURCE_APP")"
+
+        if [ "$PLATFORM" = ios ]; then
+          config=$(find "$output" -path '*EXConstants.bundle/app.config' | LC_ALL=C sort | head -1)
+        else
+          inspect="$work/inspect"
+          rm -rf "$inspect"
+          mkdir -p "$inspect"
+          unzip -q -o "$output" 'assets/app.config' -d "$inspect" || true
+          config="$inspect/assets/app.config"
+        fi
+        if [ ! -f "$config" ]; then
+          echo "::error::The repacked $PLATFORM binary embeds no app.config, so what it was rewritten with cannot be checked. A repack that cannot be verified is not a repack."
+          exit 1
+        fi
+
+        if [ "$PLATFORM" = ios ]; then
+          id_path='ios.bundleIdentifier'
+        else
+          id_path='android.package'
+        fi
+        assertions="$work/expect-config"
+        printf '%s=%s\n' "$id_path" "$APP_ID" > "$assertions"
+        printf '%s\n' "$EXPECT_CONFIG" >> "$assertions"
+
+        CONFIG_FILE="$config" ASSERTIONS_FILE="$assertions" node -e '
+          const fs = require("fs");
+          const config = JSON.parse(fs.readFileSync(process.env.CONFIG_FILE, "utf8"));
+          const read = (path) => path.split(".").reduce((value, key) => (value === null || value === undefined ? value : value[key]), config);
+          const problems = [];
+          let checked = 0;
+          for (const line of fs.readFileSync(process.env.ASSERTIONS_FILE, "utf8").split("\n")) {
+            if (line.trim() === "") continue;
+            const separator = line.indexOf("=");
+            if (separator < 1) {
+              problems.push(`expect-config line "${line}" is not <dotted.path>=<value>`);
+              continue;
+            }
+            const path = line.slice(0, separator).trim();
+            const expected = line.slice(separator + 1);
+            const actual = read(path);
+            if (actual === undefined || actual === null) {
+              problems.push(`${path} is absent from the embedded app.config, expected "${expected}"`);
+            } else if (String(actual) !== expected) {
+              problems.push(`${path} is "${String(actual)}", expected "${expected}"`);
+            } else {
+              checked += 1;
+            }
+          }
+          if (problems.length) {
+            console.error("::error::The repacked binary does not carry this build\x27s config: " + problems.join("; "));
+            process.exit(1);
+          }
+          console.log(`Embedded app.config satisfies ${checked} assertion(s).`);
+        '
+
+    - name: Verify the repacked APK's signature
+      if: inputs.platform == 'android'
+      shell: bash
+      env:
+        SOURCE_APP: ${{ steps.base.outputs.source-app }}
+        ANDROID_BUILD_TOOLS_DIR: ${{ inputs.android-build-tools-dir }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/expo-repack"
+        output="$work/out/$(basename "$SOURCE_APP")"
+        apksigner_bin=apksigner
+        if [ -n "$ANDROID_BUILD_TOOLS_DIR" ]; then
+          apksigner_bin="$ANDROID_BUILD_TOOLS_DIR/apksigner"
+        fi
+        if ! command -v "$apksigner_bin" >/dev/null 2>&1 && [ ! -x "$apksigner_bin" ]; then
+          echo "::error::apksigner was not found at '$apksigner_bin'. A repacked APK whose signature nobody verified cannot be installed on the emulator; install the Android build-tools, or set android-build-tools-dir."
+          exit 1
+        fi
+        "$apksigner_bin" verify --print-certs "$output" > /dev/null
+        if ! unzip -Z1 "$output" | grep -Fxq 'assets/index.android.bundle'; then
+          echo "::error::The repacked APK lost its embedded JavaScript bundle."
+          exit 1
+        fi
+        echo "Repacked APK is signed and carries assets/index.android.bundle."
+
+    - name: Package the repacked binary
+      id: package
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        SOURCE_APP: ${{ steps.base.outputs.source-app }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/expo-repack"
+        output="$work/out/$(basename "$SOURCE_APP")"
+        mkdir -p "$(dirname "$OUTPUT_PATH")"
+        if [ "$PLATFORM" = ios ]; then
+          if [ ! -f "$output/main.jsbundle" ]; then
+            echo "::error::The repacked .app has no main.jsbundle; the re-bundle did not land."
+            exit 1
+          fi
+          tar -czf "$OUTPUT_PATH" -C "$(dirname "$output")" "$(basename "$output")"
+        else
+          cp "$output" "$OUTPUT_PATH"
+        fi
+        echo "app-path=$OUTPUT_PATH" >> "$GITHUB_OUTPUT"
+        echo "Repacked $PLATFORM binary written to $OUTPUT_PATH."
