@@ -21,7 +21,7 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 or cut a dev release, and only for the platforms you enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v3` is current, at `v3.0.2`; `v2` stays frozen at `v2.3.0` and
+per major (`v3` is current, at `v3.1.0`; `v2` stays frozen at `v2.3.0` and
 `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v3` to float. See
@@ -61,7 +61,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.2 # v3.0.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -97,7 +97,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.0.2 # v3.0.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]

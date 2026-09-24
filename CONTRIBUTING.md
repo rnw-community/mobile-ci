@@ -23,7 +23,7 @@ floating on `v1` is handed a breaking change it did not opt into. Pin to an
 exact `vX.Y.Z` tag instead of a sliding tag only if you need to freeze against
 upstream drift entirely.
 
-**Release status:** `v3` is current; `v3.0.2` is the latest release, `v2`
+**Release status:** `v3` is current; `v3.1.0` is the latest release, `v2`
 remains frozen at `v2.3.0` and `v1` at `v1.23.1` (see [RELEASE.md](RELEASE.md)
 for the full procedure). Consumers pin to `@v3` for the latest compatible
 release or to an exact `@vX.Y.Z` tag to freeze the dependency entirely; pinning

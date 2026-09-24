@@ -150,7 +150,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.0.2 # v3.0.2
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.1.0 # v3.1.0
         with:
             ios-targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
