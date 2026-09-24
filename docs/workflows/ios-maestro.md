@@ -47,8 +47,8 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `shard-manifest-dir`          | no       | `''`                                       | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `pre-run-flow`                | no       | `''`                                       | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
 | `flow-recovery-flow`          | no       | `''`                                       | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
-| `pre-test-command`            | no       | `''`                                       | Optional consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `SIMULATOR_UDID`, `APP_ID`, and `APP_PATH` in its environment. Its failure fails that shard immediately. |
-| `pre-flow-command`            | no       | `''`                                       | Consumer-owned shell command run **before every flow attempt**, each retry included, after `pre-run-flow` and the warm-up. Never run before `pre-run-flow` or `flow-recovery-flow` themselves. Runs with `FLOW_PATH`, `FLOW_NAME`, `APP_ID`, `SIMULATOR_UDID` and `MAESTRO_FLOW_ENV_FILE` in its environment. Unlike the best-effort `flow-recovery-flow` it is a **precondition**: a non-zero exit fails that attempt without running the flow, consuming one of its `1 + flow-retries` attempts and triggering the recovery flow like any other failed attempt. Every `KEY=VALUE` line it appends to `$MAESTRO_FLOW_ENV_FILE` becomes an extra `-e KEY=VALUE` argument for that one flow's `maestro test` — see [Per-flow preconditions](#per-flow-preconditions). |
+| `pre-test-command`            | no       | `''`                                       | Optional consumer-owned shell command run once after the app is installed on the simulator and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs once per simulator (see `simulator-count`) with that simulator's `SIMULATOR_UDID` and `SIMULATOR_LANE`, plus `APP_ID` and `APP_PATH`, in its environment. Its failure fails that shard immediately. |
+| `pre-flow-command`            | no       | `''`                                       | Consumer-owned shell command run **before every flow attempt**, each retry included, after `pre-run-flow` and the warm-up. Never run before `pre-run-flow` or `flow-recovery-flow` themselves. Runs with `FLOW_PATH`, `FLOW_NAME`, `APP_ID`, `SIMULATOR_UDID`, `SIMULATOR_LANE` and `MAESTRO_FLOW_ENV_FILE` in its environment. Unlike the best-effort `flow-recovery-flow` it is a **precondition**: a non-zero exit fails that attempt without running the flow, consuming one of its `1 + flow-retries` attempts and triggering the recovery flow like any other failed attempt. Every `KEY=VALUE` line it appends to `$MAESTRO_FLOW_ENV_FILE` becomes an extra `-e KEY=VALUE` argument for that one flow's `maestro test` — see [Per-flow preconditions](#per-flow-preconditions). |
 | `maestro-env`                 | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `maestro-config`              | no       | `''`                                       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `flow-retries`                | no       | `0`                                        | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
@@ -62,6 +62,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version. |
 | `maestro-reuse-driver`        | no       | `true`                                     | `true` passes `--no-reinstall-driver` and one `--driver-host-port` derived from the simulator UDID (the first free `127.0.0.1` port from a UDID-hashed start in 20000–30098, so shards on one host get distinct ports), to every `maestro test` invocation of the shard (pre-run flow, flows, retries, recovery flow): the XCTest driver the first invocation starts keeps running and every later invocation reuses it instead of starting its own. Each flow is still its own invocation, so `pre-flow-command`, per-flow env, retries, the recovery flow and the timing rows are unchanged. `false` starts a fresh driver per invocation. |
 | `simulator-device`            | no       | `''`                                       | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched against `xcrun simctl list devices available` with no fuzzy matching — fails closed, listing available devices, on no exact match. Empty keeps the previous last-available heuristic (emits a `::notice::` naming its choice and recommending pinning). |
+| `simulator-count` | no | `1` | Simulators this shard runs its flows on concurrently, inside one runner. `1` keeps the single-device behaviour. With N > 1 lane 0 is the device `simulator-device` selects and lanes 1..N-1 are `<name> #2` .. `<name> #N`, cloned from it when the host has none; each lane device is slimmed with [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh) when `simulator-slim-profile` is set, verified, installed and warmed, and the flows are split into N interleaved lanes run concurrently. Fails closed on anything but a positive integer — see [Several simulators per shard](#several-simulators-per-shard). |
 | `simulator-reduce-motion`     | no       | `false`                                    | `true` turns on the booted simulator's Reduce Motion accessibility setting (`com.apple.Accessibility ReduceMotionEnabled`) before the app is installed and first launched, so UIKit, React Native `AccessibilityInfo` and Reanimated skip their animations. Fails closed on any value other than `true`/`false`. |
 | `simslim-version` | no | `0.10.0` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
 | `simslim-sha256` | no | `eec00b27f069...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.10.0 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
@@ -232,9 +233,51 @@ The per-flow timing table in the step summary excludes time spent in recovery;
 a line below the table reports how many times recovery ran and how many of
 those runs failed.
 
+## Several simulators per shard
+
+`simulator-count: N` runs one shard's flows on N simulators in the same
+runner instead of on N runners (rnw-community/mobile-ci#147). It is an
+experiment knob for memory-sized VMs: leave it at `1` unless you are measuring.
+
+- **Devices.** Lane 0 is the device `simulator-device` (or the heuristic)
+  selects. Lane *k* ≥ 1 is the available device named `<that name> #<k+1>`
+  (`iPhone 17 Pro #2`, …); when the host has none, it is `simctl clone`d from
+  lane 0 and kept for the next job. Distinct names keep exact-name selection
+  unambiguous. A clone comes up stock (rnw-community/mobile-ci#161), so with
+  `simulator-slim-profile` set every lane ≥ 1 is slimmed with
+  `scripts/slim-simulator.sh` (`simslim on --no-reboot` only when it drifted)
+  and then verified exactly like lane 0; `simulator-requires`, Reduce Motion,
+  install and warm-up apply to every lane.
+- **Lanes.** The shard's flows (after `shard-manifest-dir` or the modulo
+  split) are dealt round-robin: flow *i* goes to lane *i mod N*. Each lane runs
+  the same per-flow loop as a single-device shard — `pre-run-flow`,
+  `pre-flow-command`, per-flow env, retries, recovery flow and timing rows —
+  as a concurrent process that passes `--udid <lane UDID>` to every `maestro`
+  invocation, owns its own driver port (derived from its UDID, never one
+  another lane already claimed) and its own debug output under the shard's
+  scratch directory. A lane that gets no flows stays idle.
+- **Result.** The step fails if any lane fails. Each lane writes its own
+  timing table to the step summary; log lines are prefixed `[lane k]`; failing
+  flows' debug bundles and `final-screen-lane-<k>.png` land in the shard's one
+  artifact.
+- **Guardrail.** While lanes run, `memory_pressure`'s free percentage and
+  `vm_stat`'s pages occupied by the compressor are sampled every 30 s into the
+  step summary with the minimum free and peak compressor size, so memory
+  starvation reads as a measurement rather than as flaky flows.
+
+**Environment contract.** `pre-test-command` runs once **per lane device**,
+serially, and `pre-flow-command` before every attempt **in its lane**, with
+lanes running concurrently. Both receive the lane's device as
+`SIMULATOR_UDID` and its zero-based index as `SIMULATOR_LANE` (`0` on a
+single-device shard). A command that seeds with `xcrun simctl … "$SIMULATOR_UDID"`
+therefore targets the right device unchanged; one that writes to a fixed
+scratch path must key it by `SIMULATOR_UDID` or `SIMULATOR_LANE`, because two
+lanes run it at the same time. `MAESTRO_FLOW_ENV_FILE` is already private to the
+lane and attempt.
+
 ## Per-flow preconditions
 
-`pre-test-command` runs **once per shard**. `pre-flow-command` runs **before
+`pre-test-command` runs **once per simulator** (once per shard unless `simulator-count` > 1). `pre-flow-command` runs **before
 every flow attempt** — each retry of the same flow included — so a consumer
 whose flows each need their own fixture can seed it per flow instead of
 driving an import through the app's UI.
@@ -256,7 +299,8 @@ exports:
 | `FLOW_PATH`             | The flow's path exactly as it is passed to `maestro test`.               |
 | `FLOW_NAME`             | `basename` of `FLOW_PATH`.                                              |
 | `APP_ID`                | The `app-id` input.                                                     |
-| `SIMULATOR_UDID`        | UDID of the booted simulator this shard drives.                         |
+| `SIMULATOR_UDID`        | UDID of the booted simulator this flow runs on — the lane's device when `simulator-count` > 1. |
+| `SIMULATOR_LANE`        | Zero-based lane index of that simulator (`0` on a single-device shard). |
 | `MAESTRO_FLOW_ENV_FILE` | A fresh, empty file created under `$RUNNER_TEMP` for this flow attempt. Its directory is deleted when the shard finishes. |
 
 ### Contributing per-flow `-e` pairs

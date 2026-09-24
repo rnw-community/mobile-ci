@@ -97,7 +97,7 @@ on:
                     Optional consumer-owned shell command run once after the app is
                     installed on the simulator and before any flow (including
                     pre-run-flow) executes, e.g. seeding a fixture into the app's data
-                    container. Runs with SIMULATOR_UDID, APP_ID, and APP_PATH in its
+                    container. Runs once per simulator with its SIMULATOR_UDID and SIMULATOR_LANE, plus APP_ID and APP_PATH, in its
                     environment. Its failure fails that shard immediately.
                 type: string
                 required: false
@@ -107,7 +107,7 @@ on:
                     Optional consumer-owned shell command run before every flow attempt,
                     each retry included, after pre-run-flow and the warm-up. It is never
                     run before pre-run-flow or flow-recovery-flow themselves. Runs with
-                    FLOW_PATH, FLOW_NAME, APP_ID, SIMULATOR_UDID and MAESTRO_FLOW_ENV_FILE
+                    FLOW_PATH, FLOW_NAME, APP_ID, SIMULATOR_UDID, SIMULATOR_LANE and MAESTRO_FLOW_ENV_FILE
                     in its environment. Unlike the best-effort flow-recovery-flow this is
                     a precondition: a non-zero exit fails that attempt without running the
                     flow, consuming one of its 1 + flow-retries attempts and triggering the
@@ -195,6 +195,19 @@ on:
                 type: string
                 required: false
                 default: 'true'
+            simulator-count:
+                description: >-
+                    Simulators each shard runs its flows on concurrently inside one
+                    runner (default 1). With N > 1 lanes 1..N-1 use devices named
+                    '<simulator-device> #2' .. '#N', cloned when missing, slimmed and
+                    verified like the first; the shard's flows are split into N
+                    interleaved lanes run by concurrent `maestro --udid` loops, and
+                    guest memory is sampled into the step summary. pre-test-command
+                    and pre-flow-command receive the lane's SIMULATOR_UDID and
+                    SIMULATOR_LANE and run concurrently across lanes.
+                type: number
+                required: false
+                default: 1
             simulator-reduce-motion:
                 description: >-
                     'true' turns on the simulator's Reduce Motion accessibility setting
@@ -894,7 +907,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@1b1b5d9c2916ada800e725dbe06a4a5b4952668b # perf/multi-simulator-lanes fleet-validation pin
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -916,6 +929,7 @@ jobs:
                   maestro-version: ${{ inputs.maestro-version }}
                   maestro-reuse-driver: ${{ inputs.maestro-reuse-driver }}
                   simulator-device: ${{ inputs.simulator-device }}
+                  simulator-count: ${{ inputs.simulator-count }}
                   simulator-reduce-motion: ${{ inputs.simulator-reduce-motion }}
                   simslim-version: ${{ inputs.simslim-version }}
                   simslim-sha256: ${{ inputs.simslim-sha256 }}
