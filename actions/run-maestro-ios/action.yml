@@ -141,7 +141,17 @@ inputs:
       Homebrew-managed maestro on the host. An existing maestro already on
       PATH is reused only when its version exactly matches.
     required: false
-    default: '2.8.0'
+    default: '2.10.0'
+  maestro-reuse-driver:
+    description: >-
+      When 'true', every `maestro test` invocation of this shard (pre-run-flow,
+      flows, retries and flow-recovery-flow) passes --no-reinstall-driver and
+      one --driver-host-port picked free on 127.0.0.1 when the shard starts,
+      so the XCTest driver the first invocation starts keeps running and every
+      later invocation reuses it instead of paying its own driver start.
+      'false' restores a fresh driver per invocation.
+    required: false
+    default: 'true'
   simulator-device:
     description: >-
       Exact simulator device name to boot, e.g. 'iPhone 17 Pro', matched
@@ -155,6 +165,15 @@ inputs:
       host in the pool.
     required: false
     default: ''
+  simulator-reduce-motion:
+    description: >-
+      When 'true', turns on Settings > Accessibility > Motion > Reduce Motion
+      (com.apple.Accessibility ReduceMotionEnabled) on the booted simulator
+      before the app is installed and first launched, so apps and libraries
+      honouring it (UIKit, React Native AccessibilityInfo, Reanimated) skip
+      their animations. Default 'false' leaves the simulator's setting as is.
+    required: false
+    default: 'false'
   simslim-version:
     description: >-
       Pinned simslim CLI version (plain X.Y.Z), consulted only when
@@ -485,6 +504,21 @@ runs:
             fi
           fi
 
+    - name: Set simulator Reduce Motion
+      shell: bash
+      env:
+        SIMULATOR_REDUCE_MOTION: ${{ inputs.simulator-reduce-motion }}
+      run: |
+          set -euo pipefail
+          case "$SIMULATOR_REDUCE_MOTION" in
+            true) xcrun simctl spawn "$SIMULATOR_UDID" defaults write com.apple.Accessibility ReduceMotionEnabled -bool true ;;
+            false) ;;
+            *)
+              echo "::error::simulator-reduce-motion '$SIMULATOR_REDUCE_MOTION' must be 'true' or 'false'."
+              exit 1
+              ;;
+          esac
+
     - name: Install app on simulator
       shell: bash
       env:
@@ -674,6 +708,7 @@ runs:
         PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
         MAESTRO_ENV: ${{ inputs.maestro-env }}
         MAESTRO_CONFIG: ${{ inputs.maestro-config }}
+        MAESTRO_REUSE_DRIVER: ${{ inputs.maestro-reuse-driver }}
       run: |
           set -euo pipefail
           # A shard-private scratch directory passed to every `maestro test`
@@ -752,6 +787,26 @@ runs:
             esac
             maestro_config_args=(--config "$MAESTRO_CONFIG")
           fi
+
+          maestro_driver_args=()
+          case "$MAESTRO_REUSE_DRIVER" in
+            true)
+              driver_host_port="$(perl -MIO::Socket::INET -e 'print IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 1)->sockport')"
+              case "$driver_host_port" in
+                ''|*[!0-9]*)
+                  echo "::error::Could not pick a free 127.0.0.1 port for the reused Maestro driver (got '$driver_host_port')."
+                  exit 1
+                  ;;
+              esac
+              echo "Reusing one Maestro XCTest driver on 127.0.0.1:$driver_host_port across this shard's invocations."
+              maestro_driver_args=(--no-reinstall-driver --driver-host-port "$driver_host_port")
+              ;;
+            false) ;;
+            *)
+              echo "::error::maestro-reuse-driver '$MAESTRO_REUSE_DRIVER' must be 'true' or 'false'."
+              exit 1
+              ;;
+          esac
 
           maestro_env_args=()
           if [ -n "$MAESTRO_ENV" ]; then
@@ -870,7 +925,7 @@ runs:
             [ -n "$FLOW_RECOVERY_FLOW" ] || return 0
             recovery_runs=$((recovery_runs + 1))
             echo "Running recovery flow '$FLOW_RECOVERY_FLOW' after the failed attempt of '$after'."
-            if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
+            if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
               recovery_failures=$((recovery_failures + 1))
               echo "::warning::Recovery flow '$FLOW_RECOVERY_FLOW' failed after '$after'; continuing anyway because recovery is best-effort."
             fi
@@ -896,7 +951,7 @@ runs:
                   echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
                 fi
               fi
-              if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$flow"; then
+              if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$flow"; then
                 status=passed
                 break
               fi

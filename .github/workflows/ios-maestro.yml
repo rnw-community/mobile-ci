@@ -184,7 +184,24 @@ on:
             maestro-version:
                 type: string
                 required: false
-                default: '2.8.0'
+                default: '2.10.0'
+            maestro-reuse-driver:
+                description: >-
+                    'true' (default) keeps one Maestro XCTest driver running on one fixed
+                    127.0.0.1 port for every `maestro test` invocation of a shard
+                    (--no-reinstall-driver --driver-host-port), so only the first
+                    invocation pays the driver start. 'false' starts a fresh driver per
+                    invocation.
+                type: string
+                required: false
+                default: 'true'
+            simulator-reduce-motion:
+                description: >-
+                    'true' turns on the simulator's Reduce Motion accessibility setting
+                    before the app is installed and first launched. Default 'false'.
+                type: string
+                required: false
+                default: 'false'
             simulator-device:
                 description: >-
                     Exact simulator device name to boot (e.g. 'iPhone 17 Pro'), matched
@@ -897,7 +914,9 @@ jobs:
                   maestro-config: ${{ inputs.maestro-config }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
+                  maestro-reuse-driver: ${{ inputs.maestro-reuse-driver }}
                   simulator-device: ${{ inputs.simulator-device }}
+                  simulator-reduce-motion: ${{ inputs.simulator-reduce-motion }}
                   simslim-version: ${{ inputs.simslim-version }}
                   simslim-sha256: ${{ inputs.simslim-sha256 }}
                   simulator-slim-profile: ${{ inputs.simulator-slim-profile }}
