@@ -29,6 +29,7 @@ invoke_shard() {
     shift
     run_step "$dir" MAESTRO_CALLS="$dir/calls" \
         GITHUB_ENV="$dir/github-env" GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT=1 \
+        SIMULATOR_UDID=AAAAAAAA-0000-0000-0000-000000000001 \
         APP_ID=com.example.app FLOWS_DIR=flows FLOWS_MAX_DEPTH=1 \
         FLOWS_NAME_PATTERN='*.flow.yaml' FLOWS_EXCLUDE_PATTERN='' SHARD_MANIFEST_DIR='' \
         SHARD_INDEX=0 SHARD_COUNT=1 PRE_RUN_FLOW=flows/prime.yaml \
@@ -62,6 +63,44 @@ if assert_equals 1 "$STEP_STATUS" 'step status (fail.flow.yaml fails)' \
     && assert_equals 5 "$(grep -c -- '--driver-host-port [0-9][0-9]*' <<< "$calls")" 'invocations pinning the driver port' \
     && assert_equals 1 "$(grep -c . <<< "$ports")" 'distinct driver ports' \
     && assert_contains "$(cat "$workspace/summary")" '| fail.flow.yaml |' 'per-flow timing row'; then
+    pass_case
+fi
+
+case_start 'the driver port is derived from the simulator UDID, so shards on one host differ'
+workspace="$(prepare_shard)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true
+first_port="$(driver_ports "$workspace")"
+workspace="$(prepare_shard)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true
+repeat_port="$(driver_ports "$workspace")"
+workspace="$(prepare_shard)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true SIMULATOR_UDID=BBBBBBBB-0000-0000-0000-000000000002
+other_port="$(driver_ports "$workspace")"
+if assert_equals "$first_port" "$repeat_port" 'port for the same UDID' \
+    && assert_not_contains "$other_port" "$first_port" 'port for another UDID' \
+    && assert_equals 1 "$([ "$first_port" -ge 20000 ] && [ "$first_port" -le 30098 ] && echo 1 || echo 0)" "port $first_port within [20000, 30098]"; then
+    pass_case
+fi
+
+case_start 'a port already held on 127.0.0.1 is skipped for the next free one'
+perl -MIO::Socket::INET -e '$s = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => shift, Listen => 1) or die; sleep 30' "$first_port" &
+holder_pid=$!
+sleep 1
+workspace="$(prepare_shard)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true
+held_port="$(driver_ports "$workspace")"
+kill "$holder_pid" 2>/dev/null || true
+wait "$holder_pid" 2>/dev/null || true
+if assert_equals 0 "$([ "$held_port" -gt "$first_port" ] && [ "$held_port" -le $((first_port + 99)) ] && echo 0 || echo 1)" "port $held_port after the held $first_port"; then
+    pass_case
+fi
+
+case_start 'reuse without a booted simulator UDID fails closed'
+workspace="$(prepare_shard)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true SIMULATOR_UDID=''
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'SIMULATOR_UDID is not set' 'error message' \
+    && assert_equals 'false' "$([ -e "$workspace/calls" ] && echo true || echo false)" 'maestro was not invoked'; then
     pass_case
 fi
 

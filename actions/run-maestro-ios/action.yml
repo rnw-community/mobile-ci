@@ -146,7 +146,8 @@ inputs:
     description: >-
       When 'true', every `maestro test` invocation of this shard (pre-run-flow,
       flows, retries and flow-recovery-flow) passes --no-reinstall-driver and
-      one --driver-host-port picked free on 127.0.0.1 when the shard starts,
+      one --driver-host-port derived from the simulator UDID (the first free
+      127.0.0.1 port from a UDID-hashed start in 20000-30098),
       so the XCTest driver the first invocation starts keeps running and every
       later invocation reuses it instead of paying its own driver start.
       'false' restores a fresh driver per invocation.
@@ -791,13 +792,20 @@ runs:
           maestro_driver_args=()
           case "$MAESTRO_REUSE_DRIVER" in
             true)
-              driver_host_port="$(perl -MIO::Socket::INET -e 'print IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => 0, Listen => 1)->sockport')"
-              case "$driver_host_port" in
-                ''|*[!0-9]*)
-                  echo "::error::Could not pick a free 127.0.0.1 port for the reused Maestro driver (got '$driver_host_port')."
-                  exit 1
-                  ;;
-              esac
+              test -n "${SIMULATOR_UDID:-}" || { echo "::error::SIMULATOR_UDID is not set; the simulator boot step must run before the driver port is derived from it."; exit 1; }
+              udid_port_base=$((20000 + $(printf '%s' "$SIMULATOR_UDID" | cksum | cut -d ' ' -f 1) % 10000))
+              driver_host_port=''
+              for port_offset in $(seq 0 99); do
+                candidate_port=$((udid_port_base + port_offset))
+                if perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => shift, Listen => 1) ? 0 : 1)' "$candidate_port"; then
+                  driver_host_port="$candidate_port"
+                  break
+                fi
+              done
+              if [ -z "$driver_host_port" ]; then
+                echo "::error::No free 127.0.0.1 port in [$udid_port_base, $((udid_port_base + 99))] for the Maestro driver of simulator '$SIMULATOR_UDID'."
+                exit 1
+              fi
               echo "Reusing one Maestro XCTest driver on 127.0.0.1:$driver_host_port across this shard's invocations."
               maestro_driver_args=(--no-reinstall-driver --driver-host-port "$driver_host_port")
               ;;
