@@ -1279,6 +1279,7 @@ runs:
             { echo ""; cat "$lanes_dir/lane-$lane.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
           done
           kill "$memory_sampler_pid" 2>/dev/null || true
+          wait "$memory_sampler_pid" 2>/dev/null || true
           {
             echo ""
             echo "### Guest memory during shard $SHARD_INDEX (${#lane_udids[@]} simulators, sampled every 30 s)"
