@@ -76,7 +76,7 @@ inputs:
       Optional consumer-owned shell command run once after the app is
       installed on the simulator and before any flow (including
       pre-run-flow) executes, e.g. seeding a fixture into the app's data
-      container. Runs with SIMULATOR_UDID, APP_ID, and APP_PATH in its
+      container. Runs once per simulator with its SIMULATOR_UDID and SIMULATOR_LANE, plus APP_ID and APP_PATH, in its
       environment. Its failure fails the step immediately. Leave empty to
       skip.
     required: false
@@ -86,7 +86,7 @@ inputs:
       Optional consumer-owned shell command run before every flow attempt,
       each retry included, after pre-run-flow and the warm-up. It is never
       run before pre-run-flow or flow-recovery-flow themselves. Runs with
-      FLOW_PATH, FLOW_NAME, APP_ID, SIMULATOR_UDID and MAESTRO_FLOW_ENV_FILE
+      FLOW_PATH, FLOW_NAME, APP_ID, SIMULATOR_UDID, SIMULATOR_LANE and MAESTRO_FLOW_ENV_FILE
       in its environment. Unlike the best-effort flow-recovery-flow this is a
       precondition: a non-zero exit fails that attempt without running the
       flow, consuming one of its 1 + flow-retries attempts and triggering the
@@ -166,6 +166,24 @@ inputs:
       host in the pool.
     required: false
     default: ''
+  simulator-count:
+    description: >-
+      Number of simulators this shard runs its flows on concurrently, inside
+      one runner. '1' (default) keeps the single-device behaviour. With N > 1
+      the device selected by simulator-device (or the heuristic) is lane 0
+      and lanes 1..N-1 use devices named '<name> #2' .. '<name> #N', cloned
+      from it when the host has none; every lane device is booted, slimmed
+      with scripts/slim-simulator.sh when simulator-slim-profile is set,
+      verified, installed and warmed. The shard's flows are split into N
+      interleaved lanes, each run by its own `maestro --udid` loop with its
+      own driver port and debug output, and the step fails if any lane
+      fails. pre-test-command runs once per lane device and
+      pre-flow-command per lane attempt, both with that lane's
+      SIMULATOR_UDID and SIMULATOR_LANE. Guest memory (memory_pressure free
+      percentage, vm_stat compressor pages) is sampled every 30 s into the
+      step summary.
+    required: false
+    default: '1'
   simulator-reduce-motion:
     description: >-
       When 'true', turns on Settings > Accessibility > Motion > Reduce Motion
@@ -261,8 +279,15 @@ runs:
       shell: bash
       env:
         SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+        SIMULATOR_COUNT: ${{ inputs.simulator-count }}
       run: |
           set -euo pipefail
+          case "$SIMULATOR_COUNT" in
+            ''|*[!0-9]*|0*)
+              echo "::error::simulator-count '$SIMULATOR_COUNT' must be a positive integer without leading zeros."
+              exit 1
+              ;;
+          esac
           available_devices=$(xcrun simctl list devices available)
           device_name_of() {
             printf '%s\n' "$1" \
@@ -270,16 +295,21 @@ runs:
               | sed -E 's/[[:space:]]+$//' \
               | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
           }
-          if [ -n "$SIMULATOR_DEVICE" ]; then
-            device_line=''
+          udid_of() {
+            grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$1" || true
+          }
+          device_line_named() {
+            local line
             while IFS= read -r line; do
-              udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)
-              [ -n "$udid" ] || continue
-              if [ "$(device_name_of "$line")" = "$SIMULATOR_DEVICE" ]; then
-                device_line="$line"
-                break
+              [ -n "$(udid_of "$line")" ] || continue
+              if [ "$(device_name_of "$line")" = "$1" ]; then
+                printf '%s\n' "$line"
+                return 0
               fi
             done <<< "$available_devices"
+          }
+          if [ -n "$SIMULATOR_DEVICE" ]; then
+            device_line=$(device_line_named "$SIMULATOR_DEVICE")
             if [ -z "$device_line" ]; then
               echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
               echo "$available_devices"
@@ -290,24 +320,42 @@ runs:
             test -n "$device_line"
             echo "::notice::No simulator-device pinned; booted '$(device_name_of "$device_line")' via the last-available heuristic. Pin simulator-device to stop this choice from silently changing when the runner pool's device set changes."
           fi
-          device_udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$device_line")
+          device_udid=$(udid_of "$device_line")
           test -n "$device_udid"
           command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
-          echo "Booting simulator: $device_line"
-          xcrun simctl boot "$device_udid" || true
-          bootstatus_timeout_seconds=300
-          if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$device_udid" -b; then
-            :
-          else
-            bootstatus_exit=$?
-            if [ "$bootstatus_exit" -eq 142 ]; then
-              echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$device_udid' to report booted; treating it as wedged."
-            else
-              echo "::error::xcrun simctl bootstatus failed for simulator '$device_udid' (exit $bootstatus_exit)."
+          device_udids=("$device_udid")
+          lane_number=1
+          while [ "$lane_number" -lt "$SIMULATOR_COUNT" ]; do
+            lane_number=$((lane_number + 1))
+            lane_name="$(device_name_of "$device_line") #$lane_number"
+            lane_udid=$(udid_of "$(device_line_named "$lane_name")")
+            if [ -z "$lane_udid" ]; then
+              xcrun simctl shutdown "$device_udid" 2>/dev/null || true
+              lane_udid=$(xcrun simctl clone "$device_udid" "$lane_name")
+              echo "Cloned lane simulator '$lane_name' ($lane_udid) from $device_udid."
             fi
-            exit 1
-          fi
+            device_udids+=("$lane_udid")
+          done
+          bootstatus_timeout_seconds=300
+          for udid in "${device_udids[@]}"; do
+            echo "Booting simulator: $udid"
+            xcrun simctl boot "$udid" || true
+          done
+          for udid in "${device_udids[@]}"; do
+            if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$udid" -b; then
+              :
+            else
+              bootstatus_exit=$?
+              if [ "$bootstatus_exit" -eq 142 ]; then
+                echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$udid' to report booted; treating it as wedged."
+              else
+                echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
+              fi
+              exit 1
+            fi
+          done
           echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
+          echo "SIMULATOR_UDIDS=${device_udids[*]}" >> "$GITHUB_ENV"
 
     - name: Install simslim
       if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''
@@ -474,36 +522,49 @@ runs:
               echo "::error::simulator-slim-profile '$SIMULATOR_SLIM_PROFILE' does not exist or is not a file ('bundled' resolves to this release's profiles/ci.json, any other value against the workspace)."
               exit 1
             fi
-            echo "Verifying simulator $SIMULATOR_UDID against slim profile '$SIMULATOR_SLIM_PROFILE'."
-            if simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
-              :
-            elif [ "$SIMULATOR_SLIM_REPAIR" != "true" ]; then
-              echo "::error::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE' (see the drift listed above). Re-run 'simslim on $SIMULATOR_UDID --profile $SIMULATOR_SLIM_PROFILE' on the host, or set simulator-slim-repair: 'true' to repair in-job."
-              exit 1
-            else
-              echo "::warning::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE'; repairing in-job with 'simslim on' (this reboots the simulator). Fix the host's provisioning so every shard stops paying for this."
-              if ! simslim on "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
-                echo "::error::'simslim on' failed to repair simulator '$SIMULATOR_UDID' against profile '$SIMULATOR_SLIM_PROFILE'."
-                exit 1
+          fi
+          read -r -a simulator_udids <<< "${SIMULATOR_UDIDS:-$SIMULATOR_UDID}"
+          if [ -n "$SIMULATOR_SLIM_PROFILE" ] && [ "${#simulator_udids[@]}" -gt 1 ]; then
+            . "$GITHUB_ACTION_PATH/../../scripts/slim-simulator.sh"
+          fi
+          for lane in "${!simulator_udids[@]}"; do
+            SIMULATOR_UDID="${simulator_udids[$lane]}"
+            if [ -n "$SIMULATOR_SLIM_PROFILE" ]; then
+              if [ "$lane" -gt 0 ]; then
+                echo "Slimming lane $lane simulator $SIMULATOR_UDID with scripts/slim-simulator.sh."
+                SIMSLIM_PROFILE="$SIMULATOR_SLIM_PROFILE" slim_simulator "$SIMULATOR_UDID"
               fi
-              command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
-              if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
-                echo "::error::Simulator '$SIMULATOR_UDID' did not report booted within 300s after the slim repair reboot."
+              echo "Verifying simulator $SIMULATOR_UDID against slim profile '$SIMULATOR_SLIM_PROFILE'."
+              if simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+                :
+              elif [ "$SIMULATOR_SLIM_REPAIR" != "true" ]; then
+                echo "::error::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE' (see the drift listed above). Re-run 'simslim on $SIMULATOR_UDID --profile $SIMULATOR_SLIM_PROFILE' on the host, or set simulator-slim-repair: 'true' to repair in-job."
                 exit 1
+              else
+                echo "::warning::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE'; repairing in-job with 'simslim on' (this reboots the simulator). Fix the host's provisioning so every shard stops paying for this."
+                if ! simslim on "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+                  echo "::error::'simslim on' failed to repair simulator '$SIMULATOR_UDID' against profile '$SIMULATOR_SLIM_PROFILE'."
+                  exit 1
+                fi
+                command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
+                if ! perl -e 'alarm shift; exec @ARGV' 300 xcrun simctl bootstatus "$SIMULATOR_UDID" -b; then
+                  echo "::error::Simulator '$SIMULATOR_UDID' did not report booted within 300s after the slim repair reboot."
+                  exit 1
+                fi
+                if ! simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
+                  echo "::error::Simulator '$SIMULATOR_UDID' still does not match slim profile '$SIMULATOR_SLIM_PROFILE' after 'simslim on'; the runtime may predate iOS 18.5 (the earliest with persistent overrides) or the profile may be invalid."
+                  exit 1
+                fi
               fi
-              if ! simslim verify "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
-                echo "::error::Simulator '$SIMULATOR_UDID' still does not match slim profile '$SIMULATOR_SLIM_PROFILE' after 'simslim on'; the runtime may predate iOS 18.5 (the earliest with persistent overrides) or the profile may be invalid."
+            fi
+            if [ -n "$SIMULATOR_REQUIRES" ]; then
+              echo "Checking required simulator features on $SIMULATOR_UDID: $SIMULATOR_REQUIRES"
+              if ! simslim doctor "$SIMULATOR_UDID" --requires "$SIMULATOR_REQUIRES"; then
+                echo "::error::Simulator '$SIMULATOR_UDID' cannot serve required features '$SIMULATOR_REQUIRES' (see the BROKEN lines above); keep the backing daemons with the profile's 'keep'/'except' and re-run 'simslim on' on the host."
                 exit 1
               fi
             fi
-          fi
-          if [ -n "$SIMULATOR_REQUIRES" ]; then
-            echo "Checking required simulator features: $SIMULATOR_REQUIRES"
-            if ! simslim doctor "$SIMULATOR_UDID" --requires "$SIMULATOR_REQUIRES"; then
-              echo "::error::Simulator '$SIMULATOR_UDID' cannot serve required features '$SIMULATOR_REQUIRES' (see the BROKEN lines above); keep the backing daemons with the profile's 'keep'/'except' and re-run 'simslim on' on the host."
-              exit 1
-            fi
-          fi
+          done
 
     - name: Set simulator Reduce Motion
       shell: bash
@@ -512,7 +573,11 @@ runs:
       run: |
           set -euo pipefail
           case "$SIMULATOR_REDUCE_MOTION" in
-            true) xcrun simctl spawn "$SIMULATOR_UDID" defaults write com.apple.Accessibility ReduceMotionEnabled -bool true ;;
+            true)
+              for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+                xcrun simctl spawn "$udid" defaults write com.apple.Accessibility ReduceMotionEnabled -bool true
+              done
+              ;;
             false) ;;
             *)
               echo "::error::simulator-reduce-motion '$SIMULATOR_REDUCE_MOTION' must be 'true' or 'false'."
@@ -527,7 +592,9 @@ runs:
       run: |
           set -euo pipefail
           test -d "$APP_PATH"
-          xcrun simctl install "$SIMULATOR_UDID" "$APP_PATH"
+          for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+            xcrun simctl install "$udid" "$APP_PATH"
+          done
 
     - name: Warm app before first flow
       if: inputs.app-warm-seconds != '0'
@@ -544,15 +611,19 @@ runs:
               ;;
           esac
           echo "Warming '$APP_ID': launch, settle ${APP_WARM_SECONDS}s, terminate."
-          xcrun simctl launch "$SIMULATOR_UDID" "$APP_ID"
+          for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+            xcrun simctl launch "$udid" "$APP_ID"
+          done
           sleep "$APP_WARM_SECONDS"
-          if ! xcrun simctl terminate "$SIMULATOR_UDID" "$APP_ID"; then
-            if xcrun simctl spawn "$SIMULATOR_UDID" launchctl list 2>/dev/null | grep -qF "UIKitApplication:${APP_ID}["; then
-              echo "::error::simctl terminate failed for '$APP_ID' and the app is still running; the first flow would not start from a terminated app."
-              exit 1
+          for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+            if ! xcrun simctl terminate "$udid" "$APP_ID"; then
+              if xcrun simctl spawn "$udid" launchctl list 2>/dev/null | grep -qF "UIKitApplication:${APP_ID}["; then
+                echo "::error::simctl terminate failed for '$APP_ID' on '$udid' and the app is still running; the first flow would not start from a terminated app."
+                exit 1
+              fi
+              echo "::warning::simctl terminate failed for '$APP_ID' on '$udid'; the app had already exited on its own during the warm-up settle."
             fi
-            echo "::warning::simctl terminate failed for '$APP_ID'; the app had already exited on its own during the warm-up settle."
-          fi
+          done
 
     - name: Run pre-test command
       if: inputs.pre-test-command != ''
@@ -561,7 +632,15 @@ runs:
         APP_ID: ${{ inputs.app-id }}
         APP_PATH: ${{ inputs.app-path }}
         PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
-      run: eval "$PRE_TEST_COMMAND"
+      run: |
+          lane=0
+          for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+            (
+              export SIMULATOR_UDID="$udid" SIMULATOR_LANE="$lane"
+              eval "$PRE_TEST_COMMAND"
+            )
+            lane=$((lane + 1))
+          done
 
     - name: Install Maestro
       shell: bash
@@ -724,6 +803,8 @@ runs:
           maestro_debug_scratch_dir="$RUNNER_TEMP/maestro-debug-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           mkdir -p "$maestro_debug_scratch_dir"
           echo "MAESTRO_DEBUG_SCRATCH_DIR=$maestro_debug_scratch_dir" >> "$GITHUB_ENV"
+          maestro_debug_output_dir="$maestro_debug_scratch_dir"
+          maestro_debug_unit_prefix=''
           # Maestro nests every `maestro test` process's output under
           # .maestro/tests/<timestamp>/, keyed by invocation time and never
           # by flow, so the only way to tell a failing flow's output apart
@@ -789,25 +870,9 @@ runs:
             maestro_config_args=(--config "$MAESTRO_CONFIG")
           fi
 
-          maestro_driver_args=()
           case "$MAESTRO_REUSE_DRIVER" in
             true)
               test -n "${SIMULATOR_UDID:-}" || { echo "::error::SIMULATOR_UDID is not set; the simulator boot step must run before the driver port is derived from it."; exit 1; }
-              udid_port_base=$((20000 + $(printf '%s' "$SIMULATOR_UDID" | cksum | cut -d ' ' -f 1) % 10000))
-              driver_host_port=''
-              for port_offset in $(seq 0 99); do
-                candidate_port=$((udid_port_base + port_offset))
-                if perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => shift, Listen => 1) ? 0 : 1)' "$candidate_port"; then
-                  driver_host_port="$candidate_port"
-                  break
-                fi
-              done
-              if [ -z "$driver_host_port" ]; then
-                echo "::error::No free 127.0.0.1 port in [$udid_port_base, $((udid_port_base + 99))] for the Maestro driver of simulator '$SIMULATOR_UDID'."
-                exit 1
-              fi
-              echo "Reusing one Maestro XCTest driver on 127.0.0.1:$driver_host_port across this shard's invocations."
-              maestro_driver_args=(--no-reinstall-driver --driver-host-port "$driver_host_port")
               ;;
             false) ;;
             *)
@@ -815,6 +880,55 @@ runs:
               exit 1
               ;;
           esac
+          read -r -a lane_udids <<< "${SIMULATOR_UDIDS:-${SIMULATOR_UDID:-}}"
+          if [ "${#lane_udids[@]}" -eq 0 ]; then
+            lane_udids=('')
+          fi
+          lanes_dir="$maestro_debug_scratch_dir.lanes"
+          claimed_driver_ports=' '
+          maestro_driver_args=()
+          maestro_device_args=()
+          lane_label="Shard $SHARD_INDEX"
+          summary_scope="shard $SHARD_INDEX"
+          flow_env_lane_tag=''
+
+          configure_lane_driver() {
+            local udid="$1" udid_port_base candidate_port port_offset driver_host_port=''
+            maestro_driver_args=()
+            [ "$MAESTRO_REUSE_DRIVER" = 'true' ] || return 0
+            udid_port_base=$((20000 + $(printf '%s' "$udid" | cksum | cut -d ' ' -f 1) % 10000))
+            for port_offset in $(seq 0 99); do
+              candidate_port=$((udid_port_base + port_offset))
+              case "$claimed_driver_ports" in
+                *" $candidate_port "*) continue ;;
+              esac
+              if perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => shift, Listen => 1) ? 0 : 1)' "$candidate_port"; then
+                driver_host_port="$candidate_port"
+                break
+              fi
+            done
+            if [ -z "$driver_host_port" ]; then
+              echo "::error::No free 127.0.0.1 port in [$udid_port_base, $((udid_port_base + 99))] for the Maestro driver of simulator '$udid'."
+              exit 1
+            fi
+            claimed_driver_ports="$claimed_driver_ports$driver_host_port "
+            echo "Reusing one Maestro XCTest driver on 127.0.0.1:$driver_host_port across the invocations on simulator '$udid'."
+            maestro_driver_args=(--no-reinstall-driver --driver-host-port "$driver_host_port")
+          }
+
+          configure_lane() {
+            local lane="$1" udid="$2"
+            export SIMULATOR_UDID="$udid" SIMULATOR_LANE="$lane"
+            configure_lane_driver "$udid"
+            [ "${#lane_udids[@]}" -gt 1 ] || return 0
+            maestro_device_args=(--udid "$udid")
+            lane_label="Shard $SHARD_INDEX lane $lane"
+            summary_scope="shard $SHARD_INDEX, lane $lane on $udid"
+            maestro_debug_unit_prefix=".maestro/lanes/$lane/"
+            maestro_debug_output_dir="$maestro_debug_scratch_dir/.maestro/lanes/$lane"
+            maestro_debug_units_before_file="$lanes_dir/lane-$lane.before"
+            flow_env_lane_tag="-lane-$lane"
+          }
 
           maestro_env_args=()
           if [ -n "$MAESTRO_ENV" ]; then
@@ -900,16 +1014,16 @@ runs:
 
           maestro_debug_units() {
             local entry base
-            [ -d "$maestro_debug_scratch_dir" ] || return 0
-            for entry in "$maestro_debug_scratch_dir"/.maestro/tests/*; do
+            [ -d "$maestro_debug_output_dir" ] || return 0
+            for entry in "$maestro_debug_output_dir"/.maestro/tests/*; do
               [ -e "$entry" ] || continue
-              printf '%s\n' ".maestro/tests/$(basename "$entry")"
+              printf '%s\n' "$maestro_debug_unit_prefix.maestro/tests/$(basename "$entry")"
             done
-            for entry in "$maestro_debug_scratch_dir"/* "$maestro_debug_scratch_dir"/.[!.]* "$maestro_debug_scratch_dir"/..?*; do
+            for entry in "$maestro_debug_output_dir"/* "$maestro_debug_output_dir"/.[!.]* "$maestro_debug_output_dir"/..?*; do
               [ -e "$entry" ] || continue
               base=$(basename "$entry")
               if [ "$base" != '.maestro' ]; then
-                printf '%s\n' "$base"
+                printf '%s\n' "$maestro_debug_unit_prefix$base"
               fi
             done
             return 0
@@ -933,7 +1047,7 @@ runs:
             [ -n "$FLOW_RECOVERY_FLOW" ] || return 0
             recovery_runs=$((recovery_runs + 1))
             echo "Running recovery flow '$FLOW_RECOVERY_FLOW' after the failed attempt of '$after'."
-            if ! maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
+            if ! maestro ${maestro_device_args[@]+"${maestro_device_args[@]}"} test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_output_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$FLOW_RECOVERY_FLOW"; then
               recovery_failures=$((recovery_failures + 1))
               echo "::warning::Recovery flow '$FLOW_RECOVERY_FLOW' failed after '$after'; continuing anyway because recovery is best-effort."
             fi
@@ -950,7 +1064,7 @@ runs:
               flow_env_args=()
               if [ "$run_precondition" = '1' ] && [ -n "$pre_flow_script" ]; then
                 flow_env_seq=$((flow_env_seq + 1))
-                flow_env_file="$flow_env_scratch_dir/flow-$flow_env_seq.env"
+                flow_env_file="$flow_env_scratch_dir/flow$flow_env_lane_tag-$flow_env_seq.env"
                 : > "$flow_env_file"
                 if run_pre_flow_command "$flow" "$flow_env_file"; then
                   read_flow_env_file "$flow_env_file" "$label"
@@ -959,7 +1073,7 @@ runs:
                   echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
                 fi
               fi
-              if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$flow"; then
+              if [ "$attempt_ok" = '1' ] && maestro ${maestro_device_args[@]+"${maestro_device_args[@]}"} test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_output_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$flow"; then
                 status=passed
                 break
               fi
@@ -978,7 +1092,7 @@ runs:
 
           write_summary() {
             {
-              echo "### Maestro flow timing (shard $SHARD_INDEX)"
+              echo "### Maestro flow timing ($summary_scope)"
               echo "| Flow | Duration | Status | Attempts |"
               echo "| --- | --- | --- | --- |"
               printf '%s\n' "${summary_rows[@]:-}"
@@ -1080,35 +1194,105 @@ runs:
             done
           fi
 
-          if [ -n "$PRE_RUN_FLOW" ]; then
-            if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
-              write_summary
-              echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
-              exit 1
+          run_lane() {
+            local lane_flows=("$@") overall_status=0 last_flow_index flow_index flow recover_after_last_attempt
+            if [ -n "$PRE_RUN_FLOW" ]; then
+              if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
+                write_summary
+                echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting $summary_scope."
+                return 1
+              fi
             fi
-          fi
-
-          if [ "${#selected[@]}" -eq 0 ]; then
-            echo "Shard $SHARD_INDEX has no flows; nothing to run."
+            if [ "$#" -eq 0 ]; then
+              echo "$lane_label has no flows; nothing to run."
+              write_summary
+              return 0
+            fi
+            printf '%s flows:\n%s\n' "$lane_label" "$*"
+            last_flow_index=$(( $# - 1 ))
+            for flow_index in "${!lane_flows[@]}"; do
+              flow="${lane_flows[$flow_index]}"
+              recover_after_last_attempt=1
+              if [ "$flow_index" -eq "$last_flow_index" ]; then
+                recover_after_last_attempt=0
+              fi
+              if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt" 1; then
+                overall_status=1
+              fi
+            done
             write_summary
+            return "$overall_status"
+          }
+
+          sample_memory() {
+            local vm_stat_output page_size compressor_pages free_percent
+            while :; do
+              free_percent=$(memory_pressure 2>/dev/null | sed -nE 's/^System-wide memory free percentage: ([0-9]+)%.*/\1/p' || true)
+              vm_stat_output=$(vm_stat 2>/dev/null || true)
+              page_size=$(sed -nE 's/.*page size of ([0-9]+) bytes.*/\1/p' <<< "$vm_stat_output")
+              compressor_pages=$(sed -nE 's/^Pages occupied by compressor: *([0-9]+).*/\1/p' <<< "$vm_stat_output")
+              printf '%s\t%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$free_percent" "$compressor_pages" "$(( ${compressor_pages:-0} * ${page_size:-0} / 1048576 ))" >> "$lanes_dir/memory.tsv"
+              sleep 30
+            done
+          }
+
+          if [ "${#lane_udids[@]}" -le 1 ]; then
+            configure_lane 0 "${lane_udids[0]}"
+            run_lane ${selected[@]+"${selected[@]}"}
             exit 0
           fi
-          printf 'Shard %s flows:\n%s\n' "$SHARD_INDEX" "${selected[*]}"
 
-          overall_status=0
-          last_flow_index=$(( ${#selected[@]} - 1 ))
-          for flow_index in "${!selected[@]}"; do
-            flow="${selected[$flow_index]}"
-            recover_after_last_attempt=1
-            if [ "$flow_index" -eq "$last_flow_index" ]; then
-              recover_after_last_attempt=0
+          rm -rf "$lanes_dir"
+          mkdir -p "$lanes_dir"
+          : > "$lanes_dir/memory.tsv"
+          sample_memory &
+          memory_sampler_pid=$!
+          trap 'kill "$memory_sampler_pid" 2>/dev/null || true' EXIT
+          lane_pids=()
+          for lane in "${!lane_udids[@]}"; do
+            lane_flows=()
+            for flow_index in "${!selected[@]}"; do
+              if [ $((flow_index % ${#lane_udids[@]})) -eq "$lane" ]; then
+                lane_flows+=("${selected[$flow_index]}")
+              fi
+            done
+            if [ "$lane" -gt 0 ] && [ "${#lane_flows[@]}" -eq 0 ]; then
+              echo "Lane $lane has no flows; simulator ${lane_udids[$lane]} stays idle."
+              lane_pids+=('')
+              continue
             fi
-            if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt" 1; then
-              overall_status=1
-            fi
+            configure_lane "$lane" "${lane_udids[$lane]}"
+            (
+              GITHUB_STEP_SUMMARY="$lanes_dir/lane-$lane.md"
+              run_lane ${lane_flows[@]+"${lane_flows[@]}"}
+            ) > >(awk -v prefix="[lane $lane] " '{ if (index($0, "::") == 1) print; else print prefix $0; fflush() }') 2>&1 &
+            lane_pids+=("$!")
           done
 
-          write_summary
+          overall_status=0
+          for lane in "${!lane_udids[@]}"; do
+            [ -n "${lane_pids[$lane]}" ] || continue
+            if ! wait "${lane_pids[$lane]}"; then
+              overall_status=1
+              echo "::error::Lane $lane on simulator ${lane_udids[$lane]} failed."
+            fi
+            { echo ""; cat "$lanes_dir/lane-$lane.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
+          done
+          kill "$memory_sampler_pid" 2>/dev/null || true
+          {
+            echo ""
+            echo "### Guest memory during shard $SHARD_INDEX (${#lane_udids[@]} simulators, sampled every 30 s)"
+            awk -F '\t' 'NR == 1 || $2 < min { min = $2 } $4 > max { max = $4 } END { printf "Minimum memory_pressure free: %s%%. Peak compressor: %s MB over %s sample(s).\n", min, max, NR }' "$lanes_dir/memory.tsv"
+            echo ""
+            echo "<details><summary>Samples</summary>"
+            echo ""
+            echo "| Time (UTC) | Free | Compressor pages | Compressor MB |"
+            echo "| --- | --- | --- | --- |"
+            awk -F '\t' '{ printf "| %s | %s%% | %s | %s |\n", $1, $2, $3, $4 }' "$lanes_dir/memory.tsv"
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -rf "$lanes_dir"
           exit "$overall_status"
 
     - name: Capture final simulator state
@@ -1119,7 +1303,15 @@ runs:
       run: |
           mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
           if command -v perl >/dev/null 2>&1; then
-            perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl io "$SIMULATOR_UDID" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/final-screen.png" || echo "::warning::xcrun simctl io screenshot timed out or failed for simulator '$SIMULATOR_UDID'; continuing without it."
+            lane=0
+            screenshot_name=final-screen.png
+            for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+              if [ "$lane" -gt 0 ]; then
+                screenshot_name="final-screen-lane-$lane.png"
+              fi
+              perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl io "$udid" screenshot "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/$screenshot_name" || echo "::warning::xcrun simctl io screenshot timed out or failed for simulator '$udid'; continuing without it."
+              lane=$((lane + 1))
+            done
           else
             echo "::warning::'perl' is not on PATH; skipping the bounded final-screen screenshot capture."
           fi
@@ -1235,7 +1427,9 @@ runs:
       shell: bash
       run: |
           if command -v perl >/dev/null 2>&1; then
-            perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl shutdown "$SIMULATOR_UDID" || echo "::warning::xcrun simctl shutdown timed out or failed for simulator '$SIMULATOR_UDID'."
+            for udid in ${SIMULATOR_UDIDS:-$SIMULATOR_UDID}; do
+              perl -e 'alarm shift; exec @ARGV' 30 xcrun simctl shutdown "$udid" || echo "::warning::xcrun simctl shutdown timed out or failed for simulator '$udid'."
+            done
           else
             echo "::warning::'perl' is not on PATH; skipping the bounded simulator shutdown."
           fi
