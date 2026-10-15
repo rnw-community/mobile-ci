@@ -87,19 +87,20 @@ on:
             ios-pre-build-command:
                 description: >-
                     Optional consumer-owned command (e.g. patching eas.json or asserting a
-                    computed build number) run in app-dir before the iOS EAS build, with the
-                    job's env — including EXPO_TOKEN and DEVELOPMENT_BUILD_NUMBER
-                    (<run_number>.<run_attempt>, already exported to the job env by the
-                    "Compute deterministic build number" step).
+                    computed build number) run in app-dir before the iOS EAS build. Its env is
+                    EXPO_TOKEN, DEVELOPMENT_BUILD_NUMBER (<run_number>.<run_attempt>),
+                    publish-env, EAS_EXTRA_ENV and EXPO_ASC_API_KEY_PATH (empty unless the
+                    ASC_API_KEY secret is set) — not eas.json profile env, which EAS applies
+                    only inside eas build.
                 type: string
                 required: false
                 default: ''
             android-pre-build-command:
                 description: >-
                     Optional consumer-owned command run in app-dir before the Android EAS
-                    build, with the job's env — including EXPO_TOKEN and
-                    DEVELOPMENT_BUILD_NUMBER (<run_number>.<run_attempt>, already exported to
-                    the job env by the "Compute deterministic build number" step).
+                    build. Its env is EXPO_TOKEN, DEVELOPMENT_BUILD_NUMBER
+                    (<run_number>.<run_attempt>), publish-env and EAS_EXTRA_ENV — not eas.json
+                    profile env, which EAS applies only inside eas build.
                 type: string
                 required: false
                 default: ''
@@ -407,14 +408,6 @@ jobs:
                   RUN_NUMBER: ${{ github.run_number }}
               run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-            - name: Run iOS pre-build command
-              if: inputs.ios-pre-build-command != ''
-              working-directory: ${{ inputs.app-dir }}
-              shell: bash
-              env:
-                  IOS_PRE_BUILD_COMMAND: ${{ inputs.ios-pre-build-command }}
-              run: eval "$IOS_PRE_BUILD_COMMAND"
-
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
               id: asc-key
@@ -435,6 +428,15 @@ jobs:
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS pre-build command
+              if: inputs.ios-pre-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  IOS_PRE_BUILD_COMMAND: ${{ inputs.ios-pre-build-command }}
+              run: eval "$IOS_PRE_BUILD_COMMAND"
 
             - name: EAS build (iOS, development)
               id: build
