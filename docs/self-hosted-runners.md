@@ -351,9 +351,10 @@ erase` keeps the overrides, because simslim's store is keyed by UDID and lives
 outside the device) - the simulator just
 runs heavy again, and a pool that was sized for slim simulators starts
 swapping. `simslim verify` in the job catches exactly this and fails the shard
-naming the drift; re-run the loop above on that host. Set
-`simulator-slim-repair: 'true'` only if you would rather have the shard repair
-itself with an in-job `simslim on` (one extra reboot) than fail.
+naming the drift; re-run the loop above on that host. `simulator-slim-repair`
+defaults to `'true'`, so the shard repairs itself in-job with `simslim on` (a
+shutdown and one boot) and the repair is paid once per device; set it to
+`'false'` on an image that ships slimmed devices to fail on drift instead.
 
 **What slimming breaks, and `simulator-requires`.** Spotlight (`search`),
 push notifications (`apsd` in `store`), StoreKit testing (`storekitd`),
