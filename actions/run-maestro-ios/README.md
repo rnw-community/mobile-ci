@@ -85,25 +85,29 @@ writes persistent `launchctl disable` overrides into one simulator's launchd
 database so it boots with ~70 processes at roughly a quarter of the memory,
 which raises the per-host concurrency ceiling without touching the host
 itself. The overrides are per-device state that survives reboots but is
-silently lost when the device is erased, deleted and recreated, or provisioned
-from a new runtime - nothing else fails when that happens, the simulator just
-runs heavy again. This action does not slim anything itself; it fails closed
-when the simulator it booted is not in the state the consumer committed to.
+silently lost when the device is deleted and recreated, cloned, or
+provisioned from a new runtime (simslim keys them by UDID, on the host, so
+`simctl erase` keeps them) - nothing else fails when that happens, the
+simulator just runs heavy again. This action verifies the simulator it booted
+against the profile and, by default, repairs drift in-job.
 
 - **Provision on the host, verify in the job.** Apply the profile once per
   device at provisioning time (`simslim on <udid> --profile ci.json`; see
   [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim))
   and set `simulator-slim-profile` to `bundled`, this repo's own
-  [`profiles/ci.json`](../../profiles/ci.json) — the reusable workflows default
-  to it, a direct call to this action must pass it. After `simctl bootstatus` and
+  [`profiles/ci.json`](../../profiles/ci.json) — this action and the reusable
+  workflows default to it; pass `''` to opt out. After `simctl bootstatus` and
   before the app install, `simslim verify --profile` compares the booted
   simulator's overrides against the profile and fails the step listing the
   drift.
 - **`simulator-slim-repair: 'true'`** turns that failure into an in-job
-  `simslim on --profile` (idempotent, applies only the missing delta, reboots
-  the simulator, then waits for `bootstatus` again) followed by a second
-  `verify`. It is off by default so a drifted host is noticed instead of
-  being repaired on every shard. `simslim on` itself reads
+  `simslim on --profile` (simslim 0.11+ shuts the simulator down, writes the
+  missing overrides offline and boots it once; the action then waits for
+  `bootstatus` again) followed by a second `verify`. It is on by default:
+  the overrides persist per device, so a host pays the repair once, not per
+  shard. Set it to `'false'` once the image ships slimmed devices, so drift
+  fails as the provisioning defect it is. Every slim run writes
+  `simslim measure` into the step summary. `simslim on` itself reads
   `SIMSLIM_BOOT_TIMEOUT` / `SIMSLIM_SPAWN_TIMEOUT` from the job `env:` for
   its own boot-and-reconfigure deadlines on slow hosts; the action's
   follow-up `simctl bootstatus` check after the repair reboot uses the same
@@ -155,8 +159,8 @@ when the simulator it booted is not in the state the consumer committed to.
 | `simulator-reduce-motion` | no     | `false`       | `true` writes `com.apple.Accessibility ReduceMotionEnabled` (Settings > Accessibility > Motion > Reduce Motion) on the booted simulator before the app is installed and first launched, so UIKit, React Native `AccessibilityInfo` and Reanimated skip their animations. Fails closed on any value other than `true`/`false`. |
 | `simslim-version` | no | `0.12.2` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
 | `simslim-sha256` | no | `b47302da6fb8...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
-| `simulator-slim-profile` | no | `''` | `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
-| `simulator-slim-repair` | no | `false` | `true` re-applies the profile in-job with `simslim on` (reboots the simulator) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. |
+| `simulator-slim-profile` | no | `bundled` | `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
+| `simulator-slim-repair` | no | `true` | Re-applies the profile in-job with `simslim on` (a shutdown, an offline write of the missing overrides and one boot) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. Set `false` on a pool whose image ships slimmed devices, so drift fails as a provisioning defect. |
 | `simulator-requires` | no | `''` | Comma-separated simslim feature IDs the run depends on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
 | `artifacts-dir`         | yes      | —             | Directory Maestro debug output and final-state capture is written to. |
 | `artifact-name`         | yes      | —             | Uploaded artifact name.                                            |
