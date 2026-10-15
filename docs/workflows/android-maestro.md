@@ -82,7 +82,7 @@ major release.
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
-| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator via `reactivecircus/android-emulator-runner` and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator through this repo's `android-emulator` action and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
@@ -132,7 +132,9 @@ belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
 ## Emulator budget and host slots
 
 On the `avd` driver each test shard sizes its emulator from **its own
-container**, not the host: `run-maestro-android` reads the cgroup memory limit
+container**, not the host: `run-maestro-android` boots it through the
+[`android-emulator`](../../actions/android-emulator/README.md) action, which
+reads the cgroup memory limit
 and CPU quota (cgroup v2, then v1) and, for an empty `emulator-ram-size` /
 `emulator-cores`, derives 256 MB of guest RAM per GiB of limit (clamped
 1536–4096) and half the CPU quota (clamped 2–4). On the default 4 vCPU / 8 GiB
@@ -150,6 +152,10 @@ up to `emulator-slot-timeout-minutes` for a free one. Unlike a workflow
 `concurrency` group, a waiting shard is never cancelled and the cap spans every
 repository on the host. Leave it empty until the fleet provisions the
 directory: set against a host without it, every shard fails closed.
+
+Before it boots anything, `android-emulator` runs `emulator -accel-check` and
+fails the shard when hardware acceleration is unavailable, rather than letting
+the emulator fall back to software emulation and time out much later.
 
 The shutdown step kills only the emulator processes this job started
 (identified by its `RUNNER_TRACKING_ID`), so a failed or cancelled shard cannot

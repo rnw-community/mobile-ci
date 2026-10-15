@@ -36,7 +36,9 @@ simulator once via [`capture-screenshots-ios`](../../actions/capture-screenshots
 loop `locales x appearances x scenes` on it, optional
 `post-capture-command`, upload `raw-screenshots-ios-<device-slug>`) and
 **capture-android** (one job per Android entry —
-[`redroid-container`](../../actions/redroid-container/README.md) start →
+[`redroid-container`](../../actions/redroid-container/README.md) start, or
+[`android-emulator`](../../actions/android-emulator/README.md) start with
+`android-driver: avd` →
 [`capture-screenshots-android`](../../actions/capture-screenshots-android/README.md)
 → optional `post-capture-command` → upload
 `raw-screenshots-android-<device-slug>` → `if: always()` teardown) →
@@ -272,25 +274,58 @@ values before relying on this.
 
 ## Android capture
 
-- Runs on the `android-capture-runner-labels` pool (default
-  `["self-hosted","linux-tiered","linux-xl"]`, the fleet's Redroid-capable
-  Linux pool and the one Linux default that is deliberately not the x86_64
-  pool the Maestro/cache workflows use) — a Linux Redroid host per
+`android-driver` picks the device the capture job boots; the capture itself
+(`wm size`/`wm density`, per-app locales, demo-mode status bar, the scene
+loop) is identical on both:
+
+- **`redroid`** (default) — a Redroid container via
+  [`redroid-container`](../../actions/redroid-container/README.md),
+  configured by the `redroid-*` inputs. Needs a Linux Redroid host per
   [docs/self-hosted-runners.md](../self-hosted-runners.md) (binder_linux
-  module, privileged containers, prewarm manifest). This input deliberately
-  does **not** fall back to `runner-labels`, whose macOS default can never
-  run a Redroid container; `capture-runner-labels` stays iOS-only for the
-  same reason.
+  module, privileged containers, prewarm manifest).
+- **`avd`** — Google's emulator via
+  [`android-emulator`](../../actions/android-emulator/README.md), the same
+  action `android-maestro.yml`'s `run-maestro-android` boots its shards with,
+  configured by the `emulator-*` inputs (same names and defaults as
+  `android-maestro.yml`). Needs an x86_64 Linux runner with `/dev/kvm` — the
+  pool `android-maestro.yml` defaults to — and no Docker, privileged
+  container or `binder_linux`. It fails closed on another architecture, and
+  when `emulator -accel-check` reports no hardware acceleration. The guest's
+  RAM and cores are derived from the capture container's cgroup limits unless
+  set, `emulator-slots-dir` caps emulators per host exactly as it does for
+  the Maestro shards, and the always-run stop kills only this job's emulator
+  processes. Every capture job boots a dedicated `mobile-ci-screenshots` AVD
+  with `-wipe-data`, so no app state or device-wide setting crosses between a
+  capture job and a Maestro job sharing a persistent host. A `google_apis`
+  image carries real Google Play Services, which Redroid's stock images do
+  not (see the rendering caveat below).
+
+`android-capture-runner-labels` must name a pool for the chosen driver. Its
+default, `["self-hosted","linux-tiered","linux-xl"]`, is the fleet's
+Redroid-capable Linux pool and matches the default driver; it stays there
+until an `avd` capture run has been validated on the fleet. For `avd`, point
+it at the x86_64 KVM pool:
+
+```yaml
+with:
+    android-driver: avd
+    android-capture-runner-labels: '["self-hosted","trf-linux-amd64-4x8"]'
+```
+
+- `android-capture-runner-labels` deliberately does **not** fall back to
+  `runner-labels`, whose macOS default can run neither driver;
+  `capture-runner-labels` stays iOS-only for the same reason.
 - The Android **build** happens elsewhere: `android-build-runner-labels` →
   `build-runner-labels` → `runner-labels` (the macOS default is correct —
   Google publishes no `linux-aarch64` NDK/cmake, so the Redroid pool cannot
   build).
 - The device must run **API 33+** (`cmd locale set-app-locales`);
   `capture-screenshots-android` fails closed below that. The default
-  `redroid/redroid:15.0.0_64only-latest` image (API 35) is fine.
+  `redroid/redroid:15.0.0_64only-latest` image (API 35) and the default
+  `emulator-api-level` (34) are both fine.
 - `status-bar-override` maps to SystemUI demo mode (clock 09:41, full wifi,
   no mobile data type, battery 100% unplugged, notifications hidden).
-- **Rendering fidelity caveat**: Redroid runs with guest-mode GPU rendering
+- **Rendering fidelity caveat** (`redroid`): Redroid runs with guest-mode GPU rendering
   and a GMS-free image — an app that hard-depends on Play services may
   render "Play services required" dialogs into its screenshots. Validate
   captures against a local emulator before shipping them to a listing.
@@ -734,7 +769,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
-| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job (the Redroid pool). No fallback to `runner-labels`. Unlike `android-maestro.yml`/`seed-native-cache.yml`, this default stays on the Redroid-capable pool: `capture-screenshots-android` drives a `redroid-container` (`sudo docker --privileged` + `binder_linux`) and has no `avd` code path, so a rootless-container x86_64 pool cannot run it. |
+| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job. No fallback to `runner-labels`. The default is the Redroid-capable pool, matching the default `android-driver: redroid` (`sudo docker --privileged` + `binder_linux`). With `android-driver: avd`, point it at an x86_64 Linux KVM pool, e.g. `["self-hosted","trf-linux-amd64-4x8"]`; the default stays on the Redroid pool until an `avd` capture run is validated on the fleet. See [Android capture](#android-capture). |
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
@@ -746,6 +781,16 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-keystore-key-password`     | no       | `android`                                 | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `android-build-timeout-minutes`     | no       | `60`                                      | Android build job timeout. |
 | `android-capture-timeout-minutes`   | no       | `90`                                      | Android capture job timeout. |
+| `android-driver`                    | no       | `redroid`                                 | Device backend of the Android capture job: `redroid` (a Redroid container, `redroid-*` inputs) or `avd` (Google's emulator through `android-emulator`, `emulator-*` inputs; x86_64 Linux with `/dev/kvm`). Anything else fails the capture job. See [Android capture](#android-capture). |
+| `emulator-api-level`                | no       | `34`                                      | `avd` only. System image API level; must be 33+. |
+| `emulator-target`                   | no       | `google_apis`                             | `avd` only. System image target. |
+| `emulator-arch`                     | no       | `x86_64`                                  | `avd` only. System image architecture. |
+| `emulator-profile`                  | no       | `pixel_6`                                 | `avd` only. `avdmanager` hardware profile. |
+| `emulator-ram-size`                 | no       | `''`                                      | `avd` only. Emulator RAM in MB. Empty derives it from the capture runner's cgroup memory limit (256 MB per GiB, clamped 1536–4096; 2048 on a 4 vCPU / 8 GiB container); with no limit detected the profile default applies. |
+| `emulator-heap-size`                | no       | `''`                                      | `avd` only. Android VM heap size in MB. |
+| `emulator-cores`                    | no       | `''`                                      | `avd` only. Emulator CPU cores. Empty derives half the cgroup CPU quota, clamped 2–4. |
+| `emulator-slots-dir`                | no       | `''`                                      | `avd` only. Host directory of fleet-provisioned `slot-*` files capping concurrent emulators per host, shared with `android-maestro.yml`'s input of the same name. Empty takes no slot; a missing or empty directory fails the capture job. |
+| `emulator-slot-timeout-minutes`     | no       | `60`                                      | `avd` only. Minutes to wait for a free slot; counts against `android-capture-timeout-minutes`. |
 | `redroid-image`                     | no       | `redroid/redroid:15.0.0_64only-latest`    | Redroid image tag, used on a prewarm-manifest miss. Must resolve to API 33+. |
 | `redroid-memory`                    | no       | `3g`                                      | Container memory limit. |
 | `redroid-cpus`                      | no       | `2`                                       | Container CPU limit. |

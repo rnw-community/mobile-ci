@@ -505,16 +505,16 @@ on:
                 default: ''
             android-capture-runner-labels:
                 description: >-
-                    JSON array of runner labels for the Android capture job (the
-                    Redroid pool). Deliberately does NOT fall back to runner-labels,
-                    whose macOS default can never run a Redroid container. This is
-                    the one Linux default that is NOT the x86_64 Linux pool
-                    android-maestro.yml and seed-native-cache.yml now default to:
-                    capture-screenshots-android drives a redroid-container, which
-                    needs sudo docker --privileged and binder_linux, and has no avd
-                    code path — a rootless-container x86_64 pool can run neither.
-                    Point it at whatever pool on your fleet carries the Redroid
-                    capability.
+                    JSON array of runner labels for the Android capture job.
+                    Deliberately does NOT fall back to runner-labels, whose macOS
+                    default can run neither Android driver. The default is a
+                    Redroid pool, matching the default android-driver (redroid),
+                    which needs sudo docker --privileged and binder_linux. With
+                    android-driver avd, point it at an x86_64 Linux pool with
+                    /dev/kvm instead - the pool android-maestro.yml defaults to,
+                    e.g. ["self-hosted","trf-linux-amd64-4x8"]. The default stays
+                    on the Redroid pool until an avd capture run has been
+                    validated on the fleet.
                 type: string
                 required: false
                 default: '["self-hosted","linux-tiered","linux-xl"]'
@@ -589,6 +589,83 @@ on:
                 type: number
                 required: false
                 default: 90
+            android-driver:
+                description: >-
+                    Device backend the Android capture job drives. 'redroid'
+                    (default) runs Android as a privileged Docker container over
+                    the host's binder_linux module, configured by the redroid-*
+                    inputs. 'avd' boots Google's emulator through the
+                    android-emulator action, the one run-maestro-android uses,
+                    configured by the emulator-* inputs; it needs an x86_64 Linux
+                    runner with /dev/kvm, so set android-capture-runner-labels to
+                    such a pool with it. Anything else fails the capture job.
+                type: string
+                required: false
+                default: redroid
+            emulator-api-level:
+                description: >-
+                    avd driver only. System image API level; must be 33+, since
+                    capture-screenshots-android needs per-app locales.
+                type: string
+                required: false
+                default: '34'
+            emulator-target:
+                description: avd driver only. System image target.
+                type: string
+                required: false
+                default: google_apis
+            emulator-arch:
+                description: avd driver only. System image architecture.
+                type: string
+                required: false
+                default: x86_64
+            emulator-profile:
+                description: avd driver only. avdmanager hardware profile.
+                type: string
+                required: false
+                default: pixel_6
+            emulator-ram-size:
+                description: >-
+                    avd driver only. Emulator RAM in MB. Empty (default) derives
+                    it from the capture runner's cgroup memory limit: 256 MB of
+                    guest RAM per GiB of limit, clamped to 1536-4096, so a 4 vCPU
+                    / 8 GiB container gets 2048. With no memory limit detected
+                    the hardware profile's own default applies.
+                type: string
+                required: false
+                default: ''
+            emulator-heap-size:
+                description: avd driver only. Android VM heap size in MB for the emulated device.
+                type: string
+                required: false
+                default: ''
+            emulator-cores:
+                description: >-
+                    avd driver only. Emulator CPU cores. Empty (default) derives
+                    half the capture runner's cgroup CPU quota, clamped to 2-4;
+                    with no quota detected the profile default applies.
+                type: string
+                required: false
+                default: ''
+            emulator-slots-dir:
+                description: >-
+                    avd driver only. Host directory of fleet-provisioned slot-*
+                    files capping how many emulators the capture runner's host
+                    boots at once, across every job and repository - the same
+                    directory android-maestro.yml's emulator-slots-dir names.
+                    Empty (default) takes no slot. A missing or empty directory
+                    fails the capture job.
+                type: string
+                required: false
+                default: ''
+            emulator-slot-timeout-minutes:
+                description: >-
+                    avd driver only. Minutes a capture job waits for a free slot
+                    in emulator-slots-dir before failing. The wait counts against
+                    android-capture-timeout-minutes.
+                type: string
+                required: false
+                default: '60'
             redroid-image:
                 description: >-
                     Redroid image tag, used on a redroid-prewarm-manifest-path miss.
@@ -2004,8 +2081,29 @@ jobs:
                   name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
                   path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
 
+            - name: Validate android-driver against this runner
+              shell: bash
+              env:
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+              run: |
+                  case "$ANDROID_DRIVER" in
+                    redroid|avd) ;;
+                    *)
+                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid' or 'avd'."
+                      exit 1
+                      ;;
+                  esac
+                  [ "$ANDROID_DRIVER" = avd ] || exit 0
+                  [ "$(uname -s)" = Linux ] || exit 0
+                  arch="$(uname -m)"
+                  if [ "$arch" != x86_64 ]; then
+                    echo "::error::android-driver 'avd' needs an x86_64 Linux runner; this one is '$arch'. Google publishes no linux-aarch64 Android emulator. Point android-capture-runner-labels at an x86_64 Linux KVM pool, or use android-driver: redroid on this one."
+                    exit 1
+                  fi
+
             - name: redroid-container (start)
               id: redroid
+              if: inputs.android-driver == 'redroid'
               uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
               with:
                   mode: start
@@ -2016,11 +2114,29 @@ jobs:
                   prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
                   boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
 
+            - name: android-emulator (start)
+              id: emulator
+              if: inputs.android-driver == 'avd'
+              uses: rnw-community/mobile-ci/actions/android-emulator@v3.2.0 # v3.2.0
+              with:
+                  mode: start
+                  avd-name: mobile-ci-screenshots
+                  wipe-data: 'true'
+                  api-level: ${{ inputs.emulator-api-level }}
+                  target: ${{ inputs.emulator-target }}
+                  arch: ${{ inputs.emulator-arch }}
+                  profile: ${{ inputs.emulator-profile }}
+                  ram-size: ${{ inputs.emulator-ram-size }}
+                  heap-size: ${{ inputs.emulator-heap-size }}
+                  cores: ${{ inputs.emulator-cores }}
+                  emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
+                  emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
+
             - name: capture-screenshots-android
               id: capture
               uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3.1.0 # v3.1.0
               with:
-                  android-serial: ${{ steps.redroid.outputs.android-serial }}
+                  android-serial: ${{ inputs.android-driver == 'avd' && steps.emulator.outputs.android-serial || steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
@@ -2059,11 +2175,17 @@ jobs:
                   retention-days: 14
 
             - name: redroid-container (teardown)
-              if: always()
+              if: always() && inputs.android-driver == 'redroid'
               uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
+
+            - name: android-emulator (stop)
+              if: always() && inputs.android-driver == 'avd'
+              uses: rnw-community/mobile-ci/actions/android-emulator@v3.2.0 # v3.2.0
+              with:
+                  mode: stop
 
     upload:
         name: Upload screenshots
