@@ -570,12 +570,14 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
-                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                  if ! published="$(gh api "repos/$REPOSITORY/releases" --paginate --jq '.[] | select(.draft == false) | [.created_at, .tag_name] | @tsv')"; then
+                    echo "::error::Failed to list existing releases via 'gh api' while pruning old dev releases."
                     exit 1
                   fi
+                  release_tags="$(printf '%s\n' "$published" \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | sort -r -t "$(printf '\t')" -k1,1 \
+                    | cut -f2)"
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue
@@ -956,12 +958,14 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
-                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                  if ! published="$(gh api "repos/$REPOSITORY/releases" --paginate --jq '.[] | select(.draft == false) | [.created_at, .tag_name] | @tsv')"; then
+                    echo "::error::Failed to list existing releases via 'gh api' while pruning old dev releases."
                     exit 1
                   fi
+                  release_tags="$(printf '%s\n' "$published" \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | sort -r -t "$(printf '\t')" -k1,1 \
+                    | cut -f2)"
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue
