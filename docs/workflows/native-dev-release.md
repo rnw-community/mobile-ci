@@ -124,14 +124,38 @@ backend it controls (private repo) — never ship the token to the browser.
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
-| `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, with the job's env — including `EXPO_TOKEN` and `DEVELOPMENT_BUILD_NUMBER` (`<run_number>.<run_attempt>`, already exported to the job env by the "Compute deterministic build number" step). |
-| `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build, with the job's env — including `EXPO_TOKEN` and `DEVELOPMENT_BUILD_NUMBER` (`<run_number>.<run_attempt>`, already exported to the job env by the "Compute deterministic build number" step). |
+| `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, after the App Store Connect key (if any) is written. Receives `DEVELOPMENT_BUILD_NUMBER` and `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
+| `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build. Receives `DEVELOPMENT_BUILD_NUMBER` — see [Hook environment](#hook-environment). |
 | `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
 | `publish-env`                | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-dev-release` and `android-dev-release`, before `eas build` and the pre-build-command hook. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
+
+## Hook environment
+
+`ios-pre-build-command` and `android-pre-build-command` run with exactly this
+environment, and nothing more:
+
+| Variable                   | iOS pre-build | Android pre-build | Value |
+| -------------------------- | ------------- | ----------------- | ----- |
+| `EXPO_TOKEN`               | yes           | yes               | The `EXPO_TOKEN` secret (job env). |
+| `DEVELOPMENT_BUILD_NUMBER` | yes           | yes               | `<run_number>.<run_attempt>`, exported by the "Compute deterministic build number" step. |
+| `publish-env` entries      | yes           | yes               | Every `KEY=VALUE` line of the `publish-env` input. |
+| `EAS_EXTRA_ENV` entries    | yes           | yes               | Every `KEY=VALUE` line of the `EAS_EXTRA_ENV` secret, masked. |
+| `EXPO_ASC_API_KEY_PATH`    | yes           | —                 | Absolute path of the written App Store Connect API key (`asc-key-path`, or under `$RUNNER_TEMP`); empty when the `ASC_API_KEY` secret is not set. |
+
+plus the runner's own variables (`GITHUB_*`, `RUNNER_*`, the `PATH` the Node
+and package-manager setup steps built). The App Store Connect key is written
+before the iOS pre-build hook and removed in `always()` after `eas build`.
+
+Hooks do **not** see an `eas.json` build profile's `env`: EAS applies that only
+inside `eas build`, not to commands a hook runs such as `expo config`. A
+variable a hook needs — `APP_VARIANT`, for instance — must come from
+`publish-env` (or `EAS_EXTRA_ENV` if secret). `ASC_KEY_ID` / `ASC_ISSUER_ID`
+are exported to the build step only; pass them through `EAS_EXTRA_ENV` if a
+hook needs them.
 
 ## Secrets
 

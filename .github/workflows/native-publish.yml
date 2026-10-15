@@ -88,24 +88,33 @@ on:
             ios-pre-submit-command:
                 description: >-
                     Optional consumer-owned command (e.g. a fastlane lane) run in app-dir before
-                    the iOS build, with the job's env (including EXPO_TOKEN).
+                    the iOS build. Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV and
+                    EXPO_ASC_API_KEY_PATH (the written App Store Connect key) — not eas.json
+                    profile env, which EAS applies only inside eas build.
                 type: string
                 required: false
                 default: ''
             ios-post-submit-command:
                 description: >-
                     Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in
-                    app-dir after `eas submit` succeeds.
+                    app-dir after `eas submit` succeeds. Same env as ios-pre-submit-command.
                 type: string
                 required: false
                 default: ''
             android-pre-submit-command:
-                description: Optional consumer-owned command run in app-dir before the Android build.
+                description: >-
+                    Optional consumer-owned command run in app-dir before the Android build. Its
+                    env is EXPO_TOKEN, publish-env and EAS_EXTRA_ENV — not eas.json profile env,
+                    and not the Google key, which is written only after the build.
                 type: string
                 required: false
                 default: ''
             android-post-submit-command:
-                description: Optional consumer-owned command run in app-dir after `eas submit` succeeds.
+                description: >-
+                    Optional consumer-owned command run in app-dir after `eas submit` succeeds.
+                    Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV, and the written Google
+                    service account key path as both GOOGLE_APPLICATION_CREDENTIALS and
+                    GOOGLE_SERVICE_ACCOUNT_KEY_PATH — not eas.json profile env.
                 type: string
                 required: false
                 default: ''
@@ -435,14 +444,6 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
-            - name: Run iOS pre-submit command
-              if: inputs.ios-pre-submit-command != ''
-              working-directory: ${{ inputs.app-dir }}
-              shell: bash
-              env:
-                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
-              run: eval "$IOS_PRE_SUBMIT_COMMAND"
-
             - name: Write App Store Connect API key
               id: asc-key
               working-directory: ${{ inputs.app-dir }}
@@ -462,6 +463,15 @@ jobs:
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS pre-submit command
+              if: inputs.ios-pre-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
+              run: eval "$IOS_PRE_SUBMIT_COMMAND"
 
             - name: EAS build (iOS)
               id: build
@@ -515,6 +525,7 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   IOS_POST_SUBMIT_COMMAND: ${{ inputs.ios-post-submit-command }}
               run: eval "$IOS_POST_SUBMIT_COMMAND"
 
@@ -1094,6 +1105,8 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
+                  GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.google-key.outputs.key-path }}
+                  GOOGLE_SERVICE_ACCOUNT_KEY_PATH: ${{ steps.google-key.outputs.key-path }}
                   ANDROID_POST_SUBMIT_COMMAND: ${{ inputs.android-post-submit-command }}
               run: eval "$ANDROID_POST_SUBMIT_COMMAND"
 
