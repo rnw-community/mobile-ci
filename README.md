@@ -266,8 +266,9 @@ step's Android backend, `avd` by default:
   (`["self-hosted","trf-linux-amd64-4x8"]`, an x86_64 Linux KVM pool) provide,
   and it needs no privileged container, no Docker daemon, and no
   `binder_linux`. A `google_apis` system image also carries real Google Play
-  Services. Bound the guest on a memory-limited runner — hence the shipped
-  `emulator-ram-size: 2048` default.
+  Services. The guest is bounded on a memory-limited runner: an empty
+  `emulator-ram-size` (the default) is derived from the container's cgroup
+  memory limit, 2048 MB on the default 8 GiB pool.
 - **`redroid`** — Android as a privileged container over the `binder_linux`
   kernel module (`run-maestro-android-redroid`). Needs no `sdkmanager`, NDK,
   or emulator binary on the runner, so it is the only driver that works at
