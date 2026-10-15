@@ -885,10 +885,13 @@ Host requirements:
 - **Android SDK with `emulator` plus a `google_apis` x86_64 system image**
   matching `android-maestro.yml`'s `emulator-api-level`/`emulator-target`/
   `emulator-arch` inputs (e.g. `android-34`, `google_apis`, `x86_64`).
-  `android-emulator` installs these itself through `android-actions/setup-android`
-  into the SDK at `ANDROID_SDK_ROOT`/`ANDROID_HOME` (or `~/.android/sdk` when
-  neither is set), so a persistent SDK there skips the download. It runs
-  `sdkmanager`, so the runner needs a JDK on `PATH`. No `binder_linux`, no privileged containers,
+  Bake them into the runner image and point `ANDROID_SDK_ROOT`/`ANDROID_HOME`
+  at that SDK: `android-emulator` then uses it as is, and adds only a missing
+  system image to it with `sdkmanager` when the SDK root is writable. Without
+  a usable preinstalled SDK it falls back to `android-actions/setup-android`,
+  which downloads a fresh SDK (several minutes per job) into the same root or
+  `~/.android/sdk`. Either install path runs `sdkmanager`, so the runner needs
+  a JDK on `PATH`. No `binder_linux`, no privileged containers,
   and no Docker daemon are needed on this shape at all.
 - **Give the emulator room inside the runner's memory limit, and bound it
   explicitly.** On a container-backed pool the cgroup limit is the ceiling
