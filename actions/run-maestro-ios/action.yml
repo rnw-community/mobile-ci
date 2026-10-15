@@ -185,7 +185,7 @@ inputs:
       simslim-sha256, and extracted into a job-private directory. Preinstall simslim on the host
       (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
-    default: '0.10.0'
+    default: '0.12.2'
   simslim-sha256:
     description: >-
       SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
@@ -198,7 +198,7 @@ inputs:
       so only a preinstalled `simslim` on PATH with the exact version can
       satisfy the job. Bump it together with simslim-version.
     required: false
-    default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
+    default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
   simulator-slim-profile:
     description: >-
       `bundled` uses this release's own `profiles/ci.json` (App Store/push/

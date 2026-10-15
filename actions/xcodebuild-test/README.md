@@ -47,10 +47,12 @@ with:
     parallel-testing-worker-count: '2' # required; each worker is one more simulator
 ```
 
-Lease a *slim* device before raising it: `simctl clone` copies the launchd
-disable overrides with the device, so every worker clone inherits the slimming
-— see [`simulator-lease`](../simulator-lease/README.md)'s `slim-profile` /
-`template-device` / `template-strategy`.
+Raising it boots one **stock** simulator per worker: Xcode's worker clones do
+not inherit the lease's slimming, because simslim keeps disable overrides on
+the host keyed by UDID and `simctl clone` creates a new UDID
+([#161](https://github.com/rnw-community/mobile-ci/issues/161)). simslim's
+answer for worker clones is `simslim watch`, which slims each clone no-reboot as
+it boots; this action does not run it yet, so budget memory for stock workers.
 
 This action does nothing else about slimming: the lease owns the device's
 shape, and `destination-id` is all this action needs to know about it.
