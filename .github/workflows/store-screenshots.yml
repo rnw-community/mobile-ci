@@ -684,9 +684,10 @@ on:
                 default: false
             asc-dedupe-version-state:
                 description: >-
-                    App Store Connect appStoreState whose localizations are deduped;
+                    App Store Connect AppVersionState whose localizations are deduped;
                     PREPARE_FOR_SUBMISSION (the editable version) targets the same
-                    run's upload, READY_FOR_SALE audits the live listing. Empty
+                    run's upload, READY_FOR_DISTRIBUTION audits the live listing
+                    (the deprecated READY_FOR_SALE is still accepted). Empty
                     resolves to the config-path value, else PREPARE_FOR_SUBMISSION.
                 type: string
                 required: false

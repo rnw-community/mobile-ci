@@ -327,8 +327,8 @@ the gate folds that lane into the workflow so every caller gets it.
 
 **What it does:** walks every screenshot set of the target version
 (default `asc-dedupe-version-state: PREPARE_FOR_SUBMISSION`, the editable
-version this run just uploaded to; use `READY_FOR_SALE` to audit the live
-listing), groups each set by file name, deletes all but the oldest copy of
+version this run just uploaded to; use `READY_FOR_DISTRIBUTION` to audit the
+live listing - the deprecated `READY_FOR_SALE` is still accepted and translated), groups each set by file name, deletes all but the oldest copy of
 every duplicate, and appends a per-locale coverage table to the job summary.
 Duplicates on an already-submitted version cannot be modified (ASC returns
 HTTP 409) - they are counted in `undeletable-count`, warned about, and, with
@@ -757,7 +757,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to the resolved app dir, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
 | `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. **cfg** |
 | `asc-dedupe-screenshots`            | no       | `false`                                   | Post-upload App Store Connect duplicate-screenshot verification/repair gate; see [App Store Connect dedupe gate](#app-store-connect-dedupe-gate). Requires `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` secrets and an `ios-target`. **cfg** |
-| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). **cfg** |
+| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (an App Store Connect `AppVersionState`; `READY_FOR_DISTRIBUTION` audits the live listing). **cfg** |
 | `asc-dedupe-app-id`                 | no       | `''` (→ `ios-target.appId`)               | Bundle id of the ASC app whose listing is deduped; set it when the capture build uses a suffixed/e2e bundle id. **cfg** |
 | `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. **cfg** |
 
