@@ -185,11 +185,100 @@ runs:
           fi
           command -v timeout >/dev/null 2>&1 || fail "'timeout' (GNU coreutils) is required to bound the adb calls during boot and teardown but is not on PATH."
 
-    - name: Set up Android SDK
+    - name: Resolve preinstalled Android SDK
+      id: sdk
       if: inputs.mode == 'start'
+      shell: bash
+      env:
+        API_LEVEL: ${{ inputs.api-level }}
+        TARGET: ${{ inputs.target }}
+        ARCH: ${{ inputs.arch }}
+      run: |
+          set -euo pipefail
+          package="system-images;android-$API_LEVEL;$TARGET;$ARCH"
+          image_dir="system-images/android-$API_LEVEL/$TARGET/$ARCH"
+
+          report() {
+            echo "$1"
+            {
+              echo '### Android SDK'
+              echo
+              echo "$1"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          use_setup_android() {
+            {
+              echo 'sdk-ready=false'
+              echo "sdk-root=$1"
+            } >> "$GITHUB_OUTPUT"
+            report "$2 Installing through android-actions/setup-android into ${1:-its default root, ~/.android/sdk}."
+            exit 0
+          }
+
+          root=''
+          for candidate in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}"; do
+            if [ -n "$candidate" ] && [ -d "$candidate" ]; then
+              root="$candidate"
+              break
+            fi
+          done
+          [ -n "$root" ] || use_setup_android '' 'No Android SDK directory in ANDROID_SDK_ROOT or ANDROID_HOME.'
+
+          tool_dir=''
+          for dir in "$root/cmdline-tools/latest/bin" "$root"/cmdline-tools/*/bin; do
+            if [ -x "$dir/avdmanager" ]; then
+              tool_dir="$dir"
+              break
+            fi
+          done
+          if [ -z "$tool_dir" ] && command -v avdmanager >/dev/null 2>&1; then
+            tool_dir="$(dirname "$(command -v avdmanager)")"
+          fi
+
+          missing=''
+          [ -x "$root/emulator/emulator" ] || missing="$missing emulator/emulator"
+          [ -x "$root/platform-tools/adb" ] || missing="$missing platform-tools/adb"
+          [ -n "$tool_dir" ] || missing="$missing cmdline-tools avdmanager"
+          [ -z "$missing" ] || use_setup_android "$root" "The SDK at $root lacks$missing."
+
+          image_present() {
+            [ -f "$root/$image_dir/package.xml" ] && [ -f "$root/$image_dir/system.img" ]
+          }
+          how="Using the preinstalled SDK at $root as is."
+          if ! image_present; then
+            if [ ! -x "$tool_dir/sdkmanager" ] || [ ! -w "$root" ]; then
+              use_setup_android "$root" "The SDK at $root lacks $package and has no writable root with an sdkmanager to add it."
+            fi
+            echo "Installing $package into $root with $tool_dir/sdkmanager."
+            if ! "$tool_dir/sdkmanager" --sdk_root="$root" "$package" < <(yes) > "$RUNNER_TEMP/mobile-ci-sdkmanager.log" 2>&1 || ! image_present; then
+              tail -n 20 "$RUNNER_TEMP/mobile-ci-sdkmanager.log" || true
+              echo "::warning::sdkmanager could not install $package into $root; falling back to android-actions/setup-android."
+              use_setup_android "$root" "Installing $package into the SDK at $root failed."
+            fi
+            how="Using the preinstalled SDK at $root; installed the system image $package into it."
+          fi
+
+          {
+            echo "ANDROID_HOME=$root"
+            echo "ANDROID_SDK_ROOT=$root"
+          } >> "$GITHUB_ENV"
+          {
+            echo "$root/platform-tools"
+            echo "$tool_dir"
+          } >> "$GITHUB_PATH"
+          {
+            echo 'sdk-ready=true'
+            echo "sdk-root=$root"
+          } >> "$GITHUB_OUTPUT"
+          report "$how setup-android skipped."
+
+    - name: Set up Android SDK
+      if: inputs.mode == 'start' && steps.sdk.outputs.sdk-ready != 'true'
       uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
       env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT || env.ANDROID_HOME }}
+          ANDROID_SDK_ROOT: ${{ steps.sdk.outputs.sdk-root }}
       with:
           cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
           packages: platform-tools emulator system-images;android-${{ inputs.api-level }};${{ inputs.target }};${{ inputs.arch }}
@@ -199,7 +288,7 @@ runs:
       shell: bash
       run: |
           set -euo pipefail
-          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           emulator_bin="$sdk/emulator/emulator"
           if [ -z "$sdk" ] || [ ! -x "$emulator_bin" ]; then
             echo "::error::No Android emulator binary at '$emulator_bin'; the SDK setup step did not install the emulator package."
@@ -464,7 +553,7 @@ runs:
             echo "::error::$1"
             exit 1
           }
-          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
           emulator_bin="$sdk/emulator/emulator"
           [ -x "$emulator_bin" ] || fail "No Android emulator binary at '$emulator_bin'."
           for tool in avdmanager adb; do

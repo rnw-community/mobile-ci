@@ -657,6 +657,120 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+RESOLVE_STEP='Resolve preinstalled Android SDK'
+
+# preinstalled_sdk <root> [missing component]: an SDK laid out like the fleet
+# image's /opt/android-sdk, optionally without one of emulator, adb,
+# avdmanager or image.
+preinstalled_sdk() {
+    local root="$1" missing="${2:-}" image="$1/system-images/android-34/google_apis/x86_64"
+    mkdir -p "$root/emulator" "$root/platform-tools" "$root/cmdline-tools/latest/bin"
+    [ "$missing" = emulator ] || { printf '#!/bin/sh\n' > "$root/emulator/emulator"; chmod +x "$root/emulator/emulator"; }
+    [ "$missing" = adb ] || { printf '#!/bin/sh\n' > "$root/platform-tools/adb"; chmod +x "$root/platform-tools/adb"; }
+    if [ "$missing" != avdmanager ]; then
+        printf '#!/bin/sh\n' > "$root/cmdline-tools/latest/bin/avdmanager"
+        chmod +x "$root/cmdline-tools/latest/bin/avdmanager"
+    fi
+    # shellcheck disable=SC2016 # expanded when the fake sdkmanager runs.
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$SDKMANAGER_CALLS"\n[ "${SDKMANAGER_FAILS:-0}" = 1 ] && exit 1\nfor arg in "$@"; do case "$arg" in --sdk_root=*) root="${arg#--sdk_root=}" ;; system-images\\;*) pkg="$arg" ;; esac; done\ndir="$root/$(printf "%%s" "$pkg" | tr ";" "/")"\nmkdir -p "$dir" && touch "$dir/package.xml" "$dir/system.img"\n' > "$root/cmdline-tools/latest/bin/sdkmanager"
+    chmod +x "$root/cmdline-tools/latest/bin/sdkmanager"
+    if [ "$missing" != image ]; then
+        mkdir -p "$image"
+        : > "$image/package.xml"
+        : > "$image/system.img"
+    fi
+}
+
+resolve_sdk() {
+    local dir="$1"
+    shift
+    : > "$dir/sdkmanager-calls"
+    run_step "$dir" API_LEVEL=34 TARGET=google_apis ARCH=x86_64 SDKMANAGER_CALLS="$dir/sdkmanager-calls" "$@"
+}
+
+case_start 'a complete preinstalled SDK is used as is and setup-android is skipped'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+preinstalled_sdk "$workspace/opt-sdk"
+resolve_sdk "$workspace" ANDROID_SDK_ROOT="$workspace/opt-sdk" ANDROID_HOME="$workspace/elsewhere"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals true "$(step_output "$workspace" sdk-ready)" 'sdk-ready' \
+    && assert_equals "$workspace/opt-sdk" "$(step_output "$workspace" sdk-root)" 'sdk-root' \
+    && assert_contains "$(cat "$workspace/env")" "ANDROID_HOME=$workspace/opt-sdk" 'ANDROID_HOME exported' \
+    && assert_contains "$(cat "$workspace/env")" "ANDROID_SDK_ROOT=$workspace/opt-sdk" 'ANDROID_SDK_ROOT exported' \
+    && assert_contains "$(cat "$workspace/path")" "$workspace/opt-sdk/platform-tools" 'platform-tools on PATH' \
+    && assert_contains "$(cat "$workspace/path")" "$workspace/opt-sdk/cmdline-tools/latest/bin" 'avdmanager on PATH' \
+    && assert_equals '' "$(cat "$workspace/sdkmanager-calls")" 'no sdkmanager install' \
+    && assert_contains "$(cat "$workspace/summary")" 'preinstalled' 'path in summary'; then
+    pass_case
+fi
+
+case_start 'ANDROID_HOME is used when ANDROID_SDK_ROOT is unset'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+preinstalled_sdk "$workspace/opt-sdk"
+resolve_sdk "$workspace" ANDROID_SDK_ROOT='' ANDROID_HOME="$workspace/opt-sdk"
+if assert_equals true "$(step_output "$workspace" sdk-ready)" "sdk-ready ($(cat "$workspace/log"))" \
+    && assert_equals "$workspace/opt-sdk" "$(step_output "$workspace" sdk-root)" 'sdk-root'; then
+    pass_case
+fi
+
+case_start 'a preinstalled SDK missing only the system image installs just that package into it'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+preinstalled_sdk "$workspace/opt-sdk" image
+resolve_sdk "$workspace" ANDROID_SDK_ROOT="$workspace/opt-sdk" ANDROID_HOME=''
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals true "$(step_output "$workspace" sdk-ready)" 'sdk-ready' \
+    && assert_equals "$workspace/opt-sdk" "$(step_output "$workspace" sdk-root)" 'sdk-root' \
+    && assert_contains "$(cat "$workspace/sdkmanager-calls")" "--sdk_root=$workspace/opt-sdk system-images;android-34;google_apis;x86_64" 'sdkmanager installs only the image' \
+    && assert_equals true "$([ -f "$workspace/opt-sdk/system-images/android-34/google_apis/x86_64/system.img" ] && echo true || echo false)" 'image installed into the existing SDK' \
+    && assert_contains "$(cat "$workspace/summary")" 'installed the system image' 'path in summary'; then
+    pass_case
+fi
+
+case_start 'a failed system-image install falls back to setup-android on the same SDK root'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+preinstalled_sdk "$workspace/opt-sdk" image
+resolve_sdk "$workspace" ANDROID_SDK_ROOT="$workspace/opt-sdk" ANDROID_HOME='' SDKMANAGER_FAILS=1
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals false "$(step_output "$workspace" sdk-ready)" 'sdk-ready' \
+    && assert_equals "$workspace/opt-sdk" "$(step_output "$workspace" sdk-root)" 'sdk-root handed to setup-android' \
+    && assert_contains "$(cat "$workspace/log")" '::warning::' 'fallback warned'; then
+    pass_case
+fi
+
+case_start 'a preinstalled SDK without the emulator binary goes through setup-android'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+preinstalled_sdk "$workspace/opt-sdk" emulator
+resolve_sdk "$workspace" ANDROID_SDK_ROOT="$workspace/opt-sdk" ANDROID_HOME=''
+if assert_equals false "$(step_output "$workspace" sdk-ready)" "sdk-ready ($(cat "$workspace/log"))" \
+    && assert_equals "$workspace/opt-sdk" "$(step_output "$workspace" sdk-root)" 'sdk-root' \
+    && assert_contains "$(cat "$workspace/summary")" 'setup-android' 'path in summary'; then
+    pass_case
+fi
+
+case_start 'no SDK in the environment goes through setup-android with its default root'
+workspace="$(new_workspace "$ACTION" "$RESOLVE_STEP")"
+resolve_sdk "$workspace" ANDROID_SDK_ROOT='' ANDROID_HOME=''
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals false "$(step_output "$workspace" sdk-ready)" 'sdk-ready' \
+    && assert_equals '' "$(step_output "$workspace" sdk-root)" 'sdk-root' \
+    && assert_equals '' "$(cat "$workspace/env")" 'nothing exported'; then
+    pass_case
+fi
+
+case_start 'setup-android runs only when the SDK is not ready, on the resolved root'
+setup_step="$(ACTION_YML="$ACTION" python3 -c '
+import json, os, yaml
+action = yaml.safe_load(open(os.environ["ACTION_YML"], encoding="utf-8"))
+step = [s for s in action["runs"]["steps"] if s.get("name") == "Set up Android SDK"][0]
+print(json.dumps({"if": step.get("if"), "env": step.get("env")}, sort_keys=True), end="")
+' 2>&1 || true)"
+# shellcheck disable=SC2016 # a literal ${{ }} expression.
+expected_root='"ANDROID_SDK_ROOT": "${{ steps.sdk.outputs.sdk-root }}"'
+if assert_contains "$setup_step" "steps.sdk.outputs.sdk-ready != 'true'" 'setup-android condition' \
+    && assert_contains "$setup_step" "$expected_root" 'setup-android root'; then
+    pass_case
+fi
+
 # action_steps <action.yml>: "<name>\t<if>\t<uses>" per step, in order.
 action_steps() {
     ACTION_YML="$1" python3 -c '
@@ -667,13 +781,13 @@ for step in action["runs"]["steps"]:
 '
 }
 
-case_start 'start runs validate, SDK, acceleration, sizing, slot, boot in order; stop runs only the teardown, always'
+case_start 'start runs validate, SDK resolution, SDK setup, acceleration, sizing, slot, boot in order; stop runs only the teardown, always'
 steps="$(action_steps "$ACTION" 2>/dev/null || true)"
 order="$(printf '%s\n' "$steps" | cut -f1 | tr '\n' '|')"
 start_steps="$(printf '%s\n' "$steps" | awk -F'\t' '$2 ~ /inputs.mode == .start./ { print $1 }' | tr '\n' '|')"
 stop_steps="$(printf '%s\n' "$steps" | awk -F'\t' '$2 ~ /inputs.mode == .stop./ { print $1 "\t" $2 }')"
-if assert_equals "$VALIDATE_STEP|Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|$TEARDOWN_STEP|" "$order" 'step order' \
-    && assert_equals "Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|" "$start_steps" 'start-only steps' \
+if assert_equals "$VALIDATE_STEP|$RESOLVE_STEP|Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|$TEARDOWN_STEP|" "$order" 'step order' \
+    && assert_equals "$RESOLVE_STEP|Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|" "$start_steps" 'start-only steps' \
     && assert_contains "$stop_steps" "$TEARDOWN_STEP" 'teardown is stop-only' \
     && assert_contains "$stop_steps" 'always()' 'teardown runs even after a failed step'; then
     pass_case

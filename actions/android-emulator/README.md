@@ -11,9 +11,7 @@ drives through it.
 `mode: start`, in order:
 
 1. validates its inputs (fails closed on anything malformed);
-2. installs `platform-tools`, `emulator` and the system image through
-   `android-actions/setup-android`, reusing the SDK at `ANDROID_SDK_ROOT` or
-   `ANDROID_HOME`;
+2. resolves the SDK — see [Android SDK](#android-sdk);
 3. runs `emulator -accel-check` and **fails closed** unless it confirms
    hardware acceleration — see [Hardware acceleration](#hardware-acceleration);
 4. sizes the guest from the container's cgroup limits — see
@@ -58,6 +56,24 @@ of this job's emulator processes survive, and releases the slot — see
 | `ram-size`       | Guest RAM in MB the emulator was booted with: the input, else the derived value, else empty (profile default). |
 | `cores`          | Guest CPU cores the emulator was booted with: the input, else the derived value, else empty (profile default). |
 | `emulator-slot`  | Basename of the slot file held, e.g. `slot-1`. Empty when `emulator-slots-dir` is empty. |
+
+## Android SDK
+
+`start` first looks for an SDK already on the runner, in `ANDROID_SDK_ROOT`
+and then `ANDROID_HOME` (read from the runner's real environment, so an SDK
+baked into the runner image counts). It uses that SDK as is — skipping
+`android-actions/setup-android` entirely — when it has an executable
+`emulator/emulator`, `platform-tools/adb`, an `avdmanager` (under
+`cmdline-tools/latest/bin`, any `cmdline-tools/*/bin`, or on `PATH`) and the
+requested `system-images/android-<api-level>/<target>/<arch>` with its
+`package.xml` and `system.img`. When only the system image is missing and the
+SDK root is writable, it installs just that package into the same SDK with its
+`sdkmanager --sdk_root`. Otherwise, including when that install fails, it runs
+`android-actions/setup-android` against the same root (or setup-android's
+default `~/.android/sdk` when no SDK directory exists). Either way it exports
+`ANDROID_HOME`/`ANDROID_SDK_ROOT` to the resolved root for the rest of the job,
+and the step summary says which path it took. On a fleet image with the SDK
+preinstalled the step costs seconds; a fresh setup-android SDK costs minutes.
 
 ## Hardware acceleration
 
