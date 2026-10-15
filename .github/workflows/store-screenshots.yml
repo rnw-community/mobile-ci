@@ -633,6 +633,19 @@ on:
                 type: string
                 required: false
                 default: ''
+            compose-command:
+                description: >-
+                    Optional consumer-owned command run in the upload job on the
+                    collected screenshots - after every capture job's artifact is
+                    merged under screenshots-download-dir, before the
+                    apple-screenshot-slots check and upload-command - e.g. a
+                    device-frame composer such as mobile-ci's
+                    scripts/media/frame-device.sh or your own. Runs in the resolved
+                    app directory with SCREENSHOTS_DIR in its environment. Empty
+                    (default) composes nothing. Its failure fails the upload job.
+                type: string
+                required: false
+                default: ''
             screenshots-download-dir:
                 description: >-
                     Path, relative to the resolved app directory (ios-target's appDir
@@ -2301,6 +2314,15 @@ jobs:
                   pattern: raw-screenshots-*
                   path: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
                   merge-multiple: true
+
+            - name: Run compose-command
+              if: inputs.compose-command != ''
+              working-directory: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
+              shell: bash
+              env:
+                  COMPOSE_COMMAND: ${{ inputs.compose-command }}
+                  SCREENSHOTS_DIR: ${{ needs.validate-manifest.outputs.screenshots-download-dir }}
+              run: eval "$COMPOSE_COMMAND"
 
             - name: Validate iOS screenshot resolutions against apple-screenshot-slots
               if: needs.validate-manifest.outputs.apple-screenshot-slots != ''

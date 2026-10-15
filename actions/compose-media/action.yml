@@ -1,0 +1,200 @@
+name: compose-media
+description: >-
+  Frame raw device captures in fastlane frameit's real device frames and encode
+  web media - framed PNGs for a store set, AVIF + WebP stills, or WebM (AV1/VP9)
+  + H.264 MP4 + WebP poster clips - each file held to a byte budget, failing
+  closed on any missing tool, bad input, or overrun. Captions and store copy stay
+  in the consumer's own composer.
+inputs:
+  mode:
+    description: "`frame` (framed PNG per capture), `stills` (AVIF + WebP per capture), or `clips` (WebM + MP4 + poster per recording)."
+    required: true
+  input-dir:
+    description: Directory scanned recursively for raw `*.png` captures (`frame`, `stills`) or `*.mp4` recordings with a sibling `<scene>.png` poster (`clips`).
+    required: true
+  output-dir:
+    description: Directory the composed files are published into, only after every input composed within budget.
+    required: true
+  output-template:
+    description: "Output path per input, relative to `output-dir`, extension appended. Tokens: `{dir}` `{name}` `{slug}` `{parent}` `{grandparent}`. Empty uses the script default (`{dir}/{name}` for frame and clips, `{dir}/{name}@2x` for stills)."
+    required: false
+    default: ''
+  scenes:
+    description: Comma-separated input basenames to compose; each must exist. Empty composes every input.
+    required: false
+    default: ''
+  device:
+    description: "`frame`/`stills`: `iphone` (6.9\") or `ipad` (13\")."
+    required: false
+    default: iphone
+  orientation:
+    description: "`frame`/`stills`: `auto` (landscape when the capture is wider than tall), `portrait`, or `landscape`."
+    required: false
+    default: auto
+  background:
+    description: "`frame`/`stills`: `transparent`, `#RRGGBB`, or a top-to-bottom `#RRGGBB-#RRGGBB` plate."
+    required: false
+    default: transparent
+  canvas:
+    description: "`frame`: `capture` (the capture's own pixel size, what App Store Connect slots match on) or `frame` (the frame's native size)."
+    required: false
+    default: capture
+  fit:
+    description: "`frame`: fraction (0,1] of the capture canvas the framed device is contained in. Empty uses 1."
+    required: false
+    default: ''
+  width:
+    description: "`stills`: output width in pixels. Empty uses 900."
+    required: false
+    default: ''
+  height:
+    description: "`stills`: output height in pixels. Empty derives it from the width and the capture's aspect."
+    required: false
+    default: ''
+  frames-dir:
+    description: "`frame`/`stills`: frameit frames directory. Empty uses `~/.fastlane/frameit/latest` (`fastlane frameit download_frames`)."
+    required: false
+    default: ''
+  frame-file:
+    description: "`frame`/`stills`: your own frame PNG in place of the frameit asset; needs `frame-cutout`."
+    required: false
+    default: ''
+  frame-cutout:
+    description: "`frame`/`stills`: `X,Y,W,H` screen cutout of `frame-file`, in frame pixels."
+    required: false
+    default: ''
+  webp-encoder:
+    description: "`stills`/`clips`: `cwebp` or `magick`. Empty uses `cwebp`."
+    required: false
+    default: ''
+  webm-codec:
+    description: "`clips`: `auto` (AV1 via libsvtav1, VP9 when ffmpeg lacks it), `av1`, or `vp9`. Empty uses `auto`."
+    required: false
+    default: ''
+  max-seconds:
+    description: "`clips`: clip length cap in seconds. Empty uses 8."
+    required: false
+    default: ''
+  fps:
+    description: "`clips`: output frame rate. Empty uses 24."
+    required: false
+    default: ''
+  max-avif-bytes:
+    description: "`stills`: per-file AVIF budget. Empty uses 60000."
+    required: false
+    default: ''
+  max-webp-bytes:
+    description: "`stills`: per-file WebP budget. Empty uses 90000."
+    required: false
+    default: ''
+  max-webm-bytes:
+    description: "`clips`: per-file WebM budget. Empty uses 400000."
+    required: false
+    default: ''
+  max-mp4-bytes:
+    description: "`clips`: per-file MP4 budget. Empty uses 400000."
+    required: false
+    default: ''
+  max-poster-bytes:
+    description: "`clips`: per-file poster budget. Empty uses 90000."
+    required: false
+    default: ''
+outputs:
+  manifest:
+    description: Path to a TSV of every published file (relative to `output-dir`), its byte size, and its budget (`-` in frame mode).
+    value: ${{ steps.compose.outputs.manifest }}
+  count:
+    description: Number of files published.
+    value: ${{ steps.compose.outputs.count }}
+runs:
+  using: composite
+  steps:
+    - name: Compose media
+      id: compose
+      shell: bash
+      env:
+        MEDIA_SCRIPTS_DIR: ${{ github.action_path }}/../../scripts/media
+        MODE: ${{ inputs.mode }}
+        INPUT_DIR: ${{ inputs.input-dir }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        OUTPUT_TEMPLATE: ${{ inputs.output-template }}
+        SCENES: ${{ inputs.scenes }}
+        DEVICE: ${{ inputs.device }}
+        ORIENTATION: ${{ inputs.orientation }}
+        BACKGROUND: ${{ inputs.background }}
+        CANVAS: ${{ inputs.canvas }}
+        FIT: ${{ inputs.fit }}
+        WIDTH: ${{ inputs.width }}
+        HEIGHT: ${{ inputs.height }}
+        FRAMES_DIR: ${{ inputs.frames-dir }}
+        FRAME_FILE: ${{ inputs.frame-file }}
+        FRAME_CUTOUT: ${{ inputs.frame-cutout }}
+        WEBP_ENCODER: ${{ inputs.webp-encoder }}
+        WEBM_CODEC: ${{ inputs.webm-codec }}
+        MAX_SECONDS: ${{ inputs.max-seconds }}
+        FPS: ${{ inputs.fps }}
+        MAX_AVIF_BYTES: ${{ inputs.max-avif-bytes }}
+        MAX_WEBP_BYTES: ${{ inputs.max-webp-bytes }}
+        MAX_WEBM_BYTES: ${{ inputs.max-webm-bytes }}
+        MAX_MP4_BYTES: ${{ inputs.max-mp4-bytes }}
+        MAX_POSTER_BYTES: ${{ inputs.max-poster-bytes }}
+      run: |
+        set -eu
+        if [ -z "$INPUT_DIR" ] || [ -z "$OUTPUT_DIR" ]; then
+          echo "::error::input-dir and output-dir are both required."
+          exit 1
+        fi
+
+        set -- --input-dir "$INPUT_DIR" --output-dir "$OUTPUT_DIR"
+        case "$MODE" in
+          frame)
+            script=frame-device.sh
+            set -- "$@" --device "$DEVICE" --orientation "$ORIENTATION" --background "$BACKGROUND" --canvas "$CANVAS"
+            [ -z "$FIT" ] || set -- "$@" --fit "$FIT"
+            [ -z "$OUTPUT_TEMPLATE" ] || set -- "$@" --output-template "$OUTPUT_TEMPLATE"
+            ;;
+          stills)
+            script=compose-web-media.sh
+            set -- "$@" --device "$DEVICE" --orientation "$ORIENTATION" --background "$BACKGROUND"
+            [ -z "$WIDTH" ] || set -- "$@" --width "$WIDTH"
+            [ -z "$HEIGHT" ] || set -- "$@" --height "$HEIGHT"
+            [ -z "$OUTPUT_TEMPLATE" ] || set -- "$@" --output-template "$OUTPUT_TEMPLATE"
+            [ -z "$WEBP_ENCODER" ] || set -- "$@" --webp-encoder "$WEBP_ENCODER"
+            [ -z "$MAX_AVIF_BYTES" ] || set -- "$@" --max-avif-bytes "$MAX_AVIF_BYTES"
+            [ -z "$MAX_WEBP_BYTES" ] || set -- "$@" --max-webp-bytes "$MAX_WEBP_BYTES"
+            ;;
+          clips)
+            script=compose-web-clips.sh
+            [ -z "$OUTPUT_TEMPLATE" ] || set -- "$@" --output-template "$OUTPUT_TEMPLATE"
+            [ -z "$WEBP_ENCODER" ] || set -- "$@" --webp-encoder "$WEBP_ENCODER"
+            [ -z "$WEBM_CODEC" ] || set -- "$@" --webm-codec "$WEBM_CODEC"
+            [ -z "$MAX_SECONDS" ] || set -- "$@" --max-seconds "$MAX_SECONDS"
+            [ -z "$FPS" ] || set -- "$@" --fps "$FPS"
+            [ -z "$MAX_WEBM_BYTES" ] || set -- "$@" --max-webm-bytes "$MAX_WEBM_BYTES"
+            [ -z "$MAX_MP4_BYTES" ] || set -- "$@" --max-mp4-bytes "$MAX_MP4_BYTES"
+            [ -z "$MAX_POSTER_BYTES" ] || set -- "$@" --max-poster-bytes "$MAX_POSTER_BYTES"
+            ;;
+          *)
+            echo "::error::Unsupported mode '$MODE'; expected frame, stills, or clips."
+            exit 1
+            ;;
+        esac
+        [ -z "$SCENES" ] || set -- "$@" --scenes "$SCENES"
+        if [ "$MODE" != clips ]; then
+          [ -z "$FRAMES_DIR" ] || set -- "$@" --frames-dir "$FRAMES_DIR"
+          [ -z "$FRAME_FILE" ] || set -- "$@" --frame "$FRAME_FILE"
+          [ -z "$FRAME_CUTOUT" ] || set -- "$@" --cutout "$FRAME_CUTOUT"
+        fi
+
+        manifest="$(mktemp -d "$RUNNER_TEMP/compose-media.XXXXXX")/manifest.tsv"
+        set -- "$@" --manifest "$manifest"
+        bash "$MEDIA_SCRIPTS_DIR/$script" "$@"
+
+        if [ ! -f "$manifest" ]; then
+          echo "::error::$script exited 0 but wrote no manifest, so what it published is unknown."
+          exit 1
+        fi
+        count="$(grep -c . "$manifest" || true)"
+        echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+        echo "count=$count" >> "$GITHUB_OUTPUT"
+        echo "Published $count file(s) to $OUTPUT_DIR ($MODE)." >> "$GITHUB_STEP_SUMMARY"

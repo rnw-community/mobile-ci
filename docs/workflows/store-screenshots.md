@@ -43,7 +43,8 @@ loop `locales x appearances x scenes` on it, optional
 **upload** (gated by `upload-screenshots`; requires every platform with
 manifest entries to have captured successfully — a capture job skipped by a
 failed build blocks the upload, only a platform with no manifest entries may
-stay skipped — merges every `raw-screenshots-*` artifact, optionally
+stay skipped — merges every `raw-screenshots-*` artifact, runs an optional
+[`compose-command`](#compose-command) on the collected set, optionally
 validates iOS resolutions against `apple-screenshot-slots`, runs a
 consumer-owned `upload-command`, and optionally verifies/repairs App Store
 Connect duplicates via `asc-dedupe-screenshots`) → **status** (single required check with
@@ -294,6 +295,42 @@ values before relying on this.
   and a GMS-free image — an app that hard-depends on Play services may
   render "Play services required" dialogs into its screenshots. Validate
   captures against a local emulator before shipping them to a listing.
+
+## compose-command
+
+Optional consumer-owned command, run in the upload job once every capture job's
+artifact is merged under `screenshots-download-dir`. It runs before the
+`apple-screenshot-slots` check and before `upload-command`. This is the hook
+for composing the store set from the collected raw captures: framing each
+device, adding captions, laying out the canvas. Whatever it writes is then
+checked against the slots and uploaded. It runs in the resolved app directory
+with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its
+environment. Its failure fails the upload job. It only runs when the upload job
+runs, which needs `upload-screenshots: true`. Empty (the default) composes
+nothing and leaves the upload job unchanged.
+
+Use it to call your own composer, or mobile-ci's
+[`compose-media`](../../actions/compose-media/README.md) scripts fetched at a
+pinned tag. Captions and store copy are always the consumer's; the shared
+scripts only frame the device:
+
+```yaml
+compose-command: |
+    ref=<mobile-ci tag>
+    media="$RUNNER_TEMP/mobile-ci-media"
+    mkdir -p "$media"
+    for f in media-common.sh frame-device.sh; do
+        curl -fsSL "https://raw.githubusercontent.com/rnw-community/mobile-ci/$ref/scripts/media/$f" -o "$media/$f"
+    done
+    bash "$media/frame-device.sh" --input-dir "$SCREENSHOTS_DIR/ios/iphone-17-pro-max" \
+        --output-dir fastlane/screenshots/framed/ios --background '#F8F8F8-#F1F1F1' --fit 0.78
+```
+
+The upload runner needs the composer's tools: ImageMagick 7 and fastlane's
+frameit assets (`fastlane frameit download_frames`) for the example above.
+`post-capture-command` is the per-capture-job counterpart. It sees one
+device's captures before they are uploaded as an artifact, whereas
+`compose-command` sees the merged set from every device.
 
 ## apple-screenshot-slots
 
@@ -753,6 +790,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `redroid-boot-timeout-seconds`      | no       | `600`                                     | Seconds to wait for `sys.boot_completed`. |
 | `upload-screenshots`                | no       | `false`                                    | Run the gated upload job. **cfg** |
 | `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in the resolved app dir (`ios-target`'s `appDir` when set, `android-target`'s otherwise) with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its environment. **cfg** |
+| `compose-command`                   | no       | `''`                                     | Optional consumer-owned command run in the upload job on the collected screenshots, after every artifact is merged and before the `apple-screenshot-slots` check and `upload-command`. For example, a device-frame composer such as [`compose-media`](../../actions/compose-media/README.md)'s `frame-device.sh`. Runs in the resolved app dir with `SCREENSHOTS_DIR` in its environment. Its failure fails the upload job. See [compose-command](#compose-command). |
 | `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to the resolved app dir, every capture job's artifact is merged into before `upload-command` runs — iOS under its `ios/` subdirectory, Android under `android/`. **cfg** |
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to the resolved app dir, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
 | `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. **cfg** |
