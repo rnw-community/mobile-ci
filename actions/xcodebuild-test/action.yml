@@ -85,10 +85,46 @@ inputs:
     description: >-
       Value for -parallel-testing-worker-count, applied to the test run only.
       Each worker is a clone of the leased simulator, so N workers cost N times
-      its memory; a slimmed lease keeps that affordable. Empty lets Xcode
-      choose, which is why parallel-testing 'YES' requires it.
+      its memory, and a clone boots stock unless slim-workers slims it. Empty
+      lets Xcode choose, which is why parallel-testing 'YES' requires it.
     required: false
     default: ''
+  slim-workers:
+    description: >-
+      Whether to run `simslim watch --profile <slim-profile>` for the length of
+      the test run, so every parallel-testing worker clone is slimmed no-reboot
+      as it boots instead of running stock. `auto` (the default) does so when
+      parallel-testing is 'YES' and slim-profile is set, and only warns if the
+      watch fails to start or dies early, because stock workers still run the
+      tests correctly. `true` requires both and fails the job if the watch
+      fails or slims no clone in a green run. `false` never watches.
+    required: false
+    default: auto
+  slim-profile:
+    description: >-
+      simslim profile the worker clones are slimmed with; pass the lease's own
+      (simulator-lease slim-profile), since the watch also re-applies it to the
+      already-slim lease. `bundled` resolves to this release's
+      `profiles/ci.json`, any other value is a path relative to the
+      repository root. Empty (the default) leaves the workers stock.
+    required: false
+    default: ''
+  simslim-version:
+    description: >-
+      Pinned simslim CLI version (plain X.Y.Z), installed only when the watch
+      runs. Same contract and default as simulator-lease's input: a `simslim`
+      already on PATH reporting exactly this version is reused, otherwise the
+      `simslim-v<version>-macos-arm64.tar.gz` release asset is downloaded,
+      checked against simslim-sha256 and extracted into a job-private directory.
+    required: false
+    default: '0.12.2'
+  simslim-sha256:
+    description: >-
+      SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
+      release asset. Empty refuses to download. Bump it together with
+      simslim-version.
+    required: false
+    default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
   screen-capture:
     description: >-
       Screen-capture format for the UI tests, written into the generated
@@ -121,6 +157,11 @@ outputs:
   tests-failed:
     description: Number of failed tests.
     value: ${{ steps.summary.outputs.tests-failed }}
+  slimmed-workers:
+    description: >-
+      Number of parallel-testing worker clones simslim watch slimmed, empty
+      when no watch ran.
+    value: ${{ steps.stop-watch.outputs.slimmed-workers }}
 runs:
   using: composite
   steps:
@@ -461,6 +502,237 @@ runs:
           printf 'ONLY_TESTING_EOF\n'
         } >> "$GITHUB_OUTPUT"
 
+    - name: Decide whether to slim the parallel-testing workers
+      if: inputs.mode != 'build'
+      id: slim-workers
+      shell: bash
+      env:
+        SLIM_WORKERS: ${{ inputs.slim-workers }}
+        PARALLEL_TESTING: ${{ inputs.parallel-testing }}
+        SLIM_PROFILE: ${{ inputs.slim-profile }}
+      run: |
+        set -euo pipefail
+        case "$SLIM_WORKERS" in
+          auto|true|false) ;;
+          *) echo "::error::slim-workers must be 'auto', 'true' or 'false' (got '$SLIM_WORKERS')."; exit 1 ;;
+        esac
+        if [ "$SLIM_WORKERS" = 'true' ] && [ "$PARALLEL_TESTING" != 'YES' ]; then
+          echo "::error::slim-workers 'true' asks for the parallel-testing worker clones to be slimmed, but parallel-testing is '$PARALLEL_TESTING', so Xcode boots no worker clones. Set parallel-testing to 'YES', or slim-workers to 'auto'."
+          exit 1
+        fi
+        if [ "$SLIM_WORKERS" = 'true' ] && [ -z "$SLIM_PROFILE" ]; then
+          echo "::error::slim-workers 'true' needs a slim-profile to slim the worker clones with; pass the lease's own (simulator-lease defaults to 'bundled')."
+          exit 1
+        fi
+        if [ "$SLIM_WORKERS" = 'false' ] || [ "$PARALLEL_TESTING" != 'YES' ]; then
+          echo 'enabled=false' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ -z "$SLIM_PROFILE" ]; then
+          echo "::notice::parallel-testing is 'YES' but slim-profile is empty, so every worker clone boots stock (simslim keeps disable overrides keyed by UDID and a clone gets a new one). Pass the lease's slim-profile to slim them as they boot."
+          echo 'enabled=false' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        if [ "$SLIM_PROFILE" = 'bundled' ]; then
+          SLIM_PROFILE="$(cd "$GITHUB_ACTION_PATH/../.." 2>/dev/null && pwd)/profiles/ci.json"
+          echo "slim-profile 'bundled' resolved to this release's shipped profile '$SLIM_PROFILE'."
+        else
+          case "$SLIM_PROFILE" in
+            /*) ;;
+            *) SLIM_PROFILE="$GITHUB_WORKSPACE/$SLIM_PROFILE" ;;
+          esac
+        fi
+        if [ ! -f "$SLIM_PROFILE" ]; then
+          echo "::error::slim-profile '$SLIM_PROFILE' does not exist ('bundled' resolves to this release's profiles/ci.json, any other value against the repository root)."
+          exit 1
+        fi
+        {
+          echo 'enabled=true'
+          echo "profile=$SLIM_PROFILE"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Install simslim
+      if: steps.slim-workers.outputs.enabled == 'true'
+      shell: bash
+      env:
+        SIMSLIM_VERSION: ${{ inputs.simslim-version }}
+        SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
+      run: |
+        set -euo pipefail
+        if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
+          exit 1
+        fi
+        if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+          echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
+          exit 1
+        fi
+        expected_version_line="simslim $SIMSLIM_VERSION"
+        existing_bin="$(command -v simslim || true)"
+        if [ -n "$existing_bin" ] && [ "$("$existing_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" = "$expected_version_line" ]; then
+          echo "Using existing simslim $SIMSLIM_VERSION already on PATH: $existing_bin"
+          exit 0
+        fi
+        if [ -z "$SIMSLIM_SHA256" ]; then
+          echo "::error::No simslim $SIMSLIM_VERSION on PATH and simslim-sha256 is empty, so the release asset cannot be integrity-checked; refusing to download. Preinstall simslim $SIMSLIM_VERSION on the host or set simslim-sha256 to the asset's digest."
+          exit 1
+        fi
+        host_arch="$(uname -m)"
+        if [ "$host_arch" != "arm64" ]; then
+          echo "::error::MobAI-App/simslim only publishes macos-arm64 release binaries and this host reports '$host_arch'; preinstall simslim $SIMSLIM_VERSION on PATH (e.g. 'go install github.com/mobai-app/simslim/cmd/simslim@v$SIMSLIM_VERSION') instead."
+          exit 1
+        fi
+
+        sha256_of() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$1" | awk '{print $1}'
+          else
+            shasum -a 256 "$1" | awk '{print $1}'
+          fi
+        }
+
+        asset_name="simslim-v${SIMSLIM_VERSION}-macos-arm64.tar.gz"
+        pinned_root="$HOME/.simslim-pinned"
+        pinned_tarball="$pinned_root/$asset_name"
+        lock_dir="$pinned_root/.lock-$SIMSLIM_VERSION"
+        mkdir -p "$pinned_root"
+
+        cached_tarball_verified() {
+          [ -f "$pinned_tarball" ] && [ "$(sha256_of "$pinned_tarball")" = "$SIMSLIM_SHA256" ]
+        }
+
+        if ! cached_tarball_verified; then
+          lock_acquired=''
+          lock_deadline=$((SECONDS + 300))
+          lock_is_stale() {
+            lock_pid="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+            if [ -n "$lock_pid" ]; then
+              if kill -0 "$lock_pid" 2>/dev/null; then
+                [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +60 2>/dev/null)" ]
+                return
+              fi
+              return 0
+            else
+              [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]
+            fi
+          }
+          while :; do
+            if mkdir "$lock_dir" 2>/dev/null; then
+              echo "$$" > "$lock_dir/pid"
+              lock_acquired=1
+              break
+            fi
+            if cached_tarball_verified; then
+              break
+            fi
+            if lock_is_stale; then
+              echo "::warning::Removing stale simslim download lock '$lock_dir' left behind by a terminated job."
+              rm -rf "$lock_dir"
+              continue
+            fi
+            if [ "$SECONDS" -ge "$lock_deadline" ]; then
+              echo "::error::Timed out waiting for the simslim download lock '$lock_dir'; a concurrent download on this host may be stuck."
+              exit 1
+            fi
+            sleep 2
+          done
+
+          if [ -n "$lock_acquired" ]; then
+            cleanup() {
+              [ -n "${scratch_dir:-}" ] && rm -rf "$scratch_dir"
+              rm -rf "$lock_dir"
+            }
+            trap cleanup EXIT
+
+            if ! cached_tarball_verified; then
+              download_url="https://github.com/MobAI-App/simslim/releases/download/v${SIMSLIM_VERSION}/${asset_name}"
+              scratch_dir="$(mktemp -d "$pinned_root/.download-XXXXXX")"
+              tarball_path="$scratch_dir/$asset_name"
+              curl_exit=0
+              http_status="$(curl -sSL --retry 3 --retry-connrefused --max-time 300 -w '%{http_code}' -o "$tarball_path" "$download_url")" || curl_exit=$?
+              if [ "$curl_exit" -ne 0 ] || [ "$http_status" != "200" ]; then
+                echo "::error::Download of simslim-version '$SIMSLIM_VERSION' from '$download_url' failed (curl exit $curl_exit, HTTP status '$http_status'). Confirm a 'v$SIMSLIM_VERSION' release publishing a $asset_name asset exists at https://github.com/MobAI-App/simslim/releases."
+                exit 1
+              fi
+              actual_sha="$(sha256_of "$tarball_path")"
+              if [ "$actual_sha" != "$SIMSLIM_SHA256" ]; then
+                echo "::error::SHA-256 mismatch for $asset_name: expected $SIMSLIM_SHA256 (simslim-sha256), got $actual_sha. Refusing to install. If simslim-version was bumped, update simslim-sha256 to the new asset's digest."
+                exit 1
+              fi
+              mv -f "$tarball_path" "$pinned_tarball"
+              echo "Downloaded and verified $asset_name against simslim-sha256 $SIMSLIM_SHA256."
+            fi
+            trap - EXIT
+            cleanup
+          fi
+        fi
+
+        job_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/simslim-${SIMSLIM_VERSION}-XXXXXX")"
+        if ! cached_tarball_verified; then
+          echo "::error::Cached $pinned_tarball no longer matches simslim-sha256 $SIMSLIM_SHA256; refusing to extract from it. Delete it and re-run."
+          exit 1
+        fi
+        tar -xzf "$pinned_tarball" -C "$job_dir"
+        job_bin="$job_dir/simslim"
+        if [ ! -f "$job_bin" ]; then
+          echo "::error::$asset_name did not contain a top-level 'simslim' binary; refusing to install."
+          exit 1
+        fi
+        chmod +x "$job_bin"
+        if [ "$("$job_bin" version 2>/dev/null | tail -n 1 | tr -d '\r' || true)" != "$expected_version_line" ]; then
+          echo "::error::Extracted simslim at '$job_bin' reports '$("$job_bin" version 2>&1 | tail -n 1 || true)', not '$expected_version_line'; refusing to run an unexpected binary."
+          exit 1
+        fi
+        echo "$job_dir" >> "$GITHUB_PATH"
+        echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
+
+    - name: Start simslim watch for the parallel-testing workers
+      if: steps.slim-workers.outputs.enabled == 'true'
+      id: watch
+      shell: bash
+      env:
+        SLIM_WORKERS: ${{ inputs.slim-workers }}
+        SLIM_PROFILE: ${{ steps.slim-workers.outputs.profile }}
+      run: |
+        set -euo pipefail
+        not_started() {
+          echo 'started=false' >> "$GITHUB_OUTPUT"
+          if [ "$SLIM_WORKERS" = 'true' ]; then
+            echo "::error::$1 slim-workers is 'true', so a run on stock worker clones is refused."
+            exit 1
+          fi
+          echo "::warning::$1 The parallel-testing worker clones run stock: the tests are unaffected, but every clone costs a full stock simulator's memory. Set slim-workers to 'true' to make this fail the job."
+          exit 0
+        }
+        state_dir="$(mktemp -d "${RUNNER_TEMP}/xcodebuild-test-simslim-watch-XXXXXX")"
+        log="$state_dir/watch.log"
+        echo "state-dir=$state_dir" >> "$GITHUB_OUTPUT"
+        if ! command -v simslim >/dev/null 2>&1; then
+          not_started "'simslim' is not on PATH after the install step, so no watch could start."
+        fi
+        nohup simslim watch --profile "$SLIM_PROFILE" > "$log" 2>&1 < /dev/null &
+        pid=$!
+        echo "$pid" > "$state_dir/watch.pid"
+        ready=''
+        for _ in $(seq 1 20); do
+          if grep -q 'Watching device sets' "$log" 2>/dev/null; then
+            ready=1
+            break
+          fi
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.5
+        done
+        if ! kill -0 "$pid" 2>/dev/null; then
+          watch_status=0
+          wait "$pid" || watch_status=$?
+          not_started "'simslim watch --profile $SLIM_PROFILE' exited with status $watch_status before the test run started: $(tail -n 5 "$log" | tr '\n' ' ')"
+        fi
+        if [ -z "$ready" ]; then
+          echo "::notice::simslim watch (pid $pid) is running but has not printed its banner yet; the stop step reports what it slimmed."
+        fi
+        echo 'started=true' >> "$GITHUB_OUTPUT"
+        echo "simslim watch (pid $pid) slims every simulator that boots in the default and testing (~/Library/Developer/XCTestDevices) device sets with '$SLIM_PROFILE'; log at $log."
+
     - name: Run the tests without rebuilding
       if: inputs.mode != 'build'
       id: test
@@ -562,6 +834,97 @@ runs:
         printf ' %q' "${args[@]}" test-without-building
         printf '\n'
         xcodebuild "${args[@]}" test-without-building
+
+    - name: Stop simslim watch and report the slimmed workers
+      if: always() && steps.watch.outputs.state-dir != ''
+      id: stop-watch
+      shell: bash
+      env:
+        STATE_DIR: ${{ steps.watch.outputs.state-dir }}
+        STARTED: ${{ steps.watch.outputs.started }}
+        SLIM_WORKERS: ${{ inputs.slim-workers }}
+        DESTINATION_ID: ${{ inputs.destination-id }}
+        TEST_OUTCOME: ${{ steps.test.outcome }}
+      run: |
+        set -euo pipefail
+        log="$STATE_DIR/watch.log"
+        pid="$(cat "$STATE_DIR/watch.pid" 2>/dev/null || true)"
+        is_our_watch() {
+          case "$(ps -o command= -p "$1" 2>/dev/null || true)" in
+            *simslim*watch*) return 0 ;;
+          esac
+          return 1
+        }
+        exited_early=''
+        if printf '%s' "$pid" | grep -qE '^[1-9][0-9]*$' && is_our_watch "$pid"; then
+          kill -INT "$pid" 2>/dev/null || true
+          for _ in $(seq 1 60); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.5
+          done
+          if kill -0 "$pid" 2>/dev/null && is_our_watch "$pid"; then
+            echo "::warning::simslim watch (pid $pid) was still running 30s after SIGINT; killing it."
+            kill -KILL "$pid" 2>/dev/null || true
+          fi
+        else
+          exited_early=1
+        fi
+        if [ "$STARTED" != 'true' ]; then
+          echo 'simslim watch never started; the start step already reported why.'
+          exit 0
+        fi
+
+        echo '::group::simslim watch log'
+        cat "$log" 2>/dev/null || true
+        echo '::endgroup::'
+        lease="$(printf '%s' "$DESTINATION_ID" | tr '[:lower:]' '[:upper:]')"
+        udids_after() {
+          { grep -E "^watch: $1 [0-9A-Fa-f-]{36}( |\$)" "$log" 2>/dev/null || true; } \
+            | awk '{print toupper($3)}' | { grep -vxF "${lease:-none}" || true; } | LC_ALL=C sort -u
+        }
+        slimmed="$(udids_after slimmed)"
+        attempted="$(udids_after slimming)"
+        never_slimmed="$(LC_ALL=C comm -23 <(printf '%s\n' "$attempted" | sed '/^$/d') <(printf '%s\n' "$slimmed" | sed '/^$/d'))"
+        slimmed_count="$(printf '%s\n' "$slimmed" | sed '/^$/d' | wc -l | tr -d ' ')"
+        never_count="$(printf '%s\n' "$never_slimmed" | sed '/^$/d' | wc -l | tr -d ' ')"
+        clone_list="$(printf '%s\n' "$slimmed" | sed '/^$/d; s/.*/`&`/' | paste -s -d ' ' -)"
+        echo "slimmed-workers=$slimmed_count" >> "$GITHUB_OUTPUT"
+        {
+          echo '### simslim watch — parallel-testing workers'
+          echo
+          echo "Worker clones slimmed: ${slimmed_count}${clone_list:+ (${clone_list})}"
+          echo
+          echo "Worker clones seen booting but never slimmed (ran stock): $never_count"
+          echo
+          echo '<details><summary>simslim watch log (last 100 lines)</summary>'
+          echo
+          echo '```text'
+          tail -n 100 "$log" 2>/dev/null || true
+          echo '```'
+          echo
+          echo '</details>'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        failed=''
+        report() {
+          if [ "$SLIM_WORKERS" = 'true' ]; then
+            echo "::error::$1"
+            failed=1
+          else
+            echo "::warning::$1 The tests are unaffected; set slim-workers to 'true' to make this fail the job."
+          fi
+        }
+        if [ -n "$exited_early" ]; then
+          report "simslim watch (pid ${pid:-unknown}) exited before the test run ended, so any worker clone that booted after that ran stock."
+        fi
+        if [ "$slimmed_count" -eq 0 ] && [ "$TEST_OUTCOME" = 'success' ]; then
+          report 'simslim watch slimmed no worker clone during a green parallel-testing run, so every worker ran stock.'
+        fi
+        if [ "$never_count" -gt 0 ]; then
+          echo "::warning::${never_count} worker clone(s) booted but simslim watch never finished slimming them: $(printf '%s\n' "$never_slimmed" | paste -s -d ' ' -)"
+        fi
+        [ -z "$failed" ] || exit 1
+        echo "simslim watch slimmed ${slimmed_count} worker clone(s)."
 
     - name: Publish the xcodebuild test summary
       id: summary

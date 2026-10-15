@@ -175,11 +175,21 @@ on:
                 description: >-
                     -parallel-testing-worker-count for the test run, required when
                     parallel-testing is `YES` and refused otherwise. Each worker is a
-                    clone of the leased simulator, so raise it only on a slimmed
-                    lease on the 6x12 profile.
+                    clone of the leased simulator, so raise it only on the 6x12
+                    profile.
                 type: string
                 required: false
                 default: ''
+            parallel-testing-slim-workers:
+                description: >-
+                    xcodebuild-test slim-workers, given simulator-slim-profile as its
+                    profile: with parallel-testing `YES`, `simslim watch` slims every
+                    worker clone no-reboot as it boots, since a clone never inherits
+                    the lease's slimming. `auto` (the default) warns if the watch
+                    fails, `true` fails the job, `false` leaves the workers stock.
+                type: string
+                required: false
+                default: auto
             test-plan:
                 type: string
                 required: false
@@ -487,6 +497,8 @@ jobs:
                   shard-count: ${{ steps.shards.outputs.count }}
                   parallel-testing: ${{ inputs.parallel-testing }}
                   parallel-testing-worker-count: ${{ inputs.parallel-testing-worker-count }}
+                  slim-workers: ${{ inputs.parallel-testing-slim-workers }}
+                  slim-profile: ${{ inputs.parallel-testing == 'YES' && inputs.simulator-slim-profile || '' }}
                   result-bundle-path: ${{ inputs.result-bundle-path-prefix }}${{ matrix.shard }}.xcresult
                   xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
                   working-directory: ${{ inputs.working-directory }}
