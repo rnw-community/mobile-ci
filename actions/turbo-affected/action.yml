@@ -9,8 +9,17 @@ inputs:
     required: false
     default: '2.10.8'
   target-packages:
-    description: Newline-separated package names; affected if any of these is in the affected set.
-    required: true
+    description: >-
+      Newline-separated package names; affected if any of these is in the affected set.
+      Empty derives them from the `name` in each `targets[].appDir`'s package.json.
+    required: false
+    default: ''
+  targets:
+    description: >-
+      JSON array of build targets, each with an `appDir` relative to the working directory.
+      Read only when `target-packages` is empty.
+    required: false
+    default: ''
   base-sha:
     description: Base SHA for the affected computation (maps to TURBO_SCM_BASE). Empty means "always affected".
     required: false
@@ -32,6 +41,7 @@ runs:
       env:
         TURBO_VERSION: ${{ inputs.turbo-version }}
         TARGET_PACKAGES: ${{ inputs.target-packages }}
+        TARGETS: ${{ inputs.targets }}
         TURBO_SCM_BASE: ${{ inputs.base-sha }}
         ALWAYS_AFFECTED: ${{ inputs.always-affected }}
       run: |
@@ -39,6 +49,52 @@ runs:
         if [ "$ALWAYS_AFFECTED" = 'true' ]; then
           echo 'affected=true' >> "$GITHUB_OUTPUT"
           echo 'always-affected input set: skipping turbo detection.'
+          exit 0
+        fi
+        if [ -z "$(printf '%s' "$TARGET_PACKAGES" | tr -d '[:space:]')" ]; then
+          TARGET_PACKAGES=$(node -e '
+            const { readFileSync } = require("node:fs");
+            const path = require("node:path");
+            const fail = message => {
+              process.stderr.write(`::error::${message}\n`);
+              process.exit(1);
+            };
+            let targets;
+            try {
+              targets = JSON.parse(process.env.TARGETS || "[]");
+            } catch (error) {
+              fail(`targets is not valid JSON: ${error.message}`);
+            }
+            if (!Array.isArray(targets) || targets.length === 0) {
+              fail("target-packages is empty and targets names no appDir to derive it from.");
+            }
+            const names = targets.map((target, index) => {
+              const appDir = target?.appDir;
+              if (typeof appDir !== "string" || appDir.trim() === "") {
+                fail(`targets[${index}] has no appDir to derive a target package from.`);
+              }
+              if (path.resolve(appDir) === process.cwd()) {
+                fail(`targets[${index}].appDir is the repository root, which turbo never reports as affected; set target-packages.`);
+              }
+              const manifest = path.join(appDir, "package.json");
+              let name;
+              try {
+                name = JSON.parse(readFileSync(manifest, "utf8")).name;
+              } catch (error) {
+                fail(`Cannot read ${manifest}: ${error.message}`);
+              }
+              if (typeof name !== "string" || name.trim() === "") {
+                fail(`${manifest} has no name to use as a target package.`);
+              }
+              return name;
+            });
+            process.stdout.write([...new Set(names)].join("\n"));
+          ')
+          printf 'target-packages derived from targets[].appDir:\n%s\n' "$TARGET_PACKAGES"
+        fi
+        if [ -z "$TURBO_SCM_BASE" ]; then
+          echo 'affected=true' >> "$GITHUB_OUTPUT"
+          echo 'No base SHA: reporting affected without turbo detection.'
           exit 0
         fi
         affected=$(npx -y "turbo@${TURBO_VERSION}" ls --affected --output=json | TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
