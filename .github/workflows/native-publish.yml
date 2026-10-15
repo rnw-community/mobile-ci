@@ -125,6 +125,16 @@ on:
                 type: boolean
                 required: false
                 default: true
+            android-lint-gate-gradle-cache:
+                description: >-
+                    Restore and save the Gradle User Home (caches + wrapper) in the
+                    android-lint-gate job via gradle/actions/setup-gradle with the
+                    open-source `basic` cache provider, keyed on the generated Gradle
+                    build files. Written only from default-branch runs; read-only
+                    elsewhere. Set false to run lintVitalRelease without setup-gradle.
+                type: boolean
+                required: false
+                default: true
             required-android-abi:
                 description: >-
                     ABI that must be present in the built .aab (Google Play 64-bit requirement).
@@ -746,6 +756,12 @@ jobs:
                   EAS_BUILD_PROFILE: ${{ inputs.build-profile }}
               run: npx --yes expo prebuild --platform android --no-install --clean
 
+            - name: Restore Gradle User Home cache keyed on the generated build files
+              if: inputs.android-lint-gate-gradle-cache
+              uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+              with:
+                  cache-provider: basic
+
             - name: Run gradlew :app:lintVitalRelease
               working-directory: ${{ inputs.app-dir }}/android
               shell: bash
@@ -795,6 +811,17 @@ jobs:
                     exit 1
                   fi
                   echo "No restricted permissions found in the merged manifest(s)."
+
+            - name: Upload lint-results reports from the failed gate
+              if: failure()
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: android-lint-gate-reports-attempt-${{ github.run_attempt }}
+                  path: |
+                      ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.html
+                      ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.xml
+                  retention-days: 14
+                  if-no-files-found: ignore
 
     android-publish:
         name: Android build and publish
