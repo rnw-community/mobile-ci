@@ -24,7 +24,8 @@ a pinned dependency graph is never silently re-resolved mid-run.
 `-parallel-testing-enabled YES` makes Xcode **clone the destination simulator**
 and run the tests on `Clone 1 of <destination>` — even with a single worker.
 The job then pays for two simulators: the leased one it booted, slimmed and
-verified, and a clone `simslim` never saw.
+verified, and a clone that boots stock unless `slim-workers` slims it (see
+[Slimming the worker clones](#slimming-the-worker-clones)).
 
 Measured on a 4 CPU / 7 GiB VM
 ([#155](https://github.com/rnw-community/mobile-ci/issues/155)): with the clone,
@@ -47,15 +48,60 @@ with:
     parallel-testing-worker-count: '2' # required; each worker is one more simulator
 ```
 
-Raising it boots one **stock** simulator per worker: Xcode's worker clones do
-not inherit the lease's slimming, because simslim keeps disable overrides on
-the host keyed by UDID and `simctl clone` creates a new UDID
-([#161](https://github.com/rnw-community/mobile-ci/issues/161)). simslim's
-answer for worker clones is `simslim watch`, which slims each clone no-reboot as
-it boots; this action does not run it yet, so budget memory for stock workers.
+## Slimming the worker clones
 
-This action does nothing else about slimming: the lease owns the device's
-shape, and `destination-id` is all this action needs to know about it.
+Xcode creates one clone of the destination per worker, in its own `testing`
+device set (`~/Library/Developer/XCTestDevices`), and deletes them when the run
+ends. A clone never inherits the lease's slimming — simslim keeps disable
+overrides on the host keyed by UDID, and a clone gets a new UDID
+([#161](https://github.com/rnw-community/mobile-ci/issues/161)) — so without
+help every worker boots **stock**: ~272 processes and ~2 GB of compressor per
+clone in a 7 GiB guest, multiplying the footprint the lease just removed.
+
+Pass the lease's `slim-profile` and this action runs
+[`simslim watch`](https://github.com/MobAI-App/simslim#slimming-parallel-testing-clones)
+for exactly the length of `test-without-building`:
+
+```yaml
+with:
+    parallel-testing: 'YES'
+    parallel-testing-worker-count: '2'
+    slim-profile: bundled # the lease's own profile
+```
+
+- `simslim watch --profile <slim-profile>` is started detached before the
+  test run, its PID recorded under `RUNNER_TEMP`. Every 3 s it scans the
+  `default` and `testing` device sets and slims each newly booted simulator
+  **no-reboot**, so a worker is slim a few seconds into its life and stays slim
+  for the rest of the run.
+- An `if: always()` step stops it with `SIGINT` (simslim's clean stop) after
+  the run, prints its log, and adds to the job summary how many worker clones
+  it slimmed (the lease itself, already slim, is re-checked and not counted).
+- `simslim` is installed with the same pinned version and SHA-256 as
+  `simulator-lease` (`simslim-version` / `simslim-sha256`), or reused from
+  `PATH` at that exact version.
+- The watch slims *every* simulator that boots in those device sets for this
+  macOS user, not only this run's clones. On the fleet a guest runs one job,
+  so that is only the lease and its clones; on a host that runs several jobs as
+  one user, other jobs' simulators get this profile too. Use the lease's own
+  profile, since the watch re-applies it to the lease.
+
+`slim-workers` decides what happens when the watch cannot do its job:
+
+| `slim-workers` | Watch runs when | Watch fails to start, dies mid-run, or slims no clone in a green run |
+| -------------- | --------------- | --------------------------------------------------------------------- |
+| `auto` (default) | `parallel-testing: YES` and `slim-profile` set | `::warning::`; the tests still run and still decide the job. |
+| `true`         | always; refused (fails) without `YES` and a profile | the job fails. |
+| `false`        | never           | — |
+
+The asymmetry is deliberate: slimming is a **capacity** optimisation, not a
+correctness property. A stock worker runs the same tests with the same result,
+only with more memory, so under `auto` a broken watch must not turn a correct
+test run red. A caller that sized its runner profile on the assumption of slim
+workers sets `true` and gets a fail-closed guarantee instead. A configuration
+error — an unknown `slim-workers` value, or a `slim-profile` that does not exist
+— fails in every mode, and so does a `simslim` download that does not match its
+digest.
 
 ## Screen capture: screenshots, not video
 
@@ -142,7 +188,11 @@ than the number of test identifiers is a configuration error, not a free pass.
 | `xcodebuild-args`    | no       | `''`                        | Extra arguments, e.g. `xcode-cache`'s `xcodebuild-args`. Word-split.      |
 | `working-directory`  | no       | `.`                         | Directory the project/workspace and result bundle resolve against.        |
 | `parallel-testing`   | no       | `NO`                        | Value for `-parallel-testing-enabled`. `YES` boots `Clone 1 of <destination>` and is refused without an explicit `parallel-testing-worker-count`. |
-| `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator; raise it only on a slimmed lease, on a 6x12 profile. Required when `parallel-testing` is `YES`. |
+| `parallel-testing-worker-count` | no | `''`                | `-parallel-testing-worker-count` for the test run. Each worker is a clone of the leased simulator, stock unless `slim-workers` slims it; raise it only on a 6x12 profile. Required when `parallel-testing` is `YES`. |
+| `slim-workers`       | no       | `auto`                      | `auto`, `true` or `false`: run `simslim watch` during the test run so every worker clone is slimmed as it boots. `auto` watches when `parallel-testing` is `YES` and `slim-profile` is set, and only warns on a watch failure; `true` fails the job instead. See [Slimming the worker clones](#slimming-the-worker-clones). |
+| `slim-profile`       | no       | `''`                        | simslim profile for the worker clones; pass the lease's own. `bundled` is this release's `profiles/ci.json`, anything else a repository-relative path. Empty leaves the workers stock. |
+| `simslim-version`    | no       | `0.12.2`                    | Pinned simslim version, installed only when the watch runs; an exact match already on `PATH` is reused. Same as `simulator-lease`. |
+| `simslim-sha256`     | no       | `b47302da…70887`            | SHA-256 of the `simslim-v<version>-macos-arm64.tar.gz` asset; empty refuses to download. Bump with `simslim-version`. |
 | `screen-capture`     | no       | `screenshots`               | `screenshots` or `screenRecording`, written into the `.xctestrun`. Video costs ~1 GB and a core on a 7 GiB guest. |
 | `artifact-name`      | no       | `xcresult-<scheme>-<shard-index>` | Name of the uploaded `.xcresult` artifact.                          |
 | `retention-days`     | no       | `7`                         | Retention for that artifact.                                              |
@@ -154,6 +204,7 @@ than the number of test identifiers is a configuration error, not a free pass.
 | `result-bundle-path` | Path of the `.xcresult` bundle.                 |
 | `tests-total`        | Total number of tests executed.                 |
 | `tests-failed`       | Number of failed tests.                         |
+| `slimmed-workers`    | Worker clones `simslim watch` slimmed; empty when no watch ran. |
 
 ## Example
 

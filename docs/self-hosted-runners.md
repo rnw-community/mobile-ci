@@ -333,7 +333,8 @@ not inside the device, so `xcrun simctl clone` of a slimmed template produces a
 for Xcode's `-parallel-testing-worker-count` clones: each worker boots stock,
 so raising the worker count multiplies the stock footprint. simslim's own
 answer for worker clones is `simslim watch`, which slims each clone no-reboot as
-it boots; the actions do not run it yet. Baking `mobile-ci-template-*` devices
+it boots; `xcodebuild-test` runs it for the length of the test run when given
+`slim-profile` (`swift-ios.yml` passes the lease's). Baking `mobile-ci-template-*` devices
 into the image buys nothing, and `template-strategy: auto` is deprecated
 accordingly; `template-device` still clones a named device that carries
 something other than slimming, and the clone is slimmed before first boot like
@@ -422,7 +423,8 @@ after the encoder is gone.
 clones the destination simulator and runs the tests on
 `Clone 1 of <destination>` even with a single worker. A `simulator-lease` job
 then holds two simulators on a 7 GiB guest — the leased device it booted,
-slimmed and verified, and a clone `simslim` never saw.
+slimmed and verified, and a clone that boots stock unless `xcodebuild-test`'s
+`slim-workers` runs `simslim watch` for it.
 
 Measured on pony-labirinth
 ([#155](https://github.com/rnw-community/mobile-ci/issues/155), 2026-09-22):
