@@ -948,7 +948,7 @@ jobs:
 
             - name: run-maestro-android
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@203c4b3f5dc8066ea2ffb4d662152f31a1ad944d # feat/96-avd-capture-shared-emulator fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@34566573e29d657f9f6aa473bd14d7fb60ea7632 # feat/96-avd-capture-shared-emulator fleet-validation pin
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
