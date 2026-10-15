@@ -85,9 +85,13 @@ base reaches a Mac (iOS) or a Gradle build (Android). The contract is in
 [repack.md](repack.md).
 
 Per [Which pool a job belongs on](#which-pool-a-job-belongs-on), that job
-belongs on the **x86_64 Linux pool**: it re-bundles JavaScript and rewrites an
-archive. `["self-hosted","trf-linux-amd64-4x8"]` is the default
-`repack-runner-labels` value in every caller.
+belongs on the **x86_64 Linux pool without KVM**: it re-bundles JavaScript and
+rewrites an archive. `["self-hosted","trf-linux-amd64-2x4"]` (2 vCPU / 4 GiB, no
+`/dev/kvm`) is the default `repack-runner-labels` / `plan-runner-labels` value in
+every caller, so plan and repack jobs never queue behind Android emulator shards
+on the KVM pool ([#169](https://github.com/rnw-community/mobile-ci/issues/169)).
+Do not point them at a label also served by arm64 guests: Google publishes the
+Android build-tools for x86_64 Linux only.
 
 **What a repack host needs:**
 

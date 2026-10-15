@@ -408,13 +408,16 @@ on:
                 default: ''
             repack-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the plan/repack
-                    jobs of both platforms. The default is the x86_64 Linux pool: a
-                    repack re-bundles JavaScript and rewrites an archive, so it
-                    needs no Xcode, no Gradle and no build slot.
+                    JSON array of self-hosted runner labels for the plan/repack jobs of
+                    both platforms. The default is the 2 vCPU / 4 GiB x86_64 Linux pool
+                    without /dev/kvm (trf-linux-amd64-2x4), so these jobs never queue on
+                    the scarce KVM emulator lane (#169). Keep it an x86_64 pool: Google
+                    publishes Android build-tools for x86_64 Linux only. Move it to the
+                    4x8 pool if bundling the app's JavaScript needs more than about 3
+                    GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             native-build-label:
                 description: >-
                     Pull-request label forcing build-strategy: native for that one

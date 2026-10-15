@@ -123,14 +123,17 @@ on:
                 default: 2G
             plan-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the plan jobs,
-                    which compute each target's native key and ask whether a base
-                    binary is already published for it. The default is the x86_64
-                    Linux pool, so a push that changes no native surface costs
-                    Linux minutes and claims no Mac.
+                    JSON array of self-hosted runner labels for the plan jobs, which
+                    compute each target's native key and ask whether a base binary is
+                    already published for it. The default is the 2 vCPU / 4 GiB x86_64
+                    Linux pool without /dev/kvm (trf-linux-amd64-2x4), so these jobs
+                    never queue on the scarce KVM emulator lane (#169). Keep it an
+                    x86_64 pool: Google publishes Android build-tools for x86_64 Linux
+                    only. Move it to the 4x8 pool if bundling the app's JavaScript needs
+                    more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             plan-timeout-minutes:
                 type: number
                 required: false
