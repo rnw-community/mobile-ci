@@ -940,18 +940,15 @@ full input reference.
 ### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
 
 `native-publish.yml`, `seed-native-cache.yml`, and `native-dev-release.yml`
-all default their `android-runner-labels` input to the same macOS pool as
-iOS (`["self-hosted","macOS","ARM64"]`), not because the Android build needs
-a Mac, but because Google's Android NDK build tooling used by `eas build
---local` is x86_64-only on Linux — there is no `linux-aarch64` NDK to run it
-with, the same gap that rules out the `redroid`-only `linux-aarch64` shape
-for an Android build. An x86_64 Linux KVM host — the same shape
-`android-maestro.yml` and `seed-native-cache.yml` now default to — is
-x86_64-native and can serve these Android EAS build jobs too. Per
-[Which pool a job belongs on](#which-pool-a-job-belongs-on) that is where
-they belong; point `android-runner-labels` at it rather than accepting the
-macOS default, which remains only because no run has yet proven `eas build
---local` on this fleet's x86_64 Linux containers.
+all default their `android-runner-labels` input to the x86_64 Linux pool
+(`["self-hosted","trf-linux-amd64-4x8"]`). An Android `eas build --local`
+needs no Mac, only Google's NDK, which ships for x86_64 Linux and macOS but
+never for linux-aarch64 - the same gap that rules out the `redroid`-only
+`linux-aarch64` shape for an Android build. suuudokuuu's `native-publish`
+Android job has built and published from that pool repeatedly (32-38 min a
+run). The image does not need the NDK or build-tools preinstalled: the Gradle
+build downloads the versions the app pins into the SDK, so the first run on a
+fresh container pays that download.
 
 ## Maintainer note: fleet self-test repo variables
 

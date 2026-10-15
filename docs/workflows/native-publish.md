@@ -29,7 +29,7 @@ aggregates the enabled jobs into a single required check.
 | `enable-ios`                      | no       | `true`                                  | Run the `ios-publish` job. |
 | `enable-android`                  | no       | `false`                                 | Run the `android-lint-gate`/`android-publish` jobs. |
 | `ios-runner-labels`                | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS publish job. |
-| `android-runner-labels`            | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the Android publish job. Defaults to macOS because Google's Android NDK build tooling used by EAS local builds is x86_64-only on Linux. |
+| `android-runner-labels`            | no       | `["self-hosted","trf-linux-amd64-4x8"]`         | JSON array of self-hosted runner labels for the Android publish job. The default is the x86_64 Linux pool (4 vCPU / 8 GiB): the NDK `eas build --local` needs ships for x86_64 Linux and macOS only, never linux-aarch64, and the build needs no Mac. Proven there by suuudokuuu's `native-publish` Android job. |
 | `lint-runner-labels`               | no       | `["ubuntu-latest"]`                       | JSON array of hosted runner labels for the `android-lint-gate` job. |
 | `app-dir`                          | **yes**  | —                                        | App directory containing `app.json`/`eas.json` (and `android`/`ios` once prebuilt). |
 | `node-version`                     | no       | `22`                                     | Node version for `actions/setup-node`. |
