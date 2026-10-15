@@ -2117,7 +2117,7 @@ jobs:
             - name: android-emulator (start)
               id: emulator
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@5f2cb31f2ecf88f6918e0eb3bb2f5800897485b8 # feat/96-avd-capture-shared-emulator fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/android-emulator@25515f405e6b5d152f63e8eff9430fbdfcc7a361 # feat/96-avd-capture-shared-emulator fleet-validation pin
               with:
                   mode: start
                   avd-name: mobile-ci-screenshots
@@ -2183,7 +2183,7 @@ jobs:
 
             - name: android-emulator (stop)
               if: always() && inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@5f2cb31f2ecf88f6918e0eb3bb2f5800897485b8 # feat/96-avd-capture-shared-emulator fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/android-emulator@25515f405e6b5d152f63e8eff9430fbdfcc7a361 # feat/96-avd-capture-shared-emulator fleet-validation pin
               with:
                   mode: stop
 
