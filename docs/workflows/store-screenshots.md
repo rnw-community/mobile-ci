@@ -945,7 +945,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.2.0 # v3.2.0
 ```
 
 - `contents: read` — checkout.

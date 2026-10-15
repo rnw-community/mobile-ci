@@ -379,7 +379,7 @@ runs:
 
     - name: Start emulator
       id: emulator
-      uses: rnw-community/mobile-ci/actions/android-emulator@25515f405e6b5d152f63e8eff9430fbdfcc7a361 # feat/96-avd-capture-shared-emulator fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/android-emulator@v3.2.0 # v3.2.0
       with:
           mode: start
           api-level: ${{ inputs.api-level }}
@@ -538,7 +538,7 @@ runs:
 
     - name: Stop emulator
       if: always()
-      uses: rnw-community/mobile-ci/actions/android-emulator@25515f405e6b5d152f63e8eff9430fbdfcc7a361 # feat/96-avd-capture-shared-emulator fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/android-emulator@v3.2.0 # v3.2.0
       with:
           mode: stop
 
