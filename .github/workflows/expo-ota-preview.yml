@@ -132,7 +132,7 @@ on:
                 value: ${{ jobs.preview.outputs.release-tag }}
 
 concurrency:
-    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}
+    group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}-${{ github.ref }}
     cancel-in-progress: false
 
 permissions:

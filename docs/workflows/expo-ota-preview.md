@@ -78,10 +78,16 @@ itself never publishes outside GitHub Releases.
   `github.repository`, so untrusted fork code never runs on a self-hosted
   runner and the release token is never exposed to it. Run previews from
   branches in this repository.
-- **Previews for one `release-tag-prefix` + `app-dir` are serialized**
-  (concurrency with `cancel-in-progress: false`), so two runs can never race on
-  the shared release-pruning prefix. A new push queues behind the running
-  preview rather than cancelling it.
+- **Previews are serialized per ref, not per app.** The concurrency group is
+  `release-tag-prefix` + `app-dir` + the caller's `github.ref`, with
+  `cancel-in-progress: false`: a new push to the same pull request queues
+  behind its running preview rather than cancelling it, while previews of
+  different pull requests run independently. A group shared by every pull
+  request would let GitHub cancel one PR's pending preview whenever another
+  PR's run queued (it keeps one pending run per group). Runs of different
+  refs do share the release-pruning prefix; pruning tolerates that by never
+  deleting a release updated within the last ten minutes and by treating a
+  release another run already deleted as pruned.
 - Every publish uses a **fresh, per-commit tag**, so nothing is updated in place:
   a release is created once, with all of its assets, and an existing tag is
   skipped. Deep links always point at the release for the commit that produced

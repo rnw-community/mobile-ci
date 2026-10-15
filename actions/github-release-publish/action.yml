@@ -309,11 +309,24 @@ runs:
                 echo "Failed to compute stale releases."
                 exit 1
               fi
+              reread_error="$work/prune-reread.err"
+              release_is_gone() {
+                ! gh api "repos/${REPOSITORY}/releases/tags/$1" --jq '.updated_at' >/dev/null 2>"$reread_error" &&
+                  grep -q 'HTTP 404' "$reread_error"
+              }
               prune_failed=0
               while IFS= read -r stale; do
                 [ -n "$stale" ] || continue
                 [ "$stale" = "$RELEASE_TAG" ] && continue
-                stale_updated="$(gh api "repos/${REPOSITORY}/releases/tags/${stale}" --jq '.updated_at' 2>/dev/null || true)"
+                if ! stale_updated="$(gh api "repos/${REPOSITORY}/releases/tags/${stale}" --jq '.updated_at' 2>"$reread_error")"; then
+                  if grep -q 'HTTP 404' "$reread_error"; then
+                    echo "'$stale' is already gone; a concurrent run sharing the prune prefix pruned it."
+                    continue
+                  fi
+                  echo "Could not re-read release '$stale'; skipping deletion: $(cat "$reread_error")"
+                  prune_failed=1
+                  continue
+                fi
                 if [ -z "$stale_updated" ]; then
                   echo "Could not re-read release '$stale'; skipping deletion."
                   prune_failed=1
@@ -326,6 +339,8 @@ runs:
                 fi
                 if gh release delete "$stale" --yes --cleanup-tag || gh release delete "$stale" --yes; then
                   echo "Pruned '$stale'."
+                elif release_is_gone "$stale"; then
+                  echo "'$stale' is already gone; a concurrent run sharing the prune prefix pruned it."
                 else
                   echo "Could not prune release '$stale'; leaving it."
                   prune_failed=1
