@@ -128,7 +128,7 @@ each job therefore reads back what the binary embeds and publishes it as
   top-level `Info.plist` and `CFBundleVersion` fails the job — it is a broken
   artifact.
 - **Android** reads `versionCode` / `versionName` with `aapt2 dump badging`
-  for an `.apk` (`aapt2` on `PATH`, else the last `build-tools/*/aapt2` under
+  for an `.apk` (`aapt2` on `PATH`, else the numerically newest `build-tools/*/aapt2` under
   `$ANDROID_HOME` or `$ANDROID_SDK_ROOT`) or `bundletool dump manifest` for an
   `.aab` (`bundletool` on `PATH`). A host without the tool gets a
   `::warning::` and the fields are omitted; a tool that is present but cannot

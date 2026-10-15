@@ -132,6 +132,20 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'apk read-back picks the numerically newest build-tools, not the alphabetically last'
+workspace="$(new_workflow_workspace "$WORKFLOW" android-dev-release "$READ_BACK")"
+mkdir -p "$workspace/sdk/build-tools/9.0.0" "$workspace/sdk/build-tools/34.0.0"
+printf '#!/usr/bin/env bash\necho "too old" >&2\nexit 1\n' > "$workspace/sdk/build-tools/9.0.0/aapt2"
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+printf '#!/usr/bin/env bash\n[ "$1 $2" = "dump badging" ] || exit 2\nprintf "%%s\\n" "%s"\n' "$BADGING" > "$workspace/sdk/build-tools/34.0.0/aapt2"
+chmod +x "$workspace/sdk/build-tools/9.0.0/aapt2" "$workspace/sdk/build-tools/34.0.0/aapt2"
+: > "$workspace/runner-temp/app.apk"
+run_step "$workspace" ARTIFACT_PATH="$workspace/runner-temp/app.apk" ANDROID_HOME="$workspace/sdk" ANDROID_SDK_ROOT=''
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals '4821' "$(step_output "$workspace" embedded-build-number)" 'embedded-build-number'; then
+    pass_case
+fi
+
 case_start 'an apk aapt2 cannot read fails closed'
 workspace="$(new_workflow_workspace "$WORKFLOW" android-dev-release "$READ_BACK")"
 stub "$workspace" aapt2 'echo "ERROR: not a valid apk" >&2; exit 1'

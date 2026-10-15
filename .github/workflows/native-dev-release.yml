@@ -978,9 +978,10 @@ jobs:
                       else
                         for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
                           [ -n "$sdk" ] || continue
-                          for candidate in "$sdk"/build-tools/*/aapt2; do
-                            if [ -x "$candidate" ]; then aapt2_bin="$candidate"; fi
-                          done
+                          newest_build_tools="$(for candidate in "$sdk"/build-tools/*/aapt2; do
+                            if [ -x "$candidate" ]; then basename "$(dirname "$candidate")"; fi
+                          done | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+                          if [ -n "$newest_build_tools" ]; then aapt2_bin="$sdk/build-tools/$newest_build_tools/aapt2"; fi
                           if [ -n "$aapt2_bin" ]; then break; fi
                         done
                       fi
