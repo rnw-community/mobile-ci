@@ -208,6 +208,11 @@ on:
                 required: false
                 default: '*.flow.yaml'
             scenes-exclude-pattern:
+                description: >-
+                    Optional find ! -name globs excluding matched scenes by
+                    basename (flows mode only): a comma- and/or
+                    newline-separated list, entries trimmed and empty entries
+                    ignored; a glob containing a comma is not supported.
                 type: string
                 required: false
                 default: ''

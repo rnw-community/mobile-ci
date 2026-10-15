@@ -31,7 +31,12 @@ inputs:
     required: false
     default: '*.flow.yaml'
   flows-exclude-pattern:
-    description: Optional find ! -name glob excluding matched flows by basename.
+    description: >-
+      Optional find ! -name globs excluding matched flows by basename: a
+      comma- and/or newline-separated list of globs, each emitted as its own
+      find ! -name clause (surrounding whitespace trimmed, empty entries
+      ignored; a single glob works as before, a glob containing a comma is not
+      supported).
     required: false
     default: ''
   shard-manifest-dir:
