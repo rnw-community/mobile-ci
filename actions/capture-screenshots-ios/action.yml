@@ -109,8 +109,12 @@ inputs:
     default: '*.flow.yaml'
   scenes-exclude-pattern:
     description: >-
-      Optional find ! -name glob excluding matched scenes by basename.
-      Legacy flow-discovery mode only; ignored in direct mode.
+      Optional find ! -name globs excluding matched scenes by basename:
+      a comma- and/or newline-separated list of globs, each emitted as
+      its own find ! -name clause (surrounding whitespace trimmed, empty
+      entries ignored; a single glob works as before, a glob containing
+      a comma is not supported). Legacy flow-discovery mode only;
+      ignored in direct mode.
     required: false
     default: ''
   simulator-device:
@@ -1068,9 +1072,11 @@ runs:
             done
             name_args+=(')')
             find_cmd+=("${name_args[@]}")
-            if [ -n "$SCENES_EXCLUDE_PATTERN" ]; then
-              find_cmd+=(! -name "$SCENES_EXCLUDE_PATTERN")
-            fi
+            while IFS= read -r exclude_glob; do
+              exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+              exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+              [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+            done < <(printf '%s\n' "$SCENES_EXCLUDE_PATTERN" | tr ',' '\n')
             scenes=()
             while IFS= read -r scene_file; do
               scenes+=("$scene_file")

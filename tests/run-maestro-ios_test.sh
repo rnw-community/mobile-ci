@@ -6,6 +6,8 @@ set -euo pipefail
 
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
+# shellcheck source=tests/lib/exclude-pattern-cases.sh
+. "$REPO_ROOT/tests/lib/exclude-pattern-cases.sh"
 
 ACTION="$REPO_ROOT/actions/run-maestro-ios/action.yml"
 SHARD_STEP='Run Maestro shard'
@@ -160,5 +162,21 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" "simulator-reduce-motion '1' must be 'true' or 'false'" 'error message'; then
     pass_case
 fi
+
+prepare_exclude() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$SHARD_STEP")"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"'
+    write_exclude_fixture_flows "$dir/work/flows"
+    printf '%s\n' "$dir"
+}
+
+invoke_exclude() {
+    invoke_shard "$1" MAESTRO_REUSE_DRIVER=false PRE_RUN_FLOW='' FLOW_RECOVERY_FLOW='' \
+        FLOWS_EXCLUDE_PATTERN="$2"
+}
+
+run_exclude_pattern_cases flow
 
 finish_suite
