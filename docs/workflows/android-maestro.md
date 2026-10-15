@@ -87,9 +87,11 @@ major release.
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
-| `emulator-ram-size`             | no       | `2048`                                             | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default; the shipped default is bounded because the default `runner-labels` pool is a memory-bounded 8 GiB container. Raise it only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
+| `emulator-ram-size`             | no       | `''`                                               | Emulator RAM in MB (`avd` driver only). Empty (the default) derives it from the test runner's cgroup memory limit — 256 MB per GiB of limit, rounded down to a 256 MB step and clamped to 1536–4096 — so the default `runner-labels` pool (a memory-bounded 8 GiB container) gets 2048, the value this input was hand-set to before; with no memory limit detected the hardware profile's default applies. The detected limit and the resolved value are in the shard's step summary. Set a value only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. See [Emulator budget and host slots](#emulator-budget-and-host-slots). |
 | `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
-| `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty keeps the profile default. |
+| `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty derives half the test runner's cgroup CPU quota, rounded down and clamped to 2–4 (2 on the default 4 vCPU pool); with no quota detected the profile default applies. |
+| `emulator-slots-dir`            | no       | `''`                                               | Host directory of fleet-provisioned `slot-*` files capping concurrent emulators on the test runner's host across every job and repository (`avd` driver only). Each shard holds an exclusive `flock` on one slot from before boot until shutdown. Empty takes no slot. Set it only once the fleet bind-mounts the directory into every runner container: a missing directory, no `slot-*` files or an unwritable slot fails the shard. See [Emulator budget and host slots](#emulator-budget-and-host-slots). |
+| `emulator-slot-timeout-minutes` | no       | `60`                                               | Minutes a shard waits for a free slot in `emulator-slots-dir` before failing; busy slots are logged every 60 s. The wait counts against `test-timeout-minutes`. |
 | `redroid-image`                 | no       | `redroid/redroid:15.0.0_64only-latest`             | Redroid image tag, used on a `redroid-prewarm-manifest-path` miss. Verified against a `6.17` host kernel — older `13.x` tags are known to never finish boot on that kernel, and `14.x` images hard-lock the guest kernel version. |
 | `redroid-memory`                | no       | `3g`                                               | Container memory limit (`docker --memory` / `--memory-swap`). |
 | `redroid-cpus`                  | no       | `2`                                                 | Container CPU limit (`docker --cpus`). |
@@ -126,6 +128,44 @@ or an Expo/EAS token. The `android-keystore-*` inputs default to the published
 React Native **debug** keystore constants, which are not secrets; a release key
 belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
 **token permission** the caller grants; see [Permissions](#permissions).
+
+## Emulator budget and host slots
+
+On the `avd` driver each test shard sizes its emulator from **its own
+container**, not the host: `run-maestro-android` reads the cgroup memory limit
+and CPU quota (cgroup v2, then v1) and, for an empty `emulator-ram-size` /
+`emulator-cores`, derives 256 MB of guest RAM per GiB of limit (clamped
+1536–4096) and half the CPU quota (clamped 2–4). On the default 4 vCPU / 8 GiB
+pool that is 2048 MB and 2 cores — the same 2048 this workflow used to
+hard-code — so a caller that set `emulator-ram-size: '2048'` only to fit that
+pool can drop the override. An explicit value always wins. Each shard's step
+summary shows the detected limits and the resolved values.
+
+A host can still run more emulators than it has memory for when several
+runner containers on it each boot one. `emulator-slots-dir` caps that host-wide:
+the fleet provisions one `slot-*` file per emulator the host may run (see
+[self-hosted-runners.md](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver)),
+and each shard holds a `flock` on one from before boot until shutdown, waiting
+up to `emulator-slot-timeout-minutes` for a free one. Unlike a workflow
+`concurrency` group, a waiting shard is never cancelled and the cap spans every
+repository on the host. Leave it empty until the fleet provisions the
+directory: set against a host without it, every shard fails closed.
+
+The shutdown step kills only the emulator processes this job started
+(identified by its `RUNNER_TRACKING_ID`), so a failed or cancelled shard cannot
+leave a qemu holding the host's memory, and a neighbouring job's emulator is
+never touched.
+
+The `plan`/repack job needs neither KVM nor an emulator — only Node, a JDK and
+the Android build-tools. It runs on `repack-runner-labels`, which defaults to
+the same KVM pool as the build; where the fleet has a smaller non-KVM x86_64
+Linux pool with that toolchain, point it there to keep it off the emulator
+lane:
+
+```yaml
+with:
+    repack-runner-labels: '["self-hosted","linux-portable-2x4"]'
+```
 
 ## Build strategy
 

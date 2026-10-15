@@ -792,10 +792,40 @@ Host requirements:
   into a run whose earlier flows passed. Measured on a 4 vCPU / 8 GiB
   container: the AVD alone sits near 4.2 GiB, and the emulator plus Maestro's
   JVM plus the runner's own Node processes reached the 8 GiB ceiling partway
-  through a shard. Either give the profile headroom above the AVD's footprint
-  or set `emulator-ram-size` (and `emulator-heap-size`) so the guest cannot
-  grow into the limit. `redroid-memory` is the equivalent knob on the other
-  driver.
+  through a shard. `run-maestro-android` therefore sizes the guest from the
+  container's own cgroup limit when `emulator-ram-size` is empty (the
+  default): 256 MB of guest RAM per GiB of `memory.max`, clamped to
+  1536–4096, and half the `cpu.max` quota as cores, clamped to 2–4 — 2048 MB
+  and 2 cores on a 4 vCPU / 8 GiB container. It reads cgroup v2 first, then
+  cgroup v1, and keeps the profile default when neither reports a limit, so
+  give the runner container a real memory limit rather than relying on the
+  host's. Set `emulator-ram-size` (and `emulator-heap-size`) explicitly only
+  with headroom measured on the pool. `redroid-memory` is the equivalent knob
+  on the other driver.
+- **Cap emulators per host with a slot directory (optional).** Per-container
+  sizing cannot stop a host from admitting more emulator jobs than its RAM
+  holds. Provision one file per emulator the host may run, on a **local**
+  filesystem (`flock` over NFS is not reliable), and bind-mount the directory
+  read-write at the same path into every runner container on the host:
+
+  ```bash
+  # once per host; N = emulators this host can hold (e.g. host RAM / 8 GiB)
+  install -d -m 0777 /var/lib/mobile-ci/emulator-slots
+  for i in $(seq 0 $((N - 1))); do
+    install -m 0666 /dev/null "/var/lib/mobile-ci/emulator-slots/slot-$i"
+  done
+  # runner container: -v /var/lib/mobile-ci/emulator-slots:/var/lib/mobile-ci/emulator-slots:rw
+  ```
+
+  Then pass `emulator-slots-dir: /var/lib/mobile-ci/emulator-slots` to
+  `android-maestro.yml`. Each test shard holds an exclusive `flock` on one
+  slot from before the emulator boots until its shutdown step, so the number
+  of `slot-*` files is the host's emulator cap across every job and
+  repository. The lock lives in a detached `flock` holder process; if the job
+  is killed, the kernel releases the lock when that process dies — through the
+  shutdown step, the runner's orphan-process cleanup, or the container's
+  teardown. To change the cap, add or remove `slot-*` files (remove only idle
+  ones). Runner images need `flock` and `setsid` (util-linux) on `PATH`.
 - **Gate on `emulator -accel-check` before trusting the pool.** A host
   missing `/dev/kvm` access does not necessarily refuse to boot an AVD — it
   can silently fall back to software emulation, which eventually boots but

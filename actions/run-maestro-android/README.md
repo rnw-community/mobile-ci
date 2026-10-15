@@ -97,9 +97,74 @@ platform:
 | `target`             | no       | `google_apis` | Android emulator system image target.                                |
 | `arch`               | no       | `x86_64`      | Android emulator system image architecture.                          |
 | `profile`            | no       | `pixel_6`     | Android emulator hardware profile.                                    |
+| `ram-size`           | no       | `''`          | Emulator RAM in MB, passed through to `android-emulator-runner`. Empty derives it from the runner's cgroup memory limit — see [Emulator budget](#emulator-budget); with no limit detected the hardware profile's default applies. An explicit value always wins. |
+| `heap-size`          | no       | `''`          | Android VM heap size in MB for the emulated device. Empty keeps the profile default. |
+| `cores`              | no       | `''`          | Emulator CPU cores. Empty derives half the runner's cgroup CPU quota — see [Emulator budget](#emulator-budget); with no quota detected the profile default applies. An explicit value always wins. |
+| `emulator-slots-dir` | no       | `''`          | Host directory of fleet-provisioned `slot-*` files capping concurrent emulators on the host — see [Host emulator slots](#host-emulator-slots). Empty takes no slot. A missing directory, no `slot-*` files, an unwritable slot, or no `flock`/`setsid` on `PATH` fails the job. |
+| `emulator-slot-timeout-minutes` | no | `60`      | Minutes to wait for a free slot before failing the job; busy slots are logged every 60 s. `0` tries each slot once. Ignored when `emulator-slots-dir` is empty. |
 | `artifacts-dir`      | yes      | —             | Directory final-state capture (screenshot, logcat) is written to.    |
 | `artifact-name`      | yes      | —             | Uploaded artifact name.                                               |
 | `retention-days`     | no       | `7`           | Uploaded artifact retention in days.                                   |
+
+## Outputs
+
+| Name            | Description |
+| --------------- | ----------- |
+| `ram-size`      | Emulator RAM in MB the emulator was booted with: the input, else the derived value, else empty (profile default). |
+| `cores`         | Emulator CPU cores the emulator was booted with: the input, else the derived value, else empty (profile default). |
+| `emulator-slot` | Basename of the slot file held, e.g. `slot-1`. Empty when `emulator-slots-dir` is empty. |
+
+## Emulator budget
+
+Inside a container `/proc/meminfo` and `nproc` report the host, and
+`android-emulator-runner` never reads host RAM at all, so an unset `ram-size`
+used to leave the guest at the hardware profile's default regardless of the
+container it ran in. Before booting, the action reads the runner's own cgroup
+limits — cgroup v2 `memory.max` and `cpu.max`, falling back to cgroup v1
+`memory/memory.limit_in_bytes` and `cpu/cpu.cfs_quota_us` /
+`cpu.cfs_period_us` — and, only for an input left empty, derives:
+
+- **`ram-size`** = 256 MB per GiB of memory limit, rounded down to a 256 MB
+  step, clamped to 1536–4096. An 8 GiB container gets 2048: the bound this
+  pool has always run with, which leaves roughly 4 GiB beside the ~4.2 GiB
+  emulator RSS for Maestro's JVM, adb and the runner. Below 6 GiB the 1536
+  floor still applies and the step warns.
+- **`cores`** = half the CPU quota, rounded down, clamped to 2–4, leaving the
+  other half to Maestro, adb and the runner (the emulator's software GPU
+  renders on host CPU too). A 4 vCPU container gets 2.
+
+A limit of `max` (or the cgroup v1 unbounded sentinels) leaves the input
+empty, i.e. today's profile default. An unparseable limit file fails the job
+rather than guessing. The detected limits and the resolved values are written
+to the step summary and exposed as the `ram-size`/`cores` outputs.
+
+## Host emulator slots
+
+Several runner containers on one host can each boot an emulator, and nothing
+inside a single job can see the others. `emulator-slots-dir` names a host
+directory the fleet pre-creates with one `slot-*` file per emulator the host
+may run at once (the number of files **is** the cap, and the fleet owns it).
+Before booting, the action takes an exclusive `flock` on a free slot through a
+detached holder process (`setsid flock … sleep`), waits up to
+`emulator-slot-timeout-minutes` while all are busy, and fails closed when none
+frees up. The shutdown step releases it. If the job dies first, the lock still
+goes away: the kernel drops a `flock` when its last descriptor closes, and the
+holder carries the job's `RUNNER_TRACKING_ID`, so the runner's orphan cleanup
+or the container's teardown kills it. The directory must be on a local
+filesystem (never NFS) and bind-mounted read-write into every runner
+container on the host; see
+[self-hosted-runners.md](../../docs/self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver).
+
+## Shutdown
+
+The always-run shutdown step sends `adb emu kill`, waits up to 15 s for this
+job's emulator processes (`emulator`, `qemu-system-*`, `netsimd`,
+`crashpad_handler`) to exit, then `SIGKILL`s the survivors, logging each one.
+A process counts as this job's only when its environment carries this job's
+`RUNNER_TRACKING_ID` — or, where that is unset, the same `GITHUB_RUN_ID`,
+`GITHUB_RUN_ATTEMPT`, `GITHUB_JOB` and `RUNNER_NAME` — so another job's
+emulator on a shared host is never touched. It stops the adb server only when
+this job started it, then releases the emulator slot.
 
 A per-flow timing table (flow, duration, status, attempts) is appended to
 `$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
