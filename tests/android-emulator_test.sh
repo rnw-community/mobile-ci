@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# run-maestro-android on a shared x86_64 KVM host (issue #169): the emulator is
-# sized from the container's cgroup limits rather than the host's, a fleet-owned
-# directory of slot files caps how many emulators a host boots at once, and the
-# teardown kills only the emulator processes this job started.
+# android-emulator, the one AVD implementation run-maestro-android and
+# store-screenshots' avd capture leg share (issues #169, #96). On a shared
+# x86_64 KVM host the emulator is sized from the container's cgroup limits
+# rather than the host's, a fleet-owned directory of slot files caps how many
+# emulators a host boots at once, the boot fails closed without hardware
+# acceleration instead of crawling under software emulation, and the teardown
+# kills only the emulator processes this job started.
 set -euo pipefail
 
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
-ACTION="$REPO_ROOT/actions/run-maestro-android/action.yml"
+ACTION="$REPO_ROOT/actions/android-emulator/action.yml"
 WORKFLOW="$REPO_ROOT/.github/workflows/android-maestro.yml"
+VALIDATE_STEP='Validate emulator inputs'
+ACCEL_STEP='Check hardware acceleration'
 SIZE_STEP='Size emulator from container limits'
+BOOT_STEP='Boot emulator'
 SLOT_STEP='Acquire host emulator slot'
 TEARDOWN_STEP='Shutdown emulator'
 
@@ -322,6 +328,7 @@ teardown_step() {
     shift
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
     stub "$dir" adb 'printf "%s\n" "$*" >> "$ADB_CALLS"'
+    : > "$dir/adb-calls"
     run_step "$dir" ADB_CALLS="$dir/adb-calls" EMULATOR_EXIT_GRACE_SECONDS=1 \
         GITHUB_RUN_ID=42 GITHUB_RUN_ATTEMPT=1 GITHUB_JOB=test RUNNER_NAME=runner-a "$@"
 }
@@ -331,6 +338,7 @@ workspace="$(new_workspace "$ACTION" "$SLOT_STEP")"
 new_slots_dir "$workspace" 1
 run_step "$workspace" EMULATOR_SLOTS_DIR="$workspace/slots" EMULATOR_SLOT_TIMEOUT_MINUTES=1
 extract_step_script "$ACTION" "$TEARDOWN_STEP" > "$workspace/step.sh"
+printf 'emulator-5554\t0\n' > "$workspace/runner-temp/mobile-ci-emulator"
 spawn_fake /sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64 RUNNER_TRACKING_ID=github_ours
 own_qemu=$FAKE_PID
 spawn_fake /sdk/emulator/emulator RUNNER_TRACKING_ID=github_ours
@@ -350,7 +358,8 @@ if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
     && assert_equals alive "$(process_alive "$own_adb_client" && echo alive || echo dead)" 'own non-emulator process' \
     && assert_equals alive "$(process_alive "$their_qemu" && echo alive || echo dead)" "another job's qemu" \
     && assert_equals alive "$(process_alive "$anonymous_qemu" && echo alive || echo dead)" 'an unattributable qemu' \
-    && assert_contains "$(cat "$workspace/adb-calls")" 'emu kill' 'adb emu kill' \
+    && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 emu kill' 'adb emu kill on the booted serial' \
+    && assert_equals false "$([ -e "$workspace/runner-temp/mobile-ci-emulator" ] && echo true || echo false)" 'emulator record removed' \
     && assert_contains "$(cat "$workspace/log")" "$own_qemu" 'killed pid logged' \
     && assert_equals true "$(slot_is_free "$workspace/slots/slot-0" && echo true || echo false)" 'slot released'; then
     pass_case
@@ -370,7 +379,8 @@ teardown_step "$workspace" RUNNER_TRACKING_ID=''
 if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
     && assert_equals dead "$(process_alive "$own_qemu" && echo alive || echo dead)" 'own qemu' \
     && assert_equals alive "$(process_alive "$sibling_qemu" && echo alive || echo dead)" "a sibling matrix shard's qemu" \
-    && assert_not_contains "$(cat "$workspace/adb-calls")" 'kill-server' 'no own adb server, no kill-server'; then
+    && assert_not_contains "$(cat "$workspace/adb-calls")" 'kill-server' 'no own adb server, no kill-server' \
+    && assert_not_contains "$(cat "$workspace/adb-calls")" 'emu kill' 'no booted serial recorded, no blind adb emu kill'; then
     pass_case
 fi
 
@@ -388,6 +398,284 @@ if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
     && assert_contains "$(cat "$workspace/adb-calls")" 'kill-server' 'adb kill-server' \
     && assert_equals dead "$(process_alive "$own_adb_server" && echo alive || echo dead)" 'own adb server' \
     && assert_equals alive "$(process_alive "$their_adb_server" && echo alive || echo dead)" "another job's adb server"; then
+    pass_case
+fi
+
+# validate [VAR=value ...]: sets `workspace`; deliberately not a command
+# substitution so STEP_STATUS survives.
+validate() {
+    workspace="$(new_workspace "$ACTION" "$VALIDATE_STEP")"
+    run_step "$workspace" MODE=start API_LEVEL=34 TARGET=google_apis ARCH=x86_64 PROFILE=pixel_6 \
+        AVD_NAME=test PORT=5554 BOOT_TIMEOUT_SECONDS=600 WIPE_DATA=false RAM_SIZE='' HEAP_SIZE='' CORES='' "$@"
+}
+
+case_start 'the default start inputs validate'
+validate
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))"; then
+    pass_case
+fi
+
+case_start 'stop validates nothing but the mode, so a teardown never fails on a start-only input'
+validate MODE=stop PORT=bogus API_LEVEL=''
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))"; then
+    pass_case
+fi
+
+case_start 'an unknown mode fails closed'
+validate MODE=restart
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "mode 'restart'" 'error message'; then
+    pass_case
+fi
+
+case_start 'an odd or out-of-range emulator port fails closed'
+validate PORT=5555
+odd_status=$STEP_STATUS
+validate PORT=6000
+if assert_equals 1 "$odd_status" 'odd port status' \
+    && assert_equals 1 "$STEP_STATUS" 'out-of-range port status' \
+    && assert_contains "$(cat "$workspace/log")" "port '6000'" 'error message'; then
+    pass_case
+fi
+
+case_start 'a system-image component that would split the sdkmanager package list fails closed'
+validate TARGET='google_apis platform-tools'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'target' 'error names the input'; then
+    pass_case
+fi
+
+case_start 'a ram-size carrying a newline cannot inject AVD config lines'
+validate RAM_SIZE=$'2048\nhw.gpu.enabled=no'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'ram-size' 'error names the input'; then
+    pass_case
+fi
+
+case_start 'a non-boolean wipe-data fails closed'
+validate WIPE_DATA=yes
+if assert_equals 1 "$STEP_STATUS" 'step status'; then
+    pass_case
+fi
+
+# fake_sdk <workspace>: an ANDROID_HOME whose emulator binary answers
+# -accel-check from ACCEL_OUTPUT/ACCEL_EXIT and otherwise records its argv and
+# stays up like a booted emulator (or exits at once with EMULATOR_EXITS=1).
+fake_sdk() {
+    local dir="$1"
+    mkdir -p "$dir/sdk/emulator"
+    cat > "$dir/sdk/emulator/emulator" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = -accel-check ]; then
+  printf '%b' "$ACCEL_OUTPUT"
+  exit "${ACCEL_EXIT:-0}"
+fi
+printf '%s\n' "$*" > "$EMULATOR_ARGS"
+echo 'emulator: fake boot log line'
+[ "${EMULATOR_EXITS:-0}" = 1 ] && exit 3
+exec sleep 300
+STUB
+    chmod +x "$dir/sdk/emulator/emulator"
+}
+
+accel() {
+    workspace="$(new_workspace "$ACTION" "$ACCEL_STEP")"
+    fake_sdk "$workspace"
+    run_step "$workspace" ANDROID_HOME="$workspace/sdk" ANDROID_SDK_ROOT='' "$@"
+}
+
+KVM_OK='accel:\n0\nKVM (version 12) is installed and usable.\naccel\n'
+KVM_MISSING='accel:\n9\n/dev/kvm is not found: VT disabled in BIOS or KVM kernel module not loaded\naccel\n'
+
+case_start 'accel-check confirming KVM passes the preflight'
+accel ACCEL_OUTPUT="$KVM_OK" ACCEL_EXIT=0
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_contains "$(cat "$workspace/summary")" 'KVM (version 12) is installed and usable.' 'accelerator in summary'; then
+    pass_case
+fi
+
+case_start 'accel-check reporting no acceleration fails closed instead of booting under software emulation'
+accel ACCEL_OUTPUT="$KVM_MISSING" ACCEL_EXIT=9
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" '/dev/kvm is not found' 'accel-check reason surfaced'; then
+    pass_case
+fi
+
+case_start 'a non-zero accel status fails closed even when the emulator exits 0'
+accel ACCEL_OUTPUT="$KVM_MISSING" ACCEL_EXIT=0
+if assert_equals 1 "$STEP_STATUS" 'step status'; then
+    pass_case
+fi
+
+case_start 'accel-check output with no status line fails closed'
+accel ACCEL_OUTPUT='something unexpected\n' ACCEL_EXIT=0
+if assert_equals 1 "$STEP_STATUS" 'step status'; then
+    pass_case
+fi
+
+case_start 'an SDK with no emulator binary fails the preflight closed'
+workspace="$(new_workspace "$ACTION" "$ACCEL_STEP")"
+mkdir -p "$workspace/sdk"
+run_step "$workspace" ANDROID_HOME="$workspace/sdk" ANDROID_SDK_ROOT=''
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'emulator' 'error message'; then
+    pass_case
+fi
+
+# boot <workspace> [VAR=value ...]: runs the boot step against fake avdmanager,
+# adb and emulator binaries. ADB_BOOTED=0 keeps getprop sys.boot_completed
+# from ever reporting a booted device.
+boot() {
+    local dir="$1"
+    shift
+    fake_sdk "$dir"
+    mkdir -p "$dir/home"
+    # shellcheck disable=SC2016 # expanded when the stub runs.
+    stub "$dir" avdmanager 'printf "%s\n" "$*" >> "$AVDMANAGER_CALLS"
+name=""; package=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -n) name="$2"; shift ;;
+    --package) package="$2"; shift ;;
+  esac
+  shift
+done
+mkdir -p "$ANDROID_AVD_HOME/$name.avd"
+sysdir="$(printf "%s" "$package" | tr ";" "/")"
+printf "image.sysdir.1=%s/\nhw.ramSize=1536\n" "$sysdir" > "$ANDROID_AVD_HOME/$name.avd/config.ini"'
+    # shellcheck disable=SC2016 # expanded when the stub runs.
+    stub "$dir" adb 'printf "%s\n" "$*" >> "$ADB_CALLS"
+case "$*" in
+  devices) printf "List of devices attached\n%s" "${ADB_DEVICES:-}" ;;
+  *"getprop sys.boot_completed"*) [ "${ADB_BOOTED:-1}" = 1 ] && echo 1 || echo ;;
+esac
+exit 0'
+    : > "$dir/adb-calls"
+    [ -e "$dir/avdmanager-calls" ] || : > "$dir/avdmanager-calls"
+    run_step "$dir" ANDROID_HOME="$dir/sdk" ANDROID_SDK_ROOT='' HOME="$dir/home" ANDROID_AVD_HOME='' \
+        ADB_CALLS="$dir/adb-calls" AVDMANAGER_CALLS="$dir/avdmanager-calls" EMULATOR_ARGS="$dir/emulator-args" \
+        API_LEVEL=34 TARGET=google_apis ARCH=x86_64 PROFILE=pixel_6 AVD_NAME=test PORT=5554 \
+        BOOT_TIMEOUT_SECONDS=30 WIPE_DATA=false RAM_SIZE=2048 HEAP_SIZE='' CORES=2 \
+        EMULATOR_OPTIONS='-no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none' \
+        "$@"
+}
+
+stop_booted() {
+    local dir="$1" pid
+    [ -f "$dir/runner-temp/mobile-ci-emulator" ] || return 0
+    pid="$(cut -f2 "$dir/runner-temp/mobile-ci-emulator")"
+    [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
+    return 0
+}
+
+case_start 'boot creates the AVD, applies the budget, boots detached and reports the serial'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace"
+config="$workspace/home/.android/avd/test.avd/config.ini"
+emulator_pid="$(cut -f2 "$workspace/runner-temp/mobile-ci-emulator" 2>/dev/null || true)"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals emulator-5554 "$(step_output "$workspace" android-serial)" 'android-serial' \
+    && assert_contains "$(cat "$workspace/avdmanager-calls")" "--package system-images;android-34;google_apis;x86_64" 'avdmanager package' \
+    && assert_contains "$(cat "$workspace/avdmanager-calls")" '--device pixel_6' 'avdmanager profile' \
+    && assert_equals 1 "$(grep -c '^hw.ramSize=' "$config")" 'one hw.ramSize line' \
+    && assert_contains "$(cat "$config")" 'hw.ramSize=2048' 'hw.ramSize' \
+    && assert_contains "$(cat "$config")" 'hw.cpu.ncore=2' 'hw.cpu.ncore' \
+    && assert_contains "$(cat "$workspace/emulator-args")" '-port 5554 -avd test -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none' 'emulator argv' \
+    && assert_not_contains "$(cat "$workspace/emulator-args")" '-wipe-data' 'no wipe by default' \
+    && assert_not_contains "$(cat "$workspace/emulator-args")" '-accel off' 'never software emulation' \
+    && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 shell settings put global window_animation_scale 0.0' 'window animations off' \
+    && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 shell settings put global transition_animation_scale 0.0' 'transition animations off' \
+    && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 shell settings put global animator_duration_scale 0.0' 'animator off' \
+    && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 shell settings put secure spell_checker_enabled 0' 'spellchecker off' \
+    && assert_equals alive "$([ -n "$emulator_pid" ] && process_alive "$emulator_pid" && echo alive || echo dead)" 'emulator outlives the step' \
+    && assert_contains "$(cat "$config")" 'image.sysdir.1=system-images/android-34/google_apis/x86_64/' 'AVD image'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
+case_start 'a reused AVD keeps one value per key and is not recreated'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace"
+stop_booted "$workspace"
+: > "$workspace/outputs"
+boot "$workspace" RAM_SIZE=3072 CORES=4
+config="$workspace/home/.android/avd/test.avd/config.ini"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals 1 "$(grep -c 'create avd' "$workspace/avdmanager-calls")" 'avdmanager calls' \
+    && assert_equals 'hw.ramSize=3072' "$(grep '^hw.ramSize=' "$config")" 'hw.ramSize' \
+    && assert_equals 'hw.cpu.ncore=4' "$(grep '^hw.cpu.ncore=' "$config")" 'hw.cpu.ncore'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
+case_start 'an AVD built for another system image is recreated'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace"
+stop_booted "$workspace"
+boot "$workspace" API_LEVEL=35
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals 2 "$(grep -c 'create avd' "$workspace/avdmanager-calls")" 'avdmanager calls' \
+    && assert_contains "$(cat "$workspace/home/.android/avd/test.avd/config.ini")" 'android-35' 'AVD image'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
+case_start 'wipe-data true boots from a wiped userdata partition'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace" WIPE_DATA=true
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_contains "$(cat "$workspace/emulator-args")" '-wipe-data' 'emulator argv'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
+case_start 'an emulator that exits before boot fails closed with its log'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace" EMULATOR_EXITS=1 ADB_BOOTED=0
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'fake boot log line' 'emulator log surfaced' \
+    && assert_equals '' "$(step_output "$workspace" android-serial)" 'android-serial'; then
+    pass_case
+fi
+
+case_start 'a device that never reports sys.boot_completed fails closed at the boot timeout'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace" ADB_BOOTED=0 BOOT_TIMEOUT_SECONDS=3
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'sys.boot_completed' 'error message' \
+    && assert_equals true "$([ -f "$workspace/runner-temp/mobile-ci-emulator" ] && echo true || echo false)" 'record kept for the stop step'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
+case_start 'a serial already attached to adb fails closed rather than driving another job device'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+boot "$workspace" ADB_DEVICES=$'emulator-5554\tdevice\n'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'emulator-5554' 'error names the serial' \
+    && assert_equals false "$([ -e "$workspace/emulator-args" ] && echo true || echo false)" 'no emulator launched'; then
+    pass_case
+fi
+
+# action_steps <action.yml>: "<name>\t<if>\t<uses>" per step, in order.
+action_steps() {
+    ACTION_YML="$1" python3 -c '
+import os, yaml
+action = yaml.safe_load(open(os.environ["ACTION_YML"], encoding="utf-8"))
+for step in action["runs"]["steps"]:
+    print("%s\t%s\t%s" % (step.get("name", ""), step.get("if", ""), step.get("uses", "")))
+'
+}
+
+case_start 'start runs validate, SDK, acceleration, sizing, slot, boot in order; stop runs only the teardown, always'
+steps="$(action_steps "$ACTION" 2>/dev/null || true)"
+order="$(printf '%s\n' "$steps" | cut -f1 | tr '\n' '|')"
+start_steps="$(printf '%s\n' "$steps" | awk -F'\t' '$2 ~ /inputs.mode == .start./ { print $1 }' | tr '\n' '|')"
+stop_steps="$(printf '%s\n' "$steps" | awk -F'\t' '$2 ~ /inputs.mode == .stop./ { print $1 "\t" $2 }')"
+if assert_equals "$VALIDATE_STEP|Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|$TEARDOWN_STEP|" "$order" 'step order' \
+    && assert_equals "Set up Android SDK|$ACCEL_STEP|$SIZE_STEP|$SLOT_STEP|$BOOT_STEP|" "$start_steps" 'start-only steps' \
+    && assert_contains "$stop_steps" "$TEARDOWN_STEP" 'teardown is stop-only' \
+    && assert_contains "$stop_steps" 'always()' 'teardown runs even after a failed step'; then
     pass_case
 fi
 

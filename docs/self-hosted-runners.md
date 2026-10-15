@@ -51,7 +51,7 @@ twice: once in its own runtime and once in the iOS build it displaced.
 | Job | Pool | Why |
 | --- | --- | --- |
 | `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
-| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro on the `avd` driver | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
+| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro and `store-screenshots.yml`'s Android capture on the `avd` driver (`android-emulator`) | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
 | Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
 | `expo-base-plan.yml`'s plan/repack job (`expo-native-key`, `expo-base-binary`, `expo-repack`) | x86_64 Linux | re-bundles JavaScript and rewrites an archive: no Xcode, no simulator, no emulator, no KVM — see [The Linux repack pool](#the-linux-repack-pool-expo-e2e-and-screenshot-runs) |
 | Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
@@ -63,8 +63,13 @@ documented under [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-dr
 — and `android-maestro.yml`'s `android-driver` defaults to `avd` to match,
 since `redroid` cannot run on that shape. The one deliberate exception is
 `store-screenshots.yml`'s `android-capture-runner-labels`, which stays on a
-Redroid-capable Linux pool: `capture-screenshots-android` drives a
-`redroid-container` and has no `avd` code path at all.
+Redroid-capable Linux pool because its `android-driver` still defaults to
+`redroid`. The capture leg has an `avd` driver too — the same
+`android-emulator` action the Maestro shards boot with — so passing
+`android-driver: avd` with `android-capture-runner-labels:
+'["self-hosted","trf-linux-amd64-4x8"]'` moves it onto the KVM pool. Both
+defaults flip only after an `avd` capture run has been validated on the
+fleet.
 
 Label names are a property of your fleet, not of this repo. The defaults name
 the labels of the fleet this repo is developed against; on another fleet,
@@ -448,8 +453,9 @@ with:
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,
-or `cmake`, so `reactivecircus/android-emulator-runner` (`run-maestro-android`,
-the `avd` driver, `android-maestro.yml`'s default) is structurally unusable on
+or `cmake`, so `android-emulator` (`run-maestro-android` and the
+screenshot capture's `avd` driver; `android-maestro.yml`'s default) is
+structurally unusable on
 `linux-aarch64` self-hosted runners regardless of tuning.
 `run-maestro-android-redroid` (the `redroid` driver, selected explicitly
 together with `runner-labels` pointing at this shape) runs Android as a privileged Docker
@@ -762,8 +768,10 @@ Options for a consumer app that depends on GMS at runtime:
 ## Linux x86_64 KVM hosts (Android, `avd` driver)
 
 The Redroid shape above is not the only supported Android host shape.
-`android-maestro.yml`'s `avd` driver (`reactivecircus/android-emulator-runner`,
-`run-maestro-android`) is fully supported too, on an x86_64 Linux host with
+The `avd` driver — `android-maestro.yml`'s default (`run-maestro-android`) and
+`store-screenshots.yml`'s `android-driver: avd` capture leg, both booting the
+emulator through the `android-emulator` action — is fully supported too, on
+an x86_64 Linux host with
 KVM — no `binder_linux`, no privileged container, no Docker daemon at all.
 This is the shape for a rootless-container runner pool (e.g. rootless
 Podman-backed runners) where `--privileged` and `sudo modprobe` are off the
@@ -779,8 +787,10 @@ Host requirements:
 - **Android SDK with `emulator` plus a `google_apis` x86_64 system image**
   matching `android-maestro.yml`'s `emulator-api-level`/`emulator-target`/
   `emulator-arch` inputs (e.g. `android-34`, `google_apis`, `x86_64`).
-  `reactivecircus/android-emulator-runner` installs and caches these itself
-  via the Android SDK manager. No `binder_linux`, no privileged containers,
+  `android-emulator` installs these itself through `android-actions/setup-android`
+  into the SDK at `ANDROID_SDK_ROOT`/`ANDROID_HOME` (or `~/.android/sdk` when
+  neither is set), so a persistent SDK there skips the download. It runs
+  `sdkmanager`, so the runner needs a JDK on `PATH`. No `binder_linux`, no privileged containers,
   and no Docker daemon are needed on this shape at all.
 - **Give the emulator room inside the runner's memory limit, and bound it
   explicitly.** On a container-backed pool the cgroup limit is the ceiling
@@ -818,7 +828,9 @@ Host requirements:
   ```
 
   Then pass `emulator-slots-dir: /var/lib/mobile-ci/emulator-slots` to
-  `android-maestro.yml`. Each test shard holds an exclusive `flock` on one
+  `android-maestro.yml` (and to `store-screenshots.yml` when its capture leg
+  runs `android-driver: avd`, so screenshot emulators count against the same
+  cap). Each test shard holds an exclusive `flock` on one
   slot from before the emulator boots until its shutdown step, so the number
   of `slot-*` files is the host's emulator cap across every job and
   repository. The lock lives in a detached `flock` holder process; if the job
@@ -826,14 +838,14 @@ Host requirements:
   shutdown step, the runner's orphan-process cleanup, or the container's
   teardown. To change the cap, add or remove `slot-*` files (remove only idle
   ones). Runner images need `flock` and `setsid` (util-linux) on `PATH`.
-- **Gate on `emulator -accel-check` before trusting the pool.** A host
-  missing `/dev/kvm` access does not necessarily refuse to boot an AVD — it
-  can silently fall back to software emulation, which eventually boots but
-  is far too slow for a CI budget and gives no clear signal that the host is
-  misconfigured. Run `emulator -accel-check` as a host health-check (or a
-  preflight step ahead of the real job) and fail closed on anything other
-  than confirmation that hardware acceleration is available, rather than
-  discovering the problem later as an intermittent timeout in the test job.
+- **`emulator -accel-check` gates every boot.** A host missing `/dev/kvm`
+  access does not necessarily refuse to boot an AVD — it can silently fall
+  back to software emulation, which eventually boots but is far too slow for
+  a CI budget and gives no clear signal that the host is misconfigured.
+  `android-emulator` therefore runs `emulator -accel-check` before every
+  boot and fails the job, quoting the emulator's reason, unless it confirms
+  hardware acceleration. The same command makes a useful host health-check
+  outside CI.
 
 Observed characteristics from a real fleet, useful for sizing this pool
 (specific to a headless `google_apis`/x86_64 AVD; expect these to move with
@@ -864,6 +876,14 @@ Set `android-driver` together with `runner-labels` (or the split
 route a run at the host shape it needs — see
 [docs/workflows/android-maestro.md](workflows/android-maestro.md) for the
 full input reference.
+
+`store-screenshots.yml` has the same choice for its Android capture leg, with
+the opposite default for now: `android-driver` defaults to `redroid` on
+`android-capture-runner-labels`' Redroid pool. `android-driver: avd` with
+`android-capture-runner-labels` naming the x86_64 KVM pool (e.g.
+`["self-hosted","trf-linux-amd64-4x8"]`) runs the capture on the same shape
+and the same `android-emulator` action as the Maestro shards — see
+[docs/workflows/store-screenshots.md](workflows/store-screenshots.md#android-capture).
 
 ### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
 

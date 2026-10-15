@@ -33,8 +33,8 @@ adb-reachable at all.
 
 Use this instead of `run-maestro-android` on hosts where the AVD emulator
 cannot run at all — Google publishes no `linux-aarch64` build of the Android
-emulator, NDK, or `cmake` packages, so `reactivecircus/android-emulator-runner`
-is structurally unusable on `linux-aarch64` self-hosted runners regardless of
+emulator, NDK, or `cmake` packages, so `android-emulator` (the AVD action
+`run-maestro-android` boots with) is structurally unusable on `linux-aarch64` self-hosted runners regardless of
 tuning. Redroid needs no `sdkmanager`, no NDK, no emulator binary — just a
 container image and the host's `binder_linux` module — and runs at native
 `arm64` speed with no virtualization inside the guest at all.

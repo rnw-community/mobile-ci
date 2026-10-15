@@ -1,0 +1,640 @@
+name: android-emulator
+description: >-
+  Starts (mode start) or stops (mode stop) a headless Android emulator for the
+  rest of the job. start installs the SDK packages, fails closed without
+  hardware acceleration, sizes the guest from the container's cgroup limits,
+  optionally holds a host-wide emulator slot, boots the AVD to
+  sys.boot_completed and turns animations off. stop, called with if: always(),
+  kills only this job's emulator processes and releases the slot.
+inputs:
+  mode:
+    description: >-
+      'start' boots the emulator and leaves it running for later steps; 'stop'
+      shuts it down. Call stop with if: always() so a failed or cancelled job
+      still frees the host. Anything else fails the step.
+    required: true
+  api-level:
+    description: System image API level.
+    required: false
+    default: '34'
+  target:
+    description: System image target, e.g. google_apis or google_apis_playstore.
+    required: false
+    default: google_apis
+  arch:
+    description: System image architecture.
+    required: false
+    default: x86_64
+  profile:
+    description: >-
+      avdmanager hardware profile (device id or name) the AVD is created with.
+      Empty uses avdmanager's default device.
+    required: false
+    default: pixel_6
+  avd-name:
+    description: >-
+      AVD name under ANDROID_AVD_HOME. An existing AVD of that name is reused
+      when it was created for the same system image and recreated otherwise.
+      Give jobs that change device-wide settings (wm size, demo mode) their
+      own name so a later job on a persistent host never boots into them.
+    required: false
+    default: test
+  port:
+    description: >-
+      Even console port 5554-5682 the emulator listens on; its adb serial is
+      emulator-<port>. The step fails closed when that serial is already
+      attached to adb rather than drive another job's device.
+    required: false
+    default: '5554'
+  ram-size:
+    description: >-
+      Guest RAM in MB (hw.ramSize). Empty derives it from the runner's cgroup
+      memory limit (memory.max, or memory.limit_in_bytes on cgroup v1): 256 MB
+      of guest RAM per GiB of limit, rounded down to a 256 MB step and clamped
+      to 1536-4096, so a 4 vCPU / 8 GiB container gets 2048. With no memory
+      limit detected the hardware profile's own default applies. An explicit
+      value always wins. The bound matters because on a container with a
+      cgroup limit the kernel kills qemu rather than reporting an
+      out-of-memory condition, and the job then fails as a lost adb
+      connection minutes into a run that had been passing.
+    required: false
+    default: ''
+  heap-size:
+    description: Android VM heap size in MB (hw.heapSize). Empty keeps the profile default.
+    required: false
+    default: ''
+  cores:
+    description: >-
+      Guest CPU cores (hw.cpu.ncore). Empty derives half the runner's cgroup
+      CPU quota (cpu.max, or cpu.cfs_quota_us / cpu.cfs_period_us on cgroup
+      v1), rounded down and clamped to 2-4, leaving the other half to the
+      test driver, adb and the runner. With no CPU quota detected the profile
+      default applies. An explicit value always wins.
+    required: false
+    default: ''
+  emulator-options:
+    description: Whitespace-separated options passed to the emulator after -port and -avd.
+    required: false
+    default: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+  wipe-data:
+    description: >-
+      'true' boots with -wipe-data, discarding the AVD's userdata (installed
+      apps, settings) from any earlier run. 'false' keeps it.
+    required: false
+    default: 'false'
+  boot-timeout-seconds:
+    description: Seconds to wait for sys.boot_completed before failing the step.
+    required: false
+    default: '600'
+  cmdline-tools-version:
+    description: >-
+      Android SDK cmdline-tools build android-actions/setup-android installs
+      when the SDK has no matching sdkmanager.
+    required: false
+    default: '12266719'
+  emulator-slots-dir:
+    description: >-
+      Host directory holding the fleet's pre-created slot-* files, one per
+      emulator the host may run at once. When set, start takes an exclusive
+      flock on a free slot before booting and stop releases it, so the
+      number of slot files caps concurrent emulators on the host across
+      every job and repository. Must be a local filesystem (never NFS)
+      bind-mounted read-write into every runner container on the host. A
+      missing directory, no slot-* files, an unwritable slot, or no
+      flock/setsid on PATH fails the step. Empty (default) takes no slot.
+    required: false
+    default: ''
+  emulator-slot-timeout-minutes:
+    description: >-
+      Minutes to wait for a free slot in emulator-slots-dir before failing.
+      Busy slots are logged every 60 seconds while waiting. 0 tries each slot
+      once and fails at once when all are busy. Ignored when
+      emulator-slots-dir is empty.
+    required: false
+    default: '60'
+outputs:
+  android-serial:
+    description: adb serial of the booted emulator, emulator-<port>. Empty for mode stop.
+    value: ${{ steps.boot.outputs.android-serial }}
+  ram-size:
+    description: >-
+      Guest RAM in MB the emulator was booted with: the ram-size input when
+      set, else the value derived from the cgroup memory limit, else empty
+      (hardware profile default).
+    value: ${{ steps.emulator-budget.outputs.ram-size }}
+  cores:
+    description: >-
+      Guest CPU cores the emulator was booted with: the cores input when set,
+      else the value derived from the cgroup CPU quota, else empty (profile
+      default).
+    value: ${{ steps.emulator-budget.outputs.cores }}
+  emulator-slot:
+    description: >-
+      Basename of the slot file in emulator-slots-dir this job holds, e.g.
+      slot-1. Empty when emulator-slots-dir is empty.
+    value: ${{ steps.emulator-slot.outputs.slot }}
+runs:
+  using: composite
+  steps:
+    - name: Validate emulator inputs
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        API_LEVEL: ${{ inputs.api-level }}
+        TARGET: ${{ inputs.target }}
+        ARCH: ${{ inputs.arch }}
+        PROFILE: ${{ inputs.profile }}
+        AVD_NAME: ${{ inputs.avd-name }}
+        PORT: ${{ inputs.port }}
+        RAM_SIZE: ${{ inputs.ram-size }}
+        HEAP_SIZE: ${{ inputs.heap-size }}
+        CORES: ${{ inputs.cores }}
+        WIPE_DATA: ${{ inputs.wipe-data }}
+        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          case "$MODE" in
+            start) ;;
+            stop) exit 0 ;;
+            *) fail "android-emulator mode '$MODE' is not 'start' or 'stop'." ;;
+          esac
+          matches() {
+            [[ "$1" =~ ^($2)$ ]]
+          }
+          matches "$API_LEVEL" '[A-Za-z0-9._-]+' || fail "api-level '$API_LEVEL' must match ^[A-Za-z0-9._-]+\$; it becomes part of the sdkmanager package name."
+          matches "$TARGET" '[A-Za-z0-9._-]+' || fail "target '$TARGET' must match ^[A-Za-z0-9._-]+\$; it becomes part of the sdkmanager package name."
+          matches "$ARCH" '[A-Za-z0-9._-]+' || fail "arch '$ARCH' must match ^[A-Za-z0-9._-]+\$; it becomes part of the sdkmanager package name."
+          [ -z "$PROFILE" ] || matches "$PROFILE" '[A-Za-z0-9 ._-]+' || fail "profile '$PROFILE' must match ^[A-Za-z0-9 ._-]+\$."
+          matches "$AVD_NAME" '[A-Za-z0-9._-]+' || fail "avd-name '$AVD_NAME' must match ^[A-Za-z0-9._-]+\$."
+          if ! matches "$PORT" '[0-9]+' || [ "$PORT" -lt 5554 ] || [ "$PORT" -gt 5682 ] || [ $((PORT % 2)) -ne 0 ]; then
+            fail "port '$PORT' must be an even number from 5554 to 5682, the emulator's console port range."
+          fi
+          [ -z "$RAM_SIZE" ] || matches "$RAM_SIZE" '[0-9]+[MG]?' || fail "ram-size '$RAM_SIZE' must be a number of MB, optionally suffixed M or G."
+          [ -z "$HEAP_SIZE" ] || matches "$HEAP_SIZE" '[0-9]+[MG]?' || fail "heap-size '$HEAP_SIZE' must be a number of MB, optionally suffixed M or G."
+          [ -z "$CORES" ] || matches "$CORES" '[0-9]+' || fail "cores '$CORES' must be a whole number."
+          case "$WIPE_DATA" in
+            true | false) ;;
+            *) fail "wipe-data '$WIPE_DATA' must be 'true' or 'false'." ;;
+          esac
+          if ! matches "$BOOT_TIMEOUT_SECONDS" '[0-9]+' || [ "$BOOT_TIMEOUT_SECONDS" -eq 0 ]; then
+            fail "boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive whole number."
+          fi
+          command -v timeout >/dev/null 2>&1 || fail "'timeout' (GNU coreutils) is required to bound the adb calls during boot and teardown but is not on PATH."
+
+    - name: Set up Android SDK
+      if: inputs.mode == 'start'
+      uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+      env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT || env.ANDROID_HOME }}
+      with:
+          cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
+          packages: platform-tools emulator system-images;android-${{ inputs.api-level }};${{ inputs.target }};${{ inputs.arch }}
+
+    - name: Check hardware acceleration
+      if: inputs.mode == 'start'
+      shell: bash
+      run: |
+          set -euo pipefail
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          emulator_bin="$sdk/emulator/emulator"
+          if [ -z "$sdk" ] || [ ! -x "$emulator_bin" ]; then
+            echo "::error::No Android emulator binary at '$emulator_bin'; the SDK setup step did not install the emulator package."
+            exit 1
+          fi
+          status=0
+          report="$("$emulator_bin" -accel-check 2>&1)" || status=$?
+          accel_status="$(printf '%s\n' "$report" | awk 'state == 1 { print; exit } /^accel:$/ { state = 1 }' | tr -d '[:space:]')"
+          detail="$(printf '%s\n' "$report" | awk 'state == 2 && $0 == "accel" { exit } state == 2 { print } state == 1 { state = 2 } state == 0 && /^accel:$/ { state = 1 }')"
+          if [ "$status" -ne 0 ] || [ "$accel_status" != 0 ]; then
+            printf '%s\n' "$report"
+            echo "::error::emulator -accel-check reports no usable hardware acceleration (exit $status, status '${accel_status:-missing}'): ${detail:-no detail}. Refusing to boot the emulator under software emulation, which boots far too slowly for a CI budget and then fails as an unrelated timeout. Give the runner read/write access to /dev/kvm (x86_64 Linux) or move the job to a pool that has it."
+            exit 1
+          fi
+          echo "Hardware acceleration: $detail"
+          {
+            echo '### Android emulator'
+            echo
+            echo "Hardware acceleration: $detail"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Size emulator from container limits
+      id: emulator-budget
+      if: inputs.mode == 'start'
+      shell: bash
+      env:
+        RAM_SIZE: ${{ inputs.ram-size }}
+        CORES: ${{ inputs.cores }}
+      run: |
+          set -euo pipefail
+          cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
+          v1_unbounded_bytes=1125899906842624
+          limit_source='no cgroup limits found'
+          memory_bytes=''
+          cpu_millis=''
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          is_uint() {
+            case "$1" in
+              '' | *[!0-9]*) return 1 ;;
+            esac
+            return 0
+          }
+
+          if [ -f "$cgroup_root/cgroup.controllers" ]; then
+            limit_source='cgroup v2'
+            if [ -f "$cgroup_root/memory.max" ]; then
+              value="$(cat "$cgroup_root/memory.max")"
+              if [ "$value" != max ]; then
+                is_uint "$value" || fail "Unparseable $cgroup_root/memory.max '$value'; expected a byte count or 'max'. Refusing to size the emulator from a limit this step cannot read."
+                memory_bytes="$value"
+              fi
+            fi
+            if [ -f "$cgroup_root/cpu.max" ]; then
+              quota=''
+              period=''
+              read -r quota period < "$cgroup_root/cpu.max" || true
+              if [ "$quota" != max ]; then
+                if ! is_uint "$quota" || ! is_uint "$period" || [ "$period" -eq 0 ]; then
+                  fail "Unparseable $cgroup_root/cpu.max '$quota $period'; expected '<quota> <period>' or 'max <period>'. Refusing to size the emulator from a quota this step cannot read."
+                fi
+                cpu_millis=$((quota * 1000 / period))
+              fi
+            fi
+          elif [ -f "$cgroup_root/memory/memory.limit_in_bytes" ] || [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+            limit_source='cgroup v1'
+            if [ -f "$cgroup_root/memory/memory.limit_in_bytes" ]; then
+              value="$(cat "$cgroup_root/memory/memory.limit_in_bytes")"
+              is_uint "$value" || fail "Unparseable $cgroup_root/memory/memory.limit_in_bytes '$value'; expected a byte count."
+              if [ "$value" -lt "$v1_unbounded_bytes" ]; then
+                memory_bytes="$value"
+              fi
+            fi
+            if [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+              quota="$(cat "$cgroup_root/cpu/cpu.cfs_quota_us")"
+              if [ "$quota" != -1 ]; then
+                period="$(cat "$cgroup_root/cpu/cpu.cfs_period_us" 2>/dev/null || true)"
+                if ! is_uint "$quota" || ! is_uint "$period" || [ "$period" -eq 0 ]; then
+                  fail "Unparseable cgroup v1 CPU quota '$quota' / period '$period' under $cgroup_root/cpu; expected non-negative integers or a quota of -1."
+                fi
+                cpu_millis=$((quota * 1000 / period))
+              fi
+            fi
+          fi
+
+          memory_detected='unbounded'
+          ram_size="$RAM_SIZE"
+          ram_basis='ram-size input'
+          if [ -n "$memory_bytes" ]; then
+            memory_mib=$((memory_bytes / 1048576))
+            memory_detected="$memory_mib MiB"
+          fi
+          if [ -z "$ram_size" ]; then
+            if [ -n "$memory_bytes" ]; then
+              ram_size=$((memory_mib / 1024 * 256))
+              [ "$ram_size" -lt 1536 ] && ram_size=1536
+              [ "$ram_size" -gt 4096 ] && ram_size=4096
+              ram_basis='derived: 256 MB per GiB of limit, clamped to 1536-4096'
+              if [ "$memory_mib" -lt 6144 ]; then
+                echo "::warning::This runner's memory limit is $memory_mib MiB; below 6 GiB even the 1536 MB emulator floor leaves little room for the test driver's JVM and the runner, and the kernel will kill qemu rather than report it. Move this Android job to a larger pool."
+              fi
+            else
+              ram_basis='hardware profile default (no memory limit detected)'
+            fi
+          fi
+
+          cpu_detected='unbounded'
+          cores="$CORES"
+          cores_basis='cores input'
+          if [ -n "$cpu_millis" ]; then
+            cpu_detected="$(printf '%d.%02d CPUs' $((cpu_millis / 1000)) $((cpu_millis % 1000 / 10)))"
+          fi
+          if [ -z "$cores" ]; then
+            if [ -n "$cpu_millis" ]; then
+              cores=$((cpu_millis / 2000))
+              [ "$cores" -lt 2 ] && cores=2
+              [ "$cores" -gt 4 ] && cores=4
+              cores_basis='derived: half the CPU quota, clamped to 2-4'
+            else
+              cores_basis='profile default (no CPU quota detected)'
+            fi
+          fi
+
+          echo "Emulator budget ($limit_source): memory $memory_detected -> ram-size '${ram_size}' ($ram_basis); CPU $cpu_detected -> cores '${cores}' ($cores_basis)."
+          {
+            echo "ram-size=$ram_size"
+            echo "cores=$cores"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo '### Emulator budget'
+            echo
+            echo "Limits read from: $limit_source"
+            echo
+            echo '| Resource | Detected limit | Emulator | Basis |'
+            echo '| --- | --- | --- | --- |'
+            echo "| Memory | $memory_detected | ${ram_size:-profile default} MB | $ram_basis |"
+            echo "| CPU | $cpu_detected | ${cores:-profile default} cores | $cores_basis |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Acquire host emulator slot
+      id: emulator-slot
+      if: inputs.mode == 'start'
+      shell: bash
+      env:
+        EMULATOR_SLOTS_DIR: ${{ inputs.emulator-slots-dir }}
+        EMULATOR_SLOT_TIMEOUT_MINUTES: ${{ inputs.emulator-slot-timeout-minutes }}
+      run: |
+          set -euo pipefail
+          if [ -z "$EMULATOR_SLOTS_DIR" ]; then
+            echo 'slot=' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          case "$EMULATOR_SLOT_TIMEOUT_MINUTES" in
+            '' | *[!0-9]*) fail "emulator-slot-timeout-minutes '$EMULATOR_SLOT_TIMEOUT_MINUTES' must be a non-negative integer." ;;
+          esac
+          for tool in flock setsid; do
+            command -v "$tool" >/dev/null 2>&1 || fail "'$tool' (util-linux) is required to hold a host emulator slot but is not on PATH, and emulator-slots-dir is set."
+          done
+          [ -d "$EMULATOR_SLOTS_DIR" ] || fail "emulator-slots-dir '$EMULATOR_SLOTS_DIR' is not a directory on this runner. The fleet must create it on a local filesystem and bind-mount it read-write into every runner container on the host before a job may set it."
+          slots=()
+          for slot in "$EMULATOR_SLOTS_DIR"/slot-*; do
+            [ -f "$slot" ] && slots+=("$slot")
+          done
+          [ "${#slots[@]}" -gt 0 ] || fail "emulator-slots-dir '$EMULATOR_SLOTS_DIR' holds no slot-* files. The fleet pre-creates one file per emulator the host may run at once; without them no slot can ever be taken."
+          for slot in "${slots[@]}"; do
+            [ -w "$slot" ] || fail "Slot file '$slot' is not writable by this runner; the slot directory must be bind-mounted read-write."
+          done
+
+          record="$RUNNER_TEMP/mobile-ci-emulator-slot"
+          hold_seconds=21600
+
+          process_running() {
+            local state
+            state="$(cut -d' ' -f3 "/proc/$1/stat" 2>/dev/null)" || return 1
+            [ -n "$state" ] && [ "$state" != Z ]
+          }
+
+          try_slot() {
+            local slot="$1" ready holder status
+            ready="$RUNNER_TEMP/mobile-ci-emulator-slot-ready.$$"
+            rm -f "$ready" "$ready.tmp"
+            # shellcheck disable=SC2016 # expanded by the holder's own sh.
+            setsid -w flock -n -o -x -E 75 "$slot" sh -c 'read -r _ _ _ _ pgid _ < "/proc/$$/stat"; printf "%s\n" "$pgid" > "$1.tmp" && mv "$1.tmp" "$1"; exec sleep "$2"' sh "$ready" "$hold_seconds" < /dev/null > /dev/null 2>&1 &
+            holder=$!
+            while [ ! -s "$ready" ] && process_running "$holder"; do
+              sleep 0.1
+            done
+            if [ -s "$ready" ]; then
+              printf '%s\t%s\n' "$(cat "$ready")" "$slot" > "$record"
+              rm -f "$ready"
+              return 0
+            fi
+            status=0
+            wait "$holder" || status=$?
+            rm -f "$ready" "$ready.tmp"
+            [ "$status" -eq 75 ] && return 1
+            fail "flock on slot file '$slot' failed with exit status $status rather than reporting it busy."
+          }
+
+          deadline=$((SECONDS + EMULATOR_SLOT_TIMEOUT_MINUTES * 60))
+          next_log=0
+          acquired=''
+          while :; do
+            busy=''
+            for slot in "${slots[@]}"; do
+              if try_slot "$slot"; then
+                acquired="$slot"
+                break
+              fi
+              busy="$busy $(basename "$slot")"
+            done
+            [ -n "$acquired" ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              fail "No emulator slot in '$EMULATOR_SLOTS_DIR' freed up within $EMULATOR_SLOT_TIMEOUT_MINUTES minute(s); busy:$busy. The host is running as many emulators as the fleet allows; raise emulator-slot-timeout-minutes or add capacity."
+            fi
+            if [ "$SECONDS" -ge "$next_log" ]; then
+              echo "All ${#slots[@]} emulator slot(s) in '$EMULATOR_SLOTS_DIR' are busy:$busy; waiting up to $EMULATOR_SLOT_TIMEOUT_MINUTES minute(s) in total."
+              next_log=$((SECONDS + 60))
+            fi
+            sleep 5
+          done
+
+          slot_name="$(basename "$acquired")"
+          echo "Holding emulator slot $slot_name of ${#slots[@]} in '$EMULATOR_SLOTS_DIR' (holder process group $(cut -f1 "$record"))."
+          echo "slot=$slot_name" >> "$GITHUB_OUTPUT"
+          {
+            echo
+            echo "Emulator slot: \`$slot_name\` of ${#slots[@]} in \`$EMULATOR_SLOTS_DIR\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Boot emulator
+      id: boot
+      if: inputs.mode == 'start'
+      shell: bash
+      env:
+        API_LEVEL: ${{ inputs.api-level }}
+        TARGET: ${{ inputs.target }}
+        ARCH: ${{ inputs.arch }}
+        PROFILE: ${{ inputs.profile }}
+        AVD_NAME: ${{ inputs.avd-name }}
+        PORT: ${{ inputs.port }}
+        RAM_SIZE: ${{ steps.emulator-budget.outputs.ram-size }}
+        HEAP_SIZE: ${{ inputs.heap-size }}
+        CORES: ${{ steps.emulator-budget.outputs.cores }}
+        EMULATOR_OPTIONS: ${{ inputs.emulator-options }}
+        WIPE_DATA: ${{ inputs.wipe-data }}
+        BOOT_TIMEOUT_SECONDS: ${{ inputs.boot-timeout-seconds }}
+      run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          emulator_bin="$sdk/emulator/emulator"
+          [ -x "$emulator_bin" ] || fail "No Android emulator binary at '$emulator_bin'."
+          for tool in avdmanager adb; do
+            command -v "$tool" >/dev/null 2>&1 || fail "'$tool' is not on PATH; the SDK setup step should have added cmdline-tools and platform-tools."
+          done
+
+          avd_home="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$avd_home"
+          export ANDROID_AVD_HOME="$avd_home"
+          echo "ANDROID_AVD_HOME=$avd_home" >> "$GITHUB_ENV"
+          config="$avd_home/$AVD_NAME.avd/config.ini"
+          package="system-images;android-$API_LEVEL;$TARGET;$ARCH"
+          sysdir="system-images/android-$API_LEVEL/$TARGET/$ARCH"
+
+          current_sysdir=''
+          if [ -f "$config" ]; then
+            current_sysdir="$(sed -n 's/^image\.sysdir\.1[[:space:]]*=[[:space:]]*//p' "$config" | tail -n 1)"
+            current_sysdir="${current_sysdir%/}"
+          fi
+          if [ "$current_sysdir" != "$sysdir" ]; then
+            echo "Creating AVD '$AVD_NAME' for $package${current_sysdir:+ (replacing one built for $current_sysdir)}."
+            create_args=(create avd --force -n "$AVD_NAME" --abi "$TARGET/$ARCH" --package "$package")
+            [ -z "$PROFILE" ] || create_args+=(--device "$PROFILE")
+            echo no | avdmanager "${create_args[@]}"
+            [ -f "$config" ] || fail "avdmanager did not create '$config'."
+          else
+            echo "Reusing AVD '$AVD_NAME' for $package."
+          fi
+
+          set_config() {
+            local key="$1" value="$2"
+            [ -n "$value" ] || return 0
+            grep -v "^${key}[[:space:]]*=" "$config" > "$config.tmp" || true
+            printf '%s=%s\n' "$key" "$value" >> "$config.tmp"
+            mv "$config.tmp" "$config"
+          }
+          set_config hw.ramSize "$RAM_SIZE"
+          set_config hw.heapSize "$HEAP_SIZE"
+          set_config hw.cpu.ncore "$CORES"
+
+          serial="emulator-$PORT"
+          if timeout 30 adb devices | awk 'NR > 1 { print $1 }' | grep -qxF "$serial"; then
+            fail "$serial is already attached to adb on this runner, so another emulator owns console port $PORT. Pass a different port, or move the job to a runner that does not share its adb server."
+          fi
+
+          read -r -a options <<< "$EMULATOR_OPTIONS"
+          [ "$WIPE_DATA" = true ] && options+=(-wipe-data)
+          log="$RUNNER_TEMP/mobile-ci-emulator-$PORT.log"
+          record="$RUNNER_TEMP/mobile-ci-emulator"
+          echo "Starting $emulator_bin -port $PORT -avd $AVD_NAME ${options[*]}"
+          nohup "$emulator_bin" -port "$PORT" -avd "$AVD_NAME" "${options[@]}" < /dev/null > "$log" 2>&1 &
+          emulator_pid=$!
+          printf '%s\t%s\n' "$serial" "$emulator_pid" > "$record"
+
+          show_log() {
+            echo "Last emulator output ($log):"
+            tail -n 50 "$log" || true
+          }
+
+          deadline=$((SECONDS + BOOT_TIMEOUT_SECONDS))
+          while :; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              status=0
+              wait "$emulator_pid" || status=$?
+              show_log
+              fail "The emulator exited with status $status before $serial reported sys.boot_completed."
+            fi
+            booted="$(timeout 10 adb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '[:space:]' || true)"
+            [ "$booted" = 1 ] && break
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              show_log
+              fail "$serial did not report sys.boot_completed within $BOOT_TIMEOUT_SECONDS seconds."
+            fi
+            sleep 2
+          done
+          echo "$serial booted in ${SECONDS}s."
+
+          timeout 30 adb -s "$serial" shell input keyevent 82 || true
+          for setting in 'global window_animation_scale 0.0' 'global transition_animation_scale 0.0' 'global animator_duration_scale 0.0' 'secure spell_checker_enabled 0'; do
+            read -r namespace key value <<< "$setting"
+            timeout 30 adb -s "$serial" shell settings put "$namespace" "$key" "$value"
+          done
+
+          echo "android-serial=$serial" >> "$GITHUB_OUTPUT"
+          {
+            echo "Booted \`$serial\` from AVD \`$AVD_NAME\` ($package) in ${SECONDS}s."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Shutdown emulator
+      if: always() && inputs.mode == 'stop'
+      shell: bash
+      run: |
+          emulator_record="${RUNNER_TEMP:-}/mobile-ci-emulator"
+          if [ -n "${RUNNER_TEMP:-}" ] && [ -f "$emulator_record" ]; then
+            IFS=$'\t' read -r serial _ < "$emulator_record" || true
+            if [ -n "${serial:-}" ]; then
+              timeout 30 adb -s "$serial" emu kill || true
+            fi
+            rm -f "$emulator_record"
+          fi
+          grace_seconds="${EMULATOR_EXIT_GRACE_SECONDS:-15}"
+          own_tracking_id="${RUNNER_TRACKING_ID:-}"
+
+          started_by_this_job() {
+            local environ="/proc/$1/environ" var value
+            [ -r "$environ" ] || return 1
+            if [ -n "$own_tracking_id" ]; then
+              grep -qzFx -- "RUNNER_TRACKING_ID=$own_tracking_id" "$environ" 2>/dev/null
+              return
+            fi
+            for var in GITHUB_RUN_ID GITHUB_RUN_ATTEMPT GITHUB_JOB RUNNER_NAME; do
+              value="${!var:-}"
+              [ -n "$value" ] || return 1
+              grep -qzFx -- "$var=$value" "$environ" 2>/dev/null || return 1
+            done
+            return 0
+          }
+
+          list_own_processes() {
+            local kind="$1" proc pid argv0
+            for proc in /proc/[0-9]*; do
+              pid="${proc#/proc/}"
+              [ "$pid" = "$$" ] && continue
+              argv0=''
+              IFS= read -r -d '' argv0 2>/dev/null < "$proc/cmdline" || true
+              [ -n "$argv0" ] || continue
+              case "$kind:${argv0##*/}" in
+                emulator:emulator | emulator:emulator64-* | emulator:emulator-headless | emulator:qemu-system-* | emulator:netsimd | emulator:crashpad_handler) ;;
+                adb-server:adb) grep -qzFx -- fork-server "$proc/cmdline" 2>/dev/null || continue ;;
+                *) continue ;;
+              esac
+              started_by_this_job "$pid" && printf '%s %s\n' "$pid" "$argv0"
+            done
+            return 0
+          }
+
+          stop_own_processes() {
+            local kind="$1" deadline=$((SECONDS + grace_seconds)) survivors pid argv0
+            survivors="$(list_own_processes "$kind")"
+            while [ -n "$survivors" ] && [ "$SECONDS" -lt "$deadline" ]; do
+              sleep 1
+              survivors="$(list_own_processes "$kind")"
+            done
+            [ -n "$survivors" ] || return 0
+            while read -r pid argv0; do
+              if kill -KILL "$pid" 2>/dev/null; then
+                echo "::warning::Killed leftover $kind process $pid ($argv0) still running ${grace_seconds}s after shutdown."
+              fi
+            done <<< "$survivors"
+          }
+
+          stop_own_processes emulator
+          if [ -n "$(list_own_processes adb-server)" ]; then
+            timeout 10 adb kill-server || true
+            stop_own_processes adb-server
+          fi
+
+          record="${RUNNER_TEMP:-}/mobile-ci-emulator-slot"
+          if [ -n "${RUNNER_TEMP:-}" ] && [ -f "$record" ]; then
+            IFS=$'\t' read -r holder_pgid slot < "$record" || true
+            if [ -n "${holder_pgid:-}" ] && grep -qzFx -- "$slot" "/proc/$holder_pgid/cmdline" 2>/dev/null; then
+              kill -TERM -- "-$holder_pgid" 2>/dev/null || true
+              for _ in 1 2 3 4 5 6 7 8 9 10; do
+                grep -qzFx -- "$slot" "/proc/$holder_pgid/cmdline" 2>/dev/null || break
+                sleep 0.5
+              done
+              kill -KILL -- "-$holder_pgid" 2>/dev/null || true
+              echo "Released emulator slot $(basename "$slot")."
+            else
+              echo "Emulator slot $(basename "${slot:-unknown}") holder is already gone; the kernel released its lock."
+            fi
+            rm -f "$record"
+          fi
