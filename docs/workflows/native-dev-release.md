@@ -115,7 +115,7 @@ backend it controls (private repo) — never ship the token to the browser.
 | `enable-ios`                 | no       | `true`                                  | Run the `ios-dev-release` job. |
 | `enable-android`             | no       | `false`                                 | Run the `android-dev-release` job. |
 | `ios-runner-labels`          | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS dev-release job. |
-| `android-runner-labels`      | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the Android dev-release job. Defaults to macOS because Google's Android NDK build tooling used by EAS local builds is x86_64-only on Linux. |
+| `android-runner-labels`      | no       | `["self-hosted","trf-linux-amd64-4x8"]`         | JSON array of self-hosted runner labels for the Android dev-release job. The default is the x86_64 Linux pool (4 vCPU / 8 GiB): the NDK `eas build --local` needs ships for x86_64 Linux and macOS only, never linux-aarch64, and the build needs no Mac. Proven there by suuudokuuu's `native-publish` Android job. |
 | `app-dir`                    | **yes**  | —                                        | App directory containing `app.json`/`eas.json`. |
 | `node-version`               | no       | `22`                                     | Node version for `actions/setup-node`. |
 | `install-command`            | no       | `yarn install --immutable`                | JS dependency install command. |

@@ -21,11 +21,13 @@ on:
             android-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the Android dev-release job.
-                    Defaults to macOS because Google's Android NDK build tooling used by EAS
-                    local builds is x86_64-only on Linux.
+                    The default is the x86_64 Linux pool (4 vCPU / 8 GiB): `eas build
+                    --local` for Android needs Google's NDK, which ships for x86_64
+                    Linux (and macOS) only, never linux-aarch64, and needs no Mac.
+                    Proven on that pool by suuudokuuu's native-publish Android job.
                 type: string
                 required: false
-                default: '["self-hosted","macOS","ARM64"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             app-dir:
                 description: App directory containing app.json/eas.json.
                 type: string
