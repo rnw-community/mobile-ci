@@ -948,7 +948,7 @@ jobs:
 
             - name: run-maestro-android
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@25bda4532ceb0fb709316413713b3dde20bfa3a7 # feat/169-emulator-budget-and-slots fleet-validation pin
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
