@@ -257,7 +257,7 @@ on:
                     against simslim-sha256 (preinstall on the host to avoid it).
                 type: string
                 required: false
-                default: '0.10.0'
+                default: '0.12.2'
             simslim-sha256:
                 description: >-
                     SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
@@ -268,7 +268,7 @@ on:
                     Bump together with simslim-version.
                 type: string
                 required: false
-                default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
+                default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
             simulator-slim-profile:
                 description: >-
                     `bundled` (the default) uses mobile-ci's own `profiles/ci.json` -

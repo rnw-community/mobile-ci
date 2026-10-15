@@ -314,150 +314,45 @@ Then set `simulator-slim-repair: 'false'` in the caller so a device that comes
 up stock fails the job as the provisioning defect it is, instead of paying for
 an in-job `simslim on` reboot on every shard.
 
-**Leased simulators: clone a slimmed template.** `run-maestro-ios` and
+**Leased simulators: slimmed before their first boot.** `run-maestro-ios` and
 `capture-screenshots-ios` boot a device the host already owns, so the loop
 above is the whole story for them. `simulator-lease` is different: it *creates*
 the device it hands to `xcodebuild-test`, and a freshly created device is
-always stock. That is why its `slim-repair` defaults to `'true'` (the opposite
-of `run-maestro-ios`) — with only `slim-profile` set, every lease pays one
-`simslim on` reboot.
+always stock. With `slim-profile` set (the default, `bundled`) and
+`slim-repair: 'true'` (the default), the lease is left shut down and
+`simslim on --profile` writes its launchd disable overrides offline, then boots
+it once, already slim; the job verifies and measures it. No image preparation
+is needed, and nothing is left behind on the host.
 
-The way to stop paying it is `template-device`. `xcrun simctl clone` copies the
-device's launchd disable overrides along with the device, so a clone of a
-slimmed, **shut-down** template is slim from its first boot:
+**Templates do not carry slimming.** simslim keeps the overrides on the host in
+a store keyed by the device's UDID
+([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)),
+not inside the device, so `xcrun simctl clone` of a slimmed template produces a
+**stock** clone with a new UDID
+([#161](https://github.com/rnw-community/mobile-ci/issues/161)). The same holds
+for Xcode's `-parallel-testing-worker-count` clones: each worker boots stock,
+so raising the worker count multiplies the stock footprint. simslim's own
+answer for worker clones is `simslim watch`, which slims each clone no-reboot as
+it boots; the actions do not run it yet. Baking `mobile-ci-template-*` devices
+into the image buys nothing, and `template-strategy: auto` is deprecated
+accordingly; `template-device` still clones a named device that carries
+something other than slimming, and the clone is slimmed before first boot like
+a created one.
 
-```bash
-# Host provisioning, once per image: one shut-down, slimmed template per device type.
-udid=$(xcrun simctl create 'trf-template-iPad Pro 11-inch (M4)' \
-    'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4' \
-    "$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier')")
-simslim on "$udid" --profile /path/to/profiles/ci.json --boot-timeout 15m
-simslim verify "$udid" --profile /path/to/profiles/ci.json
-simslim measure "$udid"
-xcrun simctl shutdown "$udid"
-```
-
-```yaml
-with:
-    template-device: 'trf-template-iPad Pro 11-inch (M4)'
-    slim-repair: 'false'
-```
-
-`slim-repair: 'false'` is the point of the pairing: with a template in place, a
-lease that comes up stock means the *image* lost its slimming, and that should
-fail loudly rather than be repaired on every run. The action also refuses to
-clone a template that is booted — a template is provisioning state, never a
-job's device.
-
-### Templates the image can bake
-
-Naming a template in the consumer's workflow means the consumer has to know
-what the host image ships. `simulator-lease`'s `template-strategy: auto` (and
-`swift-ios.yml`'s `simulator-template-strategy: auto`) removes that coupling:
-the job looks for a **shut-down, available device whose name starts with
-`mobile-ci-template-` and whose device type and runtime both match the lease**
-and clones it. Nothing matches? The lease is created and slimmed exactly as
-before, and a shut-down copy is left behind for the next job on that host.
-
-The template is **trusted by name, device type and runtime**; the device that
-gets `simslim verify --profile`-ed is the **booted clone**, which the lease
-boots anyway. That is why the bake script below verifies **while the device is
-booted**: `simslim verify` compares a booted simulator and reports a mismatch
-for any shut-down one, so the image build is the only place a template's slim
-state can be proven, and a template the image did not verify booted will be
-caught later as a non-slim clone (repaired in-job, with a `::warning::` naming
-the template as stale — never deleted or replaced by a job).
-
-**The naming rule is the contract between this repo and the image:**
-
-```text
-mobile-ci-template-<device-type-slug>-<runtime-slug>
-```
-
-where each slug is the name lowercased with every run of non-alphanumeric
-characters collapsed to a single `-`, and the runtime slug is taken from the
-last dot-separated component of the runtime identifier:
-
-| Device type             | Runtime identifier                                | Template name                                     |
-| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| `iPad Pro 11-inch (M4)` | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`  |
-| `iPhone 17 Pro`         | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-iphone-17-pro-ios-26-0`        |
-
-Only the prefix, the device type and the runtime are matched, so a template
-baked under the exact name above is found, and a template of another runtime
-or another device type is never cloned in its place.
-
-**On a fleet of one-job VM clones, bake it into the image.** The fleet
-([`vitalyiegorov/tart-runner-fleet`](https://github.com/vitalyiegorov/tart-runner-fleet))
-gives every job a fresh clone of a base image, so the copy a job leaves behind
-dies with the VM: the persistent win requires the template to exist in the base
-image. Add this to the image build right after its "Prewarm the simulators"
-and "Slim the simulators" steps (`docs/BASE_IMAGE.md`), once per device type
-the fleet's tenants lease:
-
-```sh
-# errexit matters here: a failed 'simslim on' or 'simslim verify' followed by a
-# successful 'simctl shutdown' would otherwise bake a stock template the lease
-# refuses to clone, and the image build would report success.
-set -euo pipefail
-export DEVELOPER_DIR=/Applications/Xcode_26.4.1.app/Contents/Developer
-profile=~/.fleet/simslim.fleet.json     # or mobile-ci's profiles/ci.json
-
-bake_template() {
-    device_type="$1"
-    device_type_id="$(xcrun simctl list devicetypes -j \
-        | jq -r --arg name "$device_type" '[.devicetypes[] | select(.name == $name) | .identifier] | first')"
-    runtime_id="$(xcrun simctl list runtimes -j \
-        | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))]
-                 | sort_by(.version | split(".") | map(tonumber)) | last.identifier')"
-    slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'; }
-    name="mobile-ci-template-$(slug "$device_type")-$(slug "${runtime_id##*.}")"
-
-    # One template per device type + runtime: never create a second.
-    if xcrun simctl list devices -j | jq -e --arg name "$name" \
-        '[.devices[][] | select(.name == $name)] | length > 0' > /dev/null; then
-        echo "$name already exists"
-        return 0
-    fi
-
-    udid="$(xcrun simctl create "$name" "$device_type_id" "$runtime_id")"
-    xcrun simctl boot "$udid"
-    xcrun simctl bootstatus "$udid" -b
-    simslim on "$udid" --profile "$profile" --boot-timeout 15m
-    simslim verify "$udid" --profile "$profile"   # booted: verify reads a booted device only
-    simslim measure "$udid"
-    xcrun simctl shutdown "$udid"          # a template is always shut down
-}
-
-bake_template 'iPad Pro 11-inch (M4)'
-bake_template 'iPhone 17 Pro'
-```
-
-`pony-labirinth` leases `iPad Pro 11-inch (M4)` on the newest installed iOS
-runtime, so the device the image must carry for it is
-**`mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`** (the runtime slug follows
-whatever `simctl` reports as newest — re-derive it with the snippet above
-rather than hard-coding `26-0` if the image's runtime changes).
-
-Leaving the template **shut down** is not cosmetic: the action refuses a booted
-template — neither cloning nor replacing it — because a booted template is a
-device something else is using.
-Do not `simctl erase` a template afterwards — that resets it to stock, so every
-clone of it fails `simslim verify` once booted and pays a repair reboot, and
-the job warns that the template is stale.
-
-**The fleet base image should ship these templates.** Measured inside
+**The fleet base image should still ship slim pool devices.** Measured inside
 pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
 simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,
 a Safari extension, Spotlight — with about **2 GB in the compressor and ~14 MB
-of free pages**. The UI-test step there was memory-starved, not CPU-bound. This
-also gates `-parallel-testing-worker-count`: each worker is a *clone* of the
-leased device, so raising it on a stock lease multiplies that footprint, while
-clones of a slim lease inherit the overrides.
+of free pages**. The UI-test step there was memory-starved, not CPU-bound. The
+devices `run-maestro-ios` and `capture-screenshots-ios` boot by name keep their
+overrides across `simctl erase` (the store is keyed by UDID), so slimming them
+once in the image, with the loop above, holds for every job.
 
-**What resets a simulator to stock.** `xcrun simctl erase`, delete-and-recreate,
-"Erase All Content and Settings", and every device created from a newly
-installed runtime come up stock with no error anywhere - the simulator just
+**What resets a simulator to stock.** Anything that gives the device a new
+UDID — delete-and-recreate, `simctl clone`, and every device created from a
+newly installed runtime — comes up stock with no error anywhere (`simctl
+erase` keeps the overrides, because simslim's store is keyed by UDID and lives
+outside the device) - the simulator just
 runs heavy again, and a pool that was sized for slim simulators starts
 swapping. `simslim verify` in the job catches exactly this and fails the shard
 naming the drift; re-run the loop above on that host. Set
