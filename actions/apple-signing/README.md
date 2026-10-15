@@ -15,9 +15,14 @@ Installs the caller's Apple signing material for the duration of one job:
    wrong app fails here rather than producing an archive App Store Connect
    rejects.
 4. Creates a **throwaway** keychain under `RUNNER_TEMP/<keychain-name>/` with a
-   freshly generated random password, imports the certificate and WWDR into it,
-   and **prepends** it to the user keychain search list, preserving every entry
+   freshly generated random password, imports the certificate into it, and
+   **prepends** it to the user keychain search list, preserving every entry
    that was already there.
+5. Adds the WWDR intermediate **only if the keychain does not already hold it**
+   (matched by SHA-256 or SHA-1 in `security find-certificate -Z`). A `.p12`
+   exported from Keychain Access usually bundles the intermediate, and a second
+   `security import` of it fails with "The specified item already exists in the
+   keychain"; any other import error still fails the step.
 
 No secret is ever echoed: every value arrives through a step-level `env:`
 block, the keychain password never leaves the step, and only identifiers and
