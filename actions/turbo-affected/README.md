@@ -1,12 +1,26 @@
 # turbo-affected
 
 Detects whether any package in a target set is affected relative to a base
-SHA, using `npx turbo@<pinned-version> ls --affected --output=json`. Extracted
+SHA, using `npx turbo@<version> ls --affected --output=json`. Extracted
 verbatim from the detect job proven in production CI: `TURBO_SCM_BASE` drives
-the affected computation, and the turbo version is pinned per-consumer via
-input rather than resolved against whatever `turbo` happens to be on `PATH`.
+the affected computation, and the turbo version is an exact version, never
+whatever `turbo` happens to be on `PATH`.
 
-**Fails closed.** If the `turbo ls` invocation or the JSON parse fails, the
+**Turbo version defaults to the repository's own turbo.** An empty
+`turbo-version` resolves, from the working directory and in this order:
+`node_modules/turbo/package.json` (when dependencies are already installed),
+then the locked version in `pnpm-lock.yaml` (the root importer's `turbo`, or
+the single `turbo@` package key), `package-lock.json`, `npm-shrinkwrap.json`,
+`yarn.lock` (v1 and berry), `bun.lock`, then an exact (not a range) `turbo` in
+the root `package.json`. A source that locks several turbo versions is
+skipped with a notice. With none found, `2.10.8` runs and a `::notice::` says
+so. An explicit `turbo-version` always wins. Any version — explicit or
+resolved — must be an exact semver version, or the step fails before turbo
+runs. A pinned turbo older than the repository's own would otherwise reject
+newer `turbo.json` keys and fail every pull request.
+
+**Fails closed.** If a `turbo ls` invocation exits non-zero or prints no JSON,
+an `::error::` names the turbo version and carries turbo's stderr, and the
 step exits non-zero and the job fails — a detection failure must never read as
 a green "nothing affected, skip" result. Use `always-affected: true` for
 non-PR events (push, schedule, workflow_dispatch) where there is no meaningful
@@ -28,7 +42,7 @@ turbo could never report it affected.
 
 | Name               | Required | Default   | Description                                                          |
 | ------------------- | -------- | --------- | ------------------------------------------------------------------------ |
-| `turbo-version`     | no       | `2.10.8`  | Pinned turbo npm version.                                                 |
+| `turbo-version`     | no       | `''`      | Exact turbo npm version. Empty resolves the repository's own turbo (see above), else `2.10.8`. |
 | `target-packages`   | no       | `''`      | Newline-separated package names; affected if any is in turbo's affected set. Empty derives them from `targets`. |
 | `targets`           | no       | `''`      | JSON array of build targets with an `appDir`; read only when `target-packages` is empty. |
 | `base-sha`          | no       | `''`      | Base SHA for the affected computation (`TURBO_SCM_BASE`).                |
@@ -39,6 +53,7 @@ turbo could never report it affected.
 | Name       | Description                                     |
 | ---------- | -------------------------------------------------- |
 | `affected` | `true` or `false`.                                  |
+| `turbo-version` | The turbo version detection ran; empty when turbo did not run (`always-affected`, empty `base-sha`). |
 
 ## Example
 
