@@ -179,7 +179,10 @@ on:
                 required: false
                 default: '2.10.8'
             target-packages:
-                description: Newline-separated package names gating this pipeline on pull_request events.
+                description: >-
+                    Newline-separated package names gating this pipeline on pull_request
+                    events. Empty derives them from the name in each targets[].appDir's
+                    package.json.
                 type: string
                 required: false
                 default: ''
@@ -467,8 +470,9 @@ jobs:
               with:
                   turbo-version: ${{ inputs.turbo-version }}
                   target-packages: ${{ inputs.target-packages }}
+                  targets: ${{ inputs.targets }}
                   base-sha: ${{ github.event.pull_request.base.sha }}
-                  always-affected: ${{ github.event_name != 'pull_request' || inputs.target-packages == '' }}
+                  always-affected: ${{ github.event_name != 'pull_request' }}
 
             # The test job's matrix.shard-index must exactly match
             # inputs.shard-count: fewer indices than shard-count silently
