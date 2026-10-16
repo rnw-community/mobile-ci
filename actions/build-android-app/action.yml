@@ -58,15 +58,19 @@ runs:
           packages: platform-tools
 
     - name: Restore Gradle cache
+      id: gradle-restore
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
           path: |
               ~/.gradle/caches
               ~/.gradle/wrapper
           key: ${{ inputs.gradle-cache-key }}
-          restore-keys: ${{ inputs.gradle-cache-restore-keys }}
+          restore-keys: |
+              ${{ inputs.gradle-cache-key }}-partial-
+              ${{ inputs.gradle-cache-restore-keys }}
 
     - name: Build APK (Release)
+      id: build
       shell: bash
       working-directory: ${{ inputs.app-dir }}/android
       env:
@@ -88,13 +92,40 @@ runs:
           echo "Duration: $((build_end - build_start))s"
         } >> "$GITHUB_STEP_SUMMARY"
 
+    - name: Choose the Gradle cache save key
+      id: gradle-save
+      if: always()
+      shell: bash
+      env:
+        CACHE_KEY: ${{ inputs.gradle-cache-key }}
+        CACHE_HIT: ${{ steps.gradle-restore.outputs.cache-hit }}
+        BUILD_OUTCOME: ${{ steps.build.outcome }}
+        RUN_ID: ${{ github.run_id }}
+        RUN_ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        key=''
+        if [ "$CACHE_HIT" != 'true' ]; then
+          case "$BUILD_OUTCOME" in
+            success)
+              key="$CACHE_KEY"
+              ;;
+            failure|cancelled)
+              key="${CACHE_KEY}-partial-${RUN_ID}-${RUN_ATTEMPT}"
+              echo "::notice::The build did not succeed (${BUILD_OUTCOME}); saving the Gradle cache it warmed as ${key} so the next build restores it."
+              ;;
+          esac
+        fi
+        echo "key=${key}" >> "$GITHUB_OUTPUT"
+
     - name: Save Gradle cache
+      if: always() && steps.gradle-save.outputs.key != ''
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
           path: |
               ~/.gradle/caches
               ~/.gradle/wrapper
-          key: ${{ inputs.gradle-cache-key }}
+          key: ${{ steps.gradle-save.outputs.key }}
 
     - name: Package native app
       id: package
