@@ -422,6 +422,22 @@ true` — `actions/upload-artifact` skips hidden files by default, which
 previously shipped `final-screen.png` alone and dropped the hierarchy dumps
 the failure message points you at.
 
+## Concurrency
+
+The workflow sets its own `concurrency` group of the caller's workflow name,
+the `flows-dir` input and, for a `pull_request` run, the pull request's ref. Only a
+`pull_request` run is cancelled when a newer push to the same pull request
+supersedes it. Every other run — a push to the default branch, a schedule, a
+manual dispatch — gets a group unique to its run id, so a newer push never
+cancels or displaces an older default-branch run. A caller that sets its own
+workflow-level `concurrency` should follow the same rule: a group of
+`${{ github.event_name == 'pull_request' && github.ref || github.run_id }}`,
+so a pull request's runs share one group while every other run gets its
+own, together with
+`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. Making
+only `cancel-in-progress` conditional is not enough: a group shared by
+default-branch pushes still lets a third pending run replace the second. The example below does both.
+
 ## Permissions
 
 **The calling job must declare its own `permissions:` block.** A reusable
@@ -472,8 +488,8 @@ on:
     push:
         branches: [main]
 concurrency:
-    group: android-maestro-${{ github.ref }}
-    cancel-in-progress: true
+    group: android-maestro-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
     e2e:
         # Required: a reusable workflow can only narrow what the caller grants.
