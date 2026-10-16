@@ -82,7 +82,9 @@ frame_device_parse_cutout() {
 # DEVICE_SLUG and DEVICE_CUTOUT_X/Y/W/H. FRAME_DEVICE_FRAME and
 # FRAME_DEVICE_CUTOUT (X,Y,W,H) replace the frameit asset with your own. A
 # landscape frame is the portrait one rotated 90 degrees clockwise into
-# WORK_ROOT, with its cutout rotated alongside rather than re-measured.
+# WORK_ROOT/landscape-frames/<the source frame's absolute path>, so each
+# source frame keeps its own rotation, with its cutout rotated alongside
+# rather than re-measured.
 frame_device_select() {
     local device="$1" orientation="$2" frame cutout frame_w frame_h x y w h
     FRAMES_DIR="${FRAMES_DIR:-}"
@@ -123,8 +125,12 @@ EOF
             ;;
         landscape)
             [ -n "${WORK_ROOT:-}" ] || media_fail 'frame_device_select needs WORK_ROOT set for a landscape frame.'
-            DEVICE_FRAME="$WORK_ROOT/$device-landscape-frame.png"
+            case "$frame" in
+                /*) DEVICE_FRAME="$WORK_ROOT/landscape-frames$frame" ;;
+                *) DEVICE_FRAME="$WORK_ROOT/landscape-frames$PWD/$frame" ;;
+            esac
             if [ ! -f "$DEVICE_FRAME" ]; then
+                mkdir -p "$(dirname "$DEVICE_FRAME")"
                 magick "$frame" -rotate 90 -define png:color-type=6 -depth 8 "$DEVICE_FRAME"
             fi
             DEVICE_CUTOUT_X=$((frame_h - y - h))

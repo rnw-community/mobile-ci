@@ -917,8 +917,12 @@ runs:
         if [ -n "$exited_early" ]; then
           report "simslim watch (pid ${pid:-unknown}) exited before the test run ended, so any worker clone that booted after that ran stock."
         fi
-        if [ "$slimmed_count" -eq 0 ] && [ "$TEST_OUTCOME" = 'success' ]; then
-          report 'simslim watch slimmed no worker clone during a green parallel-testing run, so every worker ran stock.'
+        if [ "$slimmed_count" -eq 0 ]; then
+          if [ "$TEST_OUTCOME" = 'success' ]; then
+            report 'simslim watch slimmed no worker clone during a green parallel-testing run, so every worker ran stock.'
+          else
+            echo "::warning::simslim watch slimmed no worker clone during this ${TEST_OUTCOME:-unknown} test run, so every worker ran stock; check whether that caused the failures."
+          fi
         fi
         if [ "$never_count" -gt 0 ]; then
           echo "::warning::${never_count} worker clone(s) booted but simslim watch never finished slimming them: $(printf '%s\n' "$never_slimmed" | paste -s -d ' ' -)"

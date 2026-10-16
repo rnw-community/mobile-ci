@@ -164,13 +164,13 @@ never touched.
 
 The `plan`/repack job needs neither KVM nor an emulator — only Node, a JDK and
 the Android build-tools. It runs on `repack-runner-labels`, which defaults to
-the same KVM pool as the build; where the fleet has a smaller non-KVM x86_64
-Linux pool with that toolchain, point it there to keep it off the emulator
-lane:
+the smaller non-KVM `["self-hosted","trf-linux-amd64-2x4"]` pool, so it stays
+off the emulator lane. A fleet without that pool points it at any x86_64 Linux
+pool with that toolchain:
 
 ```yaml
 with:
-    repack-runner-labels: '["self-hosted","linux-portable-2x4"]'
+    repack-runner-labels: '["self-hosted","my-linux-pool"]'
 ```
 
 ## Build strategy

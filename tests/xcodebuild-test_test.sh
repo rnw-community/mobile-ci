@@ -409,6 +409,17 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
 fi
 kill -KILL "$stand_in" 2>/dev/null || true
 
+case_start "a red run with no clone slimmed still warns under slim-workers 'true', without a second failure"
+prepare_stop "$BANNER"
+launch_stand_in
+stop_watch SLIM_WORKERS='true' STARTED='true' TEST_OUTCOME='failure'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" '::warning::' 'warning annotation' \
+    && assert_contains "$(cat "$workspace/log")" 'slimmed no worker clone' 'the warning names the zero count'; then
+    pass_case
+fi
+kill -KILL "$stand_in" 2>/dev/null || true
+
 case_start 'a watch that never started is not reported again by the stop step'
 prepare_stop "simslim: unknown category \"nope\""
 stop_watch SLIM_WORKERS='auto' STARTED='false' TEST_OUTCOME='success'

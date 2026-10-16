@@ -619,6 +619,28 @@ dir="$(stub_media_workspace)"
 ) > "$dir/log" 2>&1 || true
 assert_equals '96 96 2732 2048' "$(tail -n 1 "$dir/log")" 'landscape cutout' && pass_case
 
+case_start 'frame: a sourced frame-device.sh rotates each custom frame into its own landscape file'
+dir="$(stub_media_workspace)"
+(
+    cd "$dir/work" || exit 1
+    # shellcheck disable=SC2016 # expanded by the inner shell.
+    env -i PATH="$dir/stub-bin:$dir/sandbox" HOME="$dir/home" bash -c '
+        set -euo pipefail
+        . "$1/frame-device.sh"
+        WORK_ROOT="$(mktemp -d)"
+        resolve_frameit_frames_dir
+        mkdir -p a b
+        cp "$FRAMES_DIR/$IPAD_FRAME_NAME" a/frame.png
+        cp "$FRAMES_DIR/$IPAD_FRAME_NAME" b/frame.png
+        FRAME_DEVICE_CUTOUT="$IPAD_FRAME_CUTOUT"
+        FRAME_DEVICE_FRAME=a/frame.png frame_device_select ipad landscape
+        first="$DEVICE_FRAME"
+        FRAME_DEVICE_FRAME=b/frame.png frame_device_select ipad landscape
+        [ -f "$first" ] && [ -f "$DEVICE_FRAME" ] || echo missing
+        if [ "$first" = "$DEVICE_FRAME" ]; then echo shared; else echo distinct; fi' _ "$MEDIA"
+) > "$dir/log" 2>&1 || true
+assert_equals 'distinct' "$(tail -n 1 "$dir/log")" 'landscape frame per source frame' && pass_case
+
 # --- real-tool cases ---------------------------------------------------------
 
 # synthesize_frame — budgie's own fixture: an opaque #1A1A1A slab with a fully
