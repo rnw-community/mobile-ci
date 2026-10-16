@@ -5,9 +5,13 @@ description: >-
   is never reported as an unaffected/skip result.
 inputs:
   turbo-version:
-    description: Pinned turbo npm version invoked via `npx turbo@<version>`.
+    description: >-
+      Exact turbo npm version invoked via `npx turbo@<version>`. Empty resolves the
+      repository's own turbo: node_modules/turbo, then pnpm-lock.yaml, package-lock.json,
+      npm-shrinkwrap.json, yarn.lock, bun.lock, then an exact root package.json version,
+      else 2.10.8 with a notice.
     required: false
-    default: '2.10.8'
+    default: ''
   target-packages:
     description: >-
       Newline-separated package names; affected if any of these is in the affected set.
@@ -32,6 +36,9 @@ outputs:
   affected:
     description: '`true` or `false` — whether any target package is affected.'
     value: ${{ steps.detect.outputs.affected }}
+  turbo-version:
+    description: The turbo version detection ran; empty when turbo did not run.
+    value: ${{ steps.detect.outputs.turbo-version }}
 runs:
   using: composite
   steps:
@@ -97,14 +104,174 @@ runs:
           echo 'No base SHA: reporting affected without turbo detection.'
           exit 0
         fi
+        TURBO_VERSION=$(node -e '
+          const { existsSync, readFileSync } = require("node:fs");
+          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
+          const fail = message => {
+            process.stderr.write(`::error::${message}\n`);
+            process.exit(1);
+          };
+          const read = file => (existsSync(file) ? readFileSync(file, "utf8") : null);
+          const unquote = value => value.trim().replace(/^[\x27"]|[\x27"]$/g, "");
+          const json = (file, text) => {
+            try {
+              return JSON.parse(text);
+            } catch (error) {
+              fail(`Cannot parse ${file} to resolve the turbo version: ${error.message}`);
+            }
+          };
+          const installed = text => [json("node_modules/turbo/package.json", text).version];
+          const pnpmLock = text => {
+            const lines = text.split(/\r?\n/);
+            let from = 0;
+            let base = 0;
+            const importers = lines.indexOf("importers:");
+            if (importers >= 0) {
+              const root = lines.findIndex((line, index) => index > importers && /^  (\.|[\x27"]\.[\x27"]):\s*$/.test(line));
+              from = root < 0 ? lines.length : root + 1;
+              base = 4;
+            }
+            const versions = [];
+            const packageKeys = () => lines
+              .map(line => line.match(/^  [\x27"]?\/?turbo[@/]([^\s:\x27"(]+)/))
+              .filter(Boolean)
+              .map(match => match[1]);
+            let section = "";
+            for (let index = from; index < lines.length; index += 1) {
+              const line = lines[index];
+              if (line.trim() === "") continue;
+              const indent = line.length - line.trimStart().length;
+              if (indent < base) break;
+              if (indent === base) {
+                section = line.trim();
+                continue;
+              }
+              if (indent !== base + 2 || !/^(dependencies|devDependencies|optionalDependencies):$/.test(section)) continue;
+              const entry = line.trim().match(/^[\x27"]?turbo[\x27"]?:\s*(.*)$/);
+              if (!entry) continue;
+              if (entry[1] !== "") {
+                versions.push(unquote(entry[1]));
+                continue;
+              }
+              for (let child = index + 1; child < lines.length; child += 1) {
+                const nested = lines[child];
+                if (nested.length - nested.trimStart().length <= base + 2) break;
+                const version = nested.trim().match(/^version:\s*(.+)$/);
+                if (version) versions.push(unquote(version[1]));
+              }
+            }
+            return versions.length > 0 ? versions.map(version => version.replace(/\(.*$/, "")) : packageKeys();
+          };
+          const npmLock = file => text => {
+            const lock = json(file, text);
+            return [lock.packages?.["node_modules/turbo"]?.version ?? lock.dependencies?.turbo?.version].filter(Boolean);
+          };
+          const yarnLock = text => {
+            const versions = [];
+            let inTurbo = false;
+            for (const line of text.split(/\r?\n/)) {
+              if (/^\S.*:$/.test(line) && !line.startsWith("#")) {
+                inTurbo = line.slice(0, -1).split(/,\s*/).some(entry => unquote(entry).startsWith("turbo@"));
+                continue;
+              }
+              const version = inTurbo && line.match(/^\s+version:?\s+(.+)$/);
+              if (version) versions.push(unquote(version[1]));
+            }
+            return versions;
+          };
+          const bunLock = text => {
+            let lock;
+            try {
+              lock = JSON.parse(text.replace(/,(\s*[}\]])/g, "$1"));
+            } catch {
+              return [];
+            }
+            const entry = lock.packages?.turbo?.[0];
+            return typeof entry === "string" && entry.startsWith("turbo@") ? [entry.slice("turbo@".length)] : [];
+          };
+          const manifest = text => {
+            const root = json("package.json", text);
+            const range = root.devDependencies?.turbo ?? root.dependencies?.turbo;
+            return typeof range === "string" && semver.test(range) ? [range] : [];
+          };
+          const explicit = process.env.TURBO_VERSION.trim();
+          let resolved;
+          let source;
+          if (explicit !== "") {
+            resolved = explicit;
+            source = "turbo-version input";
+          } else {
+            const sources = [
+              ["node_modules/turbo/package.json", installed],
+              ["pnpm-lock.yaml", pnpmLock],
+              ["package-lock.json", npmLock("package-lock.json")],
+              ["npm-shrinkwrap.json", npmLock("npm-shrinkwrap.json")],
+              ["yarn.lock", yarnLock],
+              ["bun.lock", bunLock],
+              ["package.json", manifest],
+            ];
+            for (const [file, parse] of sources) {
+              const text = read(file);
+              if (text === null) continue;
+              const versions = [...new Set(parse(text))];
+              if (versions.length === 1) {
+                resolved = versions[0];
+                source = file;
+                break;
+              }
+              if (versions.length > 1) {
+                process.stderr.write(`::notice::${file} locks several turbo versions (${versions.join(", ")}); trying the next source.\n`);
+              }
+            }
+            if (resolved === undefined) {
+              resolved = "2.10.8";
+              source = "fallback";
+              process.stderr.write(`::notice::No installed, locked or exact turbo version found; using turbo@${resolved}. Set turbo-version to pin one.\n`);
+            }
+          }
+          if (typeof resolved !== "string" || !semver.test(resolved)) {
+            fail(`turbo version ${JSON.stringify(resolved)} from ${source} is not an exact semver version.`);
+          }
+          process.stderr.write(`Using turbo@${resolved} (from ${source}).\n`);
+          process.stdout.write(resolved);
+        ')
+        echo "turbo-version=${TURBO_VERSION}" >> "$GITHUB_OUTPUT"
         listing=$(mktemp -d)
-        npx -y "turbo@${TURBO_VERSION}" ls --output=json > "$listing/workspace.json"
-        npx -y "turbo@${TURBO_VERSION}" ls --affected --output=json > "$listing/affected.json"
-        affected=$(LISTING="$listing" TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
-          const { readFileSync } = require("node:fs");
-          const names = file => (JSON.parse(readFileSync(`${process.env.LISTING}/${file}`, "utf8")).packages?.items ?? []).map(item => item.name);
-          const workspace = names("workspace.json");
-          const changed = names("affected.json");
+        turbo_ls() {
+          listing_name=$1
+          shift
+          turbo_status=0
+          npx -y "turbo@${TURBO_VERSION}" ls "$@" --output=json > "$listing/$listing_name.json" 2> "$listing/$listing_name.err" || turbo_status=$?
+          cat "$listing/$listing_name.err" >&2
+          if [ "$turbo_status" -ne 0 ]; then
+            echo "turbo exit status ${turbo_status}" >> "$listing/$listing_name.err"
+            echo "$turbo_status" > "$listing/$listing_name.status"
+          fi
+        }
+        turbo_ls workspace
+        turbo_ls affected --affected
+        affected=$(LISTING="$listing" TURBO_VERSION="$TURBO_VERSION" TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
+          const { existsSync, readFileSync } = require("node:fs");
+          const file = name => `${process.env.LISTING}/${name}`;
+          const names = listing => {
+            const command = `turbo@${process.env.TURBO_VERSION} ls ${listing === "affected" ? "--affected " : ""}--output=json`;
+            const stderr = readFileSync(file(`${listing}.err`), "utf8").trim();
+            const report = problem => {
+              const detail = `${command} ${problem}; turbo stderr follows.\n${stderr}`;
+              process.stderr.write(`::error::${detail.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A")}\n`);
+              process.exit(1);
+            };
+            if (existsSync(file(`${listing}.status`))) report("failed");
+            let parsed;
+            try {
+              parsed = JSON.parse(readFileSync(file(`${listing}.json`), "utf8"));
+            } catch (error) {
+              report(`printed no JSON (${error.message})`);
+            }
+            return (parsed.packages?.items ?? []).map(item => item.name);
+          };
+          const workspace = names("workspace");
+          const changed = names("affected");
           const targets = process.env.TARGET_PACKAGES.split("\n").map(name => name.trim()).filter(Boolean);
           const unknown = targets.filter(name => !workspace.includes(name));
           if (unknown.length > 0) {
