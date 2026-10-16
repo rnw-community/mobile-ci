@@ -189,6 +189,14 @@ on:
                 type: string
                 required: false
                 default: ''
+            exempt-paths:
+                description: >-
+                    Newline- or comma-separated git pathspec globs, relative to the
+                    repository root (e.g. docs/**, **/*.md). A pull request whose every
+                    changed file matches one skips the run without turbo detection.
+                type: string
+                required: false
+                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -476,6 +484,7 @@ jobs:
                   targets: ${{ inputs.targets }}
                   base-sha: ${{ github.event.pull_request.base.sha }}
                   always-affected: ${{ github.event_name != 'pull_request' }}
+                  exempt-paths: ${{ inputs.exempt-paths }}
 
             # The test job's matrix.shard-index must exactly match
             # inputs.shard-count: fewer indices than shard-count silently

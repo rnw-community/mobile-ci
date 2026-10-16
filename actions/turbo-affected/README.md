@@ -38,6 +38,18 @@ invalid `targets`, a target without `appDir` or at the repository root
 `turbo ls` does not list as a workspace package fails the step too, since
 turbo could never report it affected.
 
+**Exempt paths skip detection for docs-only pull requests.** With
+`exempt-paths` set (e.g. `docs/**`, `**/*.md`, `apps/website/**`, one per
+line or comma-separated), a pull request whose every file changed between
+`base-sha` and `HEAD` (`git diff --no-renames --name-only base...HEAD`)
+matches one of these `glob`-magic pathspecs, relative to the repository
+root, reports `affected=false` without running turbo; the changed files and
+the globs are logged. `*` does not cross `/`, so use `**/*.md` for Markdown
+anywhere. A single non-exempt file, an empty diff, or a diff git cannot
+compute (missing base object; logged as a `::warning::`) runs normal turbo
+detection instead, which keeps its fail-closed semantics. `always-affected`
+and an empty `base-sha` still win.
+
 ## Inputs
 
 | Name               | Required | Default   | Description                                                          |
@@ -45,6 +57,7 @@ turbo could never report it affected.
 | `turbo-version`     | no       | `''`      | Exact turbo npm version. Empty resolves the repository's own turbo (see above), else `2.10.8`. |
 | `target-packages`   | no       | `''`      | Newline-separated package names; affected if any is in turbo's affected set. Empty derives them from `targets`. |
 | `targets`           | no       | `''`      | JSON array of build targets with an `appDir`; read only when `target-packages` is empty. |
+| `exempt-paths`      | no       | `''`      | Newline- or comma-separated pathspec globs relative to the repository root (e.g. `docs/**`, `**/*.md`). When every file changed since `base-sha` matches one, reports `false` without running turbo. |
 | `base-sha`          | no       | `''`      | Base SHA for the affected computation (`TURBO_SCM_BASE`).                |
 | `always-affected`   | no       | `false`   | Skip detection and report affected unconditionally.                     |
 

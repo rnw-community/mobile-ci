@@ -55,6 +55,7 @@ detect() {
         TARGETS='' \
         TURBO_SCM_BASE=base-sha \
         ALWAYS_AFFECTED=false \
+        EXEMPT_PATHS= \
         TURBO_RAN_FILE="$dir/turbo-ran" \
         TURBO_JSON_FILE="$dir/turbo.json" \
         TURBO_ALL_FILE="$dir/turbo-all.json" \
@@ -459,6 +460,122 @@ assert_failed_closed "$dir" '::error::' \
     && assert_contains "$(grep '::error::' "$dir/log")" 'something odd' 'stderr in error' \
     && pass_case
 
+# Issue #191: a pull request whose every changed file matches an exempt-paths
+# glob is unaffected without running turbo; anything uncertain runs turbo.
+
+# exempt_repo <workspace> <changed path...>
+# Commits a base and then a change touching the given paths in ./work, a real
+# git repository so the exemption is decided by git's own pathspec matching.
+# Prints the base SHA.
+exempt_repo() {
+    local dir="$1" path
+    shift
+    (
+        cd "$dir/work"
+        git init -q -b main
+        git config user.email fixture@example.com
+        git config user.name Fixture
+        mkdir -p docs packages/app
+        printf 'base\n' > README.md
+        printf 'base\n' > docs/guide.md
+        printf 'base\n' > packages/app/index.js
+        git add -A
+        git commit -qm base
+        for path in "$@"; do
+            mkdir -p "$(dirname "$path")"
+            printf 'change\n' >> "$path"
+        done
+        git add -A
+        git commit -qm change
+    ) > "$dir/git-log" 2>&1
+    git -C "$dir/work" rev-parse HEAD~1
+}
+
+case_start 'exempt-paths defaults to empty'
+if ! default="$(action_input_default "$ACTION" exempt-paths)"; then
+    fail_case 'action.yml declares no exempt-paths input'
+elif assert_equals '' "$default" 'exempt-paths default'; then
+    pass_case
+fi
+
+case_start 'a pull request changing only exempt paths is unaffected without running turbo'
+dir="$(prepare @example/app)"
+base="$(exempt_repo "$dir" README.md docs/guide.md docs/new/page.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS="$(printf 'docs/**\n**/*.md\n')"
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && assert_contains "$(cat "$dir/log")" 'docs/new/page.md' 'exempt file logged' \
+    && assert_contains "$(cat "$dir/log")" '**/*.md' 'exempt glob logged' \
+    && pass_case
+
+case_start 'a comma-separated exempt-paths list is honoured'
+dir="$(prepare @example/app)"
+base="$(exempt_repo "$dir" README.md docs/guide.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS='docs/**, README.md'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'a pull request with one non-exempt file runs turbo detection'
+dir="$(prepare @example/app)"
+base="$(exempt_repo "$dir" docs/guide.md packages/app/index.js)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS='docs/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'a glob without ** does not exempt a nested file'
+dir="$(prepare @example/app)"
+base="$(exempt_repo "$dir" packages/app/README.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS='*.md'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'a file moved from a non-exempt path into an exempt one runs turbo detection'
+dir="$(prepare @example/app)"
+base="$(exempt_repo "$dir" docs/guide.md)"
+(
+    cd "$dir/work"
+    git mv packages/app/index.js docs/index.js
+    git commit -qm 'move the app entry into docs'
+) >> "$dir/git-log" 2>&1
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS='docs/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'a base SHA git cannot diff against runs turbo detection instead of exempting'
+dir="$(prepare @example/app)"
+exempt_repo "$dir" docs/guide.md > /dev/null
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE=0123456789abcdef0123456789abcdef01234567 EXEMPT_PATHS='docs/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && assert_contains "$(cat "$dir/log")" '::warning::' 'diff failure warned' \
+    && pass_case
+
+case_start 'an empty diff is not exempt and runs turbo detection'
+dir="$(prepare)"
+exempt_repo "$dir" docs/guide.md > /dev/null
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$(git -C "$dir/work" rev-parse HEAD)" EXEMPT_PATHS='docs/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'always-affected wins over exempt-paths'
+dir="$(prepare)"
+detect "$dir" ALWAYS_AFFECTED=true EXEMPT_PATHS='**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && pass_case
+
 for workflow in ios-maestro android-maestro; do
     case_start "$workflow.yml hands its targets to turbo-affected and is always affected only off pull requests"
     wiring="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON'
@@ -470,10 +587,12 @@ workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
 step = next(step for step in workflow['jobs']['detect']['steps'] if 'turbo-affected' in step.get('uses', ''))
 print(step['with'].get('targets', ''))
 print(step['with'].get('always-affected', ''))
+print(step['with'].get('exempt-paths', ''))
+print(workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('exempt-paths', {}).get('default', 'MISSING'))
 PYTHON
 )"
     # shellcheck disable=SC2016 # the expressions are matched literally.
-    assert_equals "$(printf '%s\n%s' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}")" "$wiring" 'turbo-affected with:' \
+    assert_equals "$(printf '%s\n%s\n%s\n' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}')" "$wiring" 'turbo-affected with:' \
         && pass_case
 done
 
