@@ -9,8 +9,9 @@ on:
                     The default is an x86_64 Linux KVM pool (4 vCPU / 8 GiB), the
                     host shape the default android-driver ('avd') needs: Google
                     ships an x86_64 Linux emulator and NDK, and both the Gradle
-                    build and the emulator fit in 8 GiB with emulator-ram-size
-                    bounded (see below). Override it to a linux-aarch64
+                    build and the emulator fit in 8 GiB with the emulator's RAM
+                    bounded by the container's memory limit (see
+                    emulator-ram-size). Override it to a linux-aarch64
                     binder/privileged-docker pool together with
                     android-driver: redroid.
                 type: string
@@ -65,7 +66,13 @@ on:
                 required: false
                 default: '*.flow.yaml'
             flows-exclude-pattern:
-                description: Optional find ! -name glob excluding matched flows by basename.
+                description: >-
+                    Optional find ! -name globs excluding matched flows by
+                    basename: a comma- and/or newline-separated list of globs,
+                    each emitted as its own find ! -name clause (surrounding
+                    whitespace trimmed, empty entries ignored; a single glob
+                    works as before, a glob containing a comma is not
+                    supported).
                 type: string
                 required: false
                 default: ''
@@ -235,28 +242,52 @@ on:
                 default: pixel_6
             emulator-ram-size:
                 description: >-
-                    Emulator RAM in MB. Empty keeps the hardware profile's own
-                    default; the default here is bounded on purpose, because the
-                    default runner-labels pool is a memory-bounded 8 GiB container.
-                    A cgroup limit kills qemu instead of reporting an out-of-memory
+                    Emulator RAM in MB. Empty (default) derives it from the test
+                    runner's cgroup memory limit: 256 MB of guest RAM per GiB of
+                    limit, clamped to 1536-4096, so the default runner-labels pool
+                    (a memory-bounded 8 GiB container) gets 2048. With no memory
+                    limit detected the hardware profile's own default applies. A
+                    cgroup limit kills qemu instead of reporting an out-of-memory
                     condition, so an unbounded guest fails the job as a lost adb
                     connection ("0 devices connected") partway through a run whose
-                    earlier flows passed. Raise it only with headroom measured on
-                    the pool the run lands on. Mirrors what redroid-memory does for
-                    the redroid driver.
+                    earlier flows passed; set a value only with headroom measured
+                    on the pool the run lands on. Mirrors what redroid-memory does
+                    for the redroid driver.
                 type: string
                 required: false
-                default: '2048'
+                default: ''
             emulator-heap-size:
                 description: Android VM heap size in MB for the emulated device.
                 type: string
                 required: false
                 default: ''
             emulator-cores:
-                description: Emulator CPU cores. Empty keeps the profile default.
+                description: >-
+                    Emulator CPU cores. Empty (default) derives half the test
+                    runner's cgroup CPU quota, clamped to 2-4; with no quota
+                    detected the profile default applies.
                 type: string
                 required: false
                 default: ''
+            emulator-slots-dir:
+                description: >-
+                    Host directory of fleet-provisioned slot-* files capping how
+                    many emulators the test runner's host boots at once, across
+                    every job and repository (avd driver only). Each shard holds an
+                    exclusive flock on one slot from before the emulator boots
+                    until it shuts down. Empty (default) takes no slot. Set it
+                    only once the fleet bind-mounts the directory into every
+                    runner container: a missing or empty directory fails the job.
+                type: string
+                required: false
+                default: ''
+            emulator-slot-timeout-minutes:
+                description: >-
+                    Minutes a shard waits for a free slot in emulator-slots-dir
+                    before failing. The wait counts against test-timeout-minutes.
+                type: string
+                required: false
+                default: '60'
             redroid-image:
                 description: >-
                     Redroid image tag, used on a redroid-prewarm-manifest-path miss.
@@ -344,11 +375,14 @@ on:
             repack-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the repack job. The
-                    default is the same x86_64 Linux pool the Gradle build uses; a
-                    repack needs only Node, a JDK and the Android build-tools.
+                    default is the 2 vCPU / 4 GiB x86_64 Linux pool without /dev/kvm
+                    (trf-linux-amd64-2x4), so these jobs never queue on the scarce KVM
+                    emulator lane (#169). Keep it an x86_64 pool: Google publishes
+                    Android build-tools for x86_64 Linux only. Move it to the 4x8 pool
+                    if bundling the app's JavaScript needs more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             native-build-label:
                 description: >-
                     Pull-request label forcing build-strategy: native for that one
@@ -493,7 +527,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.1.0 # v3.1.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.2.0 # v3.2.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -577,7 +611,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.2.0 # v3.2.0
         with:
             platform: android
             targets: ${{ inputs.targets }}
@@ -796,7 +830,7 @@ jobs:
 
             - name: build-android-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.2.0 # v3.2.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -817,7 +851,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.2.0 # v3.2.0
               with:
                   mode: publish
                   platform: android
@@ -890,7 +924,7 @@ jobs:
 
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v3.2.0 # v3.2.0
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e-${{ strategy.job-index }}
@@ -921,7 +955,7 @@ jobs:
 
             - name: run-maestro-android
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v3.2.0 # v3.2.0
               with:
                   apk-path: .ci-artifacts/android-e2e-app-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
@@ -948,6 +982,8 @@ jobs:
                   ram-size: ${{ inputs.emulator-ram-size }}
                   heap-size: ${{ inputs.emulator-heap-size }}
                   cores: ${{ inputs.emulator-cores }}
+                  emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
+                  emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-android-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
 

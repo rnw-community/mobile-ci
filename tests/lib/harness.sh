@@ -73,7 +73,8 @@ PYTHON
 
 # new_workspace <action.yml> <step name>
 # Prints a scratch directory holding the extracted step at ./step.sh, an empty
-# ./outputs and ./summary, a ./stub-bin on PATH and a ./work working directory.
+# ./outputs, ./summary, ./env and ./path, a ./stub-bin on PATH and a ./work
+# working directory.
 new_workspace() {
     local action_yml="$1" step_name="$2" dir
     dir="$(new_empty_workspace)"
@@ -95,6 +96,8 @@ new_empty_workspace() {
     mkdir -p "$dir/stub-bin" "$dir/work" "$dir/runner-temp"
     : > "$dir/outputs"
     : > "$dir/summary"
+    : > "$dir/env"
+    : > "$dir/path"
     printf '%s\n' "$dir"
 }
 
@@ -122,6 +125,8 @@ run_step() {
         env PATH="$dir/stub-bin:$PATH" \
             GITHUB_OUTPUT="$dir/outputs" \
             GITHUB_STEP_SUMMARY="$dir/summary" \
+            GITHUB_ENV="$dir/env" \
+            GITHUB_PATH="$dir/path" \
             RUNNER_TEMP="$dir/runner-temp" \
             GITHUB_WORKSPACE="$dir/work" \
             "$@" \

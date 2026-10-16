@@ -28,7 +28,8 @@ the section that matches your task; skip the other.
 - `fixtures/` — minimal inputs the tests and `self-test.yml` run this repo's
   own actions against (a two-test Swift Package for `swift-test`, `simctl`
   listings for `simulator-lease`, path-to-test maps for
-  `xcodebuild-affected-tests`).
+  `xcodebuild-affected-tests`, and budgie's original media scripts, which are
+  the pixel-parity reference for `compose-media`).
 - `tests/` — `run-tests.sh` plus one `<action>_test.sh` per action under test.
   Each suite extracts the step's `run:` body from the parsed `action.yml` and
   executes it against `fixtures/` with stubbed binaries, so no test duplicates
@@ -40,6 +41,10 @@ the section that matches your task; skip the other.
 - `scripts/slim-simulator.sh` — sourceable `slim_simulator` /
   `slim_booted_simulators` helpers consumers fetch at a pinned tag instead of
   keeping a copy.
+- `scripts/media/` — `frame-device.sh` (sourceable frameit framing primitives),
+  `compose-web-media.sh` and `compose-web-clips.sh`, plus their shared
+  `media-common.sh`. The `compose-media` action wraps them; consumers can also
+  run them locally or fetch them at a pinned tag.
 - `CONTRIBUTING.md` — versioning, marketplace stance, third-party pinning,
   self-references, local validation, action-change checklist.
 - `RELEASE.md` — the exact tag-and-publish procedure for cutting `v1.x.y`.

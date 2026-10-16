@@ -1,8 +1,9 @@
 # capture-screenshots-android
 
 Drives an **already-booted** Android device over adb — a Redroid container
-(pair with [`redroid-container`](../redroid-container/README.md)), an AVD, or
-a physical device — and captures one screenshot per `locale` x `appearance` x
+(pair with [`redroid-container`](../redroid-container/README.md)), an AVD
+(pair with [`android-emulator`](../android-emulator/README.md)), or a
+physical device — and captures one screenshot per `locale` x `appearance` x
 scene from a JSON scene manifest. Unlike
 [`capture-screenshots-ios`](../capture-screenshots-ios/README.md), there is
 no flow-discovery mode: Android capture is scene-manifest-driven (direct
@@ -177,3 +178,32 @@ platform:
       mode: teardown
       container-name: redroid-screenshots-${{ strategy.job-index }}
 ```
+
+On an x86_64 Linux runner with `/dev/kvm`, boot an AVD instead; nothing about
+the capture itself changes. Give it its own `avd-name` and `wipe-data: 'true'`
+so the `wm size`/`wm density` and demo-mode settings this action applies never
+leak into, or come from, another job's AVD on a persistent host:
+
+```yaml
+- name: Start emulator
+  id: emulator
+  uses: rnw-community/mobile-ci/actions/android-emulator@v3
+  with:
+      mode: start
+      avd-name: mobile-ci-screenshots
+      wipe-data: 'true'
+
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3
+  with:
+      android-serial: ${{ steps.emulator.outputs.android-serial }}
+      # ...the same inputs as above
+
+- name: Stop emulator
+  if: always()
+  uses: rnw-community/mobile-ci/actions/android-emulator@v3
+  with:
+      mode: stop
+```
+
+`store-screenshots.yml` wires both: its `android-driver` input selects
+`redroid` (default) or `avd`.

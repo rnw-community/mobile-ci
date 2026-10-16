@@ -36,14 +36,17 @@ simulator once via [`capture-screenshots-ios`](../../actions/capture-screenshots
 loop `locales x appearances x scenes` on it, optional
 `post-capture-command`, upload `raw-screenshots-ios-<device-slug>`) and
 **capture-android** (one job per Android entry —
-[`redroid-container`](../../actions/redroid-container/README.md) start →
+[`redroid-container`](../../actions/redroid-container/README.md) start, or
+[`android-emulator`](../../actions/android-emulator/README.md) start with
+`android-driver: avd` →
 [`capture-screenshots-android`](../../actions/capture-screenshots-android/README.md)
 → optional `post-capture-command` → upload
 `raw-screenshots-android-<device-slug>` → `if: always()` teardown) →
 **upload** (gated by `upload-screenshots`; requires every platform with
 manifest entries to have captured successfully — a capture job skipped by a
 failed build blocks the upload, only a platform with no manifest entries may
-stay skipped — merges every `raw-screenshots-*` artifact, optionally
+stay skipped — merges every `raw-screenshots-*` artifact, runs an optional
+[`compose-command`](#compose-command) on the collected set, optionally
 validates iOS resolutions against `apple-screenshot-slots`, runs a
 consumer-owned `upload-command`, and optionally verifies/repairs App Store
 Connect duplicates via `asc-dedupe-screenshots`) → **status** (single required check with
@@ -272,28 +275,97 @@ values before relying on this.
 
 ## Android capture
 
-- Runs on the `android-capture-runner-labels` pool (default
-  `["self-hosted","linux-tiered","linux-xl"]`, the fleet's Redroid-capable
-  Linux pool and the one Linux default that is deliberately not the x86_64
-  pool the Maestro/cache workflows use) — a Linux Redroid host per
+`android-driver` picks the device the capture job boots; the capture itself
+(`wm size`/`wm density`, per-app locales, demo-mode status bar, the scene
+loop) is identical on both:
+
+- **`redroid`** (default) — a Redroid container via
+  [`redroid-container`](../../actions/redroid-container/README.md),
+  configured by the `redroid-*` inputs. Needs a Linux Redroid host per
   [docs/self-hosted-runners.md](../self-hosted-runners.md) (binder_linux
-  module, privileged containers, prewarm manifest). This input deliberately
-  does **not** fall back to `runner-labels`, whose macOS default can never
-  run a Redroid container; `capture-runner-labels` stays iOS-only for the
-  same reason.
+  module, privileged containers, prewarm manifest).
+- **`avd`** — Google's emulator via
+  [`android-emulator`](../../actions/android-emulator/README.md), the same
+  action `android-maestro.yml`'s `run-maestro-android` boots its shards with,
+  configured by the `emulator-*` inputs (same names and defaults as
+  `android-maestro.yml`). Needs an x86_64 Linux runner with `/dev/kvm` — the
+  pool `android-maestro.yml` defaults to — and no Docker, privileged
+  container or `binder_linux`. It fails closed on another architecture, and
+  when `emulator -accel-check` reports no hardware acceleration. The guest's
+  RAM and cores are derived from the capture container's cgroup limits unless
+  set, `emulator-slots-dir` caps emulators per host exactly as it does for
+  the Maestro shards, and the always-run stop kills only this job's emulator
+  processes. Every capture job boots a dedicated `mobile-ci-screenshots` AVD
+  with `-wipe-data`, so no app state or device-wide setting crosses between a
+  capture job and a Maestro job sharing a persistent host. A `google_apis`
+  image carries real Google Play Services, which Redroid's stock images do
+  not (see the rendering caveat below).
+
+`android-capture-runner-labels` must name a pool for the chosen driver. Its
+default, `["self-hosted","linux-tiered","linux-xl"]`, is the fleet's
+Redroid-capable Linux pool and matches the default driver; it stays there
+until an `avd` capture run has been validated on the fleet. For `avd`, point
+it at the x86_64 KVM pool:
+
+```yaml
+with:
+    android-driver: avd
+    android-capture-runner-labels: '["self-hosted","trf-linux-amd64-4x8"]'
+```
+
+- `android-capture-runner-labels` deliberately does **not** fall back to
+  `runner-labels`, whose macOS default can run neither driver;
+  `capture-runner-labels` stays iOS-only for the same reason.
 - The Android **build** happens elsewhere: `android-build-runner-labels` →
   `build-runner-labels` → `runner-labels` (the macOS default is correct —
   Google publishes no `linux-aarch64` NDK/cmake, so the Redroid pool cannot
   build).
 - The device must run **API 33+** (`cmd locale set-app-locales`);
   `capture-screenshots-android` fails closed below that. The default
-  `redroid/redroid:15.0.0_64only-latest` image (API 35) is fine.
+  `redroid/redroid:15.0.0_64only-latest` image (API 35) and the default
+  `emulator-api-level` (34) are both fine.
 - `status-bar-override` maps to SystemUI demo mode (clock 09:41, full wifi,
   no mobile data type, battery 100% unplugged, notifications hidden).
-- **Rendering fidelity caveat**: Redroid runs with guest-mode GPU rendering
+- **Rendering fidelity caveat** (`redroid`): Redroid runs with guest-mode GPU rendering
   and a GMS-free image — an app that hard-depends on Play services may
   render "Play services required" dialogs into its screenshots. Validate
   captures against a local emulator before shipping them to a listing.
+
+## compose-command
+
+Optional consumer-owned command, run in the upload job once every capture job's
+artifact is merged under `screenshots-download-dir`. It runs before the
+`apple-screenshot-slots` check and before `upload-command`. This is the hook
+for composing the store set from the collected raw captures: framing each
+device, adding captions, laying out the canvas. Whatever it writes is then
+checked against the slots and uploaded. It runs in the resolved app directory
+with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its
+environment. Its failure fails the upload job. It only runs when the upload job
+runs, which needs `upload-screenshots: true`. Empty (the default) composes
+nothing and leaves the upload job unchanged.
+
+Use it to call your own composer, or mobile-ci's
+[`compose-media`](../../actions/compose-media/README.md) scripts fetched at a
+pinned tag. Captions and store copy are always the consumer's; the shared
+scripts only frame the device:
+
+```yaml
+compose-command: |
+    ref=<mobile-ci tag>
+    media="$RUNNER_TEMP/mobile-ci-media"
+    mkdir -p "$media"
+    for f in media-common.sh frame-device.sh; do
+        curl -fsSL "https://raw.githubusercontent.com/rnw-community/mobile-ci/$ref/scripts/media/$f" -o "$media/$f"
+    done
+    bash "$media/frame-device.sh" --input-dir "$SCREENSHOTS_DIR/ios/iphone-17-pro-max" \
+        --output-dir fastlane/screenshots/framed/ios --background '#F8F8F8-#F1F1F1' --fit 0.78
+```
+
+The upload runner needs the composer's tools: ImageMagick 7 and fastlane's
+frameit assets (`fastlane frameit download_frames`) for the example above.
+`post-capture-command` is the per-capture-job counterpart. It sees one
+device's captures before they are uploaded as an artifact, whereas
+`compose-command` sees the merged set from every device.
 
 ## apple-screenshot-slots
 
@@ -327,8 +399,8 @@ the gate folds that lane into the workflow so every caller gets it.
 
 **What it does:** walks every screenshot set of the target version
 (default `asc-dedupe-version-state: PREPARE_FOR_SUBMISSION`, the editable
-version this run just uploaded to; use `READY_FOR_SALE` to audit the live
-listing), groups each set by file name, deletes all but the oldest copy of
+version this run just uploaded to; use `READY_FOR_DISTRIBUTION` to audit the
+live listing - the deprecated `READY_FOR_SALE` is still accepted and translated), groups each set by file name, deletes all but the oldest copy of
 every duplicate, and appends a per-locale coverage table to the job summary.
 Duplicates on an already-submitted version cannot be modified (ASC returns
 HTTP 409) - they are counted in `undeletable-count`, warned about, and, with
@@ -697,12 +769,12 @@ loadable from `config-path`; for those, the declared `default:` in
 | `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). **cfg** |
 | `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). **cfg** |
 | `scenes-name-pattern`               | no       | `*.flow.yaml`                             | Space-separated `find -name` globs selecting scenes directly inside `screenshots-dir` (`flows` mode only). |
-| `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` glob excluding matched scenes by basename (`flows` mode only). |
+| `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` globs excluding matched scenes by basename (`flows` mode only): one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
 | `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. **cfg** |
 | `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. **cfg** |
 | `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode — on iOS also for deep-link scenes, which need it for the [open-confirmation sheet](#ios-open-confirmation-sheet) check. |
-| `simslim-version` | no | `0.10.0` | iOS capture jobs only. Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
-| `simslim-sha256` | no | `eec00b27f069...` | iOS capture jobs only. SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.10.0 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
+| `simslim-version` | no | `0.12.2` | iOS capture jobs only. Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
+| `simslim-sha256` | no | `b47302da6fb8...` | iOS capture jobs only. SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
 | `simulator-slim-profile` | no | `bundled` | iOS capture jobs only. `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
 | `simulator-slim-repair` | no | `true` | iOS capture jobs only. `true` (the default) re-applies the profile in-job with `simslim on` (reboots the simulator) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. Set it to `false` once the host image ships slimmed devices. |
 | `simulator-requires` | no | `''` | iOS capture jobs only. Comma-separated simslim feature IDs the capture depends on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
@@ -721,7 +793,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `ccache-max-size`                   | no       | `2G`                                     | Bounded, compressed ccache maximum size (iOS build). |
 | `build-env`                         | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of each build job. Fails closed on a malformed line. **cfg** |
 | `build-strategy`                    | no       | `auto`                                    | How this run gets the binaries its capture jobs install, on both platforms. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this run's JavaScript on the Linux pool; only a key with no published base reaches a build job — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the plan job instead of quietly taking a build slot. `native` is the escape hatch and a regression — every run then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy). **cfg** |
-| `repack-runner-labels`              | no       | `["self-hosted","trf-linux-amd64-4x8"]`   | JSON array of self-hosted runner labels for the `plan-ios`/`plan-android` repack jobs of both platforms. The default is the x86_64 Linux pool: a repack re-bundles JavaScript and rewrites an archive, so it needs no Xcode, no Gradle and no build slot. |
+| `repack-runner-labels`              | no       | `["self-hosted","trf-linux-amd64-2x4"]`   | JSON array of self-hosted runner labels for the `plan-ios`/`plan-android` repack jobs of both platforms. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `native-build-label`                | no       | `mobile: force native build`              | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. Only a `pull_request` event carries labels; on `workflow_dispatch`/`schedule` runs it is inert. |
 | `base-backend`                      | no       | `ghcr`                                    | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
 | `base-flavor`                       | no       | `e2e`                                     | Flavor segment of the base binary's address. |
@@ -734,7 +806,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
-| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job (the Redroid pool). No fallback to `runner-labels`. Unlike `android-maestro.yml`/`seed-native-cache.yml`, this default stays on the Redroid-capable pool: `capture-screenshots-android` drives a `redroid-container` (`sudo docker --privileged` + `binder_linux`) and has no `avd` code path, so a rootless-container x86_64 pool cannot run it. |
+| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job. No fallback to `runner-labels`. The default is the Redroid-capable pool, matching the default `android-driver: redroid` (`sudo docker --privileged` + `binder_linux`). With `android-driver: avd`, point it at an x86_64 Linux KVM pool, e.g. `["self-hosted","trf-linux-amd64-4x8"]`; the default stays on the Redroid pool until an `avd` capture run is validated on the fleet. See [Android capture](#android-capture). |
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
@@ -746,6 +818,16 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-keystore-key-password`     | no       | `android`                                 | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `android-build-timeout-minutes`     | no       | `60`                                      | Android build job timeout. |
 | `android-capture-timeout-minutes`   | no       | `90`                                      | Android capture job timeout. |
+| `android-driver`                    | no       | `redroid`                                 | Device backend of the Android capture job: `redroid` (a Redroid container, `redroid-*` inputs) or `avd` (Google's emulator through `android-emulator`, `emulator-*` inputs; x86_64 Linux with `/dev/kvm`). Anything else fails the capture job. See [Android capture](#android-capture). |
+| `emulator-api-level`                | no       | `34`                                      | `avd` only. System image API level; must be 33+. |
+| `emulator-target`                   | no       | `google_apis`                             | `avd` only. System image target. |
+| `emulator-arch`                     | no       | `x86_64`                                  | `avd` only. System image architecture. |
+| `emulator-profile`                  | no       | `pixel_6`                                 | `avd` only. `avdmanager` hardware profile. |
+| `emulator-ram-size`                 | no       | `''`                                      | `avd` only. Emulator RAM in MB. Empty derives it from the capture runner's cgroup memory limit (256 MB per GiB, clamped 1536–4096; 2048 on a 4 vCPU / 8 GiB container); with no limit detected the profile default applies. |
+| `emulator-heap-size`                | no       | `''`                                      | `avd` only. Android VM heap size in MB. |
+| `emulator-cores`                    | no       | `''`                                      | `avd` only. Emulator CPU cores. Empty derives half the cgroup CPU quota, clamped 2–4. |
+| `emulator-slots-dir`                | no       | `''`                                      | `avd` only. Host directory of fleet-provisioned `slot-*` files capping concurrent emulators per host, shared with `android-maestro.yml`'s input of the same name. Empty takes no slot; a missing or empty directory fails the capture job. |
+| `emulator-slot-timeout-minutes`     | no       | `60`                                      | `avd` only. Minutes to wait for a free slot; counts against `android-capture-timeout-minutes`. |
 | `redroid-image`                     | no       | `redroid/redroid:15.0.0_64only-latest`    | Redroid image tag, used on a prewarm-manifest miss. Must resolve to API 33+. |
 | `redroid-memory`                    | no       | `3g`                                      | Container memory limit. |
 | `redroid-cpus`                      | no       | `2`                                       | Container CPU limit. |
@@ -753,11 +835,12 @@ loadable from `config-path`; for those, the declared `default:` in
 | `redroid-boot-timeout-seconds`      | no       | `600`                                     | Seconds to wait for `sys.boot_completed`. |
 | `upload-screenshots`                | no       | `false`                                    | Run the gated upload job. **cfg** |
 | `upload-command`                    | no       | `''`                                     | Consumer-owned command run in the upload job, e.g. `bundle exec fastlane ios ios_screenshots`. Required when `upload-screenshots` is `true`; runs in the resolved app dir (`ios-target`'s `appDir` when set, `android-target`'s otherwise) with `SCREENSHOTS_DIR` (the resolved `screenshots-download-dir`) in its environment. **cfg** |
+| `compose-command`                   | no       | `''`                                     | Optional consumer-owned command run in the upload job on the collected screenshots, after every artifact is merged and before the `apple-screenshot-slots` check and `upload-command`. For example, a device-frame composer such as [`compose-media`](../../actions/compose-media/README.md)'s `frame-device.sh`. Runs in the resolved app dir with `SCREENSHOTS_DIR` in its environment. Its failure fails the upload job. See [compose-command](#compose-command). |
 | `screenshots-download-dir`          | no       | `fastlane/screenshots/raw`                 | Path, relative to the resolved app dir, every capture job's artifact is merged into before `upload-command` runs — iOS under its `ios/` subdirectory, Android under `android/`. **cfg** |
 | `asc-key-path`                      | no       | `''`                                     | Optional path, relative to the resolved app dir, the App Store Connect API key (`.p8`) is written to and removed from for `upload-command`. Leave empty (default) to write it under `$RUNNER_TEMP` instead. |
 | `publish-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of the upload job. Fails closed on a malformed line. For secret values use `EAS_EXTRA_ENV` instead. **cfg** |
 | `asc-dedupe-screenshots`            | no       | `false`                                   | Post-upload App Store Connect duplicate-screenshot verification/repair gate; see [App Store Connect dedupe gate](#app-store-connect-dedupe-gate). Requires `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` secrets and an `ios-target`. **cfg** |
-| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (`READY_FOR_SALE` audits the live listing). **cfg** |
+| `asc-dedupe-version-state`          | no       | `PREPARE_FOR_SUBMISSION`                  | Which version's localizations are deduped (an App Store Connect `AppVersionState`; `READY_FOR_DISTRIBUTION` audits the live listing). **cfg** |
 | `asc-dedupe-app-id`                 | no       | `''` (→ `ios-target.appId`)               | Bundle id of the ASC app whose listing is deduped; set it when the capture build uses a suffixed/e2e bundle id. **cfg** |
 | `asc-fail-on-duplicates`            | no       | `true`                                    | Fail the upload job when any duplicate had to be deleted; set `false` to treat a successful repair as success. **cfg** |
 
@@ -862,7 +945,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.2.0 # v3.2.0
 ```
 
 - `contents: read` — checkout.

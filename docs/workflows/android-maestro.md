@@ -64,7 +64,7 @@ major release.
 | `flows-dir`                     | **yes**  | —                                                  | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
 | `flows-max-depth`               | no       | `1`                                                 | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
 | `flows-name-pattern`            | no       | `*.flow.yaml`                                      | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
-| `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` glob excluding matched flows by basename. |
+| `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
 | `shard-manifest-dir`            | no       | `''`                                                | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `pre-run-flow`                  | no       | `''`                                               | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
 | `flow-recovery-flow`            | no       | `''`                                               | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. Passed to both `android-driver` options. |
@@ -82,14 +82,16 @@ major release.
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
-| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator via `reactivecircus/android-emulator-runner` and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator through this repo's `android-emulator` action and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
 | `emulator-profile`              | no       | `pixel_6`                                          | Android emulator hardware profile (`avd` driver only). |
-| `emulator-ram-size`             | no       | `2048`                                             | Emulator RAM in MB (`avd` driver only). Empty keeps the hardware profile's default; the shipped default is bounded because the default `runner-labels` pool is a memory-bounded 8 GiB container. Raise it only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. |
+| `emulator-ram-size`             | no       | `''`                                               | Emulator RAM in MB (`avd` driver only). Empty (the default) derives it from the test runner's cgroup memory limit — 256 MB per GiB of limit, rounded down to a 256 MB step and clamped to 1536–4096 — so the default `runner-labels` pool (a memory-bounded 8 GiB container) gets 2048, the value this input was hand-set to before; with no memory limit detected the hardware profile's default applies. The detected limit and the resolved value are in the shard's step summary. Set a value only with headroom measured on the pool the run lands on: a cgroup limit kills qemu instead of reporting an out-of-memory condition, and the job then fails as a lost adb connection partway through. The `avd` counterpart to `redroid-memory`. See [Emulator budget and host slots](#emulator-budget-and-host-slots). |
 | `emulator-heap-size`            | no       | `''`                                               | Android VM heap size in MB for the emulated device (`avd` driver only). |
-| `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty keeps the profile default. |
+| `emulator-cores`                | no       | `''`                                               | Emulator CPU cores (`avd` driver only). Empty derives half the test runner's cgroup CPU quota, rounded down and clamped to 2–4 (2 on the default 4 vCPU pool); with no quota detected the profile default applies. |
+| `emulator-slots-dir`            | no       | `''`                                               | Host directory of fleet-provisioned `slot-*` files capping concurrent emulators on the test runner's host across every job and repository (`avd` driver only). Each shard holds an exclusive `flock` on one slot from before boot until shutdown. Empty takes no slot. Set it only once the fleet bind-mounts the directory into every runner container: a missing directory, no `slot-*` files or an unwritable slot fails the shard. See [Emulator budget and host slots](#emulator-budget-and-host-slots). |
+| `emulator-slot-timeout-minutes` | no       | `60`                                               | Minutes a shard waits for a free slot in `emulator-slots-dir` before failing; busy slots are logged every 60 s. The wait counts against `test-timeout-minutes`. |
 | `redroid-image`                 | no       | `redroid/redroid:15.0.0_64only-latest`             | Redroid image tag, used on a `redroid-prewarm-manifest-path` miss. Verified against a `6.17` host kernel — older `13.x` tags are known to never finish boot on that kernel, and `14.x` images hard-lock the guest kernel version. |
 | `redroid-memory`                | no       | `3g`                                               | Container memory limit (`docker --memory` / `--memory-swap`). |
 | `redroid-cpus`                  | no       | `2`                                                 | Container CPU limit (`docker --cpus`). |
@@ -102,7 +104,7 @@ major release.
 | `build-command`                 | no       | `''`                                               | Optional workspace JS build command run at repo root before the native build. |
 | `build-env`                     | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `build-strategy`                | no       | `auto`                                             | How this pull request gets the APK its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript; only a key with no published base runs Gradle — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to run Gradle at all: a missing base fails the build. `native` is the escape hatch and a regression — every pull request then rebuilds the APK, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
-| `repack-runner-labels`          | no       | `["self-hosted","trf-linux-amd64-4x8"]`            | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the same x86_64 Linux pool the Gradle build uses; a repack needs only Node, a JDK and the Android build-tools. |
+| `repack-runner-labels`          | no       | `["self-hosted","trf-linux-amd64-2x4"]`            | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `native-build-label`            | no       | `mobile: force native build`                       | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
 | `base-backend`                  | no       | `ghcr`                                             | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
 | `base-flavor`                   | no       | `e2e`                                              | Flavor segment of the base binary's address. |
@@ -126,6 +128,50 @@ or an Expo/EAS token. The `android-keystore-*` inputs default to the published
 React Native **debug** keystore constants, which are not secrets; a release key
 belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
 **token permission** the caller grants; see [Permissions](#permissions).
+
+## Emulator budget and host slots
+
+On the `avd` driver each test shard sizes its emulator from **its own
+container**, not the host: `run-maestro-android` boots it through the
+[`android-emulator`](../../actions/android-emulator/README.md) action, which
+reads the cgroup memory limit
+and CPU quota (cgroup v2, then v1) and, for an empty `emulator-ram-size` /
+`emulator-cores`, derives 256 MB of guest RAM per GiB of limit (clamped
+1536–4096) and half the CPU quota (clamped 2–4). On the default 4 vCPU / 8 GiB
+pool that is 2048 MB and 2 cores — the same 2048 this workflow used to
+hard-code — so a caller that set `emulator-ram-size: '2048'` only to fit that
+pool can drop the override. An explicit value always wins. Each shard's step
+summary shows the detected limits and the resolved values.
+
+A host can still run more emulators than it has memory for when several
+runner containers on it each boot one. `emulator-slots-dir` caps that host-wide:
+the fleet provisions one `slot-*` file per emulator the host may run (see
+[self-hosted-runners.md](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver)),
+and each shard holds a `flock` on one from before boot until shutdown, waiting
+up to `emulator-slot-timeout-minutes` for a free one. Unlike a workflow
+`concurrency` group, a waiting shard is never cancelled and the cap spans every
+repository on the host. Leave it empty until the fleet provisions the
+directory: set against a host without it, every shard fails closed.
+
+Before it boots anything, `android-emulator` runs `emulator -accel-check` and
+fails the shard when hardware acceleration is unavailable, rather than letting
+the emulator fall back to software emulation and time out much later.
+
+The shutdown step kills only the emulator processes this job started
+(identified by its `RUNNER_TRACKING_ID`), so a failed or cancelled shard cannot
+leave a qemu holding the host's memory, and a neighbouring job's emulator is
+never touched.
+
+The `plan`/repack job needs neither KVM nor an emulator — only Node, a JDK and
+the Android build-tools. It runs on `repack-runner-labels`, which defaults to
+the smaller non-KVM `["self-hosted","trf-linux-amd64-2x4"]` pool, so it stays
+off the emulator lane. A fleet without that pool points it at any x86_64 Linux
+pool with that toolchain:
+
+```yaml
+with:
+    repack-runner-labels: '["self-hosted","my-linux-pool"]'
+```
 
 ## Build strategy
 
@@ -320,7 +366,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -395,7 +441,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
 ```
 
 - `contents: read` — checkout.
@@ -434,7 +480,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]

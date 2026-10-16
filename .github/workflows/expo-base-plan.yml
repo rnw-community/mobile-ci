@@ -34,11 +34,16 @@ on:
                 default: true
             runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels. A repack needs Node, a
-                    JDK on android, and no simulator, no Xcode and no Mac slot.
+                    JSON array of self-hosted runner labels. A repack needs Node, a JDK
+                    on android, and no simulator, no Xcode and no Mac slot. The default
+                    is the 2 vCPU / 4 GiB x86_64 Linux pool without /dev/kvm
+                    (trf-linux-amd64-2x4), so these jobs never queue on the scarce KVM
+                    emulator lane (#169). Keep it an x86_64 pool: Google publishes
+                    Android build-tools for x86_64 Linux only. Move it to the 4x8 pool
+                    if bundling the app's JavaScript needs more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             timeout-minutes:
                 type: number
                 required: false
@@ -356,7 +361,7 @@ jobs:
 
             - name: expo-native-key
               id: native-key
-              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.2.0 # v3.2.0
               with:
                   platform: ${{ inputs.platform }}
                   working-directory: ${{ matrix.target.appDir }}
@@ -369,7 +374,7 @@ jobs:
             - name: expo-base-binary (fetch)
               id: base
               if: inputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.2.0 # v3.2.0
               with:
                   mode: fetch
                   platform: ${{ inputs.platform }}
@@ -398,7 +403,7 @@ jobs:
 
             - name: expo-repack
               if: inputs.repack && steps.base.outputs.found == 'true'
-              uses: rnw-community/mobile-ci/actions/expo-repack@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-repack@v3.2.0 # v3.2.0
               with:
                   platform: ${{ inputs.platform }}
                   base-path: ${{ steps.base.outputs.path }}

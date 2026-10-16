@@ -21,11 +21,13 @@ on:
             android-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the Android dev-release job.
-                    Defaults to macOS because Google's Android NDK build tooling used by EAS
-                    local builds is x86_64-only on Linux.
+                    The default is the x86_64 Linux pool (4 vCPU / 8 GiB): `eas build
+                    --local` for Android needs Google's NDK, which ships for x86_64
+                    Linux (and macOS) only, never linux-aarch64, and needs no Mac.
+                    Proven on that pool by suuudokuuu's native-publish Android job.
                 type: string
                 required: false
-                default: '["self-hosted","macOS","ARM64"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             app-dir:
                 description: App directory containing app.json/eas.json.
                 type: string
@@ -87,19 +89,53 @@ on:
             ios-pre-build-command:
                 description: >-
                     Optional consumer-owned command (e.g. patching eas.json or asserting a
-                    computed build number) run in app-dir before the iOS EAS build, with the
-                    job's env — including EXPO_TOKEN and DEVELOPMENT_BUILD_NUMBER
-                    (<run_number>.<run_attempt>, already exported to the job env by the
-                    "Compute deterministic build number" step).
+                    computed build number) run in app-dir before the iOS EAS build. Its env is
+                    EXPO_TOKEN, DEVELOPMENT_BUILD_NUMBER (<run_number>.<run_attempt>),
+                    publish-env, EAS_EXTRA_ENV and EXPO_ASC_API_KEY_PATH (empty unless the
+                    ASC_API_KEY secret is set) — not eas.json profile env, which EAS applies
+                    only inside eas build.
                 type: string
                 required: false
                 default: ''
             android-pre-build-command:
                 description: >-
                     Optional consumer-owned command run in app-dir before the Android EAS
-                    build, with the job's env — including EXPO_TOKEN and
-                    DEVELOPMENT_BUILD_NUMBER (<run_number>.<run_attempt>, already exported to
-                    the job env by the "Compute deterministic build number" step).
+                    build. Its env is EXPO_TOKEN, DEVELOPMENT_BUILD_NUMBER
+                    (<run_number>.<run_attempt>), publish-env and EAS_EXTRA_ENV — not eas.json
+                    profile env, which EAS applies only inside eas build.
+                type: string
+                required: false
+                default: ''
+            ios-verify-embedded-build-number:
+                description: >-
+                    Fail the iOS job, before any release is created, when the built .ipa's
+                    CFBundleVersion differs from DEVELOPMENT_BUILD_NUMBER
+                    (<run_number>.<run_attempt>). Off by default because it only holds when
+                    the app wires that variable into its build number, e.g. app.config.js
+                    ios.buildNumber: process.env.DEVELOPMENT_BUILD_NUMBER with eas.json
+                    cli.appVersionSource: local. There is no Android equivalent: versionCode
+                    is an integer and can never equal <run_number>.<run_attempt>.
+                type: boolean
+                required: false
+                default: false
+            ios-post-build-command:
+                description: >-
+                    Optional consumer-owned command run in app-dir after the iOS EAS build and
+                    its embedded build number read-back, before the GitHub Release is created;
+                    a non-zero exit stops publication. Runs with the job's env plus
+                    ARTIFACT_PATH (the built .ipa), EMBEDDED_BUILD_NUMBER (CFBundleVersion) and
+                    EMBEDDED_VERSION (CFBundleShortVersionString).
+                type: string
+                required: false
+                default: ''
+            android-post-build-command:
+                description: >-
+                    Optional consumer-owned command run in app-dir after the Android EAS build
+                    and its embedded build number read-back, before the GitHub Release is
+                    created; a non-zero exit stops publication. Runs with the job's env plus
+                    ARTIFACT_PATH (the built .apk/.aab), EMBEDDED_BUILD_NUMBER (versionCode)
+                    and EMBEDDED_VERSION (versionName), both empty when the host has no tool
+                    to read them.
                 type: string
                 required: false
                 default: ''
@@ -407,14 +443,6 @@ jobs:
                   RUN_NUMBER: ${{ github.run_number }}
               run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-            - name: Run iOS pre-build command
-              if: inputs.ios-pre-build-command != ''
-              working-directory: ${{ inputs.app-dir }}
-              shell: bash
-              env:
-                  IOS_PRE_BUILD_COMMAND: ${{ inputs.ios-pre-build-command }}
-              run: eval "$IOS_PRE_BUILD_COMMAND"
-
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
               id: asc-key
@@ -435,6 +463,15 @@ jobs:
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS pre-build command
+              if: inputs.ios-pre-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  IOS_PRE_BUILD_COMMAND: ${{ inputs.ios-pre-build-command }}
+              run: eval "$IOS_PRE_BUILD_COMMAND"
 
             - name: EAS build (iOS, development)
               id: build
@@ -469,6 +506,71 @@ jobs:
                     rm -f "$ASC_KEY_PATH"
                   fi
 
+            - name: Read embedded build number
+              id: embedded
+              shell: bash
+              env:
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  VERIFY_EMBEDDED_BUILD_NUMBER: ${{ inputs.ios-verify-embedded-build-number }}
+              run: |
+                  set -euo pipefail
+                  if ! entries="$(unzip -Z1 "$ARTIFACT_PATH")"; then
+                    echo "::error::Cannot list the entries of '$ARTIFACT_PATH'; the EAS build did not produce a readable .ipa."
+                    exit 1
+                  fi
+                  info_plist_entry="$(printf '%s\n' "$entries" | grep -E '^Payload/[^/]+\.app/Info\.plist$' || true)"
+                  case "$info_plist_entry" in
+                    ''|*$'\n'*)
+                      echo "::error::Expected exactly one Payload/<name>.app/Info.plist in '$ARTIFACT_PATH', found: ${info_plist_entry:-none}."
+                      exit 1
+                      ;;
+                  esac
+                  plist_dir="$RUNNER_TEMP/ios-dev-release/embedded"
+                  mkdir -p "$plist_dir"
+                  plist="$plist_dir/Info.plist"
+                  unzip -p "$ARTIFACT_PATH" "$info_plist_entry" > "$plist"
+                  read_plist_value() {
+                    local value
+                    if value="$(plutil -extract "$1" raw -o - "$plist" 2>/dev/null)"; then
+                      printf '%s' "$value"
+                      return 0
+                    fi
+                    if [ -x /usr/libexec/PlistBuddy ] && value="$(/usr/libexec/PlistBuddy -c "Print :$1" "$plist" 2>/dev/null)"; then
+                      printf '%s' "$value"
+                      return 0
+                    fi
+                    return 1
+                  }
+                  if ! build_number="$(read_plist_value CFBundleVersion)" || [ -z "$build_number" ]; then
+                    echo "::error::Cannot read CFBundleVersion from $info_plist_entry in '$ARTIFACT_PATH'; an .ipa without a readable build number is a broken artifact."
+                    exit 1
+                  fi
+                  version="$(read_plist_value CFBundleShortVersionString || true)"
+                  case "$build_number$version" in
+                    *$'\n'*)
+                      echo "::error::CFBundleVersion or CFBundleShortVersionString in '$ARTIFACT_PATH' spans more than one line; refusing to publish it as metadata."
+                      exit 1
+                      ;;
+                  esac
+                  echo "The .ipa embeds CFBundleVersion '$build_number' and CFBundleShortVersionString '${version}'."
+                  if [ "$VERIFY_EMBEDDED_BUILD_NUMBER" = true ] && [ "$build_number" != "${DEVELOPMENT_BUILD_NUMBER:-}" ]; then
+                    echo "::error::The built .ipa embeds CFBundleVersion '$build_number', but this run's DEVELOPMENT_BUILD_NUMBER is '${DEVELOPMENT_BUILD_NUMBER:-}' and ios-verify-embedded-build-number is on. Wire the variable into the build number - app.config.js ios.buildNumber: process.env.DEVELOPMENT_BUILD_NUMBER, with eas.json cli.appVersionSource: local so EAS does not replace it - or turn the check off."
+                    exit 1
+                  fi
+                  echo "embedded-build-number=$build_number" >> "$GITHUB_OUTPUT"
+                  echo "embedded-version=$version" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS post-build command
+              if: inputs.ios-post-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  IOS_POST_BUILD_COMMAND: ${{ inputs.ios-post-build-command }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
+                  EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+              run: eval "$IOS_POST_BUILD_COMMAND"
+
             - name: Upload iOS dev build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
@@ -488,6 +590,8 @@ jobs:
                   BRANCH_NAME: ${{ github.ref_name }}
                   WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
+                  EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
+                  EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -512,9 +616,14 @@ jobs:
                     --arg tagName "$TAG_NAME" \
                     --arg assetName "$asset_name" \
                     --arg sha256 "$sha256" \
+                    --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
+                    --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
-                     + {buildNumber: $buildNumber, commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
+                     + {buildNumber: $buildNumber}
+                     + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
+                     + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
                   echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
                   echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
@@ -570,12 +679,14 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
-                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                  if ! published="$(gh api "repos/$REPOSITORY/releases" --paginate --jq '.[] | select(.draft == false) | [.created_at, .tag_name] | @tsv')"; then
+                    echo "::error::Failed to list existing releases via 'gh api' while pruning old dev releases."
                     exit 1
                   fi
+                  release_tags="$(printf '%s\n' "$published" \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | sort -r -t "$(printf '\t')" -k1,1 \
+                    | cut -f2)"
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue
@@ -855,6 +966,86 @@ jobs:
                   test -f "$output_path"
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
+            - name: Read embedded build number
+              id: embedded
+              shell: bash
+              env:
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+              run: |
+                  set -euo pipefail
+                  build_number=''
+                  version=''
+                  read_tool=''
+                  case "$ARTIFACT_PATH" in
+                    *.apk)
+                      aapt2_bin=''
+                      if command -v aapt2 >/dev/null 2>&1; then
+                        aapt2_bin="$(command -v aapt2)"
+                      else
+                        for sdk in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+                          [ -n "$sdk" ] || continue
+                          newest_build_tools="$(for candidate in "$sdk"/build-tools/*/aapt2; do
+                            if [ -x "$candidate" ]; then basename "$(dirname "$candidate")"; fi
+                          done | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+                          if [ -n "$newest_build_tools" ]; then aapt2_bin="$sdk/build-tools/$newest_build_tools/aapt2"; fi
+                          if [ -n "$aapt2_bin" ]; then break; fi
+                        done
+                      fi
+                      if [ -z "$aapt2_bin" ]; then
+                        echo "::warning::No aapt2 on PATH or under \$ANDROID_HOME / \$ANDROID_SDK_ROOT build-tools, so the versionCode and versionName '$ARTIFACT_PATH' embeds cannot be read; build-meta.json omits embeddedBuildNumber and embeddedVersion."
+                      else
+                        if ! badging="$("$aapt2_bin" dump badging "$ARTIFACT_PATH")"; then
+                          echo "::error::'$aapt2_bin dump badging' cannot read '$ARTIFACT_PATH'; the EAS build did not produce a readable .apk."
+                          exit 1
+                        fi
+                        read_tool="$aapt2_bin dump badging"
+                        package_line="$(printf '%s\n' "$badging" | sed -n '/^package:/{p;q;}')"
+                        build_number="$(printf '%s\n' "$package_line" | sed -n "s/.* versionCode='\([^']*\)'.*/\1/p")"
+                        version="$(printf '%s\n' "$package_line" | sed -n "s/.* versionName='\([^']*\)'.*/\1/p")"
+                      fi
+                      ;;
+                    *.aab)
+                      if command -v bundletool >/dev/null 2>&1; then
+                        read_tool='bundletool dump manifest'
+                        if ! build_number="$(bundletool dump manifest --bundle "$ARTIFACT_PATH" --xpath /manifest/@android:versionCode)" \
+                          || ! version="$(bundletool dump manifest --bundle "$ARTIFACT_PATH" --xpath /manifest/@android:versionName)"; then
+                          echo "::error::'bundletool dump manifest' cannot read '$ARTIFACT_PATH'; the EAS build did not produce a readable .aab."
+                          exit 1
+                        fi
+                        build_number="$(printf '%s' "$build_number" | tr -d '\r\n')"
+                        version="$(printf '%s' "$version" | tr -d '\r\n')"
+                      else
+                        echo "::warning::No bundletool on PATH, so the versionCode and versionName '$ARTIFACT_PATH' embeds cannot be read; build-meta.json omits embeddedBuildNumber and embeddedVersion."
+                      fi
+                      ;;
+                    *)
+                      echo "::error::Cannot read the build number '$ARTIFACT_PATH' embeds: expected an .apk or .aab."
+                      exit 1
+                      ;;
+                  esac
+                  if [ -n "$read_tool" ]; then
+                    case "$build_number" in
+                      ''|*[!0-9]*)
+                        echo "::error::'$read_tool' read no integer versionCode from '$ARTIFACT_PATH' (got '$build_number'); refusing to publish a build whose embedded build number cannot be read."
+                        exit 1
+                        ;;
+                    esac
+                    echo "The build embeds versionCode '$build_number' and versionName '$version'."
+                  fi
+                  echo "embedded-build-number=$build_number" >> "$GITHUB_OUTPUT"
+                  echo "embedded-version=$version" >> "$GITHUB_OUTPUT"
+
+            - name: Run Android post-build command
+              if: inputs.android-post-build-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  ANDROID_POST_BUILD_COMMAND: ${{ inputs.android-post-build-command }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
+                  EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+              run: eval "$ANDROID_POST_BUILD_COMMAND"
+
             - name: Upload Android dev build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
@@ -874,6 +1065,8 @@ jobs:
                   BRANCH_NAME: ${{ github.ref_name }}
                   WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
+                  EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
+                  EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -898,9 +1091,14 @@ jobs:
                     --arg tagName "$TAG_NAME" \
                     --arg assetName "$asset_name" \
                     --arg sha256 "$sha256" \
+                    --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
+                    --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
-                     + {buildNumber: $buildNumber, commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
+                     + {buildNumber: $buildNumber}
+                     + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
+                     + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
                   echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
                   echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
@@ -956,12 +1154,14 @@ jobs:
                       exit 1
                       ;;
                   esac
-                  if ! release_tags="$(gh api "repos/$REPOSITORY/releases" --paginate --slurp | \
-                    jq -r --arg prefix "$TAG_PREFIX" --arg current "$CURRENT_TAG" \
-                      '[.[][] | select(.draft == false) | select(.tag_name | startswith($prefix)) | select(.tag_name != $current)] | sort_by(.created_at) | reverse | .[].tag_name')"; then
-                    echo "::error::Failed to list existing releases via 'gh api | jq' while pruning old dev releases."
+                  if ! published="$(gh api "repos/$REPOSITORY/releases" --paginate --jq '.[] | select(.draft == false) | [.created_at, .tag_name] | @tsv')"; then
+                    echo "::error::Failed to list existing releases via 'gh api' while pruning old dev releases."
                     exit 1
                   fi
+                  release_tags="$(printf '%s\n' "$published" \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | sort -r -t "$(printf '\t')" -k1,1 \
+                    | cut -f2)"
                   tags=()
                   while IFS= read -r tag; do
                     [ -n "$tag" ] || continue

@@ -58,7 +58,13 @@ on:
                 required: false
                 default: '*.flow.yaml'
             flows-exclude-pattern:
-                description: Optional find ! -name glob excluding matched flows by basename.
+                description: >-
+                    Optional find ! -name globs excluding matched flows by
+                    basename: a comma- and/or newline-separated list of globs,
+                    each emitted as its own find ! -name clause (surrounding
+                    whitespace trimmed, empty entries ignored; a single glob
+                    works as before, a glob containing a comma is not
+                    supported).
                 type: string
                 required: false
                 default: ''
@@ -223,7 +229,7 @@ on:
                     against simslim-sha256 (preinstall on the host to avoid it).
                 type: string
                 required: false
-                default: '0.10.0'
+                default: '0.12.2'
             simslim-sha256:
                 description: >-
                     SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
@@ -234,7 +240,7 @@ on:
                     Bump together with simslim-version.
                 type: string
                 required: false
-                default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
+                default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
             simulator-slim-profile:
                 description: >-
                     `bundled` (the default) uses mobile-ci's own `profiles/ci.json` -
@@ -349,13 +355,15 @@ on:
                 default: auto
             repack-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the repack job.
-                    The default is the x86_64 Linux pool: a repack re-bundles
-                    JavaScript and rewrites an archive, so it needs no Xcode, no
-                    simulator and no Mac slot.
+                    JSON array of self-hosted runner labels for the repack job. The
+                    default is the 2 vCPU / 4 GiB x86_64 Linux pool without /dev/kvm
+                    (trf-linux-amd64-2x4), so these jobs never queue on the scarce KVM
+                    emulator lane (#169). Keep it an x86_64 pool: Google publishes
+                    Android build-tools for x86_64 Linux only. Move it to the 4x8 pool
+                    if bundling the app's JavaScript needs more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             native-build-label:
                 description: >-
                     Pull-request label forcing build-strategy: native for that one
@@ -454,7 +462,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.1.0 # v3.1.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v3.2.0 # v3.2.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -537,7 +545,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.2.0 # v3.2.0
         with:
             platform: ios
             targets: ${{ inputs.targets }}
@@ -736,7 +744,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.2.0 # v3.2.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -770,7 +778,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.2.0 # v3.2.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -783,7 +791,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.2.0 # v3.2.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -799,7 +807,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.2.0 # v3.2.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -823,7 +831,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.2.0 # v3.2.0
               with:
                   mode: publish
                   platform: ios
@@ -877,7 +885,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.2.0 # v3.2.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -894,7 +902,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v3.2.0 # v3.2.0
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}

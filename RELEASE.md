@@ -107,7 +107,8 @@ being cut) that consumers pin to in practice. **No
    `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`; `native-publish.yml`
    and `native-dev-release.yml` have none) **and** the composite actions that
    call sibling actions (`run-maestro-android-redroid/action.yml` →
-   `redroid-container`, `expo-native-key/action.yml` → `native-fingerprint`).
+   `redroid-container`, `run-maestro-android/action.yml` →
+   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`).
    The reusable-workflow self-references (four workflows →
    `expo-base-plan.yml`) are checked by the same loop. Fail
    closed: any reference whose tag or trailing comment does not match the
@@ -126,7 +127,8 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/expo-ota-preview.yml \
                .github/workflows/expo-fingerprint-guard.yml \
                actions/expo-native-key/action.yml \
-               actions/run-maestro-android-redroid/action.yml; do
+               actions/run-maestro-android-redroid/action.yml \
+               actions/run-maestro-android/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
        --jq '.content' | base64 -d)"
      if ! printf '%s\n' "$content" | grep -q 'uses: rnw-community/mobile-ci/'; then

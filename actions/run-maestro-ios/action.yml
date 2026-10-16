@@ -31,7 +31,12 @@ inputs:
     required: false
     default: '*.flow.yaml'
   flows-exclude-pattern:
-    description: Optional find ! -name glob excluding matched flows by basename.
+    description: >-
+      Optional find ! -name globs excluding matched flows by basename: a
+      comma- and/or newline-separated list of globs, each emitted as its own
+      find ! -name clause (surrounding whitespace trimmed, empty entries
+      ignored; a single glob works as before, a glob containing a comma is not
+      supported).
     required: false
     default: ''
   shard-manifest-dir:
@@ -185,7 +190,7 @@ inputs:
       simslim-sha256, and extracted into a job-private directory. Preinstall simslim on the host
       (`brew install mobai-app/tap/simslim`) to avoid the download entirely.
     required: false
-    default: '0.10.0'
+    default: '0.12.2'
   simslim-sha256:
     description: >-
       SHA-256 digest of the `simslim-v<simslim-version>-macos-arm64.tar.gz`
@@ -198,7 +203,7 @@ inputs:
       so only a preinstalled `simslim` on PATH with the exact version can
       satisfy the job. Bump it together with simslim-version.
     required: false
-    default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
+    default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
   simulator-slim-profile:
     description: >-
       `bundled` uses this release's own `profiles/ci.json` (App Store/push/
@@ -210,22 +215,24 @@ inputs:
       device: an erased, recreated, or new-runtime device comes up stock and
       quietly heavy, which is exactly what this catches. Apply the profile on
       the host at provisioning time with `simslim on <udid> --profile <path>`;
-      see docs/self-hosted-runners.md. Leave empty (default) to skip.
+      see docs/self-hosted-runners.md. Defaults to `bundled`; empty opts out.
     required: false
-    default: ''
+    default: bundled
   simulator-slim-repair:
     description: >-
-      When 'true' and simulator-slim-profile reports drift, re-applies the
-      profile in-job with `simslim on --profile` (idempotent, applies only
-      the missing delta, reboots the simulator) and verifies again; a second
-      mismatch still fails. Defaults to 'false' so drift surfaces as a
-      provisioning defect instead of being silently paid for on every shard.
+      When 'true' (the default) and simulator-slim-profile reports drift,
+      re-applies the profile in-job with `simslim on --profile`, which shuts
+      the simulator down, writes the missing overrides offline and boots it
+      once, then verifies again; a second mismatch still fails. The repair
+      is paid once per device, because the overrides persist. Set 'false'
+      on a pool whose image ships slimmed devices, so drift fails the job
+      as the provisioning defect it is.
       `simslim on` itself reads SIMSLIM_BOOT_TIMEOUT / SIMSLIM_SPAWN_TIMEOUT
       from the job env for its own boot-and-reconfigure deadlines; the
       action's follow-up `simctl bootstatus` check after the repair reboot
       uses the same fixed 300-second bound as the initial boot.
     required: false
-    default: 'false'
+    default: 'true'
   simulator-requires:
     description: >-
       Comma-separated simslim feature IDs the flows depend on, e.g.
@@ -481,7 +488,7 @@ runs:
               echo "::error::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE' (see the drift listed above). Re-run 'simslim on $SIMULATOR_UDID --profile $SIMULATOR_SLIM_PROFILE' on the host, or set simulator-slim-repair: 'true' to repair in-job."
               exit 1
             else
-              echo "::warning::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE'; repairing in-job with 'simslim on' (this reboots the simulator). Fix the host's provisioning so every shard stops paying for this."
+              echo "::warning::Simulator '$SIMULATOR_UDID' drifted from slim profile '$SIMULATOR_SLIM_PROFILE'; repairing in-job with 'simslim on' (a shutdown, an offline write and one boot). Fix the host's provisioning so every shard stops paying for this."
               if ! simslim on "$SIMULATOR_UDID" --profile "$SIMULATOR_SLIM_PROFILE"; then
                 echo "::error::'simslim on' failed to repair simulator '$SIMULATOR_UDID' against profile '$SIMULATOR_SLIM_PROFILE'."
                 exit 1
@@ -495,6 +502,21 @@ runs:
                 echo "::error::Simulator '$SIMULATOR_UDID' still does not match slim profile '$SIMULATOR_SLIM_PROFILE' after 'simslim on'; the runtime may predate iOS 18.5 (the earliest with persistent overrides) or the profile may be invalid."
                 exit 1
               fi
+            fi
+          fi
+          if [ -n "$SIMULATOR_SLIM_PROFILE" ]; then
+            if measurement=$(simslim measure "$SIMULATOR_UDID" 2>&1); then
+              {
+                echo "### Slim simulator \`$SIMULATOR_UDID\`"
+                echo
+                echo "Profile: \`$SIMULATOR_SLIM_PROFILE\`"
+                echo
+                echo '```text'
+                printf '%s\n' "$measurement"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning::'simslim measure' failed for '$SIMULATOR_UDID'; continuing without a footprint figure."
             fi
           fi
           if [ -n "$SIMULATOR_REQUIRES" ]; then
@@ -1010,9 +1032,11 @@ runs:
           done
           name_args+=(')')
           find_cmd+=("${name_args[@]}")
-          if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
-            find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
-          fi
+          while IFS= read -r exclude_glob; do
+            exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+            exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+            [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+          done < <(printf '%s\n' "$FLOWS_EXCLUDE_PATTERN" | tr ',' '\n')
           flows=()
           while IFS= read -r flow; do
             flows+=("$flow")

@@ -12,7 +12,10 @@ runner; takes the same `publish-env`/`EAS_EXTRA_ENV` env as the publish jobs
 so its prebuild sees consumer variables like `APP_VARIANT`, and its own
 `android-lint-gate-gradle-args` input so its lint pass can be scoped the same
 way `build-android-app`'s `gradle-args` scopes a build, e.g. to a single ABI
-to avoid an all-ABI lint OOMing D8) — **android-publish** (needs
+to avoid an all-ABI lint OOMing D8; restores a Gradle cache before lint and
+uploads the `lint-results-*` reports when it fails — see
+[Android lint gate](#android-lint-gate-gradle-cache-and-reports)) —
+**android-publish** (needs
 `android-lint-gate`; `eas build --local --platform android`, verifies the
 built `.aab` contains the required 64-bit ABI, uploads the artifact, writes
 the Google service account key to `$RUNNER_TEMP` (or `google-key-path` if
@@ -26,7 +29,7 @@ aggregates the enabled jobs into a single required check.
 | `enable-ios`                      | no       | `true`                                  | Run the `ios-publish` job. |
 | `enable-android`                  | no       | `false`                                 | Run the `android-lint-gate`/`android-publish` jobs. |
 | `ios-runner-labels`                | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS publish job. |
-| `android-runner-labels`            | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the Android publish job. Defaults to macOS because Google's Android NDK build tooling used by EAS local builds is x86_64-only on Linux. |
+| `android-runner-labels`            | no       | `["self-hosted","trf-linux-amd64-4x8"]`         | JSON array of self-hosted runner labels for the Android publish job. The default is the x86_64 Linux pool (4 vCPU / 8 GiB): the NDK `eas build --local` needs ships for x86_64 Linux and macOS only, never linux-aarch64, and the build needs no Mac. Proven there by suuudokuuu's `native-publish` Android job. |
 | `lint-runner-labels`               | no       | `["ubuntu-latest"]`                       | JSON array of hosted runner labels for the `android-lint-gate` job. |
 | `app-dir`                          | **yes**  | —                                        | App directory containing `app.json`/`eas.json` (and `android`/`ios` once prebuilt). |
 | `node-version`                     | no       | `22`                                     | Node version for `actions/setup-node`. |
@@ -37,10 +40,10 @@ aggregates the enabled jobs into a single required check.
 | `eas-cli-version`                  | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`                    | no       | `production`                              | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
 | `submit-profile`                   | no       | `production`                              | EAS submit profile (`eas.json` `submit.<profile>`) used for both platforms. |
-| `ios-pre-submit-command`           | no       | `''`                                      | Optional consumer-owned command (e.g. a fastlane lane) run in `app-dir` before the iOS build, with the job's env (including `EXPO_TOKEN`). |
-| `ios-post-submit-command`          | no       | `''`                                      | Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in `app-dir` after `eas submit` succeeds. |
-| `android-pre-submit-command`       | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android build. |
-| `android-post-submit-command`      | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after `eas submit` succeeds. |
+| `ios-pre-submit-command`           | no       | `''`                                      | Optional consumer-owned command (e.g. a fastlane lane) run in `app-dir` before the iOS build, after the App Store Connect key is written. Receives `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
+| `ios-post-submit-command`          | no       | `''`                                      | Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in `app-dir` after `eas submit` succeeds. Receives `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
+| `android-pre-submit-command`       | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android build. Does **not** receive the Google key path: the key is written only after the build — see [Hook environment](#hook-environment). |
+| `android-post-submit-command`      | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after `eas submit` succeeds. Receives the Google key path as `GOOGLE_APPLICATION_CREDENTIALS` and `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` — see [Hook environment](#hook-environment). |
 | `android-lint-gate`                | no       | `true`                                    | Require the `android-lint-gate` job (Play policy manifest check + `lintVitalRelease`) to pass before `android-publish` runs. |
 | `required-android-abi`             | no       | `arm64-v8a`                                | ABI that must be present in the built `.aab` (Google Play 64-bit requirement). Empty string disables the check. |
 | `asc-key-path`                     | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
@@ -48,7 +51,36 @@ aggregates the enabled jobs into a single required check.
 | `build-timeout-minutes`            | no       | `120`                                     | Publish job timeout (both platforms). |
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
 | `android-lint-gate-gradle-args`    | no       | `''`                                      | Extra whitespace-split arguments appended after `:app:lintVitalRelease` in the `android-lint-gate` job, e.g. `-PreactNativeArchitectures=arm64-v8a`. Not shell-quoted. |
+| `android-lint-gate-gradle-cache`   | no       | `true`                                    | Restore/save the Gradle User Home (`caches` + `wrapper`) in the `android-lint-gate` job via `gradle/actions/setup-gradle` with `cache-provider: basic`. Saved only from default-branch runs, read-only elsewhere. `false` skips `setup-gradle` entirely. See [Android lint gate](#android-lint-gate-gradle-cache-and-reports). |
 | `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`, before `eas build`/`eas submit` (or, for `android-lint-gate`, `expo prebuild`) and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
+
+## Hook environment
+
+The four `*-pre-submit-command` / `*-post-submit-command` hooks run with
+exactly this environment, and nothing more:
+
+| Variable                          | iOS pre | iOS post | Android pre | Android post | Value |
+| --------------------------------- | ------- | -------- | ----------- | ------------ | ----- |
+| `EXPO_TOKEN`                      | yes     | yes      | yes         | yes          | The `EXPO_TOKEN` secret (job env). |
+| `publish-env` entries             | yes     | yes      | yes         | yes          | Every `KEY=VALUE` line of the `publish-env` input. |
+| `EAS_EXTRA_ENV` entries           | yes     | yes      | yes         | yes          | Every `KEY=VALUE` line of the `EAS_EXTRA_ENV` secret, masked. |
+| `EXPO_ASC_API_KEY_PATH`           | yes     | yes      | —           | —            | Absolute path of the written App Store Connect API key (`asc-key-path`, or under `$RUNNER_TEMP`). |
+| `GOOGLE_APPLICATION_CREDENTIALS`  | —       | —        | —           | yes          | Absolute path of the written Google Play service account key (`google-key-path`, or under `$RUNNER_TEMP`). |
+| `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` | —       | —        | —           | yes          | Same value as `GOOGLE_APPLICATION_CREDENTIALS`, e.g. for a fastlane `json_key_file(ENV["GOOGLE_SERVICE_ACCOUNT_KEY_PATH"])`. |
+
+plus the runner's own variables (`GITHUB_*`, `RUNNER_*`, the `PATH` the Node
+and package-manager setup steps built). The App Store Connect key is written
+before the iOS pre-submit hook and removed in `always()` after the post-submit
+hook. The Google key is written only after `eas build --local`, so that an
+`app-dir`-relative `google-key-path` never enters the build archive; the
+Android pre-submit hook therefore runs before it exists and gets no path.
+
+Hooks do **not** see an `eas.json` build profile's `env`: EAS applies that only
+inside `eas build`, not to commands a hook runs such as `expo config` or
+fastlane. A variable a hook needs — `APP_VARIANT`, for instance — must come
+from `publish-env` (or `EAS_EXTRA_ENV` if secret). `ASC_KEY_ID` /
+`ASC_ISSUER_ID` are exported to the EAS steps only; pass them through
+`EAS_EXTRA_ENV` if a hook needs them.
 
 ## Secrets
 
@@ -77,6 +109,45 @@ platform need not declare the other's secrets), but each enabled publish job
 validates its own required secrets at the start of the job and fails fast
 with a clear error if any are missing. Pass them via `secrets: inherit` or an
 explicit `secrets:` block in the caller workflow.
+
+## Android lint gate: Gradle cache and reports
+
+**Gradle cache.** With `android-lint-gate-gradle-cache: true` (the default)
+the gate runs `gradle/actions/setup-gradle` after `expo prebuild` and before
+`gradlew :app:lintVitalRelease`. It uses `cache-provider: basic`, the MIT
+provider that wraps `actions/cache`, rather than setup-gradle's default
+`enhanced` provider, whose proprietary caching library is free for public
+repositories but under "Free Preview" terms for private ones. The basic
+provider:
+
+- caches `~/.gradle/caches` and `~/.gradle/wrapper` as one entry keyed on a
+  hash of every `**/*.gradle*`, `**/gradle-wrapper.properties`,
+  `gradle/*.versions.toml` and `**/versions.properties` in the workspace —
+  which is why the step sits after prebuild: `--clean` regenerates
+  `android/`, and the key must hash its build files (and the native modules'
+  `build.gradle` files under `node_modules`). No restore keys: a changed
+  dependency starts from an empty cache and writes a fresh entry.
+- writes only from a run on the repository's default branch; any other ref
+  (a tag, a release branch) restores read-only. A store release cut from a
+  tag therefore never writes the cache it reads.
+- does nothing on a self-hosted runner whose `$GRADLE_USER_HOME/caches`
+  already exists (setup-gradle never overwrites a pre-existing Gradle User
+  Home, and the basic provider does not support `cache-overwrite-existing`);
+  that runner's persistent home is already the cache.
+- validates every `gradle-wrapper.jar` in the workspace against Gradle's
+  published checksums (setup-gradle's `validate-wrappers` default) and fails
+  the gate on an unknown jar.
+
+The cache never reaches the shipped binary: `android-publish` builds with
+`eas build --local` in its own job and does not restore it. Set
+`android-lint-gate-gradle-cache: false` to run the gate exactly as before,
+with no `setup-gradle` step.
+
+**Lint reports.** When any gate step fails, the job uploads
+`<app-dir>/android/**/build/reports/lint-results-*.html` and `.xml` as the
+artifact `android-lint-gate-reports-attempt-<run attempt>` (14-day
+retention; nothing is uploaded, and no error raised, when the failure came
+before lint wrote a report).
 
 ## Permissions
 

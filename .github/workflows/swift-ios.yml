@@ -129,19 +129,17 @@ on:
             simulator-template-device:
                 description: >-
                     Exact name of a shut-down, prewarmed device on the host to clone
-                    instead of creating a stock one. A slimmed template clones slim,
-                    so the lease pays no repair reboot.
+                    instead of creating one. A clone never inherits slimming, so with
+                    simulator-slim-profile set it is slimmed before its first boot
+                    like a created device.
                 type: string
                 required: false
                 default: ''
             simulator-template-strategy:
                 description: >-
-                    `none` (the default) honours simulator-template-device only.
-                    `auto` clones the host's verified shut-down
-                    `mobile-ci-template-*` device for this device type and runtime
-                    when there is one, and otherwise leaves one behind after the
-                    lease has been slimmed, so the next job on that host pays
-                    seconds instead of a create-boot-slim cycle.
+                    Deprecated: `auto` now leases exactly like `none` (the default),
+                    because a clone of a slim template comes up stock and a created
+                    lease is already slimmed in a single boot.
                 type: string
                 required: false
                 default: none
@@ -157,9 +155,9 @@ on:
                 default: bundled
             simulator-slim-repair:
                 description: >-
-                    Apply the slim profile in-job (a reboot) when the lease does not
-                    match it. Set to false together with
-                    simulator-template-device so an unslimmed template is an error.
+                    Slim the shut-down lease with `simslim on` (offline overrides, one
+                    boot) before verifying it. `false` only verifies, which fails for
+                    any device simulator-lease creates or clones.
                 type: string
                 required: false
                 default: 'true'
@@ -177,11 +175,21 @@ on:
                 description: >-
                     -parallel-testing-worker-count for the test run, required when
                     parallel-testing is `YES` and refused otherwise. Each worker is a
-                    clone of the leased simulator, so raise it only on a slimmed
-                    lease on the 6x12 profile.
+                    clone of the leased simulator, so raise it only on the 6x12
+                    profile.
                 type: string
                 required: false
                 default: ''
+            parallel-testing-slim-workers:
+                description: >-
+                    xcodebuild-test slim-workers, given simulator-slim-profile as its
+                    profile: with parallel-testing `YES`, `simslim watch` slims every
+                    worker clone no-reboot as it boots, since a clone never inherits
+                    the lease's slimming. `auto` (the default) warns if the watch
+                    fails, `true` fails the job, `false` leaves the workers stock.
+                type: string
+                required: false
+                default: auto
             test-plan:
                 type: string
                 required: false
@@ -313,14 +321,14 @@ jobs:
 
             - name: Select the pinned Xcode toolchain
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.2.0 # v3.2.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
             - name: Restore the Xcode build cache
               id: cache
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.2.0 # v3.2.0
               with:
                   mode: restore
                   backend: ${{ inputs.cache-backend }}
@@ -335,7 +343,7 @@ jobs:
 
             - name: Run the Swift Package tests
               if: inputs.enable-swift-test
-              uses: rnw-community/mobile-ci/actions/swift-test@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/swift-test@v3.2.0 # v3.2.0
               with:
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   package-path: ${{ inputs.working-directory }}/${{ inputs.swift-package-path }}
@@ -345,7 +353,7 @@ jobs:
 
             - name: Compile the scheme's tests once
               if: inputs.enable-xcodebuild-test
-              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.2.0 # v3.2.0
               with:
                   mode: build
                   project: ${{ inputs.project }}
@@ -358,7 +366,7 @@ jobs:
 
             - name: Save the Xcode build cache
               if: success() && steps.cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.2.0 # v3.2.0
               with:
                   mode: save
                   backend: ${{ inputs.cache-backend }}
@@ -389,14 +397,14 @@ jobs:
 
             - name: Select the pinned Xcode toolchain
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.2.0 # v3.2.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
             - name: Restore the compiled test products
               id: cache
-              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcode-cache@v3.2.0 # v3.2.0
               with:
                   mode: restore
                   backend: ${{ inputs.cache-backend }}
@@ -430,7 +438,7 @@ jobs:
 
             - name: Lease an isolated simulator
               id: simulator
-              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.2.0 # v3.2.0
               with:
                   device-type: ${{ inputs.simulator-device-type }}
                   runtime: ${{ inputs.simulator-runtime }}
@@ -442,7 +450,7 @@ jobs:
             - name: Select the tests this pull request affects
               id: affected
               if: inputs.affected-tests-map != '' && github.event_name == 'pull_request'
-              uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v3.2.0 # v3.2.0
               with:
                   map-file: ${{ inputs.affected-tests-map }}
                   full-suite-paths: ${{ inputs.affected-tests-full-suite-paths }}
@@ -475,7 +483,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Run this shard's tests
-              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcodebuild-test@v3.2.0 # v3.2.0
               with:
                   mode: test
                   project: ${{ inputs.project }}
@@ -489,13 +497,15 @@ jobs:
                   shard-count: ${{ steps.shards.outputs.count }}
                   parallel-testing: ${{ inputs.parallel-testing }}
                   parallel-testing-worker-count: ${{ inputs.parallel-testing-worker-count }}
+                  slim-workers: ${{ inputs.parallel-testing-slim-workers }}
+                  slim-profile: ${{ inputs.parallel-testing == 'YES' && inputs.simulator-slim-profile || '' }}
                   result-bundle-path: ${{ inputs.result-bundle-path-prefix }}${{ matrix.shard }}.xcresult
                   xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
                   working-directory: ${{ inputs.working-directory }}
 
             - name: Release the leased simulator
               if: always() && steps.simulator.outputs.lease-file != ''
-              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/simulator-lease@v3.2.0 # v3.2.0
               with:
                   mode: release
                   lease-file: ${{ steps.simulator.outputs.lease-file }}
@@ -521,7 +531,7 @@ jobs:
                   fetch-depth: ${{ inputs.checkout-fetch-depth }}
 
             - name: Select the pinned Xcode toolchain
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.2.0 # v3.2.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -547,7 +557,7 @@ jobs:
 
             - name: Install the Apple signing material
               id: signing
-              uses: rnw-community/mobile-ci/actions/apple-signing@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/apple-signing@v3.2.0 # v3.2.0
               with:
                   certificate-base64: ${{ secrets.apple-certificate-base64 }}
                   certificate-password: ${{ secrets.apple-certificate-password }}
@@ -557,7 +567,7 @@ jobs:
                   expected-application-identifier: ${{ inputs.team-id }}.${{ inputs.bundle-id }}
 
             - name: Archive and export the scheme
-              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v3.2.0 # v3.2.0
               with:
                   project: ${{ inputs.project }}
                   workspace: ${{ inputs.workspace }}
@@ -598,6 +608,6 @@ jobs:
 
             - name: Remove the Apple signing material
               if: always()
-              uses: rnw-community/mobile-ci/actions/apple-signing@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/apple-signing@v3.2.0 # v3.2.0
               with:
                   mode: remove

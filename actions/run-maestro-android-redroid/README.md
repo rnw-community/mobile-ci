@@ -33,8 +33,8 @@ adb-reachable at all.
 
 Use this instead of `run-maestro-android` on hosts where the AVD emulator
 cannot run at all — Google publishes no `linux-aarch64` build of the Android
-emulator, NDK, or `cmake` packages, so `reactivecircus/android-emulator-runner`
-is structurally unusable on `linux-aarch64` self-hosted runners regardless of
+emulator, NDK, or `cmake` packages, so `android-emulator` (the AVD action
+`run-maestro-android` boots with) is structurally unusable on `linux-aarch64` self-hosted runners regardless of
 tuning. Redroid needs no `sdkmanager`, no NDK, no emulator binary — just a
 container image and the host's `binder_linux` module — and runs at native
 `arm64` speed with no virtualization inside the guest at all.
@@ -133,7 +133,7 @@ platform:
 | `flows-dir`               | yes      | —                                      | Directory whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
 | `flows-max-depth`         | no       | `1`                                    | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion.                          |
 | `flows-name-pattern`      | no       | `*.flow.yaml`                          | Space-separated `find -name` globs (OR'd together) selecting runnable flows, at every depth `flows-max-depth` permits. |
-| `flows-exclude-pattern`   | no       | `''`                                    | Optional `find ! -name` glob excluding matched flows by basename.                           |
+| `flows-exclude-pattern`   | no       | `''`                                    | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported).                           |
 | `shard-manifest-dir`      | no       | `''`                                    | Directory of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative path per line) overriding the index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `shard-index`             | yes      | —                                      | Zero-based shard index this job runs.                                                       |
 | `shard-count`             | yes      | —                                      | Total number of shards flows are distributed across.                                        |

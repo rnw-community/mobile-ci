@@ -12,6 +12,8 @@ permissions:
 env:
     ACTIONLINT_VERSION: '1.7.12'
     ZIZMOR_VERSION: '1.16.3'
+    IMAGEMAGICK_VERSION: '7.1.2-34'
+    IMAGEMAGICK_APPIMAGE_SHA256: '6e9edfd35d5f30b57c27533afe003d6085faaf8607b207426f398d11751acf93'
 
 jobs:
     actionlint:
@@ -69,8 +71,32 @@ jobs:
               shell: bash
               run: pip install --user 'PyYAML==6.0.2'
 
+            - name: Install the compose-media toolchain
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sudo apt-get update
+                  sudo apt-get install -y ffmpeg libavif-bin webp
+                  dir="$RUNNER_TEMP/imagemagick"
+                  mkdir -p "$dir/bin"
+                  cd "$dir"
+                  curl -fsSL -o magick.AppImage \
+                    "https://github.com/ImageMagick/ImageMagick/releases/download/${IMAGEMAGICK_VERSION}/ImageMagick-${IMAGEMAGICK_VERSION}-gcc-x86_64.AppImage"
+                  echo "${IMAGEMAGICK_APPIMAGE_SHA256}  magick.AppImage" | sha256sum -c -
+                  chmod +x magick.AppImage
+                  ./magick.AppImage --appimage-extract >/dev/null
+                  printf '#!/bin/sh\nexec "%s/squashfs-root/AppRun" "$@"\n' "$dir" > bin/magick
+                  chmod +x bin/magick
+                  echo "$dir/bin" >> "$GITHUB_PATH"
+                  "$dir/bin/magick" -version | head -n 1
+                  ffmpeg -hide_banner -version | head -n 1
+                  avifenc --version | head -n 1
+                  command -v cwebp ffprobe
+
             - name: Run the action step tests
               shell: bash
+              env:
+                  COMPOSE_MEDIA_REQUIRE_TOOLS: '1'
               run: tests/run-tests.sh
 
             - name: Shellcheck the test harness and every extracted step script
@@ -79,6 +105,7 @@ jobs:
                   set -euo pipefail
                   sudo apt-get update && sudo apt-get install -y shellcheck
                   shellcheck -s bash tests/run-tests.sh tests/lib/*.sh tests/*_test.sh
+                  shellcheck -x scripts/*.sh scripts/media/*.sh
                   scratch="$RUNNER_TEMP/extracted-steps"
                   rm -rf "$scratch"
                   mkdir -p "$scratch"

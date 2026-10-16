@@ -21,11 +21,13 @@ on:
             android-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the Android publish job.
-                    Defaults to macOS because Google's Android NDK build tooling used by EAS
-                    local builds is x86_64-only on Linux.
+                    The default is the x86_64 Linux pool (4 vCPU / 8 GiB): `eas build
+                    --local` for Android needs Google's NDK, which ships for x86_64
+                    Linux (and macOS) only, never linux-aarch64, and needs no Mac.
+                    Proven on that pool by suuudokuuu's native-publish Android job.
                 type: string
                 required: false
-                default: '["self-hosted","macOS","ARM64"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             lint-runner-labels:
                 description: JSON array of hosted runner labels for the android-lint-gate job.
                 type: string
@@ -88,24 +90,33 @@ on:
             ios-pre-submit-command:
                 description: >-
                     Optional consumer-owned command (e.g. a fastlane lane) run in app-dir before
-                    the iOS build, with the job's env (including EXPO_TOKEN).
+                    the iOS build. Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV and
+                    EXPO_ASC_API_KEY_PATH (the written App Store Connect key) — not eas.json
+                    profile env, which EAS applies only inside eas build.
                 type: string
                 required: false
                 default: ''
             ios-post-submit-command:
                 description: >-
                     Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in
-                    app-dir after `eas submit` succeeds.
+                    app-dir after `eas submit` succeeds. Same env as ios-pre-submit-command.
                 type: string
                 required: false
                 default: ''
             android-pre-submit-command:
-                description: Optional consumer-owned command run in app-dir before the Android build.
+                description: >-
+                    Optional consumer-owned command run in app-dir before the Android build. Its
+                    env is EXPO_TOKEN, publish-env and EAS_EXTRA_ENV — not eas.json profile env,
+                    and not the Google key, which is written only after the build.
                 type: string
                 required: false
                 default: ''
             android-post-submit-command:
-                description: Optional consumer-owned command run in app-dir after `eas submit` succeeds.
+                description: >-
+                    Optional consumer-owned command run in app-dir after `eas submit` succeeds.
+                    Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV, and the written Google
+                    service account key path as both GOOGLE_APPLICATION_CREDENTIALS and
+                    GOOGLE_SERVICE_ACCOUNT_KEY_PATH — not eas.json profile env.
                 type: string
                 required: false
                 default: ''
@@ -113,6 +124,16 @@ on:
                 description: >-
                     Require the android-lint-gate job (Play policy manifest check + lintVitalRelease)
                     to pass before android-publish runs.
+                type: boolean
+                required: false
+                default: true
+            android-lint-gate-gradle-cache:
+                description: >-
+                    Restore and save the Gradle User Home (caches + wrapper) in the
+                    android-lint-gate job via gradle/actions/setup-gradle with the
+                    open-source `basic` cache provider, keyed on the generated Gradle
+                    build files. Written only from default-branch runs; read-only
+                    elsewhere. Set false to run lintVitalRelease without setup-gradle.
                 type: boolean
                 required: false
                 default: true
@@ -435,14 +456,6 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
-            - name: Run iOS pre-submit command
-              if: inputs.ios-pre-submit-command != ''
-              working-directory: ${{ inputs.app-dir }}
-              shell: bash
-              env:
-                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
-              run: eval "$IOS_PRE_SUBMIT_COMMAND"
-
             - name: Write App Store Connect API key
               id: asc-key
               working-directory: ${{ inputs.app-dir }}
@@ -462,6 +475,15 @@ jobs:
                   chmod 600 "$key_path"
                   absolute_key_path="$(cd "$(dirname "$key_path")" && pwd)/$(basename "$key_path")"
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
+
+            - name: Run iOS pre-submit command
+              if: inputs.ios-pre-submit-command != ''
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  IOS_PRE_SUBMIT_COMMAND: ${{ inputs.ios-pre-submit-command }}
+              run: eval "$IOS_PRE_SUBMIT_COMMAND"
 
             - name: EAS build (iOS)
               id: build
@@ -515,6 +537,7 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   IOS_POST_SUBMIT_COMMAND: ${{ inputs.ios-post-submit-command }}
               run: eval "$IOS_POST_SUBMIT_COMMAND"
 
@@ -735,6 +758,12 @@ jobs:
                   EAS_BUILD_PROFILE: ${{ inputs.build-profile }}
               run: npx --yes expo prebuild --platform android --no-install --clean
 
+            - name: Restore Gradle User Home cache keyed on the generated build files
+              if: inputs.android-lint-gate-gradle-cache
+              uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+              with:
+                  cache-provider: basic
+
             - name: Run gradlew :app:lintVitalRelease
               working-directory: ${{ inputs.app-dir }}/android
               shell: bash
@@ -784,6 +813,17 @@ jobs:
                     exit 1
                   fi
                   echo "No restricted permissions found in the merged manifest(s)."
+
+            - name: Upload lint-results reports from the failed gate
+              if: failure()
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: android-lint-gate-reports-attempt-${{ github.run_attempt }}
+                  path: |
+                      ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.html
+                      ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.xml
+                  retention-days: 14
+                  if-no-files-found: ignore
 
     android-publish:
         name: Android build and publish
@@ -1094,6 +1134,8 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
+                  GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.google-key.outputs.key-path }}
+                  GOOGLE_SERVICE_ACCOUNT_KEY_PATH: ${{ steps.google-key.outputs.key-path }}
                   ANDROID_POST_SUBMIT_COMMAND: ${{ inputs.android-post-submit-command }}
               run: eval "$ANDROID_POST_SUBMIT_COMMAND"
 

@@ -55,7 +55,12 @@ inputs:
     required: false
     default: '*.flow.yaml'
   flows-exclude-pattern:
-    description: Optional find ! -name glob excluding matched flows by basename.
+    description: >-
+      Optional find ! -name globs excluding matched flows by basename: a
+      comma- and/or newline-separated list of globs, each emitted as its own
+      find ! -name clause (surrounding whitespace trimmed, empty entries
+      ignored; a single glob works as before, a glob containing a comma is not
+      supported).
     required: false
     default: ''
   shard-manifest-dir:
@@ -202,7 +207,7 @@ runs:
   using: composite
   steps:
     - name: Start Redroid container
-      uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v3.2.0 # v3.2.0
       with:
           mode: start
           container-name: ${{ inputs.container-name }}
@@ -674,9 +679,11 @@ runs:
           done
           name_args+=(')')
           find_cmd+=("${name_args[@]}")
-          if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
-            find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
-          fi
+          while IFS= read -r exclude_glob; do
+            exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+            exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+            [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+          done < <(printf '%s\n' "$FLOWS_EXCLUDE_PATTERN" | tr ',' '\n')
           flows=()
           while IFS= read -r flow; do
             flows+=("$flow")
@@ -906,7 +913,7 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v3.2.0 # v3.2.0
       with:
           mode: teardown
           container-name: ${{ inputs.container-name }}

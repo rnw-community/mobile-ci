@@ -303,9 +303,11 @@ for i in "${!name_patterns[@]}"; do
 done
 name_args+=(')')
 find_cmd+=("${name_args[@]}")
-if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
-  find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
-fi
+while IFS= read -r exclude_glob; do
+  exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+  exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+  [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+done < <(printf '%s\n' "$FLOWS_EXCLUDE_PATTERN" | tr ',' '\n')
 flows=()
 while IFS= read -r flow; do
   flows+=("$flow")
