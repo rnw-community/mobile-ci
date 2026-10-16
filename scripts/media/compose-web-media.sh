@@ -150,6 +150,7 @@ main() {
 "
         slug="$(printf '%s\n' "$name" | sed -E 's/-[0-9]+$//')"
         base="$(media_render_template "$template" "$rel" "$slug")"
+        media_claim_output "$base"
         count=$((count + 1))
         if [ "$MEDIA_DRY_RUN" -eq 1 ]; then
             echo "would write $MEDIA_OUTPUT_DIR/$base.avif $MEDIA_OUTPUT_DIR/$base.webp"

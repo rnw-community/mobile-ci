@@ -501,6 +501,24 @@ run_script "$dir" compose-web-media.sh $STILLS_ARGS --dry-run
 assert_succeeded "$dir" && assert_contains "$(cat "$dir/log")" 'would write' 'plan printed' \
     && assert_equals '' "$(find "$dir/work/out" -type f 2>/dev/null)" 'nothing written' && pass_case
 
+case_start 'stills: a template that renders two inputs to one path fails closed, even under --dry-run'
+dir="$(stub_media_workspace)"
+mkdir -p "$dir/work/raw/fr/light"
+printf '1320x2868\n' > "$dir/work/raw/fr/light/home-hero-1.png"
+# shellcheck disable=SC2086
+run_script "$dir" compose-web-media.sh $STILLS_ARGS --output-template '{name}' --dry-run
+dry_status=$STEP_STATUS
+dry_log="$(cat "$dir/log")"
+# shellcheck disable=SC2086
+run_script "$dir" compose-web-media.sh $STILLS_ARGS --output-template '{name}'
+if assert_failed "$dir" \
+    && assert_equals 1 "$([ "$dry_status" -ne 0 ] && echo 1 || echo 0)" "dry-run status ($dry_log)" \
+    && assert_contains "$dry_log" "renders 'home-hero-1' for more than one input" 'dry-run error' \
+    && assert_contains "$(cat "$dir/log")" "renders 'home-hero-1' for more than one input" 'error' \
+    && assert_equals '' "$(find "$dir/work/out" -type f 2>/dev/null)" 'nothing published'; then
+    pass_case
+fi
+
 clip_workspace() {
     local dir
     dir="$(stub_media_workspace)"
@@ -577,6 +595,25 @@ dir="$(clip_workspace)"
 run_script "$dir" compose-web-clips.sh $STILLS_ARGS
 assert_succeeded "$dir" && assert_equals '' "$(find "$dir/work/out" -name '*.gif')" 'no gif' \
     && assert_not_contains "$(cat "$dir/stub.log")" '.gif' 'no gif encode' && pass_case
+
+case_start 'clips: a template that renders two clips to one path fails closed'
+dir="$(clip_workspace)"
+mkdir -p "$dir/work/raw/fr/light"
+printf 'mp4\n' > "$dir/work/raw/fr/light/voice-entry-clip-1.mp4"
+printf '1320x2868\n' > "$dir/work/raw/fr/light/voice-entry-clip-1.png"
+# shellcheck disable=SC2086
+run_script "$dir" compose-web-clips.sh $STILLS_ARGS --output-template '{slug}/{name}'
+assert_failed "$dir" && assert_contains "$(cat "$dir/log")" "renders 'voice-entry/voice-entry-clip-1' for more than one input" 'error' \
+    && assert_equals '' "$(find "$dir/work/out" -type f 2>/dev/null)" 'nothing published' && pass_case
+
+case_start 'frame: a template that renders two captures to one path fails closed'
+dir="$(stub_media_workspace)"
+mkdir -p "$dir/work/raw/fr/light"
+printf '1320x2868\n' > "$dir/work/raw/fr/light/home-hero-1.png"
+# shellcheck disable=SC2086
+run_script "$dir" frame-device.sh $STILLS_ARGS --output-template '{name}'
+assert_failed "$dir" && assert_contains "$(cat "$dir/log")" "renders 'home-hero-1.png' for more than one input" 'error' \
+    && assert_equals '' "$(find "$dir/work/out" -type f 2>/dev/null)" 'nothing published' && pass_case
 
 case_start 'frame: an unknown device fails closed'
 dir="$(stub_media_workspace)"

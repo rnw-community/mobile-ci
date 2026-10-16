@@ -216,7 +216,7 @@ runs:
           echo "::error::Could not list the certificates in '$KEYCHAIN_PATH'."
           exit 1
         fi
-        if printf '%s\n' "$held" | grep -qE "SHA-256 hash: ${wwdr_sha256}|SHA-1 hash: ${wwdr_sha1}"; then
+        if printf '%s\n' "$held" | grep -qF -e "SHA-256 hash: ${wwdr_sha256}" -e "SHA-1 hash: ${wwdr_sha1}"; then
           echo "The distribution certificate already brought the WWDR intermediate into the keychain; not importing it a second time."
           exit 0
         fi

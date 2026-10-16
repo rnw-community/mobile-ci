@@ -438,6 +438,16 @@ if assert_equals 1 "$odd_status" 'odd port status' \
     pass_case
 fi
 
+case_start 'a zero-padded emulator port fails closed instead of booting an unmatched serial'
+validate PORT=05554
+octal_status=$STEP_STATUS
+validate PORT=05558
+if assert_equals 1 "$octal_status" 'octal-valid padded port status' \
+    && assert_equals 1 "$STEP_STATUS" 'octal-invalid padded port status' \
+    && assert_contains "$(cat "$workspace/log")" "port '05558'" 'error message'; then
+    pass_case
+fi
+
 case_start 'a system-image component that would split the sdkmanager package list fails closed'
 validate TARGET='google_apis platform-tools'
 if assert_equals 1 "$STEP_STATUS" 'step status' \

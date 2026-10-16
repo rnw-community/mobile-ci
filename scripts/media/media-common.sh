@@ -132,6 +132,17 @@ media_render_template() {
     printf '%s\n' "$rendered" | sed -e 's#//*#/#g' -e 's#^/##'
 }
 
+# media_claim_output <rendered path> — fails closed when --output-template
+# renders the same path for two inputs, which would otherwise overwrite the
+# first output and publish fewer files than the manifest lists.
+media_claim_output() {
+    if printf '%s' "$MEDIA_CLAIMED" | grep -Fxq -- "$1"; then
+        media_fail "--output-template renders '$1' for more than one input; add {dir}, {parent} or {grandparent} to tell them apart."
+    fi
+    MEDIA_CLAIMED="$MEDIA_CLAIMED$1
+"
+}
+
 media_bytes() {
     wc -c < "$1" | tr -d ' '
 }
@@ -155,6 +166,7 @@ media_init_work() {
     mkdir -p "$MEDIA_STAGE"
     : > "$MEDIA_WORK/manifest.tsv"
     MEDIA_OVERRUNS=''
+    MEDIA_CLAIMED=''
     # shellcheck disable=SC2034 # frame_capture's scratch directory.
     WORK_ROOT="$MEDIA_WORK"
     # shellcheck disable=SC2064 # expand now: the path is fixed for this run.

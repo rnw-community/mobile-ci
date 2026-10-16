@@ -326,6 +326,7 @@ frame_device_main() {
 "
         slug="$(printf '%s\n' "$name" | sed -E 's/-[0-9]+$//')"
         out="$(media_render_template "$template" "$rel" "$slug").png"
+        media_claim_output "$out"
         count=$((count + 1))
         if [ "$MEDIA_DRY_RUN" -eq 1 ]; then
             echo "would write $MEDIA_OUTPUT_DIR/$out"

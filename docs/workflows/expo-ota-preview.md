@@ -81,8 +81,11 @@ itself never publishes outside GitHub Releases.
 - **Previews are serialized per ref, not per app.** The concurrency group is
   `release-tag-prefix` + `app-dir` + the caller's `github.ref`, with
   `cancel-in-progress: false`: a new push to the same pull request queues
-  behind its running preview rather than cancelling it, while previews of
-  different pull requests run independently. A group shared by every pull
+  behind its running preview rather than cancelling it. GitHub keeps only
+  one pending run per group, so a still newer push replaces a preview that
+  is pending (not yet running), and the latest commit's preview is the one
+  published. Previews of different pull requests run independently. A group
+  shared by every pull
   request would let GitHub cancel one PR's pending preview whenever another
   PR's run queued (it keeps one pending run per group). Runs of different
   refs do share the release-pruning prefix; pruning tolerates that by never

@@ -37,6 +37,7 @@ stub_simslim() {
     stub "$dir" simslim '
 printf "simslim %s\n" "$*" >> "$SIMCTL_LOG"
 case "$1" in
+    on) [ -z "${SIMSLIM_ON_HANG_SECONDS:-}" ] || sleep "$SIMSLIM_ON_HANG_SECONDS" ;;
     verify)
         if [ -n "${SIMSLIM_VERIFY_FAIL_ONCE:-}" ] && [ ! -e "$SIMSLIM_VERIFY_FAIL_ONCE" ]; then
             : > "$SIMSLIM_VERIFY_FAIL_ONCE"
@@ -207,6 +208,23 @@ workspace="$(slim_workspace)"
 slim "$workspace" devices-no-template.json SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
 if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" "does not match" 'error message'; then
+    pass_case
+fi
+
+case_start 'a simslim on that never returns fails at the boot timeout instead of hanging the job'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-no-template.json BOOT_TIMEOUT_SECONDS='1' SIMSLIM_ON_HANG_SECONDS='8'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "'simslim on' did not slim and boot '$CREATED_UDID' within 1s" 'error message' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simslim verify' 'nothing verified after the wedge'; then
+    pass_case
+fi
+
+case_start 'a repair whose simslim on never returns fails at the boot timeout'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-no-template.json LEASE_BOOTED='true' BOOT_TIMEOUT_SECONDS='1' SIMSLIM_ON_HANG_SECONDS='8' SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "'simslim on' did not apply" 'error message'; then
     pass_case
 fi
 
