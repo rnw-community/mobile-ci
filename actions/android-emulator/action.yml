@@ -170,7 +170,7 @@ runs:
           matches "$ARCH" '[A-Za-z0-9._-]+' || fail "arch '$ARCH' must match ^[A-Za-z0-9._-]+\$; it becomes part of the sdkmanager package name."
           [ -z "$PROFILE" ] || matches "$PROFILE" '[A-Za-z0-9 ._-]+' || fail "profile '$PROFILE' must match ^[A-Za-z0-9 ._-]+\$."
           matches "$AVD_NAME" '[A-Za-z0-9._-]+' || fail "avd-name '$AVD_NAME' must match ^[A-Za-z0-9._-]+\$."
-          if ! matches "$PORT" '[0-9]+' || [ "$PORT" -lt 5554 ] || [ "$PORT" -gt 5682 ] || [ $((PORT % 2)) -ne 0 ]; then
+          if ! matches "$PORT" '[1-9][0-9]*' || [ "$PORT" -lt 5554 ] || [ "$PORT" -gt 5682 ] || [ $((PORT % 2)) -ne 0 ]; then
             fail "port '$PORT' must be an even number from 5554 to 5682, the emulator's console port range."
           fi
           [ -z "$RAM_SIZE" ] || matches "$RAM_SIZE" '[0-9]+[MG]?' || fail "ram-size '$RAM_SIZE' must be a number of MB, optionally suffixed M or G."

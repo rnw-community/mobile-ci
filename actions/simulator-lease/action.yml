@@ -30,7 +30,7 @@ inputs:
     required: false
     default: ''
   boot-timeout-seconds:
-    description: Bound on `xcrun simctl bootstatus -b`.
+    description: Bound on `xcrun simctl bootstatus -b`, and on each `simslim on` slim-and-boot.
     required: false
     default: '300'
   template-device:
@@ -446,10 +446,15 @@ runs:
           echo "::error::The resolved slim profile '$SLIM_PROFILE' does not exist; the profile step must run before the slim check."
           exit 1
         fi
-        command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
+        command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'simslim on' and 'xcrun simctl bootstatus' with a timeout but is not on PATH."; exit 1; }
         if [ "$LEASE_BOOTED" = 'false' ]; then
           echo "Applying '$SLIM_PROFILE' to the shut-down lease '$SIMULATOR_UDID' and booting it once with 'simslim on'."
-          if ! simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
+          simslim_on_exit=0
+          perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE" || simslim_on_exit=$?
+          if [ "$simslim_on_exit" -eq 142 ]; then
+            echo "::error::'simslim on' did not slim and boot '$SIMULATOR_UDID' within ${BOOT_TIMEOUT_SECONDS}s; treating the boot as wedged."
+            exit 1
+          elif [ "$simslim_on_exit" -ne 0 ]; then
             echo "::error::'simslim on' failed to slim and boot '$SIMULATOR_UDID' with '$SLIM_PROFILE'."
             exit 1
           fi
@@ -468,7 +473,12 @@ runs:
           exit 1
         else
           echo "::notice::Leased simulator '$SIMULATOR_UDID' is not slim; applying '$SLIM_PROFILE' with 'simslim on' (a shutdown and one boot)."
-          if ! simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE"; then
+          simslim_on_exit=0
+          perl -e 'alarm shift; exec @ARGV' "$BOOT_TIMEOUT_SECONDS" simslim on "$SIMULATOR_UDID" --profile "$SLIM_PROFILE" || simslim_on_exit=$?
+          if [ "$simslim_on_exit" -eq 142 ]; then
+            echo "::error::'simslim on' did not apply '$SLIM_PROFILE' to '$SIMULATOR_UDID' and reboot it within ${BOOT_TIMEOUT_SECONDS}s; treating the boot as wedged."
+            exit 1
+          elif [ "$simslim_on_exit" -ne 0 ]; then
             echo "::error::'simslim on' failed to apply '$SLIM_PROFILE' to '$SIMULATOR_UDID'."
             exit 1
           fi

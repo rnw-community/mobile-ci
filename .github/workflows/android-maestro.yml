@@ -164,6 +164,24 @@ on:
                 type: string
                 required: false
                 default: '0'
+            infra-retries:
+                description: >-
+                    Per-flow retry budget, separate from flow-retries, spent
+                    only on a failed attempt that hit ActivityManager's
+                    startProcessLocked non-zero startSeq race (no app
+                    process started). android-driver avd only.
+                type: string
+                required: false
+                default: '1'
+            settle-before-flow:
+                description: >-
+                    'true' force-stops the app and waits for its process to
+                    be gone before every flow attempt, so a launchApp
+                    clearState cannot race the process death pm clear
+                    causes. App data is untouched. android-driver avd only.
+                type: string
+                required: false
+                default: 'true'
             app-warm-seconds:
                 description: >-
                     Seconds the app is left running during a one-off warm-up
@@ -990,6 +1008,8 @@ jobs:
                   maestro-env: ${{ inputs.maestro-env }}
                   maestro-config: ${{ inputs.maestro-config }}
                   flow-retries: ${{ inputs.flow-retries }}
+                  infra-retries: ${{ inputs.infra-retries }}
+                  settle-before-flow: ${{ inputs.settle-before-flow }}
                   maestro-version: ${{ inputs.maestro-version }}
                   api-level: ${{ inputs.emulator-api-level }}
                   target: ${{ inputs.emulator-target }}

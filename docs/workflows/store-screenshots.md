@@ -344,6 +344,13 @@ environment. Its failure fails the upload job. It only runs when the upload job
 runs, which needs `upload-screenshots: true`. Empty (the default) composes
 nothing and leaves the upload job unchanged.
 
+It is consumer-owned code with the same trust as `upload-command`: it is
+`eval`ed with the upload job's environment, which includes the `EXPO_TOKEN`
+secret (set job-wide) and every `publish-env` and `EAS_EXTRA_ENV` variable
+(exported through `$GITHUB_ENV` before it runs). The `ASC_API_KEY`,
+`ASC_KEY_ID` and `ASC_ISSUER_ID` secrets are not in its environment. Do not
+build it from untrusted data such as a pull request title or branch name.
+
 Use it to call your own composer, or mobile-ci's
 [`compose-media`](../../actions/compose-media/README.md) scripts fetched at a
 pinned tag. Captions and store copy are always the consumer's; the shared

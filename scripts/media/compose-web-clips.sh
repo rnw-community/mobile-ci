@@ -181,6 +181,7 @@ main() {
         [ -f "$poster" ] || media_fail "missing poster capture $poster for clip '$name'"
         slug="$(printf '%s\n' "$name" | sed -E 's/-[0-9]+$//; s/-clip$//')"
         base="$(media_render_template "$template" "$rel" "$slug")"
+        media_claim_output "$base"
         count=$((count + 1))
         if [ "$MEDIA_DRY_RUN" -eq 1 ]; then
             echo "would write $MEDIA_OUTPUT_DIR/$base.webm $MEDIA_OUTPUT_DIR/$base.mp4 $MEDIA_OUTPUT_DIR/$base-poster.webp"

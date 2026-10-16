@@ -67,6 +67,10 @@ resolved against the input's path relative to `input-dir`:
 | `{parent}`      | `light`                                         |
 | `{grandparent}` | `en`                                            |
 
+A template that renders the same path for two inputs (e.g. `{name}` over
+`en/light/home-hero-1.png` and `fr/light/home-hero-1.png`) fails closed,
+`--dry-run` included, instead of letting one output overwrite the other.
+
 Budgie's landing layout is `{slug}/{dir}/{name}@2x` (stills) and
 `{slug}/{dir}/{name}` (clips), with `input-dir` set to
 `<raw>/ios/iphone-17-pro-max`.

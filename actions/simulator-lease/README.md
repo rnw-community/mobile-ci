@@ -81,7 +81,7 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `runtime`              | no       | `latest`            | `latest`, or an exact runtime identifier.                                      |
 | `name-prefix`          | no       | `mobile-ci-lease`   | Device-name prefix; run id, attempt and a random suffix are appended.          |
 | `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`, which is unique per device. An explicit path is written with `noclobber`, so a second job cannot overwrite the first job's lease and make one `release` delete the other's device. |
-| `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`.                                         |
+| `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`, and on each `simslim on` slim-and-boot. |
 | `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one. The clone does not inherit slimming; with `slim-profile` it is slimmed before first boot like a created device. |
 | `template-strategy`    | no       | `none`              | Deprecated: `auto` now leases exactly like `none` and prints a notice. |
 | `slim-profile`         | no       | `bundled`           | `bundled` uses this release's [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; `''` leases a stock device. |
