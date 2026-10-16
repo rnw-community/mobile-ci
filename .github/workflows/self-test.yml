@@ -10,7 +10,7 @@ permissions:
     contents: read
 
 concurrency:
-    group: self-test-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+    group: self-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
