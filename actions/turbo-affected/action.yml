@@ -28,6 +28,13 @@ inputs:
     description: Base SHA for the affected computation (maps to TURBO_SCM_BASE). Empty means "always affected".
     required: false
     default: ''
+  exempt-paths:
+    description: >-
+      Newline- or comma-separated git pathspec globs relative to the repository root
+      (e.g. `docs/**`, `**/*.md`). When every file changed since `base-sha` matches one,
+      reports unaffected without running turbo.
+    required: false
+    default: ''
   always-affected:
     description: When `true`, skips the turbo computation and reports affected unconditionally (e.g. non-PR events).
     required: false
@@ -51,6 +58,7 @@ runs:
         TARGETS: ${{ inputs.targets }}
         TURBO_SCM_BASE: ${{ inputs.base-sha }}
         ALWAYS_AFFECTED: ${{ inputs.always-affected }}
+        EXEMPT_PATHS: ${{ inputs.exempt-paths }}
       run: |
         set -euo pipefail
         if [ "$ALWAYS_AFFECTED" = 'true' ]; then
@@ -103,6 +111,41 @@ runs:
           echo 'affected=true' >> "$GITHUB_OUTPUT"
           echo 'No base SHA: reporting affected without turbo detection.'
           exit 0
+        fi
+        if [ -n "$(printf '%s' "$EXEMPT_PATHS" | tr -d '[:space:],')" ]; then
+          set -f
+          set --
+          exempt_globs=''
+          IFS_BEFORE=$IFS
+          IFS='
+        ,'
+          for glob in $EXEMPT_PATHS; do
+            glob=$(printf '%s' "$glob" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            if [ -n "$glob" ]; then
+              set -- "$@" ":(top,exclude,glob)$glob"
+              exempt_globs="${exempt_globs}  ${glob}
+        "
+            fi
+          done
+          IFS=$IFS_BEFORE
+          set +f
+          diff_error=$(mktemp)
+          if changed=$(git diff --no-renames --name-only "${TURBO_SCM_BASE}...HEAD" 2> "$diff_error") \
+            && remaining=$(git diff --no-renames --name-only "${TURBO_SCM_BASE}...HEAD" -- ':/' "$@" 2>> "$diff_error"); then
+            if [ -n "$changed" ] && [ -z "$remaining" ]; then
+              echo 'affected=false' >> "$GITHUB_OUTPUT"
+              printf 'Every changed file matches exempt-paths: reporting unaffected without turbo detection.\nChanged files:\n%s\nExempt globs:\n%s' "$(printf '%s\n' "$changed" | sed 's/^/  /')" "$exempt_globs"
+              echo 'affected=false'
+              exit 0
+            fi
+            if [ -z "$changed" ]; then
+              echo "No files changed since ${TURBO_SCM_BASE}: exempt-paths does not apply."
+            else
+              printf 'Files outside exempt-paths:\n%s\n' "$(printf '%s\n' "$remaining" | sed 's/^/  /')"
+            fi
+          else
+            echo "::warning::Cannot diff ${TURBO_SCM_BASE}...HEAD to apply exempt-paths; running turbo detection. $(tr '\n' ' ' < "$diff_error")"
+          fi
         fi
         TURBO_VERSION=$(node -e '
           const { existsSync, readFileSync } = require("node:fs");
