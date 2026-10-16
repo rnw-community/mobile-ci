@@ -50,6 +50,19 @@ compute (missing base object; logged as a `::warning::`) runs normal turbo
 detection instead, which keeps its fail-closed semantics. `always-affected`
 and an empty `base-sha` still win.
 
+**Trigger paths run detection-free for files turbo cannot see.** turbo only
+attributes a change to the workspace package containing it, so a file outside
+every package (the calling workflow, a `.github/` config, a root script the
+pipeline reads) never makes a target affected. With `trigger-paths` set, a
+change to any file matching one of its globs (same pathspec rules as
+`exempt-paths`; a rename counts at both paths) reports `affected=true` without
+running turbo, and the matching files are logged. `**` makes every pull
+request affected, which is what an empty `target-packages` meant before
+v3.3.0 started deriving it from `targets`. Trigger paths are checked before `exempt-paths`, so a file
+matching both runs the pipeline. A diff git cannot compute reports
+`affected=true` with a `::warning::`, since no match cannot be proven.
+`always-affected` and an empty `base-sha` still win.
+
 ## Inputs
 
 | Name               | Required | Default   | Description                                                          |
@@ -58,6 +71,7 @@ and an empty `base-sha` still win.
 | `target-packages`   | no       | `''`      | Newline-separated package names; affected if any is in turbo's affected set. Empty derives them from `targets`. |
 | `targets`           | no       | `''`      | JSON array of build targets with an `appDir`; read only when `target-packages` is empty. |
 | `exempt-paths`      | no       | `''`      | Newline- or comma-separated pathspec globs relative to the repository root (e.g. `docs/**`, `**/*.md`). When every file changed since `base-sha` matches one, reports `false` without running turbo. |
+| `trigger-paths`     | no       | `''`      | Newline- or comma-separated pathspec globs relative to the repository root (e.g. `.github/workflows/e2e.yml`, `**`). When any file changed since `base-sha` matches one, reports `true` without running turbo. Wins over `exempt-paths`. |
 | `base-sha`          | no       | `''`      | Base SHA for the affected computation (`TURBO_SCM_BASE`).                |
 | `always-affected`   | no       | `false`   | Skip detection and report affected unconditionally.                     |
 
