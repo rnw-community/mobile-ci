@@ -1991,7 +1991,7 @@ jobs:
     capture-ios:
         name: Capture iOS (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-ios, build-ios]
-        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && needs.build-ios.result != 'failure' }}
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
@@ -2084,7 +2084,7 @@ jobs:
     capture-android:
         name: Capture Android (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-android, build-android]
-        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-android == 'true' && needs.plan-android.result == 'success' && needs.build-android.result != 'failure' }}
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-android == 'true' && needs.plan-android.result == 'success' && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.android-capture-runner-labels) }}
         timeout-minutes: ${{ inputs.android-capture-timeout-minutes }}
         strategy:
