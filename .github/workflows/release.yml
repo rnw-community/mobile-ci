@@ -18,6 +18,7 @@ jobs:
     auto-tag-release:
         name: Auto-tag and release
         runs-on: ubuntu-latest
+        timeout-minutes: 15
         outputs:
             tag: ${{ steps.detect.outputs.tag }}
             tagged: ${{ steps.publish.outputs.tagged }}
