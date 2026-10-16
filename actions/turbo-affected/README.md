@@ -20,7 +20,9 @@ caller that already passes its build targets needs no extra input. An
 explicit `target-packages` always wins. Derivation fails closed: empty or
 invalid `targets`, a target without `appDir` or at the repository root
 (which turbo never lists), or a `package.json` that cannot be read or has no
-`name` fails the step.
+`name` fails the step. Any target package — derived or explicit — that
+`turbo ls` does not list as a workspace package fails the step too, since
+turbo could never report it affected.
 
 ## Inputs
 

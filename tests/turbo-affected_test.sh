@@ -11,18 +11,32 @@ set -euo pipefail
 ACTION="$REPO_ROOT/actions/turbo-affected/action.yml"
 STEP='Compute affected packages'
 
-# prepare <turbo affected package names...>
-# Stubs npx as `turbo ls --affected --output=json` reporting the given names,
-# and records that turbo ran.
-prepare() {
-    local dir items='' name
-    dir="$(new_workspace "$ACTION" "$STEP")"
+WORKSPACE_PACKAGES='@example/app @example/tv @example/landing @example/shared @example/other'
+
+turbo_items() {
+    local items='' name
     for name in "$@"; do
         items="${items:+$items,}{\"name\":\"$name\"}"
     done
-    printf '{"packages":{"items":[%s]}}' "$items" > "$dir/turbo.json"
+    printf '{"packages":{"items":[%s]}}' "$items"
+}
+
+# prepare <turbo affected package names...>
+# Stubs npx as `turbo ls --output=json`, listing $WORKSPACE_PACKAGES, and as
+# `turbo ls --affected --output=json`, reporting the given names, and records
+# that turbo ran.
+prepare() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$STEP")"
+    turbo_items "$@" > "$dir/turbo.json"
+    # shellcheck disable=SC2086 # the workspace package list is word-split on purpose.
+    turbo_items $WORKSPACE_PACKAGES > "$dir/turbo-all.json"
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
-    stub "$dir" npx 'touch "$TURBO_RAN_FILE"; cat "$TURBO_JSON_FILE"'
+    stub "$dir" npx 'touch "$TURBO_RAN_FILE"
+case " $* " in
+    *" --affected "*) cat "$TURBO_JSON_FILE" ;;
+    *) cat "$TURBO_ALL_FILE" ;;
+esac'
     printf '%s\n' "$dir"
 }
 
@@ -43,6 +57,7 @@ detect() {
         ALWAYS_AFFECTED=false \
         TURBO_RAN_FILE="$dir/turbo-ran" \
         TURBO_JSON_FILE="$dir/turbo.json" \
+        TURBO_ALL_FILE="$dir/turbo-all.json" \
         "$@"
 }
 
@@ -87,6 +102,27 @@ dir="$(prepare @example/app)"
 detect "$dir" TARGETS="$TARGETS_JSON" TARGET_PACKAGES="$(printf '@example/shared\n@example/other\n')"
 assert_equals 0 "$STEP_STATUS" 'detect exit status' \
     && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && pass_case
+
+case_start 'a derived target package that is not a turbo workspace package fails closed'
+dir="$(prepare @example/landing)"
+package "$dir" packages/app @example/app
+package "$dir" apps/outside @example/outside
+detect "$dir" TARGETS='[{"name":"bare","appDir":"packages/app"},{"name":"tv","appDir":"apps/outside"}]'
+assert_failed_closed "$dir" '@example/outside' && pass_case
+
+case_start 'an explicit target package that is not a turbo workspace package fails closed'
+dir="$(prepare @example/landing)"
+detect "$dir" TARGET_PACKAGES="$(printf '@example/app\n@example/typo\n')"
+assert_failed_closed "$dir" '@example/typo' && pass_case
+
+case_start 'scoped names and appDir spellings that name one package are matched once'
+dir="$(prepare @example/app)"
+package "$dir" packages/app @example/app
+detect "$dir" TARGETS='[{"name":"a","appDir":"./packages/app/"},{"name":"b","appDir":"packages/app"}]'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals 1 "$(grep -c '^@example/app$' "$dir/log")" 'derived name listed once' \
     && pass_case
 
 case_start 'no target-packages and no targets fails closed'

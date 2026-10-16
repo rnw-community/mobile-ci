@@ -97,14 +97,21 @@ runs:
           echo 'No base SHA: reporting affected without turbo detection.'
           exit 0
         fi
-        affected=$(npx -y "turbo@${TURBO_VERSION}" ls --affected --output=json | TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
-          let raw = "";
-          process.stdin.on("data", chunk => (raw += chunk));
-          process.stdin.on("end", () => {
-            const names = (JSON.parse(raw).packages?.items ?? []).map(item => item.name);
-            const targets = process.env.TARGET_PACKAGES.split("\n").map(name => name.trim()).filter(Boolean);
-            process.stdout.write(String(names.some(name => targets.includes(name))));
-          });
+        listing=$(mktemp -d)
+        npx -y "turbo@${TURBO_VERSION}" ls --output=json > "$listing/workspace.json"
+        npx -y "turbo@${TURBO_VERSION}" ls --affected --output=json > "$listing/affected.json"
+        affected=$(LISTING="$listing" TARGET_PACKAGES="$TARGET_PACKAGES" node -e '
+          const { readFileSync } = require("node:fs");
+          const names = file => (JSON.parse(readFileSync(`${process.env.LISTING}/${file}`, "utf8")).packages?.items ?? []).map(item => item.name);
+          const workspace = names("workspace.json");
+          const changed = names("affected.json");
+          const targets = process.env.TARGET_PACKAGES.split("\n").map(name => name.trim()).filter(Boolean);
+          const unknown = targets.filter(name => !workspace.includes(name));
+          if (unknown.length > 0) {
+            process.stderr.write(`::error::Target packages not in the turbo workspace, so never reported as affected: ${unknown.join(", ")}\n`);
+            process.exit(1);
+          }
+          process.stdout.write(String(changed.some(name => targets.includes(name))));
         ')
         echo "affected=${affected}" >> "$GITHUB_OUTPUT"
         echo "affected=${affected}"
