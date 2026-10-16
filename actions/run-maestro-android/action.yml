@@ -137,6 +137,29 @@ inputs:
       passed. The step fails if any flow exhausts its attempts.
     required: false
     default: '0'
+  infra-retries:
+    description: >-
+      Non-negative retry budget per flow, separate from flow-retries, spent
+      only on a failed attempt whose device events buffer (since the
+      attempt started) shows ActivityManager's startProcessLocked ... with
+      non-zero startSeq race for app-id: the am_wtf naming it, or an
+      activity of the app created with neither a process start nor its
+      onCreate after it. Such an attempt is reported as a ::warning:: and
+      retried even when flow-retries is 0; once this budget is spent it
+      falls back to flow-retries. A failure that cannot be classified (no
+      device clock reading) counts against flow-retries.
+    required: false
+    default: '1'
+  settle-before-flow:
+    description: >-
+      'true' runs am force-stop on app-id before every flow attempt
+      (pre-run-flow and retries included, before pre-flow-command) and waits
+      up to 5 seconds for its process to be gone, so a launchApp clearState
+      cannot race ActivityManager's handling of the process pm clear kills.
+      App data is untouched. 'false' leaves the app as the previous flow
+      left it.
+    required: false
+    default: 'true'
   maestro-version:
     description: >-
       Pinned Maestro CLI version. Installed by downloading the matching
@@ -414,6 +437,9 @@ runs:
           MAESTRO_ENV: ${{ inputs.maestro-env }}
           MAESTRO_CONFIG: ${{ inputs.maestro-config }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
+          INFRA_RETRIES: ${{ inputs.infra-retries }}
+          SETTLE_BEFORE_FLOW: ${{ inputs.settle-before-flow }}
+          ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
           PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
       run: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
@@ -429,6 +455,7 @@ runs:
           timeout 30 adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
           timeout 30 adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
           timeout 30 adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+          timeout 30 adb logcat -d -b events > "$OUT_DIR/logcat-events.txt" 2>&1 || true
           if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
             stage_dir="$OUT_DIR/maestro-debug"
             work_dir="$MAESTRO_DEBUG_SCRATCH_DIR.pack"

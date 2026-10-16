@@ -94,6 +94,8 @@ platform:
 | `maestro-env`        | no       | `''`          | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `maestro-config`      | no       | `''`           | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
 | `flow-retries`       | no       | `0`           | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
+| `infra-retries`      | no       | `1`           | Per-flow retry budget, separate from `flow-retries`, spent only on a failed attempt that hit ActivityManager's `startProcessLocked ... with non-zero startSeq` race — see [ActivityManager startSeq race](#activitymanager-startseq-race). Such an attempt is reported as a `::warning::` and retried even when `flow-retries` is `0`; once this budget is spent it falls back to `flow-retries`. |
+| `settle-before-flow` | no       | `true`        | `true` runs `am force-stop` on `app-id` before every flow attempt (`pre-run-flow` and retries included, before `pre-flow-command`) and waits up to 5 s for its process to be gone. App data is untouched. `false` leaves the app as the previous flow left it. Anything else fails the step. |
 | `maestro-version`    | no       | `2.8.0`       | Pinned Maestro CLI version. Installed by downloading the matching `cli-<version>` release directly from [mobile-dev-inc/Maestro releases](https://github.com/mobile-dev-inc/Maestro/releases) to `$HOME/.maestro-pinned/<version>` — immune to a pre-existing Homebrew-managed `maestro` on the host. An existing `maestro` already on `PATH` is reused only when its version exactly matches. |
 | `api-level`          | no       | `34`          | Android emulator API level.                                          |
 | `target`             | no       | `google_apis` | Android emulator system image target.                                |
@@ -104,9 +106,37 @@ platform:
 | `cores`              | no       | `''`          | Emulator CPU cores. Empty derives half the runner's cgroup CPU quota — see [Emulator budget](../android-emulator/README.md#emulator-budget); with no quota detected the profile default applies. An explicit value always wins. |
 | `emulator-slots-dir` | no       | `''`          | Host directory of fleet-provisioned `slot-*` files capping concurrent emulators on the host — see [Host emulator slots](../android-emulator/README.md#host-emulator-slots). Empty takes no slot. A missing directory, no `slot-*` files, an unwritable slot, or no `flock`/`setsid` on `PATH` fails the job. |
 | `emulator-slot-timeout-minutes` | no | `60`      | Minutes to wait for a free slot before failing the job; busy slots are logged every 60 s. `0` tries each slot once. Ignored when `emulator-slots-dir` is empty. |
-| `artifacts-dir`      | yes      | —             | Directory final-state capture (screenshot, logcat) is written to.    |
+| `artifacts-dir`      | yes      | —             | Directory final-state capture (screenshot, `logcat-full.txt`, `logcat-crash.txt`, `logcat-events.txt`) and the per-failed-attempt `logcat-events/<flow>-attempt-<n>.txt` are written to. |
 | `artifact-name`      | yes      | —             | Uploaded artifact name.                                               |
 | `retention-days`     | no       | `7`           | Uploaded artifact retention in days.                                   |
+
+## ActivityManager startSeq race
+
+Maestro's `launchApp: clearState: true` runs `pm clear`, which kills the
+running app process, then starts the launcher activity about a second later.
+When that start reaches ActivityManager while it is still processing the
+killed process's death, it takes the `startProcessLocked ... with non-zero
+startSeq` path and never forks the app: the activity is created, no process
+binds to it, and the flow's first selector times out on a blank screen. No
+app code runs, so this is not an app failure.
+
+- **Avoided** by `settle-before-flow` (default `true`): before every attempt
+  the action runs `am force-stop` and waits for `pidof` to come back empty,
+  so Maestro's `pm clear` finds no process to kill and there is no death in
+  flight when it launches. It deliberately does not run `pm clear` itself:
+  clearing data stays the flow's choice, so a flow without `clearState`
+  still sees the storage the previous flow left. Only a flow that expects the
+  previous flow's *running process* (no `launchApp` of its own) is affected,
+  and sharding already gives such a flow no guaranteed predecessor.
+- **Detected** after every failed attempt by scanning `adb logcat -b events`
+  from the attempt's start (device clock, `logcat -T`) for the `am_wtf`
+  naming `app-id`, or for an `app-id` activity created with neither an
+  `am_proc_start` for `app-id` nor that activity's `wm_on_create_called`
+  after it. A match emits a `::warning::` and retries on `infra-retries`.
+- **Evidenced** by `logcat-events/<flow>-attempt-<n>.txt` for every failed
+  attempt and `logcat-events.txt` in the final-state capture: the main
+  buffer usually rotates past the failure on a long shard, the events buffer
+  holds it.
 
 ## Outputs
 
@@ -128,9 +158,9 @@ how the fleet's slot files cap emulators per host
 and which processes the always-run stop kills
 ([Stop](../android-emulator/README.md#stop)).
 
-A per-flow timing table (flow, duration, status, attempts) is appended to
-`$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row
-when `pre-run-flow` is set. Time spent in `flow-recovery-flow` is excluded
+A per-flow timing table (flow, duration, status, attempts, infra retries) is
+appended to `$GITHUB_STEP_SUMMARY` after every shard run, including a
+priming-flow row when `pre-run-flow` is set. Attempts include infra retries. Time spent in `flow-recovery-flow` is excluded
 from those rows; when a recovery flow is configured, a line below the table
 reports how many times it ran and how many of those runs failed.
 
