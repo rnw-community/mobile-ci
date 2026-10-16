@@ -55,9 +55,12 @@ under `app/build/outputs/apk/release`, same as the unscoped task — and use
 that trip the same OOM independently of scoping.
 
 **Why `cmdline-tools-version` defaults to `12266719`.** This is the version
-baked into the `android-actions/setup-android@v3` tag release actually pinned
-by this action — **not** whatever `main` on that action currently defaults to.
-The two have drifted before and collided with the cmdline-tools version
+the `android-actions/setup-android@v3` release this action used to pin
+defaulted to — **not** whatever the upstream action currently defaults to
+(`v4` defaults to `15859902`, cmdline-tools 22.0). This action always passes
+the input explicitly, so moving to `setup-android@v4` (which only changed the
+Node runtime, the default, and the macOS arm64 download for 22.0+) did not
+change the cmdline-tools a build gets. The two have drifted before and collided with the cmdline-tools version
 pre-licensed on some runner SDK images, producing license-acceptance failures
 that only reproduce on cold runners. Pin the input explicitly per consumer if
 your fleet's runner image bakes a different cmdline-tools version; do not rely
