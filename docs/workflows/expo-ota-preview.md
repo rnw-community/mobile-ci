@@ -50,7 +50,10 @@ published and skipped. Zero-byte files (for example `expo export`'s empty
 `_global.css`) are skipped, because GitHub Releases cannot store 0-byte assets.
 Older preview releases are pruned to `prune-keep`, scoped to this app's tag
 prefix (`<prefix>-<app-scope>-`) and ordered by last update, and never deletes a
-release updated within the grace window. Assets are hash-named and immutable;
+release updated within the grace window. To delete a pull request's previews
+when it closes, pass the same prefix to
+[`pr-closed-cleanup-reusable.yml`](pr-closed-cleanup-reusable.md)'s
+`ota-preview-release-tag-prefix`. Assets are hash-named and immutable;
 the manifest referenced by the comment is the one published with that commit.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
