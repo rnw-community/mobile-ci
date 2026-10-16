@@ -869,7 +869,7 @@ jobs:
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
-        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.build.result != 'failure' }}
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
