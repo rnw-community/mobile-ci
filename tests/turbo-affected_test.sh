@@ -609,6 +609,15 @@ assert_equals 0 "$STEP_STATUS" 'detect exit status' \
     && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
     && pass_case
 
+case_start 'trigger-paths ** runs a pull request whose diff is empty'
+dir="$(prepare)"
+exempt_repo "$dir" docs/guide.md > /dev/null
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$(git -C "$dir/work" rev-parse HEAD)" TRIGGER_PATHS='docs/**, **'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
 case_start 'a comma-separated trigger-paths list is honoured'
 dir="$(prepare)"
 base="$(exempt_repo "$dir" README.md)"

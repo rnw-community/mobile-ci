@@ -123,6 +123,12 @@ runs:
         glob_list() {
           printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d'
         }
+        if glob_list "$TRIGGER_PATHS" | grep -qxF '**'; then
+          echo 'affected=true' >> "$GITHUB_OUTPUT"
+          echo 'trigger-paths includes **: reporting affected without turbo detection.'
+          echo 'affected=true'
+          exit 0
+        fi
         if [ -n "$(glob_list "$TRIGGER_PATHS")" ]; then
           set --
           while IFS= read -r glob; do

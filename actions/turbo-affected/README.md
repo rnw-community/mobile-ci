@@ -57,7 +57,7 @@ pipeline reads) never makes a target affected. With `trigger-paths` set, a
 change to any file matching one of its globs (same pathspec rules as
 `exempt-paths`; a rename counts at both paths) reports `affected=true` without
 running turbo, and the matching files are logged. `**` makes every pull
-request affected, which is what an empty `target-packages` meant before
+request affected, even one whose diff is empty, which is what an empty `target-packages` meant before
 v3.3.0 started deriving it from `targets`. Trigger paths are checked before `exempt-paths`, so a file
 matching both runs the pipeline. A diff git cannot compute reports
 `affected=true` with a `::warning::`, since no match cannot be proven.
