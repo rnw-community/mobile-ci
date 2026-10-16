@@ -835,8 +835,8 @@ on:
                 required: false
 
 concurrency:
-    group: store-screenshots-${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
     contents: read

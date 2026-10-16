@@ -924,6 +924,17 @@ consumer-owned, and some fastlane setups authenticate a different way (e.g.
 `FASTLANE_SESSION` threaded through `EAS_EXTRA_ENV`). The two capture
 pipelines themselves need no secrets at all.
 
+## Concurrency
+
+The workflow sets its own `concurrency` group of the caller's workflow name,
+the `config-path` and `screenshots-dir` inputs and, for a `pull_request` run, the pull request's ref. Only a
+`pull_request` run is cancelled when a newer push to the same pull request
+supersedes it. Every other run — a push to the default branch, a schedule, a
+manual dispatch — gets a group unique to its run id, so a newer push never
+cancels or displaces an older default-branch run. A caller that sets its own
+workflow-level `concurrency` should follow the same rule,
+`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`.
+
 ## Permissions
 
 **The calling job must declare its own `permissions:` block.** A reusable
