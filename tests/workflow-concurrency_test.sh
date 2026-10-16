@@ -23,6 +23,9 @@ workflow = yaml.safe_load(open(path, encoding='utf-8'))
 
 PULL_REQUEST_ONLY = re.compile(
     r"^\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$")
+PULL_REQUEST_REF_OR_RUN_ID = re.compile(
+    r"\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*&&\s*"
+    r"github\.(?:ref|head_ref)\s*\|\|\s*github\.run_id\s*\}\}")
 
 
 def check(where, concurrency, problems):
@@ -33,10 +36,11 @@ def check(where, concurrency, problems):
         return
     if isinstance(cancel, str) and PULL_REQUEST_ONLY.match(cancel.strip()):
         group = str(concurrency.get('group', ''))
-        if 'github.run_id' not in group:
+        if not PULL_REQUEST_REF_OR_RUN_ID.search(group):
             problems.append(
-                f"{where}: a non-pull_request run's group must be unique to "
-                f"the run (github.run_id), or a third default-branch run "
+                f"{where}: the group must be the pull request's ref on "
+                f"pull_request, so a newer push cancels its predecessor, and "
+                f"github.run_id otherwise, or a third default-branch run "
                 f"still displaces the pending second one")
         return
     problems.append(

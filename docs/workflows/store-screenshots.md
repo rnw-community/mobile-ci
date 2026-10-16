@@ -932,8 +932,13 @@ the `config-path` and `screenshots-dir` inputs and, for a `pull_request` run, th
 supersedes it. Every other run — a push to the default branch, a schedule, a
 manual dispatch — gets a group unique to its run id, so a newer push never
 cancels or displaces an older default-branch run. A caller that sets its own
-workflow-level `concurrency` should follow the same rule,
-`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`.
+workflow-level `concurrency` should follow the same rule: a group of
+`${{ github.event_name == 'pull_request' && github.ref || github.run_id }}`,
+so a pull request's runs share one group while every other run gets its
+own, together with
+`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. Making
+only `cancel-in-progress` conditional is not enough: a group shared by
+default-branch pushes still lets a third pending run replace the second.
 
 ## Permissions
 
