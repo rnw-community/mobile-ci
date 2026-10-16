@@ -369,7 +369,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.0 # v3.3.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -460,7 +460,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.0 # v3.3.0
 ```
 
 - `contents: read` — checkout.
@@ -499,7 +499,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.2.0 # v3.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.0 # v3.3.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
