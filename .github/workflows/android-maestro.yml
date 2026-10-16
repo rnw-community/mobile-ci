@@ -235,6 +235,15 @@ on:
                 type: string
                 required: false
                 default: ''
+            trigger-paths:
+                description: >-
+                    Newline- or comma-separated git pathspec globs, relative to the
+                    repository root (e.g. .github/workflows/e2e.yml). A pull request that
+                    changes a matching file runs without turbo detection; ** runs every
+                    pull request. Wins over exempt-paths.
+                type: string
+                required: false
+                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -568,6 +577,7 @@ jobs:
                   base-sha: ${{ github.event.pull_request.base.sha }}
                   always-affected: ${{ github.event_name != 'pull_request' }}
                   exempt-paths: ${{ inputs.exempt-paths }}
+                  trigger-paths: ${{ inputs.trigger-paths }}
 
             # The test job's matrix.shard-index must exactly match
             # inputs.shard-count: fewer indices than shard-count silently

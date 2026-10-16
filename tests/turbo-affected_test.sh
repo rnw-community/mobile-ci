@@ -56,6 +56,7 @@ detect() {
         TURBO_SCM_BASE=base-sha \
         ALWAYS_AFFECTED=false \
         EXEMPT_PATHS= \
+        TRIGGER_PATHS= \
         TURBO_RAN_FILE="$dir/turbo-ran" \
         TURBO_JSON_FILE="$dir/turbo.json" \
         TURBO_ALL_FILE="$dir/turbo-all.json" \
@@ -576,6 +577,103 @@ assert_equals 0 "$STEP_STATUS" 'detect exit status' \
     && assert_equals true "$(step_output "$dir" affected)" 'affected' \
     && pass_case
 
+# v3.3.0 gated every pull request through turbo, removing v3.2.0's "empty
+# target-packages runs every pull request" escape hatch, and turbo never lists
+# a file outside a workspace package (the caller's own workflow, a .github/
+# config) as affecting anything. trigger-paths runs the pipeline whenever a
+# matching file changed.
+
+case_start 'trigger-paths defaults to empty'
+if ! default="$(action_input_default "$ACTION" trigger-paths)"; then
+    fail_case 'action.yml declares no trigger-paths input'
+elif assert_equals '' "$default" 'trigger-paths default'; then
+    pass_case
+fi
+
+case_start 'a changed file outside every package that matches trigger-paths is affected without running turbo'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" .github/workflows/media-smoke.yml)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" TRIGGER_PATHS="$(printf '.github/workflows/media-smoke.yml\n.github/landing-media.config.json\n')"
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && assert_contains "$(cat "$dir/log")" '.github/workflows/media-smoke.yml' 'triggering file logged' \
+    && pass_case
+
+case_start 'trigger-paths ** runs every pull request that changes anything'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" docs/guide.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" TRIGGER_PATHS='**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'trigger-paths ** runs a pull request whose diff is empty'
+dir="$(prepare)"
+exempt_repo "$dir" docs/guide.md > /dev/null
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$(git -C "$dir/work" rev-parse HEAD)" TRIGGER_PATHS='docs/**, **'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'a comma-separated trigger-paths list is honoured'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" README.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" TRIGGER_PATHS='docs/**, README.md'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'no changed file matching trigger-paths falls through to turbo detection'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" packages/app/index.js)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" TRIGGER_PATHS='.github/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'trigger-paths wins over exempt-paths for a file both match'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" docs/guide.md)"
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" EXEMPT_PATHS='docs/**' TRIGGER_PATHS='docs/guide.md'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && pass_case
+
+case_start 'a file moved out of a trigger path still triggers'
+dir="$(prepare)"
+base="$(exempt_repo "$dir" README.md)"
+(
+    cd "$dir/work"
+    mkdir -p .github
+    printf 'base\n' > .github/flows.json
+    git add -A
+    git commit -qm 'add flows config'
+) >> "$dir/git-log" 2>&1
+base="$(git -C "$dir/work" rev-parse HEAD)"
+(
+    cd "$dir/work"
+    git mv .github/flows.json packages/app/flows.json
+    git commit -qm 'move the flows config'
+) >> "$dir/git-log" 2>&1
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE="$base" TRIGGER_PATHS='.github/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && pass_case
+
+case_start 'a base SHA git cannot diff against reports affected rather than guessing no trigger matched'
+dir="$(prepare)"
+exempt_repo "$dir" docs/guide.md > /dev/null
+detect "$dir" TARGET_PACKAGES=@example/app TURBO_SCM_BASE=0123456789abcdef0123456789abcdef01234567 TRIGGER_PATHS='.github/**'
+assert_equals 0 "$STEP_STATUS" 'detect exit status' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_contains "$(cat "$dir/log")" '::warning::' 'diff failure warned' \
+    && pass_case
+
 for workflow in ios-maestro android-maestro; do
     case_start "$workflow.yml hands its targets to turbo-affected and is always affected only off pull requests"
     wiring="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON'
@@ -589,10 +687,12 @@ print(step['with'].get('targets', ''))
 print(step['with'].get('always-affected', ''))
 print(step['with'].get('exempt-paths', ''))
 print(workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('exempt-paths', {}).get('default', 'MISSING'))
+print(step['with'].get('trigger-paths', ''))
+print(workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('trigger-paths', {}).get('default', 'MISSING'))
 PYTHON
 )"
     # shellcheck disable=SC2016 # the expressions are matched literally.
-    assert_equals "$(printf '%s\n%s\n%s\n' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}')" "$wiring" 'turbo-affected with:' \
+    assert_equals "$(printf '%s\n%s\n%s\n\n%s\n' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}' '${{ inputs.trigger-paths }}')" "$wiring" 'turbo-affected with:' \
         && pass_case
 done
 

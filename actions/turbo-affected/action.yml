@@ -35,6 +35,13 @@ inputs:
       reports unaffected without running turbo.
     required: false
     default: ''
+  trigger-paths:
+    description: >-
+      Newline- or comma-separated git pathspec globs relative to the repository root
+      (e.g. `.github/workflows/e2e.yml`, `**`). When any file changed since `base-sha`
+      matches one, reports affected without running turbo. Wins over `exempt-paths`.
+    required: false
+    default: ''
   always-affected:
     description: When `true`, skips the turbo computation and reports affected unconditionally (e.g. non-PR events).
     required: false
@@ -59,6 +66,7 @@ runs:
         TURBO_SCM_BASE: ${{ inputs.base-sha }}
         ALWAYS_AFFECTED: ${{ inputs.always-affected }}
         EXEMPT_PATHS: ${{ inputs.exempt-paths }}
+        TRIGGER_PATHS: ${{ inputs.trigger-paths }}
       run: |
         set -euo pipefail
         if [ "$ALWAYS_AFFECTED" = 'true' ]; then
@@ -112,23 +120,47 @@ runs:
           echo 'No base SHA: reporting affected without turbo detection.'
           exit 0
         fi
-        if [ -n "$(printf '%s' "$EXEMPT_PATHS" | tr -d '[:space:],')" ]; then
-          set -f
+        glob_list() {
+          printf '%s\n' "$1" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d'
+        }
+        if glob_list "$TRIGGER_PATHS" | grep -qxF '**'; then
+          echo 'affected=true' >> "$GITHUB_OUTPUT"
+          echo 'trigger-paths includes **: reporting affected without turbo detection.'
+          echo 'affected=true'
+          exit 0
+        fi
+        if [ -n "$(glob_list "$TRIGGER_PATHS")" ]; then
+          set --
+          while IFS= read -r glob; do
+            set -- "$@" ":(top,glob)$glob"
+          done <<TRIGGER_GLOBS
+        $(glob_list "$TRIGGER_PATHS")
+        TRIGGER_GLOBS
+          diff_error=$(mktemp)
+          if ! triggered=$(git diff --no-renames --name-only "${TURBO_SCM_BASE}...HEAD" -- "$@" 2> "$diff_error"); then
+            echo 'affected=true' >> "$GITHUB_OUTPUT"
+            echo "::warning::Cannot diff ${TURBO_SCM_BASE}...HEAD to apply trigger-paths; reporting affected without turbo detection. $(tr '\n' ' ' < "$diff_error")"
+            echo 'affected=true'
+            exit 0
+          fi
+          if [ -n "$triggered" ]; then
+            echo 'affected=true' >> "$GITHUB_OUTPUT"
+            printf 'Changed files matching trigger-paths: reporting affected without turbo detection.\n%s\n' "$(printf '%s\n' "$triggered" | sed 's/^/  /')"
+            echo 'affected=true'
+            exit 0
+          fi
+          echo 'No changed file matches trigger-paths.'
+        fi
+        if [ -n "$(glob_list "$EXEMPT_PATHS")" ]; then
           set --
           exempt_globs=''
-          IFS_BEFORE=$IFS
-          IFS='
-        ,'
-          for glob in $EXEMPT_PATHS; do
-            glob=$(printf '%s' "$glob" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-            if [ -n "$glob" ]; then
-              set -- "$@" ":(top,exclude,glob)$glob"
-              exempt_globs="${exempt_globs}  ${glob}
+          while IFS= read -r glob; do
+            set -- "$@" ":(top,exclude,glob)$glob"
+            exempt_globs="${exempt_globs}  ${glob}
         "
-            fi
-          done
-          IFS=$IFS_BEFORE
-          set +f
+          done <<EXEMPT_GLOBS
+        $(glob_list "$EXEMPT_PATHS")
+        EXEMPT_GLOBS
           diff_error=$(mktemp)
           if changed=$(git diff --no-renames --name-only "${TURBO_SCM_BASE}...HEAD" 2> "$diff_error") \
             && remaining=$(git diff --no-renames --name-only "${TURBO_SCM_BASE}...HEAD" -- ':/' "$@" 2>> "$diff_error"); then
