@@ -81,9 +81,11 @@ inputs:
     default: '3'
   status-bar-override:
     description: >-
-      When 'true', enables SystemUI demo mode before capture: clock 9:41,
+      When 'true', verifies SystemUI demo mode and reapplies it per capture
+      cell after appearance changes and seeding: clock 9:41,
       full wifi, no mobile data type, battery 100 unplugged, notifications
-      hidden. Fails closed if the demo-mode broadcasts fail.
+      hidden. Fails closed if demo mode is unavailable, does not become
+      active within 10 seconds, or any settings command or broadcast fails.
     required: false
     default: 'true'
   maestro-env:
@@ -279,24 +281,6 @@ runs:
           adb -s "$ANDROID_SERIAL" shell wm size "${DISPLAY_WIDTH}x${DISPLAY_HEIGHT}"
           adb -s "$ANDROID_SERIAL" shell wm density "$DISPLAY_DENSITY"
 
-    - name: Enable SystemUI demo-mode status bar
-      if: inputs.status-bar-override == 'true'
-      shell: bash
-      env:
-        ANDROID_SERIAL: ${{ inputs.android-serial }}
-      run: |
-          set -euo pipefail
-          adb -s "$ANDROID_SERIAL" shell settings put global sysui_demo_allowed 1
-          demo() {
-            adb -s "$ANDROID_SERIAL" shell am broadcast -a com.android.systemui.demo "$@" >/dev/null
-          }
-          demo -e command enter
-          demo -e command clock -e hhmm 0941
-          demo -e command network -e wifi show -e level 4 -e fully true
-          demo -e command network -e mobile show -e datatype none -e level 4
-          demo -e command battery -e level 100 -e plugged false
-          demo -e command notifications -e visible false
-
     - name: Install APK
       shell: bash
       env:
@@ -454,8 +438,13 @@ runs:
         LOCALE_ENV_JSON: ${{ inputs.locale-env }}
         MAESTRO_CONFIG: ${{ inputs.maestro-config }}
         DEVICE_SLUG: ${{ steps.device-slug.outputs.slug }}
+        STATUS_BAR_OVERRIDE: ${{ inputs.status-bar-override }}
       run: |
           set -euo pipefail
+          case "$STATUS_BAR_OVERRIDE" in
+            true|false) ;;
+            *) echo "::error::status-bar-override must be 'true' or 'false'."; exit 1 ;;
+          esac
 
           maestro_config_args=()
           if [ -n "$MAESTRO_CONFIG" ]; then
@@ -633,6 +622,33 @@ runs:
             esac
           }
 
+          apply_status_bar() {
+            [ "$STATUS_BAR_OVERRIDE" = true ] || return 0
+            adb -s "$ANDROID_SERIAL" shell settings put global sysui_demo_allowed 1 || return 1
+            adb -s "$ANDROID_SERIAL" shell settings put global sysui_tuner_demo_on 1 || return 1
+            local state attempt=0
+            while [ "$attempt" -lt 10 ]; do
+              state=$(adb -s "$ANDROID_SERIAL" shell dumpsys activity service com.android.systemui/.SystemUIService DemoModeController) || return 1
+              if printf '%s\n' "$state" | grep -q 'isDemoModeAllowed=true' \
+                && printf '%s\n' "$state" | grep -q 'isInDemoMode=true'; then
+                demo -e command clock -e hhmm 0941 || return 1
+                demo -e command network -e wifi show -e level 4 -e fully true || return 1
+                demo -e command network -e mobile show -e datatype none -e level 4 || return 1
+                demo -e command battery -e level 100 -e plugged false || return 1
+                demo -e command notifications -e visible false || return 1
+                return 0
+              fi
+              attempt=$((attempt + 1))
+              sleep 1
+            done
+            echo "::error::SystemUI did not enter demo mode within 10 seconds; refusing an unchecked status bar. Set status-bar-override: 'false' for devices without demo support."
+            printf '%s\n' "$state"
+            return 1
+          }
+          demo() {
+            adb -s "$ANDROID_SERIAL" shell am broadcast -a com.android.systemui.demo "$@" >/dev/null
+          }
+
           capture_deeplink_cell() {
             local deep_link="$1" settle="$2" final_path="$3" launch_output
             if ! launch_output=$(adb -s "$ANDROID_SERIAL" shell am start -W -a android.intent.action.VIEW -d "$deep_link" "$APP_ID" 2>&1); then
@@ -753,6 +769,10 @@ runs:
                     attempts=$((attempts + 1))
                     if [ "$attempts" -gt 1 ]; then
                       adb -s "$ANDROID_SERIAL" shell am force-stop "$APP_ID" || true
+                    fi
+                    if ! apply_status_bar; then
+                      echo "::error::Could not apply the demo status bar for '$scene_name' ($locale/$appearance)."
+                      exit 1
                     fi
                     if [ -n "$deep_link" ]; then
                       capture_deeplink_cell "$deep_link" "$settle" "$final_path" && cell_rc=0 || cell_rc=$?

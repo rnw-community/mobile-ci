@@ -880,12 +880,12 @@ route a run at the host shape it needs — see
 [docs/workflows/android-maestro.md](workflows/android-maestro.md) for the
 full input reference.
 
-`store-screenshots.yml` has the same choice for its Android capture leg, with
-the opposite default for now: `android-driver` defaults to `redroid` on
-`android-capture-runner-labels`' Redroid pool. `android-driver: avd` with
-`android-capture-runner-labels` naming the x86_64 KVM pool (e.g.
-`["self-hosted","trf-linux-amd64-4x8"]`) runs the capture on the same shape
-and the same `android-emulator` action as the Maestro shards — see
+`store-screenshots.yml` has the same choice and default for its Android capture
+leg: `android-driver: avd` on the x86_64 KVM pool
+(`["self-hosted","trf-linux-amd64-4x8"]`). It uses the same `android-emulator`
+action as the Maestro shards. Redroid consumers must explicitly set both
+`android-driver: redroid` and `android-capture-runner-labels` naming the
+Redroid pool — see
 [docs/workflows/store-screenshots.md](workflows/store-screenshots.md#android-capture).
 
 ### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
