@@ -131,7 +131,7 @@ platform:
 | `appearances`           | yes      | —          | Space- or comma-separated list of `light` and/or `dark` (`cmd uimode night`). |
 | `seed-command`          | no       | `''`       | Consumer-owned per-cell seed hook; see [Seed hook](#seed-hook). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`        | no       | `3`        | Seconds (integer 0–120) between a deep-link launch and its screenshot; a scene's `settleSeconds` overrides it. |
-| `status-bar-override`   | no       | `true`     | Enable the SystemUI demo-mode status bar; fails closed if the broadcasts fail. |
+| `status-bar-override`   | no       | `true`     | Reapply the SystemUI demo status bar per cell after seeding; wait up to 10 s for active demo mode and fail closed on unsupported devices or failed commands. |
 | `maestro-env`           | no       | `''`       | Newline-separated `KEY=VALUE` pairs passed as extra `-e` arguments to every `maestro test` (flow-backed scenes only). Fails closed on a malformed line, a reserved `APP_ID`/`LOCALE`/`APPEARANCE` override, or an invalid name. |
 | `locale-env`             | no       | `''`       | JSON object mapping a locale from `locales` to extra env pairs applied only to that locale's cells - e.g. `{"de": {"LOCALE_IDENTIFIER": "de-DE"}}`. Precedence: global `maestro-env`, then these (Maestro's last `-e` wins). Fails closed on invalid JSON, an unknown locale key, a reserved name, a non-string value, or a value containing a newline/tab. |
 | `maestro-config`         | no       | `''`       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
@@ -207,3 +207,9 @@ leak into, or come from, another job's AVD on a persistent host:
 
 `store-screenshots.yml` wires both: its `android-driver` input selects
 `redroid` (default) or `avd`.
+
+SystemUI demo overrides are applied after the seed hook for every capture
+cell, including after light/dark transitions. The action waits up to 10 seconds
+for SystemUI to report demo mode as available and active before broadcasting
+the 9:41 clock and icon settings. Missing demo support or a failed command
+fails capture; set `status-bar-override: 'false'` for a device without it.
