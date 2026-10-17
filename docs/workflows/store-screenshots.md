@@ -1,7 +1,7 @@
 # store-screenshots.yml
 
 `workflow_call` reusable workflow: fleet-native store screenshot capture for
-**iOS simulators and Android Redroid containers**, in one of two capture
+**iOS simulators and Android emulators or Redroid containers**, in one of two capture
 modes:
 
 - **`capture-mode: flows`** (default) — the legacy v1.5.x behavior,
@@ -238,7 +238,7 @@ launch. A seed failure marks that cell failed closed — no capture, no retry
 | `PLATFORM`        | `ios`                  | `android` |
 | `DEVICE_SLUG`     | slugified device       | same |
 | `SIMULATOR_UDID`  | booted simulator UDID  | — |
-| `ANDROID_SERIAL`  | —                      | adb serial of the Redroid container |
+| `ANDROID_SERIAL`  | —                      | adb serial of the Android device |
 | `APP_PATH`        | packaged `.app` path   | — |
 | `APK_PATH`        | —                      | packaged `.apk` path |
 
@@ -279,12 +279,12 @@ values before relying on this.
 (`wm size`/`wm density`, per-app locales, demo-mode status bar, the scene
 loop) is identical on both:
 
-- **`redroid`** (default) — a Redroid container via
+- **`redroid`** — a Redroid container via
   [`redroid-container`](../../actions/redroid-container/README.md),
   configured by the `redroid-*` inputs. Needs a Linux Redroid host per
   [docs/self-hosted-runners.md](../self-hosted-runners.md) (binder_linux
   module, privileged containers, prewarm manifest).
-- **`avd`** — Google's emulator via
+- **`avd`** (default) — Google's emulator via
   [`android-emulator`](../../actions/android-emulator/README.md), the same
   action `android-maestro.yml`'s `run-maestro-android` boots its shards with,
   configured by the `emulator-*` inputs (same names and defaults as
@@ -301,17 +301,24 @@ loop) is identical on both:
   image carries real Google Play Services, which Redroid's stock images do
   not (see the rendering caveat below).
 
-`android-capture-runner-labels` must name a pool for the chosen driver. Its
-default, `["self-hosted","linux-tiered","linux-xl"]`, is the fleet's
-Redroid-capable Linux pool and matches the default driver; it stays there
-until an `avd` capture run has been validated on the fleet. For `avd`, point
-it at the x86_64 KVM pool:
+`android-capture-runner-labels` must name a pool for the chosen driver.
+The default is `["self-hosted","trf-linux-amd64-4x8"]`, the x86_64 Linux KVM
+pool, matching the default `avd` driver.
+
+### Migrating from the Redroid defaults
+
+This default change requires a major release. Existing callers that use a
+Redroid host must pin both inputs when upgrading:
 
 ```yaml
 with:
-    android-driver: avd
-    android-capture-runner-labels: '["self-hosted","trf-linux-amd64-4x8"]'
+    android-driver: redroid
+    android-capture-runner-labels: '["self-hosted","linux-tiered","linux-xl"]'
 ```
+
+Use your fleet's own Redroid labels if they differ. Callers moving to the
+x86_64 KVM pool can omit both inputs. Explicit `redroid-*` settings remain
+available when `android-driver: redroid` is selected.
 
 - `android-capture-runner-labels` deliberately does **not** fall back to
   `runner-labels`, whose macOS default can run neither driver;
@@ -813,7 +820,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `build-timeout-minutes`             | no       | `60`                                      | iOS build job timeout. |
 | `capture-timeout-minutes`           | no       | `90`                                      | iOS capture job timeout. Default is generous: one job runs the full `locales x appearances x scenes` loop on a single booted simulator. |
 | `android-build-runner-labels`       | no       | `''`                                     | Runner labels for the Android build job. Fallback chain: this → `build-runner-labels` → `runner-labels`. |
-| `android-capture-runner-labels`     | no       | `["self-hosted","linux-tiered","linux-xl"]` | Runner labels for the Android capture job. No fallback to `runner-labels`. The default is the Redroid-capable pool, matching the default `android-driver: redroid` (`sudo docker --privileged` + `binder_linux`). With `android-driver: avd`, point it at an x86_64 Linux KVM pool, e.g. `["self-hosted","trf-linux-amd64-4x8"]`; the default stays on the Redroid pool until an `avd` capture run is validated on the fleet. See [Android capture](#android-capture). |
+| `android-capture-runner-labels`     | no       | `["self-hosted","trf-linux-amd64-4x8"]` | Runner labels for Android capture. Defaults to the x86_64 Linux KVM pool for `avd`; no fallback to the macOS `runner-labels`. With `android-driver: redroid`, explicitly select your Redroid-capable pool. See [Android capture](#android-capture). |
 | `android-cmdline-tools-version`     | no       | `12266719`                                | See `build-android-app` README — pin explicitly. |
 | `android-gradle-task`               | no       | `assembleRelease`                         | `gradlew` task for the Android build. **cfg** |
 | `android-gradle-args`               | no       | `''`                                     | Extra whitespace-split arguments appended after `android-gradle-task`. **cfg** |
@@ -825,7 +832,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `android-keystore-key-password`     | no       | `android`                                 | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `android-build-timeout-minutes`     | no       | `60`                                      | Android build job timeout. |
 | `android-capture-timeout-minutes`   | no       | `90`                                      | Android capture job timeout. |
-| `android-driver`                    | no       | `redroid`                                 | Device backend of the Android capture job: `redroid` (a Redroid container, `redroid-*` inputs) or `avd` (Google's emulator through `android-emulator`, `emulator-*` inputs; x86_64 Linux with `/dev/kvm`). Anything else fails the capture job. See [Android capture](#android-capture). |
+| `android-driver`                    | no       | `avd`                                     | Device backend of the Android capture job: `redroid` (a Redroid container, `redroid-*` inputs) or `avd` (Google's emulator through `android-emulator`, `emulator-*` inputs; x86_64 Linux with `/dev/kvm`). Anything else fails the capture job. See [Android capture](#android-capture). |
 | `emulator-api-level`                | no       | `34`                                      | `avd` only. System image API level; must be 33+. |
 | `emulator-target`                   | no       | `google_apis`                             | `avd` only. System image target. |
 | `emulator-arch`                     | no       | `x86_64`                                  | `avd` only. System image architecture. |

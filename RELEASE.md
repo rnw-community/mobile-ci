@@ -60,6 +60,14 @@ being cut) that consumers pin to in practice. **No
    that exact SHA. Do not tag a commit whose `self-test` run you have not
    personally checked.
 
+   `release.yml` waits for that exact main push's successful `self-test`
+   completion before automatically tagging, publishing generated notes and
+   moving the release's floating major. It rejects pull-request, failed,
+   cancelled and foreign-repository runs and checks out the tested SHA.
+   A release commit's tag-form self-references must all match its declared
+   version; publication follows CI, so that candidate does not wait for a tag
+   CI has not yet authorized. Ordinary main commits still require existing tags.
+
 3. **Tag the exact release**, from that verified commit:
 
    ```bash

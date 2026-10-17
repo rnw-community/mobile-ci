@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the expected values are literal ${{ }} expressions and shell text.
 # store-screenshots' capture-android job drives one of two device backends
-# (issues #96, #149): a Redroid container (android-driver: redroid, the
-# default, unchanged) or an AVD booted through android-emulator, the same
-# action run-maestro-android uses (android-driver: avd). The device steps are
+# (issues #96, #149): a Redroid container (android-driver: redroid, unchanged) or an AVD booted through android-emulator, the same
+# action run-maestro-android uses (android-driver: avd, the default). The device steps are
 # `uses:` steps, so most cases check the wiring in the parsed workflow; the
 # driver validation step is shell and runs for real.
 set -euo pipefail
@@ -31,9 +30,9 @@ print(result if isinstance(result, str) else json.dumps(result, sort_keys=True),
 ' 2>&1 || true
 }
 
-case_start 'android-driver defaults to redroid and the capture pool default is unchanged'
-if assert_equals redroid "$(query 'inputs["android-driver"]["default"]')" 'android-driver default' \
-    && assert_equals '["self-hosted","linux-tiered","linux-xl"]' "$(query 'inputs["android-capture-runner-labels"]["default"]')" 'android-capture-runner-labels default'; then
+case_start 'Android screenshots default to the AVD driver on the x86_64 Linux pool'
+if assert_equals avd "$(query 'inputs["android-driver"]["default"]')" 'android-driver default' \
+    && assert_equals '["self-hosted","trf-linux-amd64-4x8"]' "$(query 'inputs["android-capture-runner-labels"]["default"]')" 'android-capture-runner-labels default'; then
     pass_case
 fi
 
