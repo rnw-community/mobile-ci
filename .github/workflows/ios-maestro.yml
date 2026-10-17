@@ -227,13 +227,14 @@ on:
             simulator-count:
                 description: >-
                     Simulators each shard runs its flows on concurrently inside one
-                    runner (default 1). With N > 1 lanes 1..N-1 use devices named
+                    runner (integer 1-8, default 1). With N > 1 lanes 1..N-1 use devices named
                     '<simulator-device> #2' .. '#N', cloned when missing, slimmed and
                     verified like the first; the shard's flows are split into N
                     interleaved lanes run by concurrent `maestro --udid` loops, and
                     guest memory is sampled into the step summary. pre-test-command
-                    and pre-flow-command receive the lane's SIMULATOR_UDID and
-                    SIMULATOR_LANE and run concurrently across lanes.
+                    runs serially once per lane; pre-flow-command runs concurrently
+                    across lanes. Both receive SIMULATOR_UDID and SIMULATOR_LANE.
+                    pre-run-flow primes each active device serially before test lanes start.
                 type: number
                 required: false
                 default: 1

@@ -177,9 +177,11 @@ inputs:
       one runner. '1' (default) keeps the single-device behaviour. With N > 1
       the device selected by simulator-device (or the heuristic) is lane 0
       and lanes 1..N-1 use devices named '<name> #2' .. '<name> #N', cloned
-      from it when the host has none; every lane device is booted, slimmed
-      with scripts/slim-simulator.sh when simulator-slim-profile is set,
-      verified, installed and warmed. The shard's flows are split into N
+      from it when the host has none. With simulator-slim-profile set, extra
+      lanes are slimmed offline and booted once with simslim on; lane 0
+      follows simulator-slim-repair. All lanes are verified, installed and
+      warmed. Accepts integers 1-8 without leading zeros. The shard's flows
+      are split into N
       interleaved lanes, each run by its own `maestro --udid` loop with its
       own driver port and debug output, and the step fails if any lane
       fails. pre-test-command runs once per lane device and
@@ -281,88 +283,6 @@ runs:
       run: |
           mkdir -p "$MAESTRO_DEBUG_OUTPUT_DIRECTORY"
           echo "MAESTRO_DEBUG_OUTPUT_DIRECTORY=$MAESTRO_DEBUG_OUTPUT_DIRECTORY" >> "$GITHUB_ENV"
-
-    - name: Boot iOS Simulator
-      shell: bash
-      env:
-        SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
-        SIMULATOR_COUNT: ${{ inputs.simulator-count }}
-      run: |
-          set -euo pipefail
-          case "$SIMULATOR_COUNT" in
-            ''|*[!0-9]*|0*)
-              echo "::error::simulator-count '$SIMULATOR_COUNT' must be a positive integer without leading zeros."
-              exit 1
-              ;;
-          esac
-          available_devices=$(xcrun simctl list devices available)
-          device_name_of() {
-            printf '%s\n' "$1" \
-              | sed -E 's/^[[:space:]]+//' \
-              | sed -E 's/[[:space:]]+$//' \
-              | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
-          }
-          udid_of() {
-            grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$1" || true
-          }
-          device_line_named() {
-            local line
-            while IFS= read -r line; do
-              [ -n "$(udid_of "$line")" ] || continue
-              if [ "$(device_name_of "$line")" = "$1" ]; then
-                printf '%s\n' "$line"
-                return 0
-              fi
-            done <<< "$available_devices"
-          }
-          if [ -n "$SIMULATOR_DEVICE" ]; then
-            device_line=$(device_line_named "$SIMULATOR_DEVICE")
-            if [ -z "$device_line" ]; then
-              echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
-              echo "$available_devices"
-              exit 1
-            fi
-          else
-            device_line=$(grep -E '^\s+iPhone.*\(' <<< "$available_devices" | tail -1)
-            test -n "$device_line"
-            echo "::notice::No simulator-device pinned; booted '$(device_name_of "$device_line")' via the last-available heuristic. Pin simulator-device to stop this choice from silently changing when the runner pool's device set changes."
-          fi
-          device_udid=$(udid_of "$device_line")
-          test -n "$device_udid"
-          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
-          device_udids=("$device_udid")
-          lane_number=1
-          while [ "$lane_number" -lt "$SIMULATOR_COUNT" ]; do
-            lane_number=$((lane_number + 1))
-            lane_name="$(device_name_of "$device_line") #$lane_number"
-            lane_udid=$(udid_of "$(device_line_named "$lane_name")")
-            if [ -z "$lane_udid" ]; then
-              xcrun simctl shutdown "$device_udid" 2>/dev/null || true
-              lane_udid=$(xcrun simctl clone "$device_udid" "$lane_name")
-              echo "Cloned lane simulator '$lane_name' ($lane_udid) from $device_udid."
-            fi
-            device_udids+=("$lane_udid")
-          done
-          bootstatus_timeout_seconds=300
-          for udid in "${device_udids[@]}"; do
-            echo "Booting simulator: $udid"
-            xcrun simctl boot "$udid" || true
-          done
-          for udid in "${device_udids[@]}"; do
-            if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$udid" -b; then
-              :
-            else
-              bootstatus_exit=$?
-              if [ "$bootstatus_exit" -eq 142 ]; then
-                echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$udid' to report booted; treating it as wedged."
-              else
-                echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
-              fi
-              exit 1
-            fi
-          done
-          echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
-          echo "SIMULATOR_UDIDS=${device_udids[*]}" >> "$GITHUB_ENV"
 
     - name: Install simslim
       if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''
@@ -498,6 +418,104 @@ runs:
           fi
           echo "$job_dir" >> "$GITHUB_PATH"
           echo "Installed simslim $SIMSLIM_VERSION for this job at $job_bin (extracted from the digest-verified $pinned_tarball)."
+
+    - name: Boot iOS Simulator
+      shell: bash
+      env:
+        SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+        SIMULATOR_COUNT: ${{ inputs.simulator-count }}
+        SIMULATOR_SLIM_PROFILE: ${{ inputs.simulator-slim-profile }}
+      run: |
+          set -euo pipefail
+          case "$SIMULATOR_COUNT" in
+            [1-8]) ;;
+            *)
+              echo "::error::simulator-count '$SIMULATOR_COUNT' must be a positive integer from 1 to 8 without leading zeros."
+              exit 1
+              ;;
+          esac
+          available_devices=$(xcrun simctl list devices available)
+          device_name_of() {
+            printf '%s\n' "$1" \
+              | sed -E 's/^[[:space:]]+//' \
+              | sed -E 's/[[:space:]]+$//' \
+              | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
+          }
+          udid_of() {
+            grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$1" || true
+          }
+          device_line_named() {
+            local line
+            while IFS= read -r line; do
+              [ -n "$(udid_of "$line")" ] || continue
+              if [ "$(device_name_of "$line")" = "$1" ]; then
+                printf '%s\n' "$line"
+                return 0
+              fi
+            done <<< "$available_devices"
+          }
+          if [ -n "$SIMULATOR_DEVICE" ]; then
+            device_line=$(device_line_named "$SIMULATOR_DEVICE")
+            if [ -z "$device_line" ]; then
+              echo "::error::simulator-device '$SIMULATOR_DEVICE' has no exact match among available simulators. Available devices:"
+              echo "$available_devices"
+              exit 1
+            fi
+          else
+            device_line=$(grep -E '^\s+iPhone.*\(' <<< "$available_devices" | grep -vE ' #[0-9]+ \(' | tail -1)
+            test -n "$device_line"
+            echo "::notice::No simulator-device pinned; booted '$(device_name_of "$device_line")' via the last-available heuristic. Pin simulator-device to stop this choice from silently changing when the runner pool's device set changes."
+          fi
+          device_udid=$(udid_of "$device_line")
+          test -n "$device_udid"
+          command -v perl >/dev/null 2>&1 || { echo "::error::'perl' is required to bound 'xcrun simctl bootstatus' with a timeout but is not on PATH (macOS ships it by default; something removed it from this runner)."; exit 1; }
+          device_udids=("$device_udid")
+          lane_number=1
+          while [ "$lane_number" -lt "$SIMULATOR_COUNT" ]; do
+            lane_number=$((lane_number + 1))
+            lane_name="$(device_name_of "$device_line") #$lane_number"
+            lane_udid=$(udid_of "$(device_line_named "$lane_name")")
+            if [ -z "$lane_udid" ]; then
+              xcrun simctl shutdown "$device_udid" 2>/dev/null || true
+              lane_udid=$(xcrun simctl clone "$device_udid" "$lane_name")
+              echo "Cloned lane simulator '$lane_name' ($lane_udid) from $device_udid."
+            fi
+            device_udids+=("$lane_udid")
+          done
+          bootstatus_timeout_seconds=300
+          slim_profile="${SIMULATOR_SLIM_PROFILE:-}"
+          if [ "$slim_profile" = bundled ]; then
+            slim_profile="$(cd "$GITHUB_ACTION_PATH/../.." && pwd)/profiles/ci.json"
+          fi
+          if [ -n "$slim_profile" ] && [ ! -f "$slim_profile" ]; then
+            echo "::error::simulator-slim-profile '$slim_profile' does not exist."
+            exit 1
+          fi
+          for lane in "${!device_udids[@]}"; do
+            udid="${device_udids[$lane]}"
+            if [ "$lane" -gt 0 ] && [ -n "$slim_profile" ]; then
+              echo "Slimming and booting lane $lane simulator: $udid"
+              perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" simslim on "$udid" --profile "$slim_profile"
+            else
+              echo "Booting simulator: $udid"
+              xcrun simctl boot "$udid" || true
+            fi
+          done
+          for udid in "${device_udids[@]}"; do
+            if perl -e 'alarm shift; exec @ARGV' "$bootstatus_timeout_seconds" xcrun simctl bootstatus "$udid" -b; then
+              :
+            else
+              bootstatus_exit=$?
+              if [ "$bootstatus_exit" -eq 142 ]; then
+                echo "::error::xcrun simctl bootstatus timed out after ${bootstatus_timeout_seconds}s waiting for simulator '$udid' to report booted; treating it as wedged."
+              else
+                echo "::error::xcrun simctl bootstatus failed for simulator '$udid' (exit $bootstatus_exit)."
+              fi
+              exit 1
+            fi
+          done
+          echo "SIMULATOR_UDID=$device_udid" >> "$GITHUB_ENV"
+          echo "SIMULATOR_UDIDS=${device_udids[*]}" >> "$GITHUB_ENV"
 
     - name: Verify simulator slim profile and required features
       if: inputs.simulator-slim-profile != '' || inputs.simulator-requires != ''
@@ -931,10 +949,18 @@ runs:
             maestro_driver_args=(--no-reinstall-driver --driver-host-port "$driver_host_port")
           }
 
+          lane_driver_ports=()
           configure_lane() {
             local lane="$1" udid="$2"
             export SIMULATOR_UDID="$udid" SIMULATOR_LANE="$lane"
-            configure_lane_driver "$udid"
+            if [ -n "${lane_driver_ports[$lane]:-}" ]; then
+              maestro_driver_args=(--no-reinstall-driver --driver-host-port "${lane_driver_ports[$lane]}")
+            else
+              configure_lane_driver "$udid"
+              if [ "$MAESTRO_REUSE_DRIVER" = true ]; then
+                lane_driver_ports[$lane]="${maestro_driver_args[2]}"
+              fi
+            fi
             [ "${#lane_udids[@]}" -gt 1 ] || return 0
             maestro_device_args=(--udid "$udid")
             lane_label="Shard $SHARD_INDEX lane $lane"
@@ -1213,7 +1239,7 @@ runs:
 
           run_lane() {
             local lane_flows=("$@") overall_status=0 last_flow_index flow_index flow recover_after_last_attempt
-            if [ -n "$PRE_RUN_FLOW" ]; then
+            if [ -n "$PRE_RUN_FLOW" ] && [ "${#lane_udids[@]}" -eq 1 ]; then
               if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
                 write_summary
                 echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting $summary_scope."
@@ -1265,6 +1291,27 @@ runs:
           sample_memory &
           memory_sampler_pid=$!
           trap 'kill "$memory_sampler_pid" 2>/dev/null || true' EXIT
+          if [ -n "$PRE_RUN_FLOW" ]; then
+            for lane in "${!lane_udids[@]}"; do
+              if [ "$lane" -gt 0 ] && [ "$lane" -ge "${#selected[@]}" ]; then
+                continue
+              fi
+              configure_lane "$lane" "${lane_udids[$lane]}"
+              if ! (
+                GITHUB_STEP_SUMMARY="$lanes_dir/lane-$lane.md"
+                if run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
+                  write_summary
+                else
+                  write_summary
+                  exit 1
+                fi
+              ); then
+                cat "$lanes_dir/lane-$lane.md" >> "$GITHUB_STEP_SUMMARY"
+                echo "::error::Priming flow '$PRE_RUN_FLOW' failed on lane $lane; no test lanes started."
+                exit 1
+              fi
+            done
+          fi
           lane_pids=()
           for lane in "${!lane_udids[@]}"; do
             lane_flows=()

@@ -156,7 +156,7 @@ against the profile and, by default, repairs drift in-job.
 | `maestro-version`       | no       | `2.10.0`      | Pinned Maestro CLI version. Installed by downloading the matching `cli-<version>` release directly from [mobile-dev-inc/Maestro releases](https://github.com/mobile-dev-inc/Maestro/releases) to `$HOME/.maestro-pinned/<version>` — immune to a pre-existing Homebrew-managed `maestro` on the host. An existing `maestro` already on `PATH` is reused only when its version exactly matches. |
 | `maestro-reuse-driver`  | no       | `true`        | `true` passes `--no-reinstall-driver` and one `--driver-host-port` derived from the simulator UDID (the first free `127.0.0.1` port from a UDID-hashed start in 20000–30098, so shards on one host get distinct ports), to every `maestro test` invocation of the shard (`pre-run-flow`, flows, retries, `flow-recovery-flow`), so the XCTest driver the first invocation starts keeps running and every later invocation reuses it instead of paying its own driver start. Each flow is still its own invocation, so `pre-flow-command`, per-flow env, retries, the recovery flow and the timing rows are unchanged. `false` starts a fresh driver per invocation. |
 | `simulator-device`      | no       | `''`          | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched with no fuzzy matching. Fails closed, listing available devices, on no exact match. Empty keeps the last-available-iPhone heuristic (emits a `::notice::` naming its choice). |
-| `simulator-count` | no | `1` | Simulators this shard runs its flows on concurrently, inside one runner. `1` keeps the single-device behaviour. With N > 1 lane 0 is the device `simulator-device` selects and lanes 1..N-1 are `<name> #2` .. `<name> #N`, cloned from it when the host has none; each lane device is slimmed with [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh) when `simulator-slim-profile` is set, verified, installed and warmed, and the flows are split into N interleaved lanes run concurrently. Fails closed on anything but a positive integer — see [Several simulators per shard](#several-simulators-per-shard). |
+| `simulator-count` | no | `1` | Simulators this shard runs its flows on concurrently, inside one runner. `1` keeps the single-device behaviour. With N > 1 lane 0 is the device `simulator-device` selects and lanes 1..N-1 are `<name> #2` .. `<name> #N`, cloned from it when the host has none; extra lanes are slimmed offline and booted once with `simslim on` when `simulator-slim-profile` is set; lane 0 follows `simulator-slim-repair`. All lanes are verified, installed and warmed, and the flows are split into N interleaved lanes run concurrently. Fails closed on anything but an integer from 1 to 8 without leading zeros — see [Several simulators per shard](#several-simulators-per-shard). |
 | `simulator-reduce-motion` | no     | `false`       | `true` writes `com.apple.Accessibility ReduceMotionEnabled` (Settings > Accessibility > Motion > Reduce Motion) on the booted simulator before the app is installed and first launched, so UIKit, React Native `AccessibilityInfo` and Reanimated skip their animations. Fails closed on any value other than `true`/`false`. |
 | `simslim-version` | no | `0.12.2` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
 | `simslim-sha256` | no | `b47302da6fb8...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
@@ -212,13 +212,15 @@ experiment knob for memory-sized VMs: leave it at `1` unless you are measuring.
   (`iPhone 17 Pro #2`, …); when the host has none, it is `simctl clone`d from
   lane 0 and kept for the next job. Distinct names keep exact-name selection
   unambiguous. A clone comes up stock (rnw-community/mobile-ci#161), so with
-  `simulator-slim-profile` set every lane ≥ 1 is slimmed with
-  `scripts/slim-simulator.sh` (`simslim on --no-reboot` only when it drifted)
-  and then verified exactly like lane 0; `simulator-requires`, Reduce Motion,
+  `simulator-slim-profile` set every lane ≥ 1 is slimmed offline and booted
+  once with bounded `simslim on`, then verified. Lane 0 follows
+  `simulator-slim-repair`; `simulator-requires`, Reduce Motion,
   install and warm-up apply to every lane.
+- **Priming.** `pre-run-flow` runs serially once per active device before
+  any test lane starts. A failed priming flow aborts the shard.
 - **Lanes.** The shard's flows (after `shard-manifest-dir` or the modulo
   split) are dealt round-robin: flow *i* goes to lane *i mod N*. Each lane runs
-  the same per-flow loop as a single-device shard — `pre-run-flow`,
+  the same per-flow loop as a single-device shard —
   `pre-flow-command`, per-flow env, retries, recovery flow and timing rows —
   as a concurrent process that passes `--udid <lane UDID>` to every `maestro`
   invocation, owns its own driver port (derived from its UDID, never one

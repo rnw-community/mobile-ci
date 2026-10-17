@@ -366,4 +366,53 @@ invoke_exclude() {
 
 run_exclude_pattern_cases flow
 
+
+for count in 9 100 999999999999999999999999999999999999; do
+    case_start "simulator-count $count fails before listing or creating devices"
+    workspace="$(prepare_boot)"
+    run_step "$workspace" XCRUN_CALLS="$workspace/calls" SIMULATOR_DEVICE='' SIMULATOR_COUNT="$count" EXTRA_DEVICES=''
+    if assert_equals 1 "$STEP_STATUS" 'step status' \
+        && assert_equals false "$([ -e "$workspace/calls" ] && echo true || echo false)" 'no simulator work'; then
+        pass_case
+    fi
+done
+
+case_start 'the unpinned device heuristic excludes persistent lane clones'
+workspace="$(prepare_boot)"
+run_step "$workspace" XCRUN_CALLS="$workspace/calls" GITHUB_ENV="$workspace/github-env" \
+    SIMULATOR_DEVICE='' SIMULATOR_COUNT=2 \
+    EXTRA_DEVICES='    iPhone 17 Pro #2 (BBBBBBBB-0000-0000-0000-000000000002) (Shutdown) '
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/github-env")" "SIMULATOR_UDID=$LANE_A" 'base device selected' \
+    && assert_not_contains "$(cat "$workspace/calls")" '#2 #2' 'no nested clone'; then
+    pass_case
+fi
+
+case_start 'additional lanes are slimmed offline before their first boot'
+workspace="$(prepare_boot)"
+# shellcheck disable=SC2016
+stub "$workspace" simslim 'printf "slim %s\n" "$*" >> "$XCRUN_CALLS"'
+run_step "$workspace" XCRUN_CALLS="$workspace/calls" GITHUB_ENV="$workspace/github-env" \
+    GITHUB_ACTION_PATH="$REPO_ROOT/actions/run-maestro-ios" SIMULATOR_DEVICE='iPhone 17 Pro' \
+    SIMULATOR_COUNT=2 EXTRA_DEVICES='' SIMULATOR_SLIM_PROFILE=bundled
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/calls")" 'slim on CCCCCCCC-0000-0000-0000-000000000003 --profile' 'offline slim boot' \
+    && assert_not_contains "$(cat "$workspace/calls")" 'simctl boot CCCCCCCC-0000-0000-0000-000000000003' 'no stock clone boot'; then
+    pass_case
+fi
+
+case_start 'all lanes finish priming before concurrent test flows start'
+workspace="$(prepare_lanes)"
+# shellcheck disable=SC2016
+stub "$workspace" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"
+case "$*" in
+  *prime.yaml*) case "$*" in *BBBBBBBB*) sleep 1 ;; esac; echo primed >> "$PRIMED" ;;
+  *) [ "$(wc -l < "$PRIMED")" -eq 2 ] || exit 1 ;;
+esac'
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true SIMULATOR_UDIDS="$LANE_A $LANE_B" PRIMED="$workspace/primed"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(grep -c prime.yaml "$workspace/calls")" 'one prime per active device'; then
+    pass_case
+fi
+
 finish_suite
