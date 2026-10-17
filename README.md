@@ -21,10 +21,10 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 or cut a dev release, and only for the platforms you enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v3` is current, at `v3.3.1`; `v2` stays frozen at `v2.3.0` and
-`v1` at `v1.23.1`) that
+per major (`v4` is current, at `v4.0.0`; `v3` stays frozen at `v3.3.2`,
+`v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
-commit SHA for reproducibility, or `@v3` to float. See
+commit SHA for reproducibility, or `@v4` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
 
@@ -61,7 +61,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.0.0 # v4.0.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -97,7 +97,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.0.0 # v4.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -352,7 +352,7 @@ job reads.
 
 **Versioning note:** examples in this README and the per-action/per-workflow
 docs use a floating major tag or `@main` for readability. A major tag such as
-`@v3` floats to the latest release of that major and `@main` can change
+`@v4` floats to the latest release of that major and `@main` can change
 without a deprecation window — pin to an exact `vX.Y.Z` tag or a full commit
 SHA when you need reproducibility.
 
