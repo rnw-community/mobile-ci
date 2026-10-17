@@ -257,14 +257,13 @@ jobs:
             # "tag known in advance" pattern requires a release PR to bump
             # self-references to a tag that does not exist yet, so checking
             # resolution on the PR itself would fail every legitimate release
-            # PR. On main it is unconditional - main must never carry a
-            # self-reference to a non-existent tag or a raw commit SHA (see
-            # #117: both happened here, undetected for 5 days). release.yml
-            # runs concurrently on the same push and may still be creating
-            # the tag, so the resolution check is retried with a bounded
-            # backoff before failing.
+            # PR. A release commit must name the exact tag used by every
+            # self-reference; release.yml publishes it after self-test passes.
+            # Every other main commit must resolve its tag-form references.
             - name: Every self-reference is tag-form and resolves
               shell: bash
+              env:
+                  HEAD_MESSAGE: ${{ github.event.head_commit.message }}
               run: |
                   set -euo pipefail
                   refs="$(
@@ -287,6 +286,18 @@ jobs:
                   done <<< "$refs"
                   if [ "$non_tag_form" -ne 0 ]; then
                       exit 1
+                  fi
+
+                  release_tag="$(printf '%s\n' "$HEAD_MESSAGE" | sed -nE '1s/^release: (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]].*)?$/\1/p')"
+                  if [ -n "$release_tag" ]; then
+                      while IFS= read -r ref; do
+                          if [ "$ref" != "$release_tag" ]; then
+                              echo "::error::Release ${release_tag} has a self-reference to ${ref}."
+                              exit 1
+                          fi
+                      done <<< "$refs"
+                      echo "All self-references match ${release_tag}; publication follows successful self-test."
+                      exit 0
                   fi
 
                   attempts=12

@@ -1,7 +1,9 @@
 name: release
 
 on:
-    push:
+    workflow_run:
+        workflows: [self-test]
+        types: [completed]
         branches: [main]
 
 permissions:
@@ -17,6 +19,11 @@ env:
 jobs:
     auto-tag-release:
         name: Auto-tag and release
+        if: >-
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.event == 'push' &&
+            github.event.workflow_run.head_branch == 'main' &&
+            github.event.workflow_run.head_repository.full_name == github.repository
         runs-on: ubuntu-latest
         timeout-minutes: 15
         outputs:
@@ -25,6 +32,7 @@ jobs:
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
+                  ref: ${{ github.event.workflow_run.head_sha }}
                   fetch-depth: 0
                   persist-credentials: true
 
@@ -36,13 +44,13 @@ jobs:
             # merges. A merged "release: vX.Y.Z" PR that nobody follows up on
             # leaves every self-reference in this repo pointed at a tag that
             # does not exist, breaking every consumer (see #117). This job
-            # runs steps 2-8 automatically on every push to main and is a
-            # no-op unless the head commit is a release-PR merge.
+            # runs steps 2-8 after the exact main commit passes self-test and
+            # is a no-op unless that tested commit is a release-PR merge.
             - name: Detect release version from the head commit
               id: detect
               shell: bash
               env:
-                  HEAD_SHA: ${{ github.sha }}
+                  HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
               run: |
                   set -euo pipefail
                   message="$(git log -1 --format=%B "$HEAD_SHA")"
@@ -92,12 +100,12 @@ jobs:
                   tag_re=$(printf '%s' "$TAG" | sed 's/[.[\*^$]/\\&/g')
                   mismatch=0
                   while IFS= read -r file; do
-                      if grep -n 'rnw-community/mobile-ci/actions/' "$file" \
-                          | grep -vE "rnw-community/mobile-ci/actions/[a-z0-9-]+@${tag_re}( # ${tag_re})?\$"; then
+                      if grep -n 'uses: rnw-community/mobile-ci/' "$file" \
+                          | grep -vE "rnw-community/mobile-ci/(actions/[a-z0-9-]+|\.github/workflows/[a-z0-9-]+\.yml)@${tag_re} # ${tag_re}\$"; then
                           echo "::error file=${file}::Self-reference not pinned to ${TAG}"
                           mismatch=1
                       fi
-                  done < <(grep -rl 'rnw-community/mobile-ci/actions/' --include='*.yml' .github/workflows actions \
+                  done < <(grep -rl 'uses: rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions \
                       | grep -v -e '^\.github/workflows/self-test\.yml$' -e '^\.github/workflows/release\.yml$')
                   if [ "$mismatch" -ne 0 ]; then
                       echo "::error::Self-references are not fully bumped to ${TAG}; refusing to cut a broken release. See RELEASE.md step 1."
