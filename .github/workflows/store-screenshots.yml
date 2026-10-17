@@ -514,18 +514,14 @@ on:
             android-capture-runner-labels:
                 description: >-
                     JSON array of runner labels for the Android capture job.
-                    Deliberately does NOT fall back to runner-labels, whose macOS
-                    default can run neither Android driver. The default is a
-                    Redroid pool, matching the default android-driver (redroid),
-                    which needs sudo docker --privileged and binder_linux. With
-                    android-driver avd, point it at an x86_64 Linux pool with
-                    /dev/kvm instead - the pool android-maestro.yml defaults to,
-                    e.g. ["self-hosted","trf-linux-amd64-4x8"]. The default stays
-                    on the Redroid pool until an avd capture run has been
-                    validated on the fleet.
+                    Does not fall back to runner-labels, whose macOS default can
+                    run neither Android driver. Defaults to the x86_64 Linux KVM
+                    pool for android-driver avd. With android-driver redroid,
+                    explicitly select a Redroid-capable Linux pool with Docker,
+                    privileged containers and binder_linux.
                 type: string
                 required: false
-                default: '["self-hosted","linux-tiered","linux-xl"]'
+                default: '["self-hosted","trf-linux-amd64-4x8"]'
             android-cmdline-tools-version:
                 description: See build-android-app README - pin explicitly, do not trust upstream defaults.
                 type: string
@@ -599,17 +595,16 @@ on:
                 default: 90
             android-driver:
                 description: >-
-                    Device backend the Android capture job drives. 'redroid'
-                    (default) runs Android as a privileged Docker container over
-                    the host's binder_linux module, configured by the redroid-*
-                    inputs. 'avd' boots Google's emulator through the
-                    android-emulator action, the one run-maestro-android uses,
-                    configured by the emulator-* inputs; it needs an x86_64 Linux
-                    runner with /dev/kvm, so set android-capture-runner-labels to
-                    such a pool with it. Anything else fails the capture job.
+                    Device backend for Android capture. 'avd' (default) boots
+                    Google's emulator through android-emulator, configured by
+                    emulator-* inputs, on x86_64 Linux with /dev/kvm. 'redroid'
+                    runs Android in a privileged Docker container over
+                    binder_linux, configured by redroid-* inputs; select a
+                    matching android-capture-runner-labels pool explicitly.
+                    Anything else fails the capture job.
                 type: string
                 required: false
-                default: redroid
+                default: avd
             emulator-api-level:
                 description: >-
                     avd driver only. System image API level; must be 33+, since
