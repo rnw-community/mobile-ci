@@ -39,9 +39,10 @@ invoke_capture() {
         ADB_CALLS="$dir/adb-calls" DEMO_READY="$dir/demo-ready" CLOCK_READY="$dir/clock-ready" "$@"
 }
 
-case_start 'demo status is reapplied after each appearance change before capture'
+case_start 'demo status is reapplied after each appearance change and seed hook before capture'
 workspace=$(prepare_capture)
-invoke_capture "$workspace"
+# shellcheck disable=SC2016
+invoke_capture "$workspace" SEED_COMMAND='rm -f "$DEMO_READY" "$CLOCK_READY"'
 if assert_equals 0 "$STEP_STATUS" 'capture status' \
     && assert_equals 2 "$(find "$workspace/output" -name '*.png' | wc -l | tr -d ' ')" 'captured cells' \
     && assert_equals 2 "$(grep -c 'command clock' "$workspace/adb-calls" || true)" 'clock applied per cell'; then

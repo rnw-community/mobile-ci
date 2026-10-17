@@ -206,7 +206,9 @@ leak into, or come from, another job's AVD on a persistent host:
 ```
 
 `store-screenshots.yml` wires both: its `android-driver` input selects
-`redroid` (default) or `avd`.
+`avd` (default, x86_64 Linux KVM) or `redroid`. Redroid consumers must
+explicitly set both `android-driver: redroid` and compatible
+`android-capture-runner-labels`.
 
 SystemUI demo overrides are applied after the seed hook for every capture
 cell, including after light/dark transitions. The action waits up to 10 seconds
