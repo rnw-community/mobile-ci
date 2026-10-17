@@ -419,7 +419,8 @@ case_start 'the single-device baseline records the same memory metrics as multip
 workspace="$(prepare_lanes)"
 invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true SIMULATOR_UDIDS="$LANE_A"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/summary")" 'Minimum memory_pressure free: 42%. Peak compressor: 2 MB' 'baseline memory'; then
+    && assert_contains "$(cat "$workspace/summary")" 'Minimum memory_pressure free: 42%. Peak compressor: 2 MB' 'baseline memory' \
+    && assert_contains "$(cat "$workspace/log")" 'Minimum memory_pressure free: 42%. Peak compressor: 2 MB' 'downloadable log memory evidence'; then
     pass_case
 fi
 

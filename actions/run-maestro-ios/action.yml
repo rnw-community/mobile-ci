@@ -1141,7 +1141,7 @@ runs:
                 echo ""
                 echo "Recovery flow \`$(basename "$FLOW_RECOVERY_FLOW")\` ran $recovery_runs time(s) after a failed attempt, $recovery_failures of which failed and were tolerated. Its duration is excluded from the rows above."
               fi
-            } >> "$GITHUB_STEP_SUMMARY"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
           }
 
           # Only files matching flows-name-pattern within flows-max-depth are
@@ -1297,7 +1297,7 @@ runs:
               awk -F '\t' '{ printf "| %s | %s%% | %s | %s |\n", $1, $2, $3, $4 }' "$lanes_dir/memory.tsv"
               echo ""
               echo "</details>"
-            } >> "$GITHUB_STEP_SUMMARY"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
             rm -rf "$lanes_dir"
           }
 
