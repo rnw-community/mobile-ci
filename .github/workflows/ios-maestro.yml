@@ -890,6 +890,51 @@ jobs:
                   echo "### iOS ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Pull requests on this native surface now repack instead of compiling.' >> "$GITHUB_STEP_SUMMARY"
 
+            - name: Diagnose the runner's bundled Node after a failure
+              if: failure() && runner.os == 'macOS'
+              continue-on-error: true
+              shell: bash
+              run: |
+                  set +e
+                  set -u
+                  runner_root="${RUNNER_TEMP%/_work/_temp}"
+                  node_bin="$runner_root/externals/node24/bin/node"
+                  probe() {
+                      echo "--- $1"
+                      ls -l@ "$node_bin" 2>&1
+                      shasum -a 256 "$node_bin" 2>&1
+                      file "$node_bin" 2>&1
+                      xxd -l 64 "$node_bin" 2>&1
+                      "$node_bin" -e 'process.exit(0)' >/dev/null 2>&1
+                      echo "exec exit status: $?"
+                  }
+                  echo "::group::Runner Node exec diagnostics"
+                  sw_vers 2>&1; uname -a; uptime
+                  probe "as installed"
+                  codesign -dvv "$node_bin" 2>&1 | head -12
+                  xattr -l "$node_bin" 2>&1 | head -12
+                  copy="$RUNNER_TEMP/node-exec-diagnostic"
+                  if cp "$node_bin" "$copy"; then
+                      shasum -a 256 "$copy" 2>&1
+                      "$copy" -e 'process.exit(0)' >/dev/null 2>&1
+                      echo "fresh copy exec exit status: $?"
+                      rm -f "$copy"
+                  fi
+                  if sudo -n purge 2>/dev/null; then
+                      probe "after purging the guest file cache"
+                  else
+                      echo "purge unavailable without a password"
+                  fi
+                  sysctl vm.swapusage 2>&1
+                  vm_stat 2>&1 | head -12
+                  df -h / 2>&1
+                  echo "::endgroup::"
+                  echo "::group::Kernel and code-signing log, last 15 minutes"
+                  log show --last 15m --style compact \
+                      --predicate 'process == "kernel" OR process == "amfid" OR process == "syspolicyd" OR eventMessage CONTAINS[c] "node24"' 2>&1 |
+                      grep -i -E 'exec|node|mach-?o|code ?sign|amfi|apfs|i/o|error' | tail -200
+                  echo "::endgroup::"
+
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
@@ -973,6 +1018,51 @@ jobs:
                   simulator-requires: ${{ inputs.simulator-requires }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+
+            - name: Diagnose the runner's bundled Node after a failure
+              if: failure() && runner.os == 'macOS'
+              continue-on-error: true
+              shell: bash
+              run: |
+                  set +e
+                  set -u
+                  runner_root="${RUNNER_TEMP%/_work/_temp}"
+                  node_bin="$runner_root/externals/node24/bin/node"
+                  probe() {
+                      echo "--- $1"
+                      ls -l@ "$node_bin" 2>&1
+                      shasum -a 256 "$node_bin" 2>&1
+                      file "$node_bin" 2>&1
+                      xxd -l 64 "$node_bin" 2>&1
+                      "$node_bin" -e 'process.exit(0)' >/dev/null 2>&1
+                      echo "exec exit status: $?"
+                  }
+                  echo "::group::Runner Node exec diagnostics"
+                  sw_vers 2>&1; uname -a; uptime
+                  probe "as installed"
+                  codesign -dvv "$node_bin" 2>&1 | head -12
+                  xattr -l "$node_bin" 2>&1 | head -12
+                  copy="$RUNNER_TEMP/node-exec-diagnostic"
+                  if cp "$node_bin" "$copy"; then
+                      shasum -a 256 "$copy" 2>&1
+                      "$copy" -e 'process.exit(0)' >/dev/null 2>&1
+                      echo "fresh copy exec exit status: $?"
+                      rm -f "$copy"
+                  fi
+                  if sudo -n purge 2>/dev/null; then
+                      probe "after purging the guest file cache"
+                  else
+                      echo "purge unavailable without a password"
+                  fi
+                  sysctl vm.swapusage 2>&1
+                  vm_stat 2>&1 | head -12
+                  df -h / 2>&1
+                  echo "::endgroup::"
+                  echo "::group::Kernel and code-signing log, last 15 minutes"
+                  log show --last 15m --style compact \
+                      --predicate 'process == "kernel" OR process == "amfid" OR process == "syspolicyd" OR eventMessage CONTAINS[c] "node24"' 2>&1 |
+                      grep -i -E 'exec|node|mach-?o|code ?sign|amfi|apfs|i/o|error' | tail -200
+                  echo "::endgroup::"
 
     status:
         name: iOS Maestro E2E result
