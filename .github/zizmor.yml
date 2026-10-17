@@ -7,6 +7,13 @@
 # limited to what is listed here.
 
 rules:
+  # release.yml admits only successful push runs from this repository's main,
+  # checks out that exact tested SHA, and consumes no artifacts or caches.
+  # release-gate_test.sh checks every admission boundary and the checkout SHA.
+  dangerous-triggers:
+    ignore:
+      - release.yml
+
   # This repo's reusable workflows and composite actions call its OWN
   # composite actions via the full `rnw-community/mobile-ci/actions/<name>
   # @vX.Y.Z` form (a relative `./actions/<name>` reference only resolves
