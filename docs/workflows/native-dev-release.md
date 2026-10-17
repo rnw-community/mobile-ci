@@ -284,3 +284,10 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
+
+### Local build output
+
+Local EAS build output from stdout and stderr passes through a filter that
+redacts long encoded payload tokens before they reach the job log. Diagnostic
+text is retained. A failed build or output filter still fails the job; filtering
+never turns a failed build into a published release.
