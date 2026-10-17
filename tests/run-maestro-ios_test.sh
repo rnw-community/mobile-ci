@@ -415,4 +415,12 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'the single-device baseline records the same memory metrics as multiple lanes'
+workspace="$(prepare_lanes)"
+invoke_shard "$workspace" MAESTRO_REUSE_DRIVER=true SIMULATOR_UDIDS="$LANE_A"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/summary")" 'Minimum memory_pressure free: 42%. Peak compressor: 2 MB' 'baseline memory'; then
+    pass_case
+fi
+
 finish_suite

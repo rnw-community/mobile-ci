@@ -1267,30 +1267,55 @@ runs:
             return "$overall_status"
           }
 
-          sample_memory() {
+          sample_memory_once() {
             local vm_stat_output page_size compressor_pages free_percent
-            while :; do
               free_percent=$(memory_pressure 2>/dev/null | sed -nE 's/^System-wide memory free percentage: ([0-9]+)%.*/\1/p' || true)
               vm_stat_output=$(vm_stat 2>/dev/null || true)
               page_size=$(sed -nE 's/.*page size of ([0-9]+) bytes.*/\1/p' <<< "$vm_stat_output")
               compressor_pages=$(sed -nE 's/^Pages occupied by compressor: *([0-9]+).*/\1/p' <<< "$vm_stat_output")
               printf '%s\t%s\t%s\t%s\n' "$(date -u +%H:%M:%S)" "$free_percent" "$compressor_pages" "$(( ${compressor_pages:-0} * ${page_size:-0} / 1048576 ))" >> "$lanes_dir/memory.tsv"
-              sleep 30
+          }
+
+          sample_memory() {
+            while sleep 30; do
+              sample_memory_once
             done
           }
 
-          if [ "${#lane_udids[@]}" -le 1 ]; then
-            configure_lane 0 "${lane_udids[0]}"
-            run_lane ${selected[@]+"${selected[@]}"}
-            exit 0
-          fi
+          finish_memory_report() {
+            kill "$memory_sampler_pid" 2>/dev/null || true
+            wait "$memory_sampler_pid" 2>/dev/null || true
+            {
+              echo ""
+              echo "### Guest memory during shard $SHARD_INDEX (${#lane_udids[@]} simulators, sampled every 30 s)"
+              awk -F '\t' 'NR == 1 || $2 < min { min = $2 } $4 > max { max = $4 } END { printf "Minimum memory_pressure free: %s%%. Peak compressor: %s MB over %s sample(s).\n", min, max, NR }' "$lanes_dir/memory.tsv"
+              echo ""
+              echo "<details><summary>Samples</summary>"
+              echo ""
+              echo "| Time (UTC) | Free | Compressor pages | Compressor MB |"
+              echo "| --- | --- | --- | --- |"
+              awk -F '\t' '{ printf "| %s | %s%% | %s | %s |\n", $1, $2, $3, $4 }' "$lanes_dir/memory.tsv"
+              echo ""
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+            rm -rf "$lanes_dir"
+          }
 
           rm -rf "$lanes_dir"
           mkdir -p "$lanes_dir"
           : > "$lanes_dir/memory.tsv"
+          sample_memory_once
           sample_memory &
           memory_sampler_pid=$!
           trap 'kill "$memory_sampler_pid" 2>/dev/null || true' EXIT
+          if [ "${#lane_udids[@]}" -le 1 ]; then
+            configure_lane 0 "${lane_udids[0]}"
+            overall_status=0
+            run_lane ${selected[@]+"${selected[@]}"} || overall_status=$?
+            finish_memory_report
+            exit "$overall_status"
+          fi
+
           if [ -n "$PRE_RUN_FLOW" ]; then
             for lane in "${!lane_udids[@]}"; do
               if [ "$lane" -gt 0 ] && [ "$lane" -ge "${#selected[@]}" ]; then
@@ -1342,22 +1367,7 @@ runs:
             fi
             { echo ""; cat "$lanes_dir/lane-$lane.md" 2>/dev/null || true; } >> "$GITHUB_STEP_SUMMARY"
           done
-          kill "$memory_sampler_pid" 2>/dev/null || true
-          wait "$memory_sampler_pid" 2>/dev/null || true
-          {
-            echo ""
-            echo "### Guest memory during shard $SHARD_INDEX (${#lane_udids[@]} simulators, sampled every 30 s)"
-            awk -F '\t' 'NR == 1 || $2 < min { min = $2 } $4 > max { max = $4 } END { printf "Minimum memory_pressure free: %s%%. Peak compressor: %s MB over %s sample(s).\n", min, max, NR }' "$lanes_dir/memory.tsv"
-            echo ""
-            echo "<details><summary>Samples</summary>"
-            echo ""
-            echo "| Time (UTC) | Free | Compressor pages | Compressor MB |"
-            echo "| --- | --- | --- | --- |"
-            awk -F '\t' '{ printf "| %s | %s%% | %s | %s |\n", $1, $2, $3, $4 }' "$lanes_dir/memory.tsv"
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-          rm -rf "$lanes_dir"
+          finish_memory_report
           exit "$overall_status"
 
     - name: Capture final simulator state
