@@ -37,6 +37,7 @@ stub_simslim() {
     stub "$dir" simslim '
 printf "simslim %s\n" "$*" >> "$SIMCTL_LOG"
 case "$1" in
+    on) [ -z "${SIMSLIM_ON_HANG_SECONDS:-}" ] || sleep "$SIMSLIM_ON_HANG_SECONDS" ;;
     verify)
         if [ -n "${SIMSLIM_VERIFY_FAIL_ONCE:-}" ] && [ ! -e "$SIMSLIM_VERIFY_FAIL_ONCE" ]; then
             : > "$SIMSLIM_VERIFY_FAIL_ONCE"
@@ -73,6 +74,7 @@ acquire() {
         TEMPLATE_DEVICE='' \
         TEMPLATE_STRATEGY='none' \
         SLIM_PROFILE="$REPO_ROOT/profiles/ci.json" \
+        SLIM_REPAIR='true' \
         LEASE_FILE_INPUT="$dir/lease.json" \
         BOOT_TIMEOUT_SECONDS='5' \
         "$@"
@@ -89,63 +91,44 @@ if assert_equals 'none' "$(action_input_default "$ACTION" template-strategy)" 't
     pass_case
 fi
 
-case_start "auto clones the host's shut-down mobile-ci-template device"
+case_start 'a lease with a slim profile is left shut down for the slim step to boot once, already slim'
+workspace="$(acquire_workspace)"
+acquire "$workspace" devices-no-template.json
+log="$(cat "$workspace/simctl-log")"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$log" 'simctl create' 'simctl log' \
+    && assert_not_contains "$log" 'simctl boot' 'no boot before the profile is applied' \
+    && assert_equals 'false' "$(step_output "$workspace" booted)" 'booted output'; then
+    pass_case
+fi
+
+case_start 'a lease without a slim profile is booted by acquire'
+workspace="$(acquire_workspace)"
+acquire "$workspace" devices-no-template.json SLIM_PROFILE=''
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/simctl-log")" "simctl bootstatus $CREATED_UDID -b" 'simctl log' \
+    && assert_equals 'true' "$(step_output "$workspace" booted)" 'booted output'; then
+    pass_case
+fi
+
+case_start 'with slim-repair false the lease is booted as it is, for the slim step to verify'
+workspace="$(acquire_workspace)"
+acquire "$workspace" devices-no-template.json SLIM_REPAIR='false'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/simctl-log")" "simctl boot $CREATED_UDID" 'simctl log' \
+    && assert_equals 'true' "$(step_output "$workspace" booted)" 'booted output'; then
+    pass_case
+fi
+
+case_start 'auto is deprecated: it neither clones a host template nor leaves one behind'
 workspace="$(acquire_workspace)"
 acquire "$workspace" devices-template.json TEMPLATE_STRATEGY='auto'
 log="$(cat "$workspace/simctl-log")"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$log" 'simslim verify 22222222-2222-2222-2222-222222222222' 'a shut-down template is never verified, because simslim verify compares a booted device' \
-    && assert_contains "$log" "simctl clone 22222222-2222-2222-2222-222222222222" 'simctl log' \
-    && assert_not_contains "$log" 'simctl create' 'simctl log' \
-    && assert_equals "$TEMPLATE" "$(step_output "$workspace" template)" 'template output' \
-    && assert_equals '' "$(step_output "$workspace" template-bake-name)" 'nothing left to bake'; then
-    pass_case
-fi
-
-case_start 'auto names the template it will leave behind when the host has none'
-workspace="$(acquire_workspace)"
-acquire "$workspace" devices-no-template.json TEMPLATE_STRATEGY='auto'
-log="$(cat "$workspace/simctl-log")"
-if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$log" 'simctl create' 'simctl log' \
     && assert_not_contains "$log" 'simctl clone' 'simctl log' \
-    && assert_equals "$TEMPLATE" "$(step_output "$workspace" template-bake-name)" 'template name to bake'; then
-    pass_case
-fi
-
-case_start 'auto never clones a template of another runtime'
-workspace="$(acquire_workspace)"
-acquire "$workspace" devices-template-other-runtime.json TEMPLATE_STRATEGY='auto'
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
-    && assert_equals "$TEMPLATE" "$(step_output "$workspace" template-bake-name)" 'template name to bake'; then
-    pass_case
-fi
-
-case_start 'a booted template is refused, neither cloned nor replaced'
-workspace="$(acquire_workspace)"
-acquire "$workspace" devices-template-booted.json TEMPLATE_STRATEGY='auto'
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/simctl-log")" 'simctl create' 'simctl log' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
-    && assert_equals '' "$(step_output "$workspace" template-bake-name)" 'no second template for this type and runtime' \
-    && assert_contains "$(cat "$workspace/log")" '::warning::' 'the booted template is reported'; then
-    pass_case
-fi
-
-case_start 'auto together with an explicit template-device fails closed'
-workspace="$(acquire_workspace)"
-acquire "$workspace" devices-template.json TEMPLATE_STRATEGY='auto' TEMPLATE_DEVICE='some-template'
-if assert_equals 1 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/log")" 'set exactly one of them' 'error message'; then
-    pass_case
-fi
-
-case_start 'auto without a slim profile fails closed'
-workspace="$(acquire_workspace)"
-acquire "$workspace" devices-template.json TEMPLATE_STRATEGY='auto' SLIM_PROFILE=''
-if assert_equals 1 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/log")" 'requires slim-profile' 'error message'; then
+    && assert_equals '' "$(step_output "$workspace" template)" 'template output' \
+    && assert_contains "$(cat "$workspace/log")" "template-strategy 'auto' is deprecated" 'deprecation notice'; then
     pass_case
 fi
 
@@ -166,20 +149,21 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
-case_start 'an explicitly named template is still cloned by name'
+case_start 'an explicitly named template is still cloned by name, and slimmed before its first boot'
 workspace="$(acquire_workspace)"
 acquire "$workspace" devices-template.json TEMPLATE_DEVICE="$TEMPLATE"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/simctl-log")" 'simctl clone 22222222-2222-2222-2222-222222222222' 'simctl log' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl boot' 'simctl log' \
     && assert_equals "$TEMPLATE" "$(step_output "$workspace" template)" 'template output'; then
     pass_case
 fi
 
-# --- the slim step bakes the template it was told to leave behind ------------
+# --- the slim step slims a shut-down lease with a single boot -----------------
 
 slim_workspace() {
     local dir
-    dir="$(new_workspace "$ACTION" "Verify, repair and measure the lease's slim profile")"
+    dir="$(new_workspace "$ACTION" 'Slim, verify and measure the lease')"
     stub_xcrun "$dir"
     stub_simslim "$dir"
     : > "$dir/simctl-log"
@@ -200,91 +184,77 @@ slim() {
         SLIM_REPAIR='true' \
         SIMULATOR_UDID="$CREATED_UDID" \
         TEMPLATE_CLONED_FROM='' \
+        LEASE_BOOTED='false' \
         BOOT_TIMEOUT_SECONDS='5' \
         "$@"
 }
 
-case_start 'a booted clone that fails verify is repaired and names its template as stale'
+case_start 'a shut-down lease is slimmed by simslim on, then waited for and verified'
 workspace="$(slim_workspace)"
-slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME='' TEMPLATE_CLONED_FROM="$TEMPLATE" \
-    SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
-log="$(cat "$workspace/log")"
+slim "$workspace" devices-no-template.json
+log="$(cat "$workspace/simctl-log")"
+expected="simslim on $CREATED_UDID --profile $REPO_ROOT/profiles/ci.json
+simctl bootstatus $CREATED_UDID -b
+simslim verify $CREATED_UDID --profile $REPO_ROOT/profiles/ci.json"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/simctl-log")" "simslim on $CREATED_UDID --profile" 'the clone is repaired in-job' \
-    && assert_contains "$log" '::warning::' 'the stale template is reported' \
-    && assert_contains "$log" "$TEMPLATE" 'the warning names the template' \
+    && assert_contains "$log" "$expected" 'call order' \
+    && assert_not_contains "$log" 'simctl boot ' 'simslim on boots the lease itself' \
+    && assert_equals 'true' "$(step_output "$workspace" slimmed)" 'slimmed output'; then
+    pass_case
+fi
+
+case_start 'a shut-down lease that still does not verify after simslim on fails the job'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-no-template.json SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "does not match" 'error message'; then
+    pass_case
+fi
+
+case_start 'a simslim on that never returns fails at the boot timeout instead of hanging the job'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-no-template.json BOOT_TIMEOUT_SECONDS='1' SIMSLIM_ON_HANG_SECONDS='8'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "'simslim on' did not slim and boot '$CREATED_UDID' within 1s" 'error message' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simslim verify' 'nothing verified after the wedge'; then
+    pass_case
+fi
+
+case_start 'a repair whose simslim on never returns fails at the boot timeout'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-no-template.json LEASE_BOOTED='true' BOOT_TIMEOUT_SECONDS='1' SIMSLIM_ON_HANG_SECONDS='8' SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "'simslim on' did not apply" 'error message'; then
+    pass_case
+fi
+
+case_start 'a booted lease that fails verify is repaired with simslim on and verified again'
+workspace="$(slim_workspace)"
+slim "$workspace" devices-template.json LEASE_BOOTED='true' TEMPLATE_CLONED_FROM="$TEMPLATE" \
+    SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/simctl-log")" "simslim on $CREATED_UDID --profile" 'the lease is repaired in-job' \
+    && assert_not_contains "$(cat "$workspace/log")" '::warning::' 'a stock clone is expected, not a stale template' \
     && assert_not_contains "$(cat "$workspace/simctl-log")" "simctl delete" 'the template is never replaced automatically'; then
     pass_case
 fi
 
-case_start 'with slim-repair false a stale template fails the job instead of being repaired'
+case_start 'with slim-repair false a stock clone fails the job and says clones never inherit overrides'
 workspace="$(slim_workspace)"
-slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME='' TEMPLATE_CLONED_FROM="$TEMPLATE" \
+slim "$workspace" devices-template.json LEASE_BOOTED='true' TEMPLATE_CLONED_FROM="$TEMPLATE" \
     SLIM_REPAIR='false' SIMSLIM_VERIFY_FAIL_ONCE="$workspace/verify-failed-once"
 if assert_equals 1 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simslim on' 'no repair reboot' \
-    && assert_contains "$(cat "$workspace/log")" "came from template '$TEMPLATE', so that template is stale" 'the error names the template'; then
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simslim on' 'no repair' \
+    && assert_contains "$(cat "$workspace/log")" 'a clone never inherits the disable overrides of its template' 'the error names the cause'; then
     pass_case
 fi
 
-case_start 'a clone that is already slim is neither repaired nor blamed on its template'
+case_start 'a booted lease that is already slim is not touched'
 workspace="$(slim_workspace)"
-slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME='' TEMPLATE_CLONED_FROM="$TEMPLATE"
+slim "$workspace" devices-no-template.json LEASE_BOOTED='true'
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" "simslim on" 'no repair reboot' \
-    && assert_not_contains "$(cat "$workspace/log")" '::warning::' 'nothing to warn about'; then
-    pass_case
-fi
-
-case_start 'a lease with nothing to bake leaves no device behind'
-workspace="$(slim_workspace)"
-slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME=''
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log'; then
-    pass_case
-fi
-
-case_start 'baking shuts the lease down, clones it, and boots the lease again'
-workspace="$(slim_workspace)"
-slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
-log="$(cat "$workspace/simctl-log")"
-expected="simctl shutdown $CREATED_UDID
-simctl clone $CREATED_UDID $TEMPLATE
-simctl shutdown $CLONED_UDID
-simctl boot $CREATED_UDID"
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$log" "$expected" 'simctl call order' \
-    && assert_contains "$log" "simctl bootstatus $CREATED_UDID -b" 'the lease is waited for again'; then
-    pass_case
-fi
-
-case_start 'baking never creates a second template for the same type and runtime'
-workspace="$(slim_workspace)"
-slim "$workspace" devices-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
-    && assert_contains "$(cat "$workspace/log")" 'never baking a second one' 'reason'; then
-    pass_case
-fi
-
-case_start 'a fresh lock from another job means this lease does not bake'
-workspace="$(slim_workspace)"
-mkdir -p "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
-slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'simctl log' \
-    && assert_contains "$(cat "$workspace/log")" 'already baking' 'reason'; then
-    pass_case
-fi
-
-case_start 'a lock a terminated job left behind is reclaimed, not obeyed forever'
-workspace="$(slim_workspace)"
-mkdir -p "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
-touch -d '-2 hours' "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock"
-slim "$workspace" devices-no-template.json TEMPLATE_BAKE_NAME="$TEMPLATE"
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/simctl-log")" "simctl clone $CREATED_UDID $TEMPLATE" 'simctl log' \
-    && assert_equals 'false' "$([ -d "$workspace/home/.mobile-ci-simulator-templates/$TEMPLATE.lock" ] && echo true || echo false)" 'the lock is released'; then
+    && assert_not_contains "$(cat "$workspace/simctl-log")" "simslim on" 'no repair' \
+    && assert_not_contains "$(cat "$workspace/simctl-log")" 'simctl clone' 'no template is baked'; then
     pass_case
 fi
 

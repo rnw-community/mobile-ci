@@ -51,7 +51,7 @@ twice: once in its own runtime and once in the iOS build it displaced.
 | Job | Pool | Why |
 | --- | --- | --- |
 | `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
-| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro on the `avd` driver | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
+| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro and `store-screenshots.yml`'s Android capture on the `avd` driver (`android-emulator`) | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
 | Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
 | `expo-base-plan.yml`'s plan/repack job (`expo-native-key`, `expo-base-binary`, `expo-repack`) | x86_64 Linux | re-bundles JavaScript and rewrites an archive: no Xcode, no simulator, no emulator, no KVM — see [The Linux repack pool](#the-linux-repack-pool-expo-e2e-and-screenshot-runs) |
 | Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
@@ -63,8 +63,13 @@ documented under [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-dr
 — and `android-maestro.yml`'s `android-driver` defaults to `avd` to match,
 since `redroid` cannot run on that shape. The one deliberate exception is
 `store-screenshots.yml`'s `android-capture-runner-labels`, which stays on a
-Redroid-capable Linux pool: `capture-screenshots-android` drives a
-`redroid-container` and has no `avd` code path at all.
+Redroid-capable Linux pool because its `android-driver` still defaults to
+`redroid`. The capture leg has an `avd` driver too — the same
+`android-emulator` action the Maestro shards boot with — so passing
+`android-driver: avd` with `android-capture-runner-labels:
+'["self-hosted","trf-linux-amd64-4x8"]'` moves it onto the KVM pool. Both
+defaults flip only after an `avd` capture run has been validated on the
+fleet.
 
 Label names are a property of your fleet, not of this repo. The defaults name
 the labels of the fleet this repo is developed against; on another fleet,
@@ -85,9 +90,13 @@ base reaches a Mac (iOS) or a Gradle build (Android). The contract is in
 [repack.md](repack.md).
 
 Per [Which pool a job belongs on](#which-pool-a-job-belongs-on), that job
-belongs on the **x86_64 Linux pool**: it re-bundles JavaScript and rewrites an
-archive. `["self-hosted","trf-linux-amd64-4x8"]` is the default
-`repack-runner-labels` value in every caller.
+belongs on the **x86_64 Linux pool without KVM**: it re-bundles JavaScript and
+rewrites an archive. `["self-hosted","trf-linux-amd64-2x4"]` (2 vCPU / 4 GiB, no
+`/dev/kvm`) is the default `repack-runner-labels` / `plan-runner-labels` value in
+every caller, so plan and repack jobs never queue behind Android emulator shards
+on the KVM pool ([#169](https://github.com/rnw-community/mobile-ci/issues/169)).
+Do not point them at a label also served by arm64 guests: Google publishes the
+Android build-tools for x86_64 Linux only.
 
 **What a repack host needs:**
 
@@ -310,155 +319,52 @@ Then set `simulator-slim-repair: 'false'` in the caller so a device that comes
 up stock fails the job as the provisioning defect it is, instead of paying for
 an in-job `simslim on` reboot on every shard.
 
-**Leased simulators: clone a slimmed template.** `run-maestro-ios` and
+**Leased simulators: slimmed before their first boot.** `run-maestro-ios` and
 `capture-screenshots-ios` boot a device the host already owns, so the loop
 above is the whole story for them. `simulator-lease` is different: it *creates*
 the device it hands to `xcodebuild-test`, and a freshly created device is
-always stock. That is why its `slim-repair` defaults to `'true'` (the opposite
-of `run-maestro-ios`) — with only `slim-profile` set, every lease pays one
-`simslim on` reboot.
+always stock. With `slim-profile` set (the default, `bundled`) and
+`slim-repair: 'true'` (the default), the lease is left shut down and
+`simslim on --profile` writes its launchd disable overrides offline, then boots
+it once, already slim; the job verifies and measures it. No image preparation
+is needed, and nothing is left behind on the host.
 
-The way to stop paying it is `template-device`. `xcrun simctl clone` copies the
-device's launchd disable overrides along with the device, so a clone of a
-slimmed, **shut-down** template is slim from its first boot:
+**Templates do not carry slimming.** simslim keeps the overrides on the host in
+a store keyed by the device's UDID
+([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)),
+not inside the device, so `xcrun simctl clone` of a slimmed template produces a
+**stock** clone with a new UDID
+([#161](https://github.com/rnw-community/mobile-ci/issues/161)). The same holds
+for Xcode's `-parallel-testing-worker-count` clones: each worker boots stock,
+so raising the worker count multiplies the stock footprint. simslim's own
+answer for worker clones is `simslim watch`, which slims each clone no-reboot as
+it boots; `xcodebuild-test` runs it for the length of the test run when given
+`slim-profile` (`swift-ios.yml` passes the lease's). Baking `mobile-ci-template-*` devices
+into the image buys nothing, and `template-strategy: auto` is deprecated
+accordingly; `template-device` still clones a named device that carries
+something other than slimming, and the clone is slimmed before first boot like
+a created one.
 
-```bash
-# Host provisioning, once per image: one shut-down, slimmed template per device type.
-udid=$(xcrun simctl create 'trf-template-iPad Pro 11-inch (M4)' \
-    'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4' \
-    "$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))] | sort_by(.version | split(".") | map(tonumber)) | last.identifier')")
-simslim on "$udid" --profile /path/to/profiles/ci.json --boot-timeout 15m
-simslim verify "$udid" --profile /path/to/profiles/ci.json
-simslim measure "$udid"
-xcrun simctl shutdown "$udid"
-```
-
-```yaml
-with:
-    template-device: 'trf-template-iPad Pro 11-inch (M4)'
-    slim-repair: 'false'
-```
-
-`slim-repair: 'false'` is the point of the pairing: with a template in place, a
-lease that comes up stock means the *image* lost its slimming, and that should
-fail loudly rather than be repaired on every run. The action also refuses to
-clone a template that is booted — a template is provisioning state, never a
-job's device.
-
-### Templates the image can bake
-
-Naming a template in the consumer's workflow means the consumer has to know
-what the host image ships. `simulator-lease`'s `template-strategy: auto` (and
-`swift-ios.yml`'s `simulator-template-strategy: auto`) removes that coupling:
-the job looks for a **shut-down, available device whose name starts with
-`mobile-ci-template-` and whose device type and runtime both match the lease**
-and clones it. Nothing matches? The lease is created and slimmed exactly as
-before, and a shut-down copy is left behind for the next job on that host.
-
-The template is **trusted by name, device type and runtime**; the device that
-gets `simslim verify --profile`-ed is the **booted clone**, which the lease
-boots anyway. That is why the bake script below verifies **while the device is
-booted**: `simslim verify` compares a booted simulator and reports a mismatch
-for any shut-down one, so the image build is the only place a template's slim
-state can be proven, and a template the image did not verify booted will be
-caught later as a non-slim clone (repaired in-job, with a `::warning::` naming
-the template as stale — never deleted or replaced by a job).
-
-**The naming rule is the contract between this repo and the image:**
-
-```text
-mobile-ci-template-<device-type-slug>-<runtime-slug>
-```
-
-where each slug is the name lowercased with every run of non-alphanumeric
-characters collapsed to a single `-`, and the runtime slug is taken from the
-last dot-separated component of the runtime identifier:
-
-| Device type             | Runtime identifier                                | Template name                                     |
-| ----------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| `iPad Pro 11-inch (M4)` | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`  |
-| `iPhone 17 Pro`         | `com.apple.CoreSimulator.SimRuntime.iOS-26-0`     | `mobile-ci-template-iphone-17-pro-ios-26-0`        |
-
-Only the prefix, the device type and the runtime are matched, so a template
-baked under the exact name above is found, and a template of another runtime
-or another device type is never cloned in its place.
-
-**On a fleet of one-job VM clones, bake it into the image.** The fleet
-([`vitalyiegorov/tart-runner-fleet`](https://github.com/vitalyiegorov/tart-runner-fleet))
-gives every job a fresh clone of a base image, so the copy a job leaves behind
-dies with the VM: the persistent win requires the template to exist in the base
-image. Add this to the image build right after its "Prewarm the simulators"
-and "Slim the simulators" steps (`docs/BASE_IMAGE.md`), once per device type
-the fleet's tenants lease:
-
-```sh
-# errexit matters here: a failed 'simslim on' or 'simslim verify' followed by a
-# successful 'simctl shutdown' would otherwise bake a stock template the lease
-# refuses to clone, and the image build would report success.
-set -euo pipefail
-export DEVELOPER_DIR=/Applications/Xcode_26.4.1.app/Contents/Developer
-profile=~/.fleet/simslim.fleet.json     # or mobile-ci's profiles/ci.json
-
-bake_template() {
-    device_type="$1"
-    device_type_id="$(xcrun simctl list devicetypes -j \
-        | jq -r --arg name "$device_type" '[.devicetypes[] | select(.name == $name) | .identifier] | first')"
-    runtime_id="$(xcrun simctl list runtimes -j \
-        | jq -r '[.runtimes[] | select(.isAvailable and (.identifier | contains("iOS")))]
-                 | sort_by(.version | split(".") | map(tonumber)) | last.identifier')"
-    slug() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//'; }
-    name="mobile-ci-template-$(slug "$device_type")-$(slug "${runtime_id##*.}")"
-
-    # One template per device type + runtime: never create a second.
-    if xcrun simctl list devices -j | jq -e --arg name "$name" \
-        '[.devices[][] | select(.name == $name)] | length > 0' > /dev/null; then
-        echo "$name already exists"
-        return 0
-    fi
-
-    udid="$(xcrun simctl create "$name" "$device_type_id" "$runtime_id")"
-    xcrun simctl boot "$udid"
-    xcrun simctl bootstatus "$udid" -b
-    simslim on "$udid" --profile "$profile" --boot-timeout 15m
-    simslim verify "$udid" --profile "$profile"   # booted: verify reads a booted device only
-    simslim measure "$udid"
-    xcrun simctl shutdown "$udid"          # a template is always shut down
-}
-
-bake_template 'iPad Pro 11-inch (M4)'
-bake_template 'iPhone 17 Pro'
-```
-
-`pony-labirinth` leases `iPad Pro 11-inch (M4)` on the newest installed iOS
-runtime, so the device the image must carry for it is
-**`mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`** (the runtime slug follows
-whatever `simctl` reports as newest — re-derive it with the snippet above
-rather than hard-coding `26-0` if the image's runtime changes).
-
-Leaving the template **shut down** is not cosmetic: the action refuses a booted
-template — neither cloning nor replacing it — because a booted template is a
-device something else is using.
-Do not `simctl erase` a template afterwards — that resets it to stock, so every
-clone of it fails `simslim verify` once booted and pays a repair reboot, and
-the job warns that the template is stale.
-
-**The fleet base image should ship these templates.** Measured inside
+**The fleet base image should still ship slim pool devices.** Measured inside
 pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
 simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,
 a Safari extension, Spotlight — with about **2 GB in the compressor and ~14 MB
-of free pages**. The UI-test step there was memory-starved, not CPU-bound. This
-also gates `-parallel-testing-worker-count`: each worker is a *clone* of the
-leased device, so raising it on a stock lease multiplies that footprint, while
-clones of a slim lease inherit the overrides.
+of free pages**. The UI-test step there was memory-starved, not CPU-bound. The
+devices `run-maestro-ios` and `capture-screenshots-ios` boot by name keep their
+overrides across `simctl erase` (the store is keyed by UDID), so slimming them
+once in the image, with the loop above, holds for every job.
 
-**What resets a simulator to stock.** `xcrun simctl erase`, delete-and-recreate,
-"Erase All Content and Settings", and every device created from a newly
-installed runtime come up stock with no error anywhere - the simulator just
+**What resets a simulator to stock.** Anything that gives the device a new
+UDID — delete-and-recreate, `simctl clone`, and every device created from a
+newly installed runtime — comes up stock with no error anywhere (`simctl
+erase` keeps the overrides, because simslim's store is keyed by UDID and lives
+outside the device) - the simulator just
 runs heavy again, and a pool that was sized for slim simulators starts
 swapping. `simslim verify` in the job catches exactly this and fails the shard
-naming the drift; re-run the loop above on that host. Set
-`simulator-slim-repair: 'true'` only if you would rather have the shard repair
-itself with an in-job `simslim on` (one extra reboot) than fail.
+naming the drift; re-run the loop above on that host. `simulator-slim-repair`
+defaults to `'true'`, so the shard repairs itself in-job with `simslim on` (a
+shutdown and one boot) and the repair is paid once per device; set it to
+`'false'` on an image that ships slimmed devices to fail on drift instead.
 
 **What slimming breaks, and `simulator-requires`.** Spotlight (`search`),
 push notifications (`apsd` in `store`), StoreKit testing (`storekitd`),
@@ -522,7 +428,8 @@ after the encoder is gone.
 clones the destination simulator and runs the tests on
 `Clone 1 of <destination>` even with a single worker. A `simulator-lease` job
 then holds two simulators on a 7 GiB guest — the leased device it booted,
-slimmed and verified, and a clone `simslim` never saw.
+slimmed and verified, and a clone that boots stock unless `xcodebuild-test`'s
+`slim-workers` runs `simslim watch` for it.
 
 Measured on pony-labirinth
 ([#155](https://github.com/rnw-community/mobile-ci/issues/155), 2026-09-22):
@@ -546,8 +453,9 @@ with:
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,
-or `cmake`, so `reactivecircus/android-emulator-runner` (`run-maestro-android`,
-the `avd` driver, `android-maestro.yml`'s default) is structurally unusable on
+or `cmake`, so `android-emulator` (`run-maestro-android` and the
+screenshot capture's `avd` driver; `android-maestro.yml`'s default) is
+structurally unusable on
 `linux-aarch64` self-hosted runners regardless of tuning.
 `run-maestro-android-redroid` (the `redroid` driver, selected explicitly
 together with `runner-labels` pointing at this shape) runs Android as a privileged Docker
@@ -860,8 +768,10 @@ Options for a consumer app that depends on GMS at runtime:
 ## Linux x86_64 KVM hosts (Android, `avd` driver)
 
 The Redroid shape above is not the only supported Android host shape.
-`android-maestro.yml`'s `avd` driver (`reactivecircus/android-emulator-runner`,
-`run-maestro-android`) is fully supported too, on an x86_64 Linux host with
+The `avd` driver — `android-maestro.yml`'s default (`run-maestro-android`) and
+`store-screenshots.yml`'s `android-driver: avd` capture leg, both booting the
+emulator through the `android-emulator` action — is fully supported too, on
+an x86_64 Linux host with
 KVM — no `binder_linux`, no privileged container, no Docker daemon at all.
 This is the shape for a rootless-container runner pool (e.g. rootless
 Podman-backed runners) where `--privileged` and `sudo modprobe` are off the
@@ -877,8 +787,13 @@ Host requirements:
 - **Android SDK with `emulator` plus a `google_apis` x86_64 system image**
   matching `android-maestro.yml`'s `emulator-api-level`/`emulator-target`/
   `emulator-arch` inputs (e.g. `android-34`, `google_apis`, `x86_64`).
-  `reactivecircus/android-emulator-runner` installs and caches these itself
-  via the Android SDK manager. No `binder_linux`, no privileged containers,
+  Bake them into the runner image and point `ANDROID_SDK_ROOT`/`ANDROID_HOME`
+  at that SDK: `android-emulator` then uses it as is, and adds only a missing
+  system image to it with `sdkmanager` when the SDK root is writable. Without
+  a usable preinstalled SDK it falls back to `android-actions/setup-android`,
+  which downloads a fresh SDK (several minutes per job) into the same root or
+  `~/.android/sdk`. Either install path runs `sdkmanager`, so the runner needs
+  a JDK on `PATH`. No `binder_linux`, no privileged containers,
   and no Docker daemon are needed on this shape at all.
 - **Give the emulator room inside the runner's memory limit, and bound it
   explicitly.** On a container-backed pool the cgroup limit is the ceiling
@@ -890,18 +805,50 @@ Host requirements:
   into a run whose earlier flows passed. Measured on a 4 vCPU / 8 GiB
   container: the AVD alone sits near 4.2 GiB, and the emulator plus Maestro's
   JVM plus the runner's own Node processes reached the 8 GiB ceiling partway
-  through a shard. Either give the profile headroom above the AVD's footprint
-  or set `emulator-ram-size` (and `emulator-heap-size`) so the guest cannot
-  grow into the limit. `redroid-memory` is the equivalent knob on the other
-  driver.
-- **Gate on `emulator -accel-check` before trusting the pool.** A host
-  missing `/dev/kvm` access does not necessarily refuse to boot an AVD — it
-  can silently fall back to software emulation, which eventually boots but
-  is far too slow for a CI budget and gives no clear signal that the host is
-  misconfigured. Run `emulator -accel-check` as a host health-check (or a
-  preflight step ahead of the real job) and fail closed on anything other
-  than confirmation that hardware acceleration is available, rather than
-  discovering the problem later as an intermittent timeout in the test job.
+  through a shard. `run-maestro-android` therefore sizes the guest from the
+  container's own cgroup limit when `emulator-ram-size` is empty (the
+  default): 256 MB of guest RAM per GiB of `memory.max`, clamped to
+  1536–4096, and half the `cpu.max` quota as cores, clamped to 2–4 — 2048 MB
+  and 2 cores on a 4 vCPU / 8 GiB container. It reads cgroup v2 first, then
+  cgroup v1, and keeps the profile default when neither reports a limit, so
+  give the runner container a real memory limit rather than relying on the
+  host's. Set `emulator-ram-size` (and `emulator-heap-size`) explicitly only
+  with headroom measured on the pool. `redroid-memory` is the equivalent knob
+  on the other driver.
+- **Cap emulators per host with a slot directory (optional).** Per-container
+  sizing cannot stop a host from admitting more emulator jobs than its RAM
+  holds. Provision one file per emulator the host may run, on a **local**
+  filesystem (`flock` over NFS is not reliable), and bind-mount the directory
+  read-write at the same path into every runner container on the host:
+
+  ```bash
+  # once per host; N = emulators this host can hold (e.g. host RAM / 8 GiB)
+  install -d -m 0777 /var/lib/mobile-ci/emulator-slots
+  for i in $(seq 0 $((N - 1))); do
+    install -m 0666 /dev/null "/var/lib/mobile-ci/emulator-slots/slot-$i"
+  done
+  # runner container: -v /var/lib/mobile-ci/emulator-slots:/var/lib/mobile-ci/emulator-slots:rw
+  ```
+
+  Then pass `emulator-slots-dir: /var/lib/mobile-ci/emulator-slots` to
+  `android-maestro.yml` (and to `store-screenshots.yml` when its capture leg
+  runs `android-driver: avd`, so screenshot emulators count against the same
+  cap). Each test shard holds an exclusive `flock` on one
+  slot from before the emulator boots until its shutdown step, so the number
+  of `slot-*` files is the host's emulator cap across every job and
+  repository. The lock lives in a detached `flock` holder process; if the job
+  is killed, the kernel releases the lock when that process dies — through the
+  shutdown step, the runner's orphan-process cleanup, or the container's
+  teardown. To change the cap, add or remove `slot-*` files (remove only idle
+  ones). Runner images need `flock` and `setsid` (util-linux) on `PATH`.
+- **`emulator -accel-check` gates every boot.** A host missing `/dev/kvm`
+  access does not necessarily refuse to boot an AVD — it can silently fall
+  back to software emulation, which eventually boots but is far too slow for
+  a CI budget and gives no clear signal that the host is misconfigured.
+  `android-emulator` therefore runs `emulator -accel-check` before every
+  boot and fails the job, quoting the emulator's reason, unless it confirms
+  hardware acceleration. The same command makes a useful host health-check
+  outside CI.
 
 Observed characteristics from a real fleet, useful for sizing this pool
 (specific to a headless `google_apis`/x86_64 AVD; expect these to move with
@@ -933,21 +880,26 @@ route a run at the host shape it needs — see
 [docs/workflows/android-maestro.md](workflows/android-maestro.md) for the
 full input reference.
 
+`store-screenshots.yml` has the same choice for its Android capture leg, with
+the opposite default for now: `android-driver` defaults to `redroid` on
+`android-capture-runner-labels`' Redroid pool. `android-driver: avd` with
+`android-capture-runner-labels` naming the x86_64 KVM pool (e.g.
+`["self-hosted","trf-linux-amd64-4x8"]`) runs the capture on the same shape
+and the same `android-emulator` action as the Maestro shards — see
+[docs/workflows/store-screenshots.md](workflows/store-screenshots.md#android-capture).
+
 ### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
 
 `native-publish.yml`, `seed-native-cache.yml`, and `native-dev-release.yml`
-all default their `android-runner-labels` input to the same macOS pool as
-iOS (`["self-hosted","macOS","ARM64"]`), not because the Android build needs
-a Mac, but because Google's Android NDK build tooling used by `eas build
---local` is x86_64-only on Linux — there is no `linux-aarch64` NDK to run it
-with, the same gap that rules out the `redroid`-only `linux-aarch64` shape
-for an Android build. An x86_64 Linux KVM host — the same shape
-`android-maestro.yml` and `seed-native-cache.yml` now default to — is
-x86_64-native and can serve these Android EAS build jobs too. Per
-[Which pool a job belongs on](#which-pool-a-job-belongs-on) that is where
-they belong; point `android-runner-labels` at it rather than accepting the
-macOS default, which remains only because no run has yet proven `eas build
---local` on this fleet's x86_64 Linux containers.
+all default their `android-runner-labels` input to the x86_64 Linux pool
+(`["self-hosted","trf-linux-amd64-4x8"]`). An Android `eas build --local`
+needs no Mac, only Google's NDK, which ships for x86_64 Linux and macOS but
+never for linux-aarch64 - the same gap that rules out the `redroid`-only
+`linux-aarch64` shape for an Android build. suuudokuuu's `native-publish`
+Android job has built and published from that pool repeatedly (32-38 min a
+run). The image does not need the NDK or build-tools preinstalled: the Gradle
+build downloads the versions the app pins into the SDK, so the first run on a
+fresh container pays that download.
 
 ## Maintainer note: fleet self-test repo variables
 

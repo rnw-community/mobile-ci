@@ -25,7 +25,7 @@ success.
 
 **Submitted versions are detect-only.** App Store Connect forbids modifying
 a version's screenshots once it has been submitted for review (HTTP 409
-`STATE_ERROR`). Auditing `READY_FOR_SALE` therefore reports undeletable
+`STATE_ERROR`). Auditing `READY_FOR_DISTRIBUTION` therefore reports undeletable
 duplicates via the `undeletable-count` output and a `::warning::`, and - with
 the default `fail-on-duplicates: true` - still fails the run: someone must
 clean those up manually or they age out with the next version submission.
@@ -38,7 +38,10 @@ Dedupe *before* submitting by targeting `PREPARE_FOR_SUBMISSION`.
   call it directly after your own upload step.
 - Against the editable version (`PREPARE_FOR_SUBMISSION`, default) in the
   same run that uploaded, or against the live version
-  (`READY_FOR_SALE`) as an audit.
+  (`READY_FOR_DISTRIBUTION`) as an audit.
+- As a standalone maintenance run (e.g. `workflow_dispatch`) with
+  `missing-version: skip`, so a moment when the app has no version in
+  `version-state` is a zero-count notice instead of a failure.
 
 It never touches metadata, binaries, or non-duplicate screenshots; a clean
 listing is a read-only pass that appends a coverage table to the job summary.
@@ -51,8 +54,40 @@ listing is a read-only pass that appends a coverage table to the job summary.
 | `asc-key-path`           | yes      | —                             | Path to the `.p8` API key file. Write it from a secret in a prior step (see example) and remove it afterwards. |
 | `asc-key-id`             | yes      | —                             | App Store Connect API key ID. |
 | `asc-issuer-id`          | yes      | —                             | App Store Connect API issuer ID (UUID). |
-| `version-state`           | no       | `PREPARE_FOR_SUBMISSION`      | Which version's localizations to dedupe (any `appStoreState` enum value). |
+| `version-state`           | no       | `PREPARE_FOR_SUBMISSION`      | Which version's localizations to dedupe; an App Store Connect `AppVersionState` value (see [Version states](#version-states)). |
 | `fail-on-duplicates`      | no       | `true`                        | Fail the step when any duplicate had to be deleted. |
+| `missing-version`         | no       | `error`                       | When no version is in `version-state`: `error` fails the step; `skip` logs a `::notice::`, sets both counts to `0` and succeeds. Any other value fails the step. See [Missing version](#missing-version). |
+
+## Version states
+
+The version is selected with `filter[appVersionState]`, which replaced the
+`appStoreState` filter Apple deprecated in
+[App Store Connect API 3.7](https://developer.apple.com/documentation/appstoreconnectapi/app-store-connect-api-3-7-release-notes).
+`version-state` must be one of the
+[`AppVersionState`](https://developer.apple.com/documentation/appstoreconnectapi/appversionstate)
+values: `ACCEPTED`, `DEVELOPER_REJECTED`, `IN_REVIEW`, `INVALID_BINARY`,
+`METADATA_REJECTED`, `PENDING_APPLE_RELEASE`, `PENDING_DEVELOPER_RELEASE`,
+`PREPARE_FOR_SUBMISSION`, `PROCESSING_FOR_DISTRIBUTION`,
+`READY_FOR_DISTRIBUTION`, `READY_FOR_REVIEW`, `REJECTED`,
+`REPLACED_WITH_NEW_VERSION`, `WAITING_FOR_EXPORT_COMPLIANCE`,
+`WAITING_FOR_REVIEW`.
+
+The two deprecated `appStoreState` values that have a direct equivalent keep
+working with a `::warning::`: `READY_FOR_SALE` becomes
+`READY_FOR_DISTRIBUTION` and `PROCESSING_FOR_APP_STORE` becomes
+`PROCESSING_FOR_DISTRIBUTION`. The other `appStoreState`-only values
+(`DEVELOPER_REMOVED_FROM_SALE`, `REMOVED_FROM_SALE`, `PREORDER_READY_FOR_SALE`,
+`PENDING_CONTRACT`, `NOT_APPLICABLE`) describe distribution status rather than
+a version state, so they fail the step instead of guessing a mapping.
+
+## Missing version
+
+Right after an upload, the version in `version-state` must exist - its absence
+means the upload targeted a different version - so the default
+`missing-version: error` fails the step. A standalone maintenance run has no
+such guarantee (for example, no `PREPARE_FOR_SUBMISSION` version exists
+between a release and the next version being created); pass
+`missing-version: skip` there.
 
 ## Outputs
 

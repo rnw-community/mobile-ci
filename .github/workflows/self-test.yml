@@ -9,14 +9,21 @@ on:
 permissions:
     contents: read
 
+concurrency:
+    group: self-test-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
     ACTIONLINT_VERSION: '1.7.12'
     ZIZMOR_VERSION: '1.16.3'
+    IMAGEMAGICK_VERSION: '7.1.2-34'
+    IMAGEMAGICK_APPIMAGE_SHA256: '6e9edfd35d5f30b57c27533afe003d6085faaf8607b207426f398d11751acf93'
 
 jobs:
     actionlint:
         name: actionlint
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -44,6 +51,7 @@ jobs:
     zizmor:
         name: zizmor
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -60,6 +68,7 @@ jobs:
     unit-tests:
         name: Action step unit tests
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -69,8 +78,32 @@ jobs:
               shell: bash
               run: pip install --user 'PyYAML==6.0.2'
 
+            - name: Install the compose-media toolchain
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  sudo apt-get update
+                  sudo apt-get install -y ffmpeg libavif-bin webp
+                  dir="$RUNNER_TEMP/imagemagick"
+                  mkdir -p "$dir/bin"
+                  cd "$dir"
+                  curl -fsSL -o magick.AppImage \
+                    "https://github.com/ImageMagick/ImageMagick/releases/download/${IMAGEMAGICK_VERSION}/ImageMagick-${IMAGEMAGICK_VERSION}-gcc-x86_64.AppImage"
+                  echo "${IMAGEMAGICK_APPIMAGE_SHA256}  magick.AppImage" | sha256sum -c -
+                  chmod +x magick.AppImage
+                  ./magick.AppImage --appimage-extract >/dev/null
+                  printf '#!/bin/sh\nexec "%s/squashfs-root/AppRun" "$@"\n' "$dir" > bin/magick
+                  chmod +x bin/magick
+                  echo "$dir/bin" >> "$GITHUB_PATH"
+                  "$dir/bin/magick" -version | head -n 1
+                  ffmpeg -hide_banner -version | head -n 1
+                  avifenc --version | head -n 1
+                  command -v cwebp ffprobe
+
             - name: Run the action step tests
               shell: bash
+              env:
+                  COMPOSE_MEDIA_REQUIRE_TOOLS: '1'
               run: tests/run-tests.sh
 
             - name: Shellcheck the test harness and every extracted step script
@@ -79,6 +112,7 @@ jobs:
                   set -euo pipefail
                   sudo apt-get update && sudo apt-get install -y shellcheck
                   shellcheck -s bash tests/run-tests.sh tests/lib/*.sh tests/*_test.sh
+                  shellcheck -x scripts/*.sh scripts/media/*.sh
                   scratch="$RUNNER_TEMP/extracted-steps"
                   rm -rf "$scratch"
                   mkdir -p "$scratch"
@@ -89,6 +123,7 @@ jobs:
     pin-check:
         name: Third-party SHA pin check
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -160,6 +195,7 @@ jobs:
     dry-lint-local-refs:
         name: Dry lint (self-referenced composite action schemas)
         runs-on: ubuntu-latest
+        timeout-minutes: 10
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -211,6 +247,7 @@ jobs:
         name: Self-references resolve to a real tag
         if: github.event_name == 'push'
         runs-on: ubuntu-latest
+        timeout-minutes: 15
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -284,6 +321,7 @@ jobs:
         name: Fleet self-test (manual only)
         if: github.event_name == 'workflow_dispatch'
         runs-on: [self-hosted, macOS, ARM64]
+        timeout-minutes: 30
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -303,6 +341,7 @@ jobs:
         name: Fleet Swift self-test (manual only)
         if: github.event_name == 'workflow_dispatch'
         runs-on: [self-hosted, macOS, ARM64]
+        timeout-minutes: 45
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:

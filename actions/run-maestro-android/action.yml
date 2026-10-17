@@ -31,7 +31,12 @@ inputs:
     required: false
     default: '*.flow.yaml'
   flows-exclude-pattern:
-    description: Optional find ! -name glob excluding matched flows by basename.
+    description: >-
+      Optional find ! -name globs excluding matched flows by basename: a
+      comma- and/or newline-separated list of globs, each emitted as its own
+      find ! -name clause (surrounding whitespace trimmed, empty entries
+      ignored; a single glob works as before, a glob containing a comma is not
+      supported).
     required: false
     default: ''
   shard-manifest-dir:
@@ -132,6 +137,29 @@ inputs:
       passed. The step fails if any flow exhausts its attempts.
     required: false
     default: '0'
+  infra-retries:
+    description: >-
+      Non-negative retry budget per flow, separate from flow-retries, spent
+      only on a failed attempt whose device events buffer (since the
+      attempt started) shows ActivityManager's startProcessLocked ... with
+      non-zero startSeq race for app-id: the am_wtf naming it, or an
+      activity of the app created with neither a process start nor its
+      onCreate after it. Such an attempt is reported as a ::warning:: and
+      retried even when flow-retries is 0; once this budget is spent it
+      falls back to flow-retries. A failure that cannot be classified (no
+      device clock reading) counts against flow-retries.
+    required: false
+    default: '1'
+  settle-before-flow:
+    description: >-
+      'true' runs am force-stop on app-id before every flow attempt
+      (pre-run-flow and retries included, before pre-flow-command) and waits
+      up to 5 seconds for its process to be gone, so a launchApp clearState
+      cannot race ActivityManager's handling of the process pm clear kills.
+      App data is untouched. 'false' leaves the app as the previous flow
+      left it.
+    required: false
+    default: 'true'
   maestro-version:
     description: >-
       Pinned Maestro CLI version. Installed by downloading the matching
@@ -160,26 +188,55 @@ inputs:
     default: pixel_6
   ram-size:
     description: >-
-      Emulator RAM in MB, passed through to android-emulator-runner. Empty
-      keeps the hardware profile's own default. Set this when the runner is
-      memory-bounded: on a container with a cgroup limit the kernel kills
-      qemu rather than reporting an out-of-memory condition, and the job
-      then fails as a lost adb connection ("0 devices connected") minutes
-      into a run that had been passing.
+      Emulator RAM in MB, passed to android-emulator. Empty
+      derives it from the runner's cgroup memory limit (memory.max, or
+      memory.limit_in_bytes on cgroup v1): 256 MB of guest RAM per GiB of
+      limit, rounded down to a 256 MB step and clamped to 1536-4096, so a
+      4 vCPU / 8 GiB container gets 2048. With no memory limit detected it
+      keeps the hardware profile's own default. An explicit value always
+      wins. The bound matters because on a container with a cgroup limit
+      the kernel kills qemu rather than reporting an out-of-memory
+      condition, and the job then fails as a lost adb connection ("0
+      devices connected") minutes into a run that had been passing.
     required: false
     default: ''
   heap-size:
     description: >-
       Android VM heap size in MB for the emulated device, passed through to
-      android-emulator-runner. Empty keeps the profile default.
+      android-emulator. Empty keeps the profile default.
     required: false
     default: ''
   cores:
     description: >-
-      Emulator CPU cores, passed through to android-emulator-runner. Empty
-      keeps the profile default.
+      Emulator CPU cores, passed to android-emulator. Empty
+      derives half the runner's cgroup CPU quota (cpu.max, or
+      cpu.cfs_quota_us / cpu.cfs_period_us on cgroup v1), rounded down and
+      clamped to 2-4, leaving the other half to Maestro, adb and the
+      runner. With no CPU quota detected it keeps the profile default. An
+      explicit value always wins.
     required: false
     default: ''
+  emulator-slots-dir:
+    description: >-
+      Host directory holding the fleet's pre-created slot-* files, one per
+      emulator the host may run at once. When set, the action takes an
+      exclusive flock on a free slot before booting the emulator and holds
+      it until the shutdown step, so the number of slot files caps
+      concurrent emulators on the host across every job and repository.
+      Must be a local filesystem (never NFS) bind-mounted read-write into
+      every runner container on the host. A missing directory, no slot-*
+      files, an unwritable slot, or no flock/setsid on PATH fails the job.
+      Empty (default) takes no slot.
+    required: false
+    default: ''
+  emulator-slot-timeout-minutes:
+    description: >-
+      Minutes to wait for a free slot in emulator-slots-dir before failing
+      the job. Busy slots are logged every 60 seconds while waiting. 0
+      tries each slot once and fails at once when all are busy. Ignored
+      when emulator-slots-dir is empty.
+    required: false
+    default: '60'
   artifacts-dir:
     description: Directory final-state capture (screenshot, logcat) is written to.
     required: true
@@ -190,6 +247,24 @@ inputs:
     description: Uploaded artifact retention in days.
     required: false
     default: '7'
+outputs:
+  ram-size:
+    description: >-
+      Emulator RAM in MB the emulator was booted with: the ram-size input
+      when set, else the value derived from the cgroup memory limit, else
+      empty (hardware profile default).
+    value: ${{ steps.emulator.outputs.ram-size }}
+  cores:
+    description: >-
+      Emulator CPU cores the emulator was booted with: the cores input when
+      set, else the value derived from the cgroup CPU quota, else empty
+      (profile default).
+    value: ${{ steps.emulator.outputs.cores }}
+  emulator-slot:
+    description: >-
+      Basename of the slot file in emulator-slots-dir this job held, e.g.
+      slot-1. Empty when emulator-slots-dir is empty.
+    value: ${{ steps.emulator.outputs.emulator-slot }}
 runs:
   using: composite
   steps:
@@ -325,10 +400,27 @@ runs:
       shell: bash
       run: command -v timeout >/dev/null 2>&1 || { echo "::error::'timeout' (GNU coreutils) is required to bound the adb diagnostic and teardown calls below but is not on PATH."; exit 1; }
 
-    - name: Boot emulator, install app, and run Maestro shard
+    - name: Start emulator
+      id: emulator
+      uses: rnw-community/mobile-ci/actions/android-emulator@v3.3.1 # v3.3.1
+      with:
+          mode: start
+          api-level: ${{ inputs.api-level }}
+          target: ${{ inputs.target }}
+          arch: ${{ inputs.arch }}
+          profile: ${{ inputs.profile }}
+          ram-size: ${{ inputs.ram-size }}
+          heap-size: ${{ inputs.heap-size }}
+          cores: ${{ inputs.cores }}
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
+          emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
+
+    - name: Run Maestro shard
       id: run-shard
-      uses: reactivecircus/android-emulator-runner@1dcd0090116d15e7c562f8db72807de5e036a4ed # v2.34.0
+      shell: bash
       env:
+          ANDROID_SERIAL: ${{ steps.emulator.outputs.android-serial }}
           APK_PATH: ${{ inputs.apk-path }}
           APP_ID: ${{ inputs.app-id }}
           FLOWS_DIR: ${{ inputs.flows-dir }}
@@ -345,20 +437,11 @@ runs:
           MAESTRO_ENV: ${{ inputs.maestro-env }}
           MAESTRO_CONFIG: ${{ inputs.maestro-config }}
           FLOW_RETRIES: ${{ inputs.flow-retries }}
+          INFRA_RETRIES: ${{ inputs.infra-retries }}
+          SETTLE_BEFORE_FLOW: ${{ inputs.settle-before-flow }}
+          ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
           PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
-      with:
-          api-level: ${{ inputs.api-level }}
-          target: ${{ inputs.target }}
-          arch: ${{ inputs.arch }}
-          profile: ${{ inputs.profile }}
-          ram-size: ${{ inputs.ram-size }}
-          heap-size: ${{ inputs.heap-size }}
-          cores: ${{ inputs.cores }}
-          disable-animations: true
-          disable-spellchecker: true
-          force-avd-creation: false
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
+      run: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
     - name: Capture final device state
       if: always()
@@ -366,11 +449,13 @@ runs:
       env:
         OUT_DIR: ${{ inputs.artifacts-dir }}
         SHARD_OUTCOME: ${{ steps.run-shard.outcome }}
+        ANDROID_SERIAL: ${{ steps.emulator.outputs.android-serial }}
       run: |
           mkdir -p "$OUT_DIR"
           timeout 30 adb exec-out screencap -p > "$OUT_DIR/final-screen.png" || true
           timeout 30 adb logcat -d > "$OUT_DIR/logcat-full.txt" 2>&1 || true
           timeout 30 adb logcat -d -b crash > "$OUT_DIR/logcat-crash.txt" 2>&1 || true
+          timeout 30 adb logcat -d -b events > "$OUT_DIR/logcat-events.txt" 2>&1 || true
           if [ "$SHARD_OUTCOME" = "failure" ] && [ -n "${MAESTRO_DEBUG_SCRATCH_DIR:-}" ] && [ -d "$MAESTRO_DEBUG_SCRATCH_DIR" ] && [ -n "$(ls -A "$MAESTRO_DEBUG_SCRATCH_DIR" 2>/dev/null)" ]; then
             stage_dir="$OUT_DIR/maestro-debug"
             work_dir="$MAESTRO_DEBUG_SCRATCH_DIR.pack"
@@ -478,10 +563,11 @@ runs:
             rm -rf "$FLOW_ENV_SCRATCH_DIR" || true
           fi
 
-    - name: Shutdown emulator
+    - name: Stop emulator
       if: always()
-      shell: bash
-      run: timeout 30 adb emu kill || true
+      uses: rnw-community/mobile-ci/actions/android-emulator@v3.3.1 # v3.3.1
+      with:
+          mode: stop
 
     - name: Upload Maestro artifacts
       if: always()

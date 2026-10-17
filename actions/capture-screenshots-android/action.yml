@@ -11,8 +11,8 @@ inputs:
     description: >-
       adb serial of an already-booted device this action drives. This action
       never manages the device lifecycle itself - pair it with
-      redroid-container (mode start / mode teardown) or your own emulator
-      bring-up. The device must run API 33+ (cmd locale set-app-locales);
+      redroid-container (mode start / mode teardown), android-emulator (mode
+      start / mode stop) or your own bring-up. The device must run API 33+ (cmd locale set-app-locales);
       older API levels fail closed.
     required: true
   apk-path:

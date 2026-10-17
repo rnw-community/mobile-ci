@@ -44,7 +44,7 @@ key and the address that is empty.
 | `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. |
 | `build-strategy` | string | no | `auto` | `auto`, `repack` or `native`. Resolved by the caller, never here. |
 | `repack` | boolean | no | `true` | Repack the base when one is found. The warm-up sets it false: it is looking for a key with no base, not producing this commit's binary. |
-| `runner-labels` | string | no | `'["self-hosted","trf-linux-amd64-4x8"]'` | JSON array of runner labels for the plan jobs. |
+| `runner-labels` | string | no | `'["self-hosted","trf-linux-amd64-2x4"]'` | JSON array of runner labels for the plan jobs. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `timeout-minutes` | number | no | `30` | Per-target timeout. |
 | `app-artifact-prefix` | string | yes | — | Artifact-name prefix the caller's test/capture job downloads the app under. |
 | `plan-artifact-prefix` | string | yes | — | Artifact-name prefix for the per-target plan files. |

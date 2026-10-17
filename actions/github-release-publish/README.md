@@ -48,7 +48,9 @@ this action is intended for public repos. The `clean` input is retained for
 compatibility and has no effect.
 Retention (`prune-prefix` + `prune-keep`) orders releases by **last update**.
 `expo-ota-preview` scopes the prefix to the app so one app never prunes another's
-previews.
+previews. Runs sharing a prefix may prune concurrently: a release another run
+already deleted counts as pruned, and only a failure to read or delete a
+release that still exists is reported as a pruning warning.
 
 ## Inputs
 

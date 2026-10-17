@@ -21,7 +21,7 @@ picture in the two opt-in publish workflows (`native-publish.yml`,
 or cut a dev release, and only for the platforms you enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v3` is current, at `v3.1.0`; `v2` stays frozen at `v2.3.0` and
+per major (`v3` is current, at `v3.3.1`; `v2` stays frozen at `v2.3.0` and
 `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v3` to float. See
@@ -61,7 +61,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -97,7 +97,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -137,7 +137,7 @@ full input reference, and the same doc's siblings under
 | [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
 | [`xcode-cache`](actions/xcode-cache/README.md)                   | Restore/save DerivedData + resolved Swift Package clones + the Xcode 26 compilation cache (CAS), keyed on toolchain + project fingerprint; `github` or network-free `local` backend. Emits the `xcodebuild` arguments that point Xcode at all three. |
 | [`swift-test`](actions/swift-test/README.md)                     | `swift test --parallel` for a Swift Package, `.build` cached on the same key scheme, pass/fail step summary. |
-| [`simulator-lease`](actions/simulator-lease/README.md)           | Create + boot + `bootstatus -b` an isolated, run-scoped simulator; `template-strategy: auto` clones the host's verified slim `mobile-ci-template-*` device instead, and leaves one behind when there is none; paired `mode: release` shuts the lease down and deletes it. |
+| [`simulator-lease`](actions/simulator-lease/README.md)           | Create an isolated, run-scoped simulator, slim it before its first boot (`simslim on`, one boot), wait for `bootstatus -b` and verify it; paired `mode: release` shuts the lease down and deletes it. |
 | [`xcodebuild-affected-tests`](actions/xcodebuild-affected-tests/README.md) | Maps a pull request's changed files to the `only-testing` list that covers them; an unmapped file, a full-suite path, a push or an unreachable base ref all widen back to the whole suite. |
 | [`xcodebuild-test`](actions/xcodebuild-test/README.md)           | `build-for-testing` once, then `test-without-building` against a booted simulator; `mode: build`/`test` splits the two so N shard jobs share one compile; `.xcresult` artifact, summary; zero executed tests fails the job. |
 | [`apple-signing`](actions/apple-signing/README.md)               | Throwaway keychain from the caller's `.p12`/profile/ASC key, profile ↔ App ID assertion, paired `mode: remove` teardown. No secret is echoed. |
@@ -149,10 +149,12 @@ full input reference, and the same doc's siblings under
 | [`expo-repack`](actions/expo-repack/README.md)                   | Turn a published base into this commit's binary without compiling native code: re-bundle the JS, rewrite the embedded Expo config, assert it, re-sign on Android. |
 | [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
 | [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
+| [`android-emulator`](actions/android-emulator/README.md)         | Standalone headless AVD lifecycle (`mode: start` / `mode: stop`) — fail-closed `emulator -accel-check` preflight, guest RAM/cores sized from the container's cgroup limits, optional host-wide `flock` emulator slot, job-scoped teardown — shared by `run-maestro-android` and `store-screenshots.yml`'s `avd` capture leg. |
 | [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners (`android-maestro.yml`'s `android-driver: redroid`). |
 | [`redroid-container`](actions/redroid-container/README.md)       | Standalone Redroid container lifecycle (`mode: start` / `mode: teardown`) — run-scoped naming, prewarm manifest, kernel-assigned loopback adb port — for jobs that drive the booted device themselves. |
 | [`capture-screenshots-ios`](actions/capture-screenshots-ios/README.md) | Boots a pinned Simulator and captures one screenshot per locale x appearance x scene — discovered Maestro flows or a deep-link/flow scene manifest with a per-cell seed hook — into a fixed `raw/ios/<device-slug>/...` layout for store screenshot pipelines. |
 | [`capture-screenshots-android`](actions/capture-screenshots-android/README.md) | Drives an already-booted Android device (Redroid/AVD/physical) through a scene manifest — `wm size`/`wm density` device shaping, per-app locales, demo-mode status bar, per-cell seed hook — into a fixed `raw/android/<device-slug>/...` layout. |
+| [`compose-media`](actions/compose-media/README.md) | Frames raw captures in fastlane frameit's real device frames (iPhone 6.9", iPad 13"; transparent or plate background) and encodes web media: AVIF + WebP stills, and WebM (AV1, VP9 fallback) + faststart H.264 MP4 + WebP poster clips. Every file is held to a byte budget, and the action fails closed. Captions stay app-side. Also usable locally from `scripts/media/`. |
 | [`asc-dedupe-screenshots`](actions/asc-dedupe-screenshots/README.md) | Post-upload App Store Connect duplicate-screenshot verify/repair gate — self-signed ES256 JWT, `curl`/`jq`/`openssl` only; deletes all but the oldest copy of every `deliver` retry duplicate and fails closed so the flaky upload lane gets fixed. |
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 | [`load-consumer-config`](actions/load-consumer-config/README.md) | Reads a consumer-owned JSON config file out of the checkout and validates it against an allowlist of keys, so a reusable workflow can resolve its inputs from a checked-in file instead of JSON-in-YAML `with:` blobs. |
@@ -173,10 +175,10 @@ input/output table and a usage example.
 | [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `build` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `xcodebuild-test` `mode: build` → `xcode-cache` save) → `test` (one matrix shard per `shards-json` entry: `xcode-cache` restore → `simulator-lease` → optional `xcodebuild-affected-tests` on a pull request → `xcodebuild-test` `mode: test`), both secretless, then an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). N shards share one compile through the restored DerivedData cache. |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | Per-platform `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (development profile) → publish to a pruned GitHub Release. |
-| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
+| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `redroid-container` (default) or `android-emulator` (`android-driver: avd`) + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
 | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `native-fingerprint` → `expo export` → `expo-ota-manifest` → `github-release-publish` → pull-request deep-link + QR comment. EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`. |
 | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | `native-fingerprint` on the pull-request head → `native-fingerprint` on a merge-base `git worktree` → hash comparison + `fingerprint:diff`. Fails a pull request that silently moves the native runtime fingerprint out from under published OTA updates, unless an override label acknowledges it. |
-| [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+| [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs, and opt-in deletes the PR's `expo-ota-preview.yml` releases. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
 
 `store-screenshots.yml` additionally accepts a `config-path` pointing at a
 checked-in JSON file holding its app-shaped configuration (targets, capture
@@ -261,13 +263,14 @@ and fails with an actionable message rather than letting
 step's Android backend, `avd` by default:
 
 - **`avd`** (default) — a real Android emulator via
-  `reactivecircus/android-emulator-runner` (`run-maestro-android`), on a host
+  `run-maestro-android` (which boots it through `android-emulator`), on a host
   with `/dev/kvm`. This is what the default `runner-labels`
   (`["self-hosted","trf-linux-amd64-4x8"]`, an x86_64 Linux KVM pool) provide,
   and it needs no privileged container, no Docker daemon, and no
   `binder_linux`. A `google_apis` system image also carries real Google Play
-  Services. Bound the guest on a memory-limited runner — hence the shipped
-  `emulator-ram-size: 2048` default.
+  Services. The guest is bounded on a memory-limited runner: an empty
+  `emulator-ram-size` (the default) is derived from the container's cgroup
+  memory limit, 2048 MB on the default 8 GiB pool.
 - **`redroid`** — Android as a privileged container over the `binder_linux`
   kernel module (`run-maestro-android-redroid`). Needs no `sdkmanager`, NDK,
   or emulator binary on the runner, so it is the only driver that works at

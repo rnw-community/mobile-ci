@@ -36,68 +36,36 @@ StoreKit) and `web` (Safari sync, universal links) categories stay on, every
 other category is disabled — so a consumer commits no profile of its own. Point
 it at a repository-relative path to use a different one, or set it to `''` to
 lease a stock device. Either way the booted lease is verified against the
-profile, repaired if it drifts, and measured into the job summary. The same
+profile and measured into the job summary. The same
 profile is what [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh)
 applies on a developer's Mac, so a local run reproduces the CI simulator.
 
-Three ways to get a slim lease, in preference order:
+**One boot, already slim.** simslim keeps a device's disable overrides on the
+host, in a store keyed by the device's UDID that `launchd_sim` reads when the
+device starts ([simslim `disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)).
+So with `slim-profile` set and `slim-repair: true` (both defaults), `acquire`
+creates the device and leaves it **shut down**, and the slim step runs
+`simslim on --profile` against it: simslim writes the overrides offline and
+boots the device once, reading the result back from the booted device (and
+falling back to the live `launchctl` path if a runtime ignores the store).
+The lease is then waited for with `bootstatus -b`, verified, and measured. That
+replaces the previous boot → verify → `simslim on` (spawn per label, then
+reboot) sequence, which cost about a minute per lease.
 
-1. **`template-device`** — clone a prewarmed, already-slimmed, **shut-down**
-   device that the host image ships. `xcrun simctl clone` copies the launchd
-   overrides with the device, so the lease is slim from its first boot and
-   pays **no** repair reboot. The template is selected by **name, device type,
-   runtime and `Shutdown` state together** — not by name alone — so a host with
-   several devices of that name cannot hand the job an old runtime or a booted
-   one, and a stale template can never quietly run the tests on a different
-   device or OS than the lease claims. When nothing matches, every device with
-   that name is printed with its runtime, type and state. Set `slim-repair: false` alongside it so a
-   template that is *not* slim surfaces as an error rather than being silently
-   repaired on every run. The action fails closed if the named template is
-   booted — a template is provisioning state, never a job's device.
-2. **`template-strategy: auto`** — the same clone, without the consumer
-   knowing anything about the host image. The action looks for a shut-down,
-   available device on this host whose name starts with `mobile-ci-template-`
-   and whose **device type and runtime both match this lease**, and clones it.
-   The template is trusted by prefix, device type and runtime; what gets
-   verified is the **booted clone**, because
-   [`simslim verify` compares a booted simulator](https://github.com/MobAI-App/simslim)
-   and reports a mismatch for any shut-down device — verifying the template
-   itself meant no template was ever cloned and every lease paid
-   create + boot + slim. When no such template exists, the lease is created and
-   slimmed as usual and a shut-down copy named
-   **`mobile-ci-template-<device-type-slug>-<runtime-slug>`** is left behind
-   for the next lease on that host — so the create-boot-slim cycle is paid once
-   per host instead of once per job. The slug is the name lowercased with every
-   run of non-alphanumeric characters replaced by `-`, so
-   `iPad Pro 11-inch (M4)` on `com.apple.CoreSimulator.SimRuntime.iOS-26-0`
-   gives `mobile-ci-template-ipad-pro-11-inch-m4-ios-26-0`.
+**Templates do not carry slimming.** Because the store is keyed by UDID,
+`xcrun simctl clone` of a slimmed device produces a **stock** clone
+(rnw-community/mobile-ci#161). `template-device` is still honoured for a device
+that carries something else, and its clone is slimmed before first boot like a
+created one; `template-strategy: auto` is deprecated and leases exactly like
+`none`, since cloning or baking a template bought nothing. Devices named
+`mobile-ci-template-*` are still never deleted by `mode: release`.
 
-   The rules the action holds to:
-
-   - **Never more than one template per device type + runtime.** A clone whose
-     booted `simslim verify` fails is repaired in-job with `simslim on` and the
-     stale template is reported as a `::warning::` naming it — never deleted
-     and never replaced behind the image's back; the host image is the place to
-     fix it.
-   - **A template is never a job's device.** `mode: release` refuses to delete
-     any device named `mobile-ci-template-*`, and a booted template is refused:
-     it is neither cloned nor replaced, because something else is using it.
-   - **`slim-profile` is required**, because a clone nothing verified after
-     boot would hand the tests a device nothing checked.
-   - Baking is host-local and idempotent, guarded by a lock directory under
-     `$HOME/.mobile-ci-simulator-templates`, so two concurrent jobs leave one
-     template, not two.
-
-   On a fleet whose VMs are fresh clones of a base image per job, the copy left
-   behind dies with the VM — the win there comes from **baking the templates
-   into the image**; see
-   [docs/self-hosted-runners.md](../../docs/self-hosted-runners.md#templates-the-image-can-bake)
-   for the exact `simctl` recipe and naming rule.
-3. **`slim-profile` alone** — the action creates a stock device and applies the
-   profile in-job with `simslim on`, which reboots it. That is why
-   `slim-repair` defaults to `true` here and to `false` in `run-maestro-ios`:
-   this action *creates* the device it leases, so "stock" is expected rather
-   than a provisioning defect.
+**XCUITest lanes.** A controlled A/B in #161 measured a slim lease ~1.23×
+slower than a stock one on an XCUITest subset (simslim 0.10.0). simslim 0.12.0
+keeps `gamed` enabled because disabling it added a ~10 s delay to every
+XCUITest app launch, which plausibly accounts for much of that; re-measure
+before choosing `slim-profile: ''` for an XCUITest lane, and keep `bundled` for
+Maestro lanes, where slimming was measured as a win.
 
 `simslim` itself is resolved exactly as `run-maestro-ios` resolves it: an
 existing binary on PATH whose `simslim version` matches `simslim-version` is
@@ -113,13 +81,13 @@ reused; otherwise the pinned release asset is downloaded, verified against
 | `runtime`              | no       | `latest`            | `latest`, or an exact runtime identifier.                                      |
 | `name-prefix`          | no       | `mobile-ci-lease`   | Device-name prefix; run id, attempt and a random suffix are appended.          |
 | `lease-file`           | no       | `''`                | Lease file path. Defaults to `$RUNNER_TEMP/simulator-lease-<udid>.json`, which is unique per device. An explicit path is written with `noclobber`, so a second job cannot overwrite the first job's lease and make one `release` delete the other's device. |
-| `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`.                                         |
-| `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one.    |
-| `template-strategy`    | no       | `none`              | `auto` clones the host's shut-down `mobile-ci-template-<device-type>-<runtime>` device for this lease (verifying the booted clone, not the template), and leaves one behind when there is none. Mutually exclusive with `template-device`; requires `slim-profile`. |
+| `boot-timeout-seconds` | no       | `300`               | Bound on `xcrun simctl bootstatus -b`, and on each `simslim on` slim-and-boot. |
+| `template-device`      | no       | `''`                | Exact name of a shut-down device to `simctl clone` instead of creating one. The clone does not inherit slimming; with `slim-profile` it is slimmed before first boot like a created device. |
+| `template-strategy`    | no       | `none`              | Deprecated: `auto` now leases exactly like `none` and prints a notice. |
 | `slim-profile`         | no       | `bundled`           | `bundled` uses this release's [`profiles/ci.json`](../../profiles/ci.json); a repo-relative path uses that profile instead; `''` leases a stock device. |
-| `slim-repair`          | no       | `true`              | Apply the profile in-job (a reboot) when the lease does not match it; when enabled, a cloned template that produced a non-slim lease is also warned about as stale (with `false` the mismatch fails the job instead). |
-| `simslim-version`      | no       | `0.10.0`             | Pinned simslim CLI version.                                                    |
-| `simslim-sha256`       | no       | `eec00b27…f4a1d`    | Digest of that version's `macos-arm64` release asset.                          |
+| `slim-repair`          | no       | `true`              | Slim the shut-down lease with `simslim on` (offline overrides, one boot) before verifying it. `false` boots the lease as it is and only verifies, which fails for any device this action leases. |
+| `simslim-version`      | no       | `0.12.2`             | Pinned simslim CLI version.                                                    |
+| `simslim-sha256`       | no       | `b47302da…70887`    | Digest of that version's `macos-arm64` release asset.                          |
 
 `device-type` and `runtime` are matched exactly against
 `xcrun simctl list devicetypes -j` / `list runtimes -j`; no fuzzy matching and
@@ -146,7 +114,6 @@ immediately instead of silently testing on something else.
   with:
       device-type: 'iPad Pro 11-inch (M4)'
       runtime: latest
-      template-strategy: auto
 
 - name: Test
   run: |

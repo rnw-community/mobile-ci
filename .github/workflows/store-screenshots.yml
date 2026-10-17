@@ -208,6 +208,11 @@ on:
                 required: false
                 default: '*.flow.yaml'
             scenes-exclude-pattern:
+                description: >-
+                    Optional find ! -name globs excluding matched scenes by
+                    basename (flows mode only): a comma- and/or
+                    newline-separated list, entries trimmed and empty entries
+                    ignored; a glob containing a comma is not supported.
                 type: string
                 required: false
                 default: ''
@@ -252,7 +257,7 @@ on:
                     against simslim-sha256 (preinstall on the host to avoid it).
                 type: string
                 required: false
-                default: '0.10.0'
+                default: '0.12.2'
             simslim-sha256:
                 description: >-
                     SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
@@ -263,7 +268,7 @@ on:
                     Bump together with simslim-version.
                 type: string
                 required: false
-                default: 'eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d'
+                default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
             simulator-slim-profile:
                 description: >-
                     `bundled` (the default) uses mobile-ci's own `profiles/ci.json` -
@@ -408,13 +413,16 @@ on:
                 default: ''
             repack-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the plan/repack
-                    jobs of both platforms. The default is the x86_64 Linux pool: a
-                    repack re-bundles JavaScript and rewrites an archive, so it
-                    needs no Xcode, no Gradle and no build slot.
+                    JSON array of self-hosted runner labels for the plan/repack jobs of
+                    both platforms. The default is the 2 vCPU / 4 GiB x86_64 Linux pool
+                    without /dev/kvm (trf-linux-amd64-2x4), so these jobs never queue on
+                    the scarce KVM emulator lane (#169). Keep it an x86_64 pool: Google
+                    publishes Android build-tools for x86_64 Linux only. Move it to the
+                    4x8 pool if bundling the app's JavaScript needs more than about 3
+                    GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             native-build-label:
                 description: >-
                     Pull-request label forcing build-strategy: native for that one
@@ -505,16 +513,16 @@ on:
                 default: ''
             android-capture-runner-labels:
                 description: >-
-                    JSON array of runner labels for the Android capture job (the
-                    Redroid pool). Deliberately does NOT fall back to runner-labels,
-                    whose macOS default can never run a Redroid container. This is
-                    the one Linux default that is NOT the x86_64 Linux pool
-                    android-maestro.yml and seed-native-cache.yml now default to:
-                    capture-screenshots-android drives a redroid-container, which
-                    needs sudo docker --privileged and binder_linux, and has no avd
-                    code path — a rootless-container x86_64 pool can run neither.
-                    Point it at whatever pool on your fleet carries the Redroid
-                    capability.
+                    JSON array of runner labels for the Android capture job.
+                    Deliberately does NOT fall back to runner-labels, whose macOS
+                    default can run neither Android driver. The default is a
+                    Redroid pool, matching the default android-driver (redroid),
+                    which needs sudo docker --privileged and binder_linux. With
+                    android-driver avd, point it at an x86_64 Linux pool with
+                    /dev/kvm instead - the pool android-maestro.yml defaults to,
+                    e.g. ["self-hosted","trf-linux-amd64-4x8"]. The default stays
+                    on the Redroid pool until an avd capture run has been
+                    validated on the fleet.
                 type: string
                 required: false
                 default: '["self-hosted","linux-tiered","linux-xl"]'
@@ -589,6 +597,83 @@ on:
                 type: number
                 required: false
                 default: 90
+            android-driver:
+                description: >-
+                    Device backend the Android capture job drives. 'redroid'
+                    (default) runs Android as a privileged Docker container over
+                    the host's binder_linux module, configured by the redroid-*
+                    inputs. 'avd' boots Google's emulator through the
+                    android-emulator action, the one run-maestro-android uses,
+                    configured by the emulator-* inputs; it needs an x86_64 Linux
+                    runner with /dev/kvm, so set android-capture-runner-labels to
+                    such a pool with it. Anything else fails the capture job.
+                type: string
+                required: false
+                default: redroid
+            emulator-api-level:
+                description: >-
+                    avd driver only. System image API level; must be 33+, since
+                    capture-screenshots-android needs per-app locales.
+                type: string
+                required: false
+                default: '34'
+            emulator-target:
+                description: avd driver only. System image target.
+                type: string
+                required: false
+                default: google_apis
+            emulator-arch:
+                description: avd driver only. System image architecture.
+                type: string
+                required: false
+                default: x86_64
+            emulator-profile:
+                description: avd driver only. avdmanager hardware profile.
+                type: string
+                required: false
+                default: pixel_6
+            emulator-ram-size:
+                description: >-
+                    avd driver only. Emulator RAM in MB. Empty (default) derives
+                    it from the capture runner's cgroup memory limit: 256 MB of
+                    guest RAM per GiB of limit, clamped to 1536-4096, so a 4 vCPU
+                    / 8 GiB container gets 2048. With no memory limit detected
+                    the hardware profile's own default applies.
+                type: string
+                required: false
+                default: ''
+            emulator-heap-size:
+                description: avd driver only. Android VM heap size in MB for the emulated device.
+                type: string
+                required: false
+                default: ''
+            emulator-cores:
+                description: >-
+                    avd driver only. Emulator CPU cores. Empty (default) derives
+                    half the capture runner's cgroup CPU quota, clamped to 2-4;
+                    with no quota detected the profile default applies.
+                type: string
+                required: false
+                default: ''
+            emulator-slots-dir:
+                description: >-
+                    avd driver only. Host directory of fleet-provisioned slot-*
+                    files capping how many emulators the capture runner's host
+                    boots at once, across every job and repository - the same
+                    directory android-maestro.yml's emulator-slots-dir names.
+                    Empty (default) takes no slot. A missing or empty directory
+                    fails the capture job.
+                type: string
+                required: false
+                default: ''
+            emulator-slot-timeout-minutes:
+                description: >-
+                    avd driver only. Minutes a capture job waits for a free slot
+                    in emulator-slots-dir before failing. The wait counts against
+                    android-capture-timeout-minutes.
+                type: string
+                required: false
+                default: '60'
             redroid-image:
                 description: >-
                     Redroid image tag, used on a redroid-prewarm-manifest-path miss.
@@ -630,6 +715,19 @@ on:
                     the downloaded screenshots under screenshots-download-dir, which
                     is also exposed to it as the SCREENSHOTS_DIR environment
                     variable.
+                type: string
+                required: false
+                default: ''
+            compose-command:
+                description: >-
+                    Optional consumer-owned command run in the upload job on the
+                    collected screenshots - after every capture job's artifact is
+                    merged under screenshots-download-dir, before the
+                    apple-screenshot-slots check and upload-command - e.g. a
+                    device-frame composer such as mobile-ci's
+                    scripts/media/frame-device.sh or your own. Runs in the resolved
+                    app directory with SCREENSHOTS_DIR in its environment. Empty
+                    (default) composes nothing. Its failure fails the upload job.
                 type: string
                 required: false
                 default: ''
@@ -684,9 +782,10 @@ on:
                 default: false
             asc-dedupe-version-state:
                 description: >-
-                    App Store Connect appStoreState whose localizations are deduped;
+                    App Store Connect AppVersionState whose localizations are deduped;
                     PREPARE_FOR_SUBMISSION (the editable version) targets the same
-                    run's upload, READY_FOR_SALE audits the live listing. Empty
+                    run's upload, READY_FOR_DISTRIBUTION audits the live listing
+                    (the deprecated READY_FOR_SALE is still accepted). Empty
                     resolves to the config-path value, else PREPARE_FOR_SUBMISSION.
                 type: string
                 required: false
@@ -736,8 +835,8 @@ on:
                 required: false
 
 concurrency:
-    group: store-screenshots-${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
     contents: read
@@ -792,7 +891,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v3.3.1 # v3.3.1
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
@@ -1320,7 +1419,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.3.1 # v3.3.1
         with:
             platform: ios
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.ios-target) }}
@@ -1498,7 +1597,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -1519,7 +1618,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.3.1 # v3.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1553,7 +1652,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.3.1 # v3.3.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1565,7 +1664,7 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.3.1 # v3.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1581,7 +1680,7 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.3.1 # v3.3.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1604,7 +1703,7 @@ jobs:
                   retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.3.1 # v3.3.1
               with:
                   mode: publish
                   platform: ios
@@ -1631,7 +1730,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.3.1 # v3.3.1
         with:
             platform: android
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.android-target) }}
@@ -1814,7 +1913,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -1849,14 +1948,14 @@ jobs:
               run: eval "$PREBUILD_COMMAND"
 
             - name: build-android-app
-              uses: rnw-community/mobile-ci/actions/build-android-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.3.1 # v3.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
                   gradle-task: ${{ needs.validate-manifest.outputs.android-gradle-task }}
                   gradle-args: ${{ needs.validate-manifest.outputs.android-gradle-args }}
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
@@ -1870,7 +1969,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.3.1 # v3.3.1
               with:
                   mode: publish
                   platform: android
@@ -1892,7 +1991,7 @@ jobs:
     capture-ios:
         name: Capture iOS (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-ios, build-ios]
-        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && needs.build-ios.result != 'failure' }}
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
@@ -1917,7 +2016,7 @@ jobs:
                   fi
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.3.1 # v3.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1935,7 +2034,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v3.3.1 # v3.3.1
               with:
                   app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
@@ -1985,7 +2084,7 @@ jobs:
     capture-android:
         name: Capture Android (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-android, build-android]
-        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-android == 'true' && needs.plan-android.result == 'success' && needs.build-android.result != 'failure' }}
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-android == 'true' && needs.plan-android.result == 'success' && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.android-capture-runner-labels) }}
         timeout-minutes: ${{ inputs.android-capture-timeout-minutes }}
         strategy:
@@ -2004,9 +2103,30 @@ jobs:
                   name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
                   path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
 
+            - name: Validate android-driver against this runner
+              shell: bash
+              env:
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+              run: |
+                  case "$ANDROID_DRIVER" in
+                    redroid|avd) ;;
+                    *)
+                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid' or 'avd'."
+                      exit 1
+                      ;;
+                  esac
+                  [ "$ANDROID_DRIVER" = avd ] || exit 0
+                  [ "$(uname -s)" = Linux ] || exit 0
+                  arch="$(uname -m)"
+                  if [ "$arch" != x86_64 ]; then
+                    echo "::error::android-driver 'avd' needs an x86_64 Linux runner; this one is '$arch'. Google publishes no linux-aarch64 Android emulator. Point android-capture-runner-labels at an x86_64 Linux KVM pool, or use android-driver: redroid on this one."
+                    exit 1
+                  fi
+
             - name: redroid-container (start)
               id: redroid
-              uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
+              if: inputs.android-driver == 'redroid'
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.3.1 # v3.3.1
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -2016,11 +2136,29 @@ jobs:
                   prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
                   boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
 
+            - name: android-emulator (start)
+              id: emulator
+              if: inputs.android-driver == 'avd'
+              uses: rnw-community/mobile-ci/actions/android-emulator@v3.3.1 # v3.3.1
+              with:
+                  mode: start
+                  avd-name: mobile-ci-screenshots
+                  wipe-data: 'true'
+                  api-level: ${{ inputs.emulator-api-level }}
+                  target: ${{ inputs.emulator-target }}
+                  arch: ${{ inputs.emulator-arch }}
+                  profile: ${{ inputs.emulator-profile }}
+                  ram-size: ${{ inputs.emulator-ram-size }}
+                  heap-size: ${{ inputs.emulator-heap-size }}
+                  cores: ${{ inputs.emulator-cores }}
+                  emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
+                  emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
+
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v3.3.1 # v3.3.1
               with:
-                  android-serial: ${{ steps.redroid.outputs.android-serial }}
+                  android-serial: ${{ inputs.android-driver == 'avd' && steps.emulator.outputs.android-serial || steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
@@ -2059,11 +2197,17 @@ jobs:
                   retention-days: 14
 
             - name: redroid-container (teardown)
-              if: always()
-              uses: rnw-community/mobile-ci/actions/redroid-container@v3.1.0 # v3.1.0
+              if: always() && inputs.android-driver == 'redroid'
+              uses: rnw-community/mobile-ci/actions/redroid-container@v3.3.1 # v3.3.1
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
+
+            - name: android-emulator (stop)
+              if: always() && inputs.android-driver == 'avd'
+              uses: rnw-community/mobile-ci/actions/android-emulator@v3.3.1 # v3.3.1
+              with:
+                  mode: stop
 
     upload:
         name: Upload screenshots
@@ -2277,7 +2421,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -2301,6 +2445,15 @@ jobs:
                   pattern: raw-screenshots-*
                   path: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
                   merge-multiple: true
+
+            - name: Run compose-command
+              if: inputs.compose-command != ''
+              working-directory: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}
+              shell: bash
+              env:
+                  COMPOSE_COMMAND: ${{ inputs.compose-command }}
+                  SCREENSHOTS_DIR: ${{ needs.validate-manifest.outputs.screenshots-download-dir }}
+              run: eval "$COMPOSE_COMMAND"
 
             - name: Validate iOS screenshot resolutions against apple-screenshot-slots
               if: needs.validate-manifest.outputs.apple-screenshot-slots != ''
@@ -2404,7 +2557,7 @@ jobs:
               # against 'true' here - unlike a raw boolean input, whose
               # `== 'true'` comparison is always false and needs truthiness.
               if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
-              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v3.3.1 # v3.3.1
               with:
                   app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}

@@ -50,7 +50,10 @@ published and skipped. Zero-byte files (for example `expo export`'s empty
 `_global.css`) are skipped, because GitHub Releases cannot store 0-byte assets.
 Older preview releases are pruned to `prune-keep`, scoped to this app's tag
 prefix (`<prefix>-<app-scope>-`) and ordered by last update, and never deletes a
-release updated within the grace window. Assets are hash-named and immutable;
+release updated within the grace window. To delete a pull request's previews
+when it closes, pass the same prefix to
+[`pr-closed-cleanup-reusable.yml`](pr-closed-cleanup-reusable.md)'s
+`ota-preview-release-tag-prefix`. Assets are hash-named and immutable;
 the manifest referenced by the comment is the one published with that commit.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
@@ -78,10 +81,19 @@ itself never publishes outside GitHub Releases.
   `github.repository`, so untrusted fork code never runs on a self-hosted
   runner and the release token is never exposed to it. Run previews from
   branches in this repository.
-- **Previews for one `release-tag-prefix` + `app-dir` are serialized**
-  (concurrency with `cancel-in-progress: false`), so two runs can never race on
-  the shared release-pruning prefix. A new push queues behind the running
-  preview rather than cancelling it.
+- **Previews are serialized per ref, not per app.** The concurrency group is
+  `release-tag-prefix` + `app-dir` + the caller's `github.ref`, with
+  `cancel-in-progress: false`: a new push to the same pull request queues
+  behind its running preview rather than cancelling it. GitHub keeps only
+  one pending run per group, so a still newer push replaces a preview that
+  is pending (not yet running), and the latest commit's preview is the one
+  published. Previews of different pull requests run independently. A group
+  shared by every pull
+  request would let GitHub cancel one PR's pending preview whenever another
+  PR's run queued (it keeps one pending run per group). Runs of different
+  refs do share the release-pruning prefix; pruning tolerates that by never
+  deleting a release updated within the last ten minutes and by treating a
+  release another run already deleted as pruned.
 - Every publish uses a **fresh, per-commit tag**, so nothing is updated in place:
   a release is created once, with all of its assets, and an existing tag is
   skipped. Deep links always point at the release for the commit that produced

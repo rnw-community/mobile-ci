@@ -6,8 +6,10 @@ platform, published as a GitHub Release rather than to a store.
 Two independent jobs, each gated by its own `enable-*` input:
 **ios-dev-release** and **android-dev-release**. Each: computes a
 deterministic build number (`run_number.run_attempt`), runs `eas build
---local --profile <build-profile>` for its platform, uploads the artifact,
-computes a `build-meta.json` + `SHA256SUMS` pair describing that artifact,
+--local --profile <build-profile>` for its platform, reads back the build
+number and version the binary actually embeds (see [Embedded build
+number](#embedded-build-number)), runs the optional post-build hook, uploads
+the artifact, computes a `build-meta.json` + `SHA256SUMS` pair describing that artifact,
 creates a draft GitHub Release tagged `<tag-prefix>-<platform>-<run_number>`,
 attaches the build artifact plus those two files, publishes the release,
 then prunes older published releases under that platform's tag prefix down
@@ -39,6 +41,8 @@ code never has to hand-parse the release tag or scrape release notes:
     "platform": "ios",
     "version": "1.4.2",
     "buildNumber": "482.1",
+    "embeddedBuildNumber": "482.1",
+    "embeddedVersion": "1.4.2",
     "commitSha": "b0389d2c2c3f9e1d1234567890abcdef1234567",
     "branch": "main",
     "builtAt": "2026-08-10T12:34:56Z",
@@ -53,7 +57,9 @@ code never has to hand-parse the release tag or scrape release notes:
 | ------------- | --------------- | -------------- |
 | `platform`    | yes              | `"ios"` or `"android"`. |
 | `version`     | no               | The app version read from `<app-dir>/app.json`'s `expo.version`. Omitted entirely (not `null`, not empty string) when `app.json` does not exist or has no `expo.version` — e.g. apps using a dynamic `app.config.js`/`.ts`. Never guessed. |
-| `buildNumber` | yes              | `<run_number>.<run_attempt>`, the same deterministic build number used elsewhere in the job. |
+| `buildNumber` | yes              | `<run_number>.<run_attempt>`, the same deterministic build number used elsewhere in the job. This is what the workflow exported to the build as `DEVELOPMENT_BUILD_NUMBER`, not what the binary carries — read `embeddedBuildNumber` for that. |
+| `embeddedBuildNumber` | no       | The build number read back from the built binary: iOS `CFBundleVersion` from the `.ipa`'s `Info.plist`, Android `versionCode` (`aapt2 dump badging` for an `.apk`, `bundletool dump manifest` for an `.aab`). Omitted when the Android host has no `aapt2`/`bundletool` (the job warns); never omitted on iOS, where an unreadable `Info.plist` fails the job. See [Embedded build number](#embedded-build-number). |
+| `embeddedVersion` | no           | The version read back from the built binary: iOS `CFBundleShortVersionString`, Android `versionName`. Omitted when it could not be read or is empty. |
 | `commitSha`   | yes              | `github.sha` for the run that produced the build. |
 | `branch`      | yes              | `github.ref_name` for the run that produced the build. |
 | `builtAt`     | yes              | UTC build timestamp, ISO 8601 (`date -u +%Y-%m-%dT%H:%M:%SZ`). |
@@ -87,7 +93,7 @@ on `/releases/latest` to find "the latest dev build for platform X".
    `dev-ios-`) and `draft == false`.
 3. Sort by `created_at` descending and take the first match.
 4. Download that release's `build-meta.json` asset and read it for
-   `assetName`/`sha256`/`version`/`buildNumber` — **prefer this over parsing
+   `assetName`/`sha256`/`version`/`buildNumber`/`embeddedBuildNumber` — **prefer this over parsing
    `tag_name` or the release notes body**, both of which are incidental
    formatting, not a contract. `build-meta.json` is the contract.
 5. Download the release asset whose name equals the `assetName` value read
@@ -108,6 +114,55 @@ A public "latest dev build" page should call unauthenticated discovery
 directly (public repo) or proxy the authenticated call through a trusted
 backend it controls (private repo) — never ship the token to the browser.
 
+## Embedded build number
+
+`buildNumber` records what the workflow *handed* the build; whether the app
+actually wires `DEVELOPMENT_BUILD_NUMBER` into its binary is the app's
+configuration, so the two can silently disagree. Right after the EAS build,
+each job therefore reads back what the binary embeds and publishes it as
+`embeddedBuildNumber` / `embeddedVersion` in `build-meta.json`:
+
+- **iOS** extracts `Payload/<name>.app/Info.plist` from the `.ipa` and reads
+  `CFBundleVersion` / `CFBundleShortVersionString` with `plutil` (falling back
+  to `/usr/libexec/PlistBuddy`). An `.ipa` without exactly one readable
+  top-level `Info.plist` and `CFBundleVersion` fails the job — it is a broken
+  artifact.
+- **Android** reads `versionCode` / `versionName` with `aapt2 dump badging`
+  for an `.apk` (`aapt2` on `PATH`, else the numerically newest `build-tools/*/aapt2` under
+  `$ANDROID_HOME` or `$ANDROID_SDK_ROOT`) or `bundletool dump manifest` for an
+  `.aab` (`bundletool` on `PATH`). A host without the tool gets a
+  `::warning::` and the fields are omitted; a tool that is present but cannot
+  read the artifact, or reads no integer `versionCode`, fails the job.
+
+Set `ios-verify-embedded-build-number: true` to fail the iOS job — before any
+release is created — when `CFBundleVersion` differs from
+`DEVELOPMENT_BUILD_NUMBER`. It is off by default because it holds only when
+the app wires the variable in, e.g.:
+
+```js
+// app.config.js
+export default ({ config }) => ({
+    ...config,
+    ios: { ...config.ios, buildNumber: process.env.DEVELOPMENT_BUILD_NUMBER },
+});
+```
+
+with `"cli": { "appVersionSource": "local" }` in `eas.json` so EAS does not
+substitute its own remote build number. There is no Android equivalent:
+`versionCode` must be an integer and can never equal
+`<run_number>.<run_attempt>`, so compare it yourself in
+`android-post-build-command` against whatever integer your config derives.
+
+`ios-post-build-command` / `android-post-build-command` run in `app-dir`
+after the read-back and before the draft release is created, so a non-zero
+exit stops publication. They see the job's env plus `ARTIFACT_PATH`,
+`EMBEDDED_BUILD_NUMBER` and `EMBEDDED_VERSION`, e.g. to assert a derived
+`versionCode`:
+
+```yaml
+android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
+```
+
 ## Inputs
 
 | Name                     | Required | Default                             | Description |
@@ -115,7 +170,7 @@ backend it controls (private repo) — never ship the token to the browser.
 | `enable-ios`                 | no       | `true`                                  | Run the `ios-dev-release` job. |
 | `enable-android`             | no       | `false`                                 | Run the `android-dev-release` job. |
 | `ios-runner-labels`          | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS dev-release job. |
-| `android-runner-labels`      | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the Android dev-release job. Defaults to macOS because Google's Android NDK build tooling used by EAS local builds is x86_64-only on Linux. |
+| `android-runner-labels`      | no       | `["self-hosted","trf-linux-amd64-4x8"]`         | JSON array of self-hosted runner labels for the Android dev-release job. The default is the x86_64 Linux pool (4 vCPU / 8 GiB): the NDK `eas build --local` needs ships for x86_64 Linux and macOS only, never linux-aarch64, and the build needs no Mac. Proven there by suuudokuuu's `native-publish` Android job. |
 | `app-dir`                    | **yes**  | —                                        | App directory containing `app.json`/`eas.json`. |
 | `node-version`               | no       | `22`                                     | Node version for `actions/setup-node`. |
 | `install-command`            | no       | `yarn install --immutable`                | JS dependency install command. |
@@ -124,14 +179,41 @@ backend it controls (private repo) — never ship the token to the browser.
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
-| `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, with the job's env — including `EXPO_TOKEN` and `DEVELOPMENT_BUILD_NUMBER` (`<run_number>.<run_attempt>`, already exported to the job env by the "Compute deterministic build number" step). |
-| `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build, with the job's env — including `EXPO_TOKEN` and `DEVELOPMENT_BUILD_NUMBER` (`<run_number>.<run_attempt>`, already exported to the job env by the "Compute deterministic build number" step). |
+| `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, after the App Store Connect key (if any) is written. Receives `DEVELOPMENT_BUILD_NUMBER` and `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
+| `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build. Receives `DEVELOPMENT_BUILD_NUMBER` — see [Hook environment](#hook-environment). |
+| `ios-verify-embedded-build-number` | no | `false`                                | Fail the iOS job, before any release is created, when the built `.ipa`'s `CFBundleVersion` differs from `DEVELOPMENT_BUILD_NUMBER`. Turn on only once the app wires that variable into its build number — see [Embedded build number](#embedded-build-number). No Android equivalent: `versionCode` is an integer and can never equal `<run_number>.<run_attempt>`. |
+| `ios-post-build-command`     | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the iOS EAS build and the embedded build number read-back, before the GitHub Release is created; a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.ipa`), `EMBEDDED_BUILD_NUMBER` (`CFBundleVersion`) and `EMBEDDED_VERSION` (`CFBundleShortVersionString`). |
+| `android-post-build-command` | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the Android EAS build and the embedded build number read-back, before the GitHub Release is created; a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.apk`/`.aab`), `EMBEDDED_BUILD_NUMBER` (`versionCode`) and `EMBEDDED_VERSION` (`versionName`), both empty when the host has no tool to read them. |
 | `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
 | `publish-env`                | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-dev-release` and `android-dev-release`, before `eas build` and the pre-build-command hook. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
+
+## Hook environment
+
+`ios-pre-build-command` and `android-pre-build-command` run with exactly this
+environment, and nothing more:
+
+| Variable                   | iOS pre-build | Android pre-build | Value |
+| -------------------------- | ------------- | ----------------- | ----- |
+| `EXPO_TOKEN`               | yes           | yes               | The `EXPO_TOKEN` secret (job env). |
+| `DEVELOPMENT_BUILD_NUMBER` | yes           | yes               | `<run_number>.<run_attempt>`, exported by the "Compute deterministic build number" step. |
+| `publish-env` entries      | yes           | yes               | Every `KEY=VALUE` line of the `publish-env` input. |
+| `EAS_EXTRA_ENV` entries    | yes           | yes               | Every `KEY=VALUE` line of the `EAS_EXTRA_ENV` secret, masked. |
+| `EXPO_ASC_API_KEY_PATH`    | yes           | —                 | Absolute path of the written App Store Connect API key (`asc-key-path`, or under `$RUNNER_TEMP`); empty when the `ASC_API_KEY` secret is not set. |
+
+plus the runner's own variables (`GITHUB_*`, `RUNNER_*`, the `PATH` the Node
+and package-manager setup steps built). The App Store Connect key is written
+before the iOS pre-build hook and removed in `always()` after `eas build`.
+
+Hooks do **not** see an `eas.json` build profile's `env`: EAS applies that only
+inside `eas build`, not to commands a hook runs such as `expo config`. A
+variable a hook needs — `APP_VARIANT`, for instance — must come from
+`publish-env` (or `EAS_EXTRA_ENV` if secret). `ASC_KEY_ID` / `ASC_ISSUER_ID`
+are exported to the build step only; pass them through `EAS_EXTRA_ENV` if a
+hook needs them.
 
 ## Secrets
 

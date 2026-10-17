@@ -2,9 +2,23 @@ name: pr-closed-cleanup-reusable
 
 on:
     workflow_call:
-
-permissions:
-    actions: write
+        inputs:
+            ota-preview-release-tag-prefix:
+                description: >-
+                    The release-tag-prefix the caller passes to expo-ota-preview.yml. When set, the
+                    closed pull request's preview releases and tags (<prefix>-<app-scope>-pr-<number>-<sha>)
+                    are deleted; the calling job must then also grant contents: write. Empty (default)
+                    leaves releases untouched.
+                type: string
+                required: false
+                default: ''
+            ota-preview-cleanup-runner-labels:
+                description: >-
+                    JSON array of runner labels for the preview cleanup job. The job needs curl and jq,
+                    not gh.
+                type: string
+                required: false
+                default: '["ubuntu-latest"]'
 
 jobs:
     cancel-queued-runs:
@@ -20,6 +34,7 @@ jobs:
                     HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
                     CURRENT_RUN_ID: ${{ github.run_id }}
                     PR_NUMBER: ${{ github.event.pull_request.number }}
+                    REPOSITORY: ${{ github.repository }}
                 run: |
                     set -euo pipefail
 
@@ -35,13 +50,13 @@ jobs:
                         fi
 
                         response=$(gh api --method GET \
-                          "repos/${{ github.repository }}/actions/runs" \
+                          "repos/${REPOSITORY}/actions/runs" \
                           -f "branch=${HEAD_BRANCH}" \
                           -f "status=${status}" \
                           -f "per_page=100" \
                           -f "page=1")
 
-                        cancellable_ids=$(echo "$response" | jq -r --arg repo "${{ github.repository }}" --arg current "$CURRENT_RUN_ID" --argjson pr_number "$PR_NUMBER" '
+                        cancellable_ids=$(echo "$response" | jq -r --arg repo "$REPOSITORY" --arg current "$CURRENT_RUN_ID" --argjson pr_number "$PR_NUMBER" '
                           [.workflow_runs[]
                             | select(.head_repository.full_name == $repo)
                             | select(.event == "pull_request")
@@ -58,7 +73,107 @@ jobs:
                         echo "$cancellable_ids" | while read -r run_id; do
                           echo "Cancelling run ${run_id}"
                           gh api --method POST \
-                            "repos/${{ github.repository }}/actions/runs/${run_id}/cancel" || true
+                            "repos/${REPOSITORY}/actions/runs/${run_id}/cancel" || true
                         done
                       done
                     done
+
+    delete-ota-previews:
+        name: Delete the closed PR's OTA preview releases
+        if: inputs.ota-preview-release-tag-prefix != '' && github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ${{ fromJSON(inputs.ota-preview-cleanup-runner-labels) }}
+        timeout-minutes: 10
+        steps:
+            -   name: Delete this pull request's preview releases and tags
+                shell: bash
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    REPOSITORY: ${{ github.repository }}
+                    TAG_PREFIX: ${{ inputs.ota-preview-release-tag-prefix }}
+                    PR_NUMBER: ${{ github.event.pull_request.number }}
+                run: |
+                    set -euo pipefail
+                    for tool in curl jq; do
+                      if ! command -v "$tool" >/dev/null 2>&1; then
+                        echo "::error::OTA preview cleanup needs '${tool}' on the runner and found none on PATH; point ota-preview-cleanup-runner-labels at a runner that has curl and jq."
+                        exit 1
+                      fi
+                    done
+                    case "$TAG_PREFIX" in
+                      ''|*[!A-Za-z0-9._-]*)
+                        echo "::error::ota-preview-release-tag-prefix must be only [A-Za-z0-9._-]; got '${TAG_PREFIX}'."
+                        exit 1
+                        ;;
+                    esac
+                    case "$PR_NUMBER" in
+                      ''|*[!0-9]*)
+                        echo "::error::No pull request number in the event; call this workflow from a 'pull_request: types: [closed]' trigger."
+                        exit 1
+                        ;;
+                    esac
+
+                    api_url="${GITHUB_API_URL:-https://api.github.com}/repos/${REPOSITORY}"
+                    body="$(mktemp)"
+                    matches="$(mktemp)"
+                    trap 'rm -f "$body" "$matches"' EXIT
+                    status=''
+                    api() {
+                      if ! status="$(curl -sS -o "$body" -w '%{http_code}' -X "$1" \
+                          -H "Authorization: Bearer ${GH_TOKEN}" \
+                          -H 'Accept: application/vnd.github+json' \
+                          -H 'X-GitHub-Api-Version: 2022-11-28' \
+                          "${api_url}/$2")"; then
+                        echo "::error::$1 ${api_url}/$2 did not complete."
+                        exit 1
+                      fi
+                    }
+                    refuse() {
+                      echo "::error::$1 returned HTTP ${status}: $(cat "$body"). Deleting releases and tags needs 'contents: write' on the calling job."
+                      exit 1
+                    }
+
+                    suffix="-pr-${PR_NUMBER}-[0-9a-f]{40}\$"
+                    list_matching() {
+                      local path="$1" field="$2" page=1 count
+                      : > "$matches"
+                      while :; do
+                        api GET "${path}per_page=100&page=${page}"
+                        [ "$status" = 200 ] || refuse "GET ${path}"
+                        count="$(jq 'length' "$body")"
+                        jq -r --arg prefix "${TAG_PREFIX}-" --arg suffix "$suffix" --arg field "$field" '
+                          .[]
+                          | {id, tag: (if $field == "ref" then (.ref | ltrimstr("refs/tags/")) else .tag_name end)}
+                          | select((.tag | startswith($prefix)) and (.tag | test($suffix)))
+                          | "\(.id)\t\(.tag)"
+                        ' "$body" >> "$matches"
+                        [ "$count" -lt 100 ] && break
+                        page=$((page + 1))
+                      done
+                    }
+
+                    list_matching 'releases?' release
+                    deleted_releases=0
+                    while IFS="$(printf '\t')" read -r id tag; do
+                      [ -n "$id" ] || continue
+                      api DELETE "releases/${id}"
+                      case "$status" in
+                        204|404) echo "Deleted release ${tag}"; deleted_releases=$((deleted_releases + 1)) ;;
+                        *) refuse "DELETE release ${tag}" ;;
+                      esac
+                    done < "$matches"
+
+                    list_matching "git/matching-refs/tags/${TAG_PREFIX}-?" ref
+                    deleted_tags=0
+                    while IFS="$(printf '\t')" read -r _ tag; do
+                      [ -n "$tag" ] || continue
+                      api DELETE "git/refs/tags/${tag}"
+                      if [ "$status" = 422 ] && jq -e '.message == "Reference does not exist"' "$body" >/dev/null; then
+                        status=404
+                      fi
+                      case "$status" in
+                        204|404) echo "Deleted tag ${tag}"; deleted_tags=$((deleted_tags + 1)) ;;
+                        *) refuse "DELETE tag ${tag}" ;;
+                      esac
+                    done < "$matches"
+
+                    echo "### OTA previews of #${PR_NUMBER}: ${deleted_releases} release(s), ${deleted_tags} tag(s) deleted" >> "$GITHUB_STEP_SUMMARY"

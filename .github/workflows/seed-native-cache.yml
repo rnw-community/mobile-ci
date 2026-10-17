@@ -123,14 +123,17 @@ on:
                 default: 2G
             plan-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the plan jobs,
-                    which compute each target's native key and ask whether a base
-                    binary is already published for it. The default is the x86_64
-                    Linux pool, so a push that changes no native surface costs
-                    Linux minutes and claims no Mac.
+                    JSON array of self-hosted runner labels for the plan jobs, which
+                    compute each target's native key and ask whether a base binary is
+                    already published for it. The default is the 2 vCPU / 4 GiB x86_64
+                    Linux pool without /dev/kvm (trf-linux-amd64-2x4), so these jobs
+                    never queue on the scarce KVM emulator lane (#169). Keep it an
+                    x86_64 pool: Google publishes Android build-tools for x86_64 Linux
+                    only. Move it to the 4x8 pool if bundling the app's JavaScript needs
+                    more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             plan-timeout-minutes:
                 type: number
                 required: false
@@ -216,7 +219,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.3.1 # v3.3.1
         with:
             platform: ios
             targets: ${{ inputs.ios-targets }}
@@ -247,7 +250,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v3.3.1 # v3.3.1
         with:
             platform: android
             targets: ${{ inputs.android-targets }}
@@ -425,7 +428,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -445,7 +448,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v3.3.1 # v3.3.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -481,7 +484,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.3.1 # v3.3.1
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -497,7 +500,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.3.1 # v3.3.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -510,7 +513,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v3.3.1 # v3.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -527,7 +530,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v3.3.1 # v3.3.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -535,7 +538,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.3.1 # v3.3.1
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -557,7 +560,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.3.1 # v3.3.1
               with:
                   mode: publish
                   platform: ios
@@ -725,7 +728,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -761,7 +764,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.3.1 # v3.3.1
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -777,20 +780,20 @@ jobs:
 
             - name: build-android-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v3.3.1 # v3.3.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   gradle-task: ${{ inputs.gradle-task }}
                   gradle-args: ${{ inputs.gradle-args }}
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/package.json', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
                       gradle-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v3.3.1 # v3.3.1
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -801,7 +804,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.3.1 # v3.3.1
               with:
                   mode: publish
                   platform: android

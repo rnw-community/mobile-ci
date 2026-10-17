@@ -185,7 +185,10 @@ the second waits, builds, and finds the base published. Only a default-branch
 build that publishes joins that group; a pull request's native build never waits
 on one. GitHub keeps at most one job *pending* per group, so a third build of the
 same key queued behind the first two cancels the pending one — it shows as
-cancelled, not failed, and a re-run finds the base and repacks.
+cancelled, not failed, and a re-run finds the base and repacks. The test and
+capture jobs start only on a build that succeeded or was skipped because a base
+was found, so a cancelled or timed-out build never sends a shard to a device slot
+to download an app nobody built.
 
 A fetch that finds nothing reports `found=false`, and that is the signal to
 build natively. A fetch that *cannot tell* — an unauthorized registry, a failing
@@ -328,7 +331,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.3.1 # v3.3.1
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -361,7 +364,7 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
         with: ...
 ```
 

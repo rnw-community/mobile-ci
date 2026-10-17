@@ -85,6 +85,19 @@ case "$FLOW_RETRIES" in
     ;;
 esac
 max_attempts=$((1 + FLOW_RETRIES))
+case "$INFRA_RETRIES" in
+  ''|*[!0-9]*|0[0-9]*)
+    echo "::error::infra-retries '$INFRA_RETRIES' must be a non-negative integer without leading zeros."
+    exit 1
+    ;;
+esac
+case "$SETTLE_BEFORE_FLOW" in
+  true|false) ;;
+  *)
+    echo "::error::settle-before-flow '$SETTLE_BEFORE_FLOW' must be 'true' or 'false'."
+    exit 1
+    ;;
+esac
 case "$FLOWS_MAX_DEPTH" in
   ''|*[!0-9]*|0[0-9]*)
     echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer without leading zeros."
@@ -221,6 +234,79 @@ record_maestro_debug_units() {
 summary_rows=()
 recovery_runs=0
 recovery_failures=0
+infra_retries_total=0
+
+# Issue #192. Maestro's `launchApp: clearState: true` runs `pm clear` (which
+# kills the running process) and starts the launcher activity within about a
+# second. When that start reaches ActivityManager while it is still processing
+# the killed process's death, it takes the `startProcessLocked ... with
+# non-zero startSeq` path and never forks the app: the activity record exists,
+# no process binds to it, and the flow times out on a blank screen. Stopping
+# the app ourselves and waiting for its process to be gone before the attempt
+# leaves `pm clear` nothing to kill, so there is no death in flight when
+# Maestro launches. `am force-stop` keeps the app's data; clearing it stays
+# Maestro's job, so a flow without clearState sees the same storage as before.
+settle_app_process() {
+  local deadline
+  [ "$SETTLE_BEFORE_FLOW" = 'true' ] || return 0
+  timeout 30 adb shell am force-stop "$APP_ID" >/dev/null 2>&1 || true
+  deadline=$((SECONDS + 5))
+  while [ -n "$(timeout 10 adb shell pidof "$APP_ID" 2>/dev/null | tr -d '\r\n ' || true)" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "::warning::'$APP_ID' still has a live process 5s after am force-stop; running the attempt unsettled."
+      return 0
+    fi
+    sleep 0.25
+  done
+}
+
+device_epoch() {
+  local now
+  now="$(timeout 10 adb shell date +%s 2>/dev/null | tr -d '\r\n ' || true)"
+  case "$now" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  printf '%s' "$now"
+}
+
+events_evidence_dir="${ARTIFACTS_DIR:-}/logcat-events"
+
+keep_events_evidence() {
+  local label="$1" attempt="$2" name
+  [ -n "${ARTIFACTS_DIR:-}" ] || return 0
+  name="${label//[^A-Za-z0-9._-]/_}"
+  mkdir -p "$events_evidence_dir"
+  timeout 30 adb logcat -b events -d > "$events_evidence_dir/$name-attempt-$attempt.txt" 2>&1 || true
+}
+
+# Succeeds when the events buffer since <epoch> shows the race for APP_ID:
+# the am_wtf naming it, or an activity of the app created with neither a
+# process start for the app nor that activity's onCreate after it.
+startseq_race_since() {
+  local since="$1" events
+  events="$(timeout 30 adb logcat -b events -d -T "$since.000" 2>/dev/null || true)"
+  [ -n "$events" ] || return 1
+  printf '%s\n' "$events" | awk -v app="$APP_ID" '
+    function fields(line, out) {
+      return split(substr(line, index(line, "[") + 1), out, ",")
+    }
+    index($0, "startProcessLocked processName:" app " with non-zero startSeq") { race = 1 }
+    /[ \t](am|wm)_create_activity[ \t]*:/ {
+      if (fields($0, f) >= 4 && index(f[4], app "/") == 1) { pending[f[2]] = 1 }
+    }
+    /[ \t]am_proc_start[ \t]*:/ {
+      if (fields($0, f) >= 4 && f[4] == app) { for (t in pending) delete pending[t] }
+    }
+    /[ \t](am|wm)_on_create_called[ \t]*:/ {
+      if (fields($0, f) >= 1) { delete pending[f[1]] }
+    }
+    END {
+      if (race) exit 0
+      for (t in pending) exit 0
+      exit 1
+    }
+  '
+}
 
 run_flow_recovery() {
   local after="$1"
@@ -235,13 +321,14 @@ run_flow_recovery() {
 
 run_flow_with_retries() {
   local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
-  local recovery_seconds=0 recovery_start attempt_ok flow_env_file
+  local recovery_seconds=0 recovery_start attempt_ok flow_env_file infra_used=0 attempt_epoch retry
   start=$(date +%s)
   maestro_debug_units > "$maestro_debug_units_before_file"
-  while [ "$attempts" -lt "$max_attempts" ]; do
+  while :; do
     attempts=$((attempts + 1))
     attempt_ok=1
     flow_env_args=()
+    settle_app_process
     if [ "$run_precondition" = '1' ] && [ -n "$pre_flow_script" ]; then
       flow_env_seq=$((flow_env_seq + 1))
       flow_env_file="$flow_env_scratch_dir/flow-$flow_env_seq.env"
@@ -253,29 +340,54 @@ run_flow_with_retries() {
         echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
       fi
     fi
+    attempt_epoch="$(device_epoch)"
     if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} "$flow"; then
       status=passed
       break
     fi
-    if [ "$attempts" -lt "$max_attempts" ] || [ "$recover_after_last_attempt" = '1' ]; then
+    keep_events_evidence "$label" "$attempts"
+    retry=0
+    if [ "$attempt_ok" = '1' ]; then
+      if [ -z "$attempt_epoch" ]; then
+        echo "::warning::Could not read the device clock before attempt $attempts of '$label'; its failure is not checked for ActivityManager's startSeq race and counts as a flow failure."
+      elif startseq_race_since "$attempt_epoch"; then
+        if [ "$infra_used" -lt "$INFRA_RETRIES" ]; then
+          infra_used=$((infra_used + 1))
+          infra_retries_total=$((infra_retries_total + 1))
+          retry=1
+          echo "::warning::Attempt $attempts of '$label' hit ActivityManager's 'startProcessLocked ... with non-zero startSeq' race: '$APP_ID' was launched while its previous process's death was still being processed, so no process was started and the screen stayed blank. This is an emulator/infrastructure race, not an app failure; retrying on infra-retries ($infra_used of $INFRA_RETRIES)."
+        else
+          echo "::warning::Attempt $attempts of '$label' hit ActivityManager's 'startProcessLocked ... with non-zero startSeq' race (no '$APP_ID' process was started; not an app failure), but its infra-retries budget of $INFRA_RETRIES is spent."
+        fi
+      fi
+    fi
+    if [ "$retry" = '0' ] && [ $((attempts - infra_used)) -lt "$max_attempts" ]; then
+      retry=1
+    fi
+    if [ "$retry" = '1' ] || [ "$recover_after_last_attempt" = '1' ]; then
       recovery_start=$(date +%s)
       run_flow_recovery "$label"
       recovery_seconds=$((recovery_seconds + $(date +%s) - recovery_start))
     fi
+    [ "$retry" = '1' ] || break
   done
   end=$(date +%s)
   duration=$((end - start - recovery_seconds))
   record_maestro_debug_units "$label" "$status"
-  summary_rows+=("| $label | ${duration}s | $status | $attempts |")
+  summary_rows+=("| $label | ${duration}s | $status | $attempts | $infra_used |")
   [ "$status" = "passed" ]
 }
 
 write_summary() {
   {
     echo "### Maestro flow timing (shard $SHARD_INDEX)"
-    echo "| Flow | Duration | Status | Attempts |"
-    echo "| --- | --- | --- | --- |"
+    echo "| Flow | Duration | Status | Attempts | Infra retries |"
+    echo "| --- | --- | --- | --- | --- |"
     printf '%s\n' "${summary_rows[@]:-}"
+    if [ "$infra_retries_total" -gt 0 ]; then
+      echo ""
+      echo "$infra_retries_total attempt(s) were retried on infra-retries after ActivityManager's startSeq race left no app process; see the warnings and logcat-events/ in the artifact."
+    fi
     if [ -n "$FLOW_RECOVERY_FLOW" ]; then
       echo ""
       echo "Recovery flow \`$(basename "$FLOW_RECOVERY_FLOW")\` ran $recovery_runs time(s) after a failed attempt, $recovery_failures of which failed and were tolerated. Its duration is excluded from the rows above."
@@ -303,9 +415,11 @@ for i in "${!name_patterns[@]}"; do
 done
 name_args+=(')')
 find_cmd+=("${name_args[@]}")
-if [ -n "$FLOWS_EXCLUDE_PATTERN" ]; then
-  find_cmd+=(! -name "$FLOWS_EXCLUDE_PATTERN")
-fi
+while IFS= read -r exclude_glob; do
+  exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+  exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+  [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+done < <(printf '%s\n' "$FLOWS_EXCLUDE_PATTERN" | tr ',' '\n')
 flows=()
 while IFS= read -r flow; do
   flows+=("$flow")

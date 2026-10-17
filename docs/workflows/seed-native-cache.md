@@ -40,7 +40,7 @@ the two things a fingerprint cannot see (see
 | Name                          | Required | Default                                       | Description |
 | -------------------------------- | -------- | ------------------------------------------------ | -------------- |
 | `ios-runner-labels`               | no       | `["self-hosted","macOS","ARM64"]`                  | JSON array of self-hosted runner labels for `seed-ios`. |
-| `plan-runner-labels`              | no       | `["self-hosted","trf-linux-amd64-4x8"]`             | JSON array of self-hosted runner labels for the two plan jobs, which compute each target's native key and ask whether a base binary is already published for it. The default is the x86_64 Linux pool, so a push that changes no native surface costs Linux minutes and claims no Mac. |
+| `plan-runner-labels`              | no       | `["self-hosted","trf-linux-amd64-2x4"]`             | JSON array of self-hosted runner labels for the two plan jobs, which compute each target's native key and ask whether a base binary is already published for it. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `plan-timeout-minutes`            | no       | `30`                                               | Per-target timeout for the plan jobs. |
 | `publish-base`                    | no       | `true`                                             | Publish the native app this run builds as the base binary pull requests repack. On by default: warming a host cache nobody else can reach is half the job. Publishing needs `packages: write` on the **calling** job for the `ghcr` backend, or `actions: read` for the `artifact` one. A run off the default branch builds but never publishes, and says so with a `::warning::`. |
 | `force-base`                      | no       | `false`                                            | Rebuild and re-publish every target's base even when its native key already has one. It overwrites a base other builds are already repacking onto, so say why in the run. See [When to use force-base](#when-to-use-force-base). |
@@ -150,7 +150,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.3.1 # v3.3.1
         with:
             ios-targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]

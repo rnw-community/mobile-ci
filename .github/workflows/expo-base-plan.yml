@@ -34,11 +34,16 @@ on:
                 default: true
             runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels. A repack needs Node, a
-                    JDK on android, and no simulator, no Xcode and no Mac slot.
+                    JSON array of self-hosted runner labels. A repack needs Node, a JDK
+                    on android, and no simulator, no Xcode and no Mac slot. The default
+                    is the 2 vCPU / 4 GiB x86_64 Linux pool without /dev/kvm
+                    (trf-linux-amd64-2x4), so these jobs never queue on the scarce KVM
+                    emulator lane (#169). Keep it an x86_64 pool: Google publishes
+                    Android build-tools for x86_64 Linux only. Move it to the 4x8 pool
+                    if bundling the app's JavaScript needs more than about 3 GiB.
                 type: string
                 required: false
-                default: '["self-hosted","trf-linux-amd64-4x8"]'
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
             timeout-minutes:
                 type: number
                 required: false
@@ -320,7 +325,7 @@ jobs:
 
             - name: Setup pnpm
               if: steps.package-manager.outputs.pm == 'pnpm'
-              uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -356,7 +361,7 @@ jobs:
 
             - name: expo-native-key
               id: native-key
-              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-native-key@v3.3.1 # v3.3.1
               with:
                   platform: ${{ inputs.platform }}
                   working-directory: ${{ matrix.target.appDir }}
@@ -369,7 +374,7 @@ jobs:
             - name: expo-base-binary (fetch)
               id: base
               if: inputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v3.3.1 # v3.3.1
               with:
                   mode: fetch
                   platform: ${{ inputs.platform }}
@@ -391,14 +396,14 @@ jobs:
 
             - name: Set up Android SDK for the repack
               if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
-              uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+              uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
               with:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
 
             - name: expo-repack
               if: inputs.repack && steps.base.outputs.found == 'true'
-              uses: rnw-community/mobile-ci/actions/expo-repack@v3.1.0 # v3.1.0
+              uses: rnw-community/mobile-ci/actions/expo-repack@v3.3.1 # v3.3.1
               with:
                   platform: ${{ inputs.platform }}
                   base-path: ${{ steps.base.outputs.path }}

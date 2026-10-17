@@ -179,7 +179,6 @@ runs:
         security set-keychain-settings -lut "$KEYCHAIN_TIMEOUT_SECONDS" "$keychain"
         security unlock-keychain -p "$keychain_password" "$keychain"
         security import "$certificate" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
-        security import "$wwdr" -A -t cert -f x509 -k "$keychain"
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
 
         search_list=("$keychain")
@@ -194,8 +193,35 @@ runs:
           echo "profile-uuid=$profile_uuid"
           echo "keychain-path=$keychain"
           echo "asc-key-path=$asc_key"
+          echo "wwdr-path=$wwdr"
         } >> "$GITHUB_OUTPUT"
         echo "Installed signing material for $EXPECTED_APPLICATION_IDENTIFIER (profile $profile_uuid)."
+
+    - name: Add the WWDR intermediate unless the distribution certificate already brought it
+      if: inputs.mode == 'install'
+      shell: bash
+      env:
+        KEYCHAIN_PATH: ${{ steps.install.outputs.keychain-path }}
+        WWDR_PATH: ${{ steps.install.outputs.wwdr-path }}
+        WWDR_SHA256: ${{ inputs.wwdr-sha256 }}
+      run: |
+        set -euo pipefail
+        if [ -z "$KEYCHAIN_PATH" ] || [ ! -s "$WWDR_PATH" ]; then
+          echo "::error::The install step recorded no keychain or WWDR certificate; it must succeed before the WWDR intermediate is added."
+          exit 1
+        fi
+        wwdr_sha256=$(printf '%s' "$WWDR_SHA256" | tr '[:lower:]' '[:upper:]')
+        wwdr_sha1=$(shasum -a 1 "$WWDR_PATH" | awk '{print toupper($1)}')
+        if ! held=$(security find-certificate -a -Z "$KEYCHAIN_PATH"); then
+          echo "::error::Could not list the certificates in '$KEYCHAIN_PATH'."
+          exit 1
+        fi
+        if printf '%s\n' "$held" | grep -qF -e "SHA-256 hash: ${wwdr_sha256}" -e "SHA-1 hash: ${wwdr_sha1}"; then
+          echo "The distribution certificate already brought the WWDR intermediate into the keychain; not importing it a second time."
+          exit 0
+        fi
+        security import "$WWDR_PATH" -A -t cert -f x509 -k "$KEYCHAIN_PATH"
+        echo "Added the WWDR intermediate to '$KEYCHAIN_PATH'."
 
     - name: Remove the Apple signing material
       if: inputs.mode == 'remove'

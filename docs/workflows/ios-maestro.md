@@ -43,7 +43,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `flows-dir`                   | **yes**  | —                                          | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
 | `flows-max-depth`             | no       | `1`                                        | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
 | `flows-name-pattern`          | no       | `*.flow.yaml`                              | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
-| `flows-exclude-pattern`       | no       | `''`                                       | Optional `find ! -name` glob excluding matched flows by basename. |
+| `flows-exclude-pattern`       | no       | `''`                                       | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
 | `shard-manifest-dir`          | no       | `''`                                       | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
 | `pre-run-flow`                | no       | `''`                                       | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
 | `flow-recovery-flow`          | no       | `''`                                       | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. |
@@ -56,16 +56,18 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `shard-count`                 | no       | `2`                                        | Number of test shards per target. |
 | `xcode-version`               | no       | `26.4.1`                                   | Xcode version string, e.g. `26.4.1`. |
 | `xcode-build`                 | no       | `17E202`                                   | Xcode build number, e.g. `17E202`. |
-| `turbo-version`               | no       | `2.10.8`                                   | Pinned turbo npm version used by the detect job. |
-| `target-packages`             | no       | `''`                                       | Newline-separated package names gating this pipeline on `pull_request` events. |
+| `turbo-version`               | no       | `''`                                       | Exact turbo npm version used by the detect job. Empty resolves the repository's own turbo: `node_modules/turbo`, then the version locked in `pnpm-lock.yaml`, `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock` or `bun.lock`, then an exact root `package.json` version, else `2.10.8` with a notice. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
+| `target-packages`             | no       | `''`                                       | Newline-separated package names gating this pipeline on `pull_request` events: a pull request that affects none of them (per `turbo ls --affected`) skips the run. Empty derives them from the `name` in each `targets[].appDir`'s `package.json`. Fails closed: an unreadable or nameless `package.json`, a target package `turbo ls` does not list, or a `turbo` failure, fails the detect job, and a missing base SHA reports affected. Every non-`pull_request` event runs. |
+| `exempt-paths`                | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `docs/**`, `**/*.md`, `apps/website/**`. A pull request whose every changed file (`base...HEAD`) matches one skips the run without turbo detection. One non-exempt file, an empty diff, or a diff that cannot be computed (logged as a `::warning::`) runs normal detection instead. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
+| `trigger-paths`               | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `.github/workflows/e2e.yml`, `e2e/**`. A pull request that changes a matching file (`base...HEAD`, renames counted at both paths) runs without turbo detection, which never attributes a file outside a workspace package to one. `**` runs every pull request, which is what an empty `target-packages` did before v3.3.0. Wins over `exempt-paths`; a diff that cannot be computed runs, with a `::warning::`. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version. |
 | `maestro-reuse-driver`        | no       | `true`                                     | `true` passes `--no-reinstall-driver` and one `--driver-host-port` derived from the simulator UDID (the first free `127.0.0.1` port from a UDID-hashed start in 20000–30098, so shards on one host get distinct ports), to every `maestro test` invocation of the shard (pre-run flow, flows, retries, recovery flow): the XCTest driver the first invocation starts keeps running and every later invocation reuses it instead of starting its own. Each flow is still its own invocation, so `pre-flow-command`, per-flow env, retries, the recovery flow and the timing rows are unchanged. `false` starts a fresh driver per invocation. |
 | `simulator-device`            | no       | `''`                                       | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched against `xcrun simctl list devices available` with no fuzzy matching — fails closed, listing available devices, on no exact match. Empty keeps the previous last-available heuristic (emits a `::notice::` naming its choice and recommending pinning). |
 | `simulator-count` | no | `1` | Simulators this shard runs its flows on concurrently, inside one runner. `1` keeps the single-device behaviour. With N > 1 lane 0 is the device `simulator-device` selects and lanes 1..N-1 are `<name> #2` .. `<name> #N`, cloned from it when the host has none; each lane device is slimmed with [`scripts/slim-simulator.sh`](../../scripts/slim-simulator.sh) when `simulator-slim-profile` is set, verified, installed and warmed, and the flows are split into N interleaved lanes run concurrently. Fails closed on anything but a positive integer — see [Several simulators per shard](#several-simulators-per-shard). |
 | `simulator-reduce-motion`     | no       | `false`                                    | `true` turns on the booted simulator's Reduce Motion accessibility setting (`com.apple.Accessibility ReduceMotionEnabled`) before the app is installed and first launched, so UIKit, React Native `AccessibilityInfo` and Reanimated skip their animations. Fails closed on any value other than `true`/`false`. |
-| `simslim-version` | no | `0.10.0` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
-| `simslim-sha256` | no | `eec00b27f069...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.10.0 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
+| `simslim-version` | no | `0.12.2` | Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
+| `simslim-sha256` | no | `b47302da6fb8...` | SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
 | `simulator-slim-profile` | no | `bundled` | `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
 | `simulator-slim-repair` | no | `true` | `true` (the default) re-applies the profile in-job with `simslim on` (reboots the simulator) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. Set it to `false` once the host image ships slimmed devices. |
 | `simulator-requires` | no | `''` | Comma-separated simslim feature IDs the flows depend on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
@@ -80,7 +82,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `ccache-max-size`             | no       | `2G`                                       | Bounded, compressed ccache maximum size. |
 | `build-env`                   | no       | `''`                                       | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `build-strategy`              | no       | `auto`                                     | How this pull request gets the binary its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript on the Linux pool; only a key with no published base reaches the Mac — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to compile native code at all: a missing base fails the build instead of quietly taking a Mac slot. `native` is the escape hatch and a regression — every pull request then compiles native code again, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
-| `repack-runner-labels`        | no       | `["self-hosted","trf-linux-amd64-4x8"]`    | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the x86_64 Linux pool: a repack re-bundles JavaScript and rewrites an archive, so it needs no Xcode, no simulator and no Mac slot. |
+| `repack-runner-labels`        | no       | `["self-hosted","trf-linux-amd64-2x4"]`    | JSON array of self-hosted runner labels for the `plan`/repack job. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `native-build-label`          | no       | `mobile: force native build`               | Pull-request label forcing `build-strategy: native` for that one pull request. Set together with `build-strategy: repack` it fails closed rather than silently picking a winner. |
 | `base-backend`                | no       | `ghcr`                                     | Where base binaries live: `ghcr` (an immutable OCI artifact needing `packages: write` to publish and `packages: read` to fetch) or `artifact` (workflow artifacts, default-branch runs only, needing `actions: read`). See [`expo-base-binary`](../../actions/expo-base-binary). |
 | `base-flavor`                 | no       | `e2e`                                      | Flavor segment of the base binary's address. |
@@ -326,7 +328,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -382,6 +384,22 @@ true` — `actions/upload-artifact` skips hidden files by default, which
 previously shipped `final-screen.png` alone and dropped the hierarchy dumps
 the failure message points you at.
 
+## Concurrency
+
+The workflow sets its own `concurrency` group of the caller's workflow name,
+the `flows-dir` input and, for a `pull_request` run, the pull request's ref. Only a
+`pull_request` run is cancelled when a newer push to the same pull request
+supersedes it. Every other run — a push to the default branch, a schedule, a
+manual dispatch — gets a group unique to its run id, so a newer push never
+cancels or displaces an older default-branch run. A caller that sets its own
+workflow-level `concurrency` should follow the same rule: a group of
+`${{ github.event_name == 'pull_request' && github.ref || github.run_id }}`,
+so a pull request's runs share one group while every other run gets its
+own, together with
+`cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. Making
+only `cancel-in-progress` conditional is not enough: a group shared by
+default-branch pushes still lets a third pending run replace the second. The example below does both.
+
 ## Permissions
 
 **The calling job must declare its own `permissions:` block.** A reusable
@@ -408,7 +426,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
 ```
 
 - `contents: read` — checkout.
@@ -440,8 +458,8 @@ on:
     schedule:
         - cron: '17 3 * * *'
 concurrency:
-    group: ios-maestro-${{ github.ref }}
-    cancel-in-progress: true
+    group: ios-maestro-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
     e2e:
         # Required: a reusable workflow can only narrow what the caller grants.
@@ -449,7 +467,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.1.0 # v3.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
