@@ -987,7 +987,7 @@ jobs:
               run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@1e2b915533ecc5bed43f4435651b6ceb95fd259c # perf/multi-simulator-lanes fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@91b2f66ba6f36943c2f8ed6834dae2ff22f43f8a # perf/multi-simulator-lanes fleet-validation pin
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
