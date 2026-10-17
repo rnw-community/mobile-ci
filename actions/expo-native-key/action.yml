@@ -144,7 +144,7 @@ runs:
 
     - name: native-fingerprint
       id: fingerprint
-      uses: rnw-community/mobile-ci/actions/native-fingerprint@v3.3.2 # v3.3.2
+      uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
       with:
         platform: ${{ inputs.platform }}
         working-directory: ${{ inputs.working-directory }}
