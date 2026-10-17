@@ -504,7 +504,7 @@ jobs:
                     --profile "$BUILD_PROFILE" \
                     --local \
                     --non-interactive \
-                    --output "$output_path"
+                    --output "$output_path" 2>&1 | LC_ALL=C sed -E 's#[A-Za-z0-9+/=]{128,}#[REDACTED encoded build payload]#g'
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
             - name: Upload iOS build artifact
@@ -1065,7 +1065,7 @@ jobs:
                     --profile "$BUILD_PROFILE" \
                     --local \
                     --non-interactive \
-                    --output "$output_path"
+                    --output "$output_path" 2>&1 | LC_ALL=C sed -E 's#[A-Za-z0-9+/=]{128,}#[REDACTED encoded build payload]#g'
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
             - name: Verify required Android ABI present
