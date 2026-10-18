@@ -28,6 +28,8 @@ workflow around the action.
 | `platform` | string | yes | - | `ios` or `android`. |
 | `targets` | string | yes | - | JSON array of targets; each needs `name`, `appDir`, `appId`; may carry `prebuildCommand`, `workspace`, `scheme`. |
 | `runner-labels` | string | no | `'["self-hosted","trf-linux-amd64-2x4"]'` | Runner labels for the key jobs (Linux; no Mac needed). |
+| `control-runner-labels` | string | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the `assert` job, which only compares downloaded plan records. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set. |
+| `runs-on-cache-bypass` | boolean | no | `false` | Opt-in. Runs the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action as the first step of both jobs, so artifact upload/download works on a RunsOn runner started with `extras=s3-cache`. A logged no-op elsewhere. |
 | `timeout-minutes` | number | no | `30` | Per-target timeout. |
 | `toolchain` | string | no | `''` | Toolchain identity, as passed to the build. |
 | `base-flavor` | string | no | `e2e` | Flavor segment of the key. |
