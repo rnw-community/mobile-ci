@@ -916,12 +916,47 @@ assume an ATD counterpart exists for the fleet's pinned image.
 
 ATDs remove SystemUI, Settings and other bundled apps, and disable hardware
 rendering. Google's documentation excludes screenshot tests that require
-hardware rendering. That makes them an option to evaluate for isolated
-instrumentation suites, not a drop-in replacement for this fleet's Maestro
-flows, permission/system UI interactions or store-media captures. Those paths
-currently use `google_apis` x86_64 images; no ATD switch or compatibility claim
-is made here. The `android-emulator` action can request a different SDK target,
-but accepting a target string does not prove its image can run a consumer.
+hardware rendering. This fleet's API 34 / x86_64 compatibility canary below
+shows that this app's four-flow Maestro compatibility subset does not complete
+on either ATD target, while it completes on `google_apis` on the same Omarchy
+host. This result is specific to this app and flow set; it does not establish
+that every app is incompatible with ATDs. The `android-emulator` action can
+request a different SDK target, but accepting a target string does not prove
+its image can run a consumer.
+
+**API 34 / x86_64 compatibility canary (2026-10-18)** — all four runs used the
+same APK SHA-256
+(`dfb4daf188885ea0893aa65801336b534745fc68106f324c1bbae56117bf0395`), the
+same four selected flows in one Maestro shard, and a Nexus 4 guest configured
+with 2 GiB RAM and 2 cores on a 4 CPU / 8 GiB worker. The metadata-revision
+guard changed between
+baseline and later runs.
+The Ubuntu baseline and Omarchy control used `google_apis`; the two Omarchy ATD
+runs used the SDK targets `google_atd` and `aosp_atd` (Gradle image sources
+`google-atd` and `aosp-atd`).
+
+| Image and physical host | Run | Selected flows |
+| --- | --- | --- |
+| `google_apis`, Ubuntu baseline | [39099635352](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39099635352) | 4/4 passed |
+| `google_atd`, Omarchy | [39100202202](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39100202202) | 3/4 passed; theme flow failed twice |
+| `aosp_atd`, Omarchy | [39100743990](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39100743990) | 3/4 passed; theme flow failed twice |
+| `google_apis`, Omarchy host-matched control | [39101269470](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39101269470) | 4/4 passed |
+
+Both ATD runs failed `10.themes-screen.flow.yaml` after `hideKeyboard`. Android
+logged a `key_back_press`; the assertion hierarchy showed the app's “Discard
+changes?” modal and no Save button. The artifacts do not include a successful
+pre-command hierarchy, so whether an IME was visible before that Back event is
+unproven. The ATD failure and final screenshots are black; they do not establish
+a blank app screen. Google's [ATD documentation](https://developer.android.com/studio/test/managed-devices#use-automated-test-devices)
+notes the rendering and bundled-app restrictions relevant to interpreting
+those captures.
+
+These failed suites establish no ATD speed or memory savings. SDK image setup
+ran before resource collection in the same job cgroup, so retained image
+file-cache can inflate raw memory figures; the ATD jobs also approached or
+reached their 8 GiB cgroup limit. Keep full images for Maestro and capture.
+Smaller-worker experiments remain pending; compare completed suites with cache
+effects controlled.
 
 For the existing AVD lane, use the controls already implemented:
 
