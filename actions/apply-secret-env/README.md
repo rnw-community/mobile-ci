@@ -21,6 +21,9 @@ What it guarantees:
 - **No value can escape its entry.** Each entry is written to `$GITHUB_ENV` as
   `NAME<<DELIMITER` with a fresh random delimiter, re-drawn if the value happens
   to contain it, so a value can never end its own entry and start another.
+- **Warns about short values.** A value under 8 characters is masked like any
+  other, but the step warns by name. Masking `1` or `true` hides that string
+  everywhere in the job log, and GitHub drops any job output containing it.
 - **Only a digest leaves.** The `digest` output is a SHA-256 over every entry's
   name and the SHA-256 of its value. It changes whenever any value does and
   reveals none of them; `expo-base-plan.yml` folds it into the native key so a

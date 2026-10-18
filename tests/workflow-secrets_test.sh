@@ -125,6 +125,17 @@ elif mode == 'containment':
                     if not str(step.get('uses', '')).startswith(APPLY):
                         problems.append(f'{name}:{job_id}:{label} hands a secret to something other than apply-secret-env')
 
+elif mode == 'eas-install':
+    for name in ('native-publish.yml', 'native-dev-release.yml'):
+        for job_id, job in load(name)['jobs'].items():
+            names = [step.get('name') for step in job.get('steps') or []]
+            if 'Install dependencies' not in names:
+                continue
+            if 'Apply EAS_EXTRA_ENV' not in names or names.index('Apply EAS_EXTRA_ENV') > names.index('Install dependencies'):
+                problems.append(f'{name}:{job_id} installs and builds without EAS_EXTRA_ENV applied first')
+            elif "secrets.EAS_EXTRA_ENV != ''" not in str((job.get('env') or {}).get('HAS_EAS_EXTRA_ENV', '')):
+                problems.append(f'{name}:{job_id} gates Apply EAS_EXTRA_ENV on a HAS_EAS_EXTRA_ENV it never sets')
+
 elif mode == 'eas-extra-env':
     for name in ('native-publish.yml', 'native-dev-release.yml', 'store-screenshots.yml'):
         for job_id, job in load(name)['jobs'].items():
@@ -157,5 +168,6 @@ run_case 'only the build secrets digest, never a value, reaches the native key' 
 run_case 'every Maestro step gets maestro-env merged with the secrets, and redacts its artifacts' maestro-steps
 run_case 'no secret reaches a run: body, a job output, an artifact upload or a plain input' containment
 run_case 'EAS_EXTRA_ENV is parsed by the shared action, not a copy of it' eas-extra-env
+run_case 'every native-publish/dev-release job that installs (the plan job too) applies EAS_EXTRA_ENV first' eas-install
 
 finish_suite

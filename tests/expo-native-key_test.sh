@@ -102,6 +102,26 @@ assert_equals 0 "$STEP_STATUS" 'compose exit status' \
     && assert_equals "${FINGERPRINT}-${expected_identity}" "$(step_output "$dir" key)" 'key without secrets' \
     && pass_case
 
+case_start 'with no secrets the key is byte-identical to the keys main published bases under'
+# Golden keys computed with origin/main's (pre-secrets) compose step for these
+# exact inputs. A drift here orphans every base already published.
+golden_ok=1
+for golden in \
+    'ios arm64 0123456789abcdef0123456789abcdef01234567-a731cde412a7' \
+    'ios x86_64 0123456789abcdef0123456789abcdef01234567-f685f9d47926' \
+    'android arm64 0123456789abcdef0123456789abcdef01234567-8608e8919356'; do
+    read -r golden_platform golden_archs golden_key <<< "$golden"
+    dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+    PLATFORM="$golden_platform" TOOLCHAIN='xcode-26.4.1-17E202-MyApp.xcworkspace-MyApp' \
+        compose "$dir" 0123456789abcdef0123456789abcdef01234567 buildhash confighash \
+        IOS_SIMULATOR_ARCHS="$golden_archs" SECRETS_DIGEST=''
+    if ! assert_equals "$golden_key" "$(step_output "$dir" key)" "$golden_platform/$golden_archs key"; then
+        golden_ok=0
+        break
+    fi
+done
+[ "$golden_ok" -eq 1 ] && pass_case
+
 case_start 'a rotated build secret moves the key, through its digest alone'
 digest_a="$(printf 'a' | sha256sum | cut -d' ' -f1)"
 digest_b="$(printf 'b' | sha256sum | cut -d' ' -f1)"

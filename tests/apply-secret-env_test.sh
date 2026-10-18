@@ -146,6 +146,15 @@ assert_equals 0 "$STEP_STATUS" 'exit status' \
     && assert_contains "$(cat "$dir/log")" '::add-mask::50%2525off%0D' 'escaped mask' \
     && pass_case
 
+case_start 'a short value is warned about by name, since masking it hides that string everywhere'
+dir="$(new_workspace "$ACTION" "$STEP")"
+apply "$dir" $'FLAG=1\nTOKEN=long-enough-token'
+log="$(cat "$dir/log")"
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_contains "$log" "::warning::build-secrets-env entry 'FLAG' has a value shorter than 8 characters" 'warning' \
+    && assert_not_contains "$log" "entry 'TOKEN'" 'no warning for a long value' \
+    && pass_case
+
 case_start 'the digest moves with a value and never contains one'
 dir="$(new_workspace "$ACTION" "$STEP")"
 apply "$dir" 'MAPS_KEY=before'

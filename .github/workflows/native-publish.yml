@@ -355,6 +355,8 @@ jobs:
         name: Plan native publish
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         timeout-minutes: ${{ inputs.plan-timeout-minutes }}
+        env:
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
         outputs:
             ios-targets: ${{ steps.targets.outputs.ios-targets }}
             android-targets: ${{ steps.targets.outputs.android-targets }}
@@ -374,6 +376,14 @@ jobs:
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply EAS_EXTRA_ENV
+              id: eas-extra-env
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve publish targets and their eas.json profile env
               id: targets
@@ -723,8 +733,13 @@ jobs:
                   STORE_BUILD_NUMBER_VALUE: ${{ steps.version.outputs.build-number }}
                   STORE_MARKETING_VERSION_VALUE: ${{ steps.version.outputs.marketing-version }}
                   FINGERPRINT_VERSION: ${{ inputs.fingerprint-version }}
+                  EAS_EXTRA_ENV_NAMES: ${{ steps.eas-extra-env.outputs.names }}
               run: |
                   set -euo pipefail
+                  excluded_env=()
+                  for excluded_name in ${EAS_EXTRA_ENV_NAMES:-}; do
+                    excluded_env+=(-u "$excluded_name")
+                  done
                   publish_env=()
                   while IFS= read -r line; do
                     [ -n "$line" ] || continue
@@ -764,7 +779,7 @@ jobs:
                     out_file="$RUNNER_TEMP/native-publish-fingerprint-${name}.json"
                     error_file="$RUNNER_TEMP/native-publish-fingerprint-${name}.err"
                     generate() {
-                      env "${target_env[@]}" ${publish_env[@]+"${publish_env[@]}"} ${store_env[@]+"${store_env[@]}"} \
+                      env ${excluded_env[@]+"${excluded_env[@]}"} "${target_env[@]}" ${publish_env[@]+"${publish_env[@]}"} ${store_env[@]+"${store_env[@]}"} \
                         npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$platform" > "$out_file" 2> "$error_file"
                     }
                     status=0

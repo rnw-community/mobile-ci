@@ -124,6 +124,9 @@ runs:
 
         record() {
           local name="$1" value="$2"
+          if [ -n "$value" ] && [ "${#value}" -lt 8 ]; then
+            echo "::warning::${SECRET_LABEL} entry '${name}' has a value shorter than 8 characters. Masking it hides every occurrence of that string in this job's log, and GitHub drops any job output that contains it."
+          fi
           mask_value "$value"
           count=$((count + 1))
           printf '%s\n' "$name" >> "$names"

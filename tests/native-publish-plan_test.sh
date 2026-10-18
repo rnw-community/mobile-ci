@@ -355,6 +355,20 @@ if assert_equals 0 "$STEP_STATUS" 'status' \
     pass_case
 fi
 
+case_start "fingerprint: EAS_EXTRA_ENV the plan job applied for the install stays out of every fingerprint"
+ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
+# shellcheck disable=SC2016
+stub "$ws" npx '
+printf "TURBO_TOKEN=%s MAPS_KEY=%s APP_BRAND=%s\n" "${TURBO_TOKEN:-unset}" "${MAPS_KEY:-unset}" "${APP_BRAND:-unset}" >> "$(dirname "$0")/../npx-calls"
+printf "{\"hash\":\"h\"}"'
+run_step "$ws" FINGERPRINT_VERSION=0.20.6 PUBLISH_ENV='' STORE_BUILD_NUMBER_VALUE='' STORE_MARKETING_VERSION_VALUE='' \
+    TURBO_TOKEN=secret-turbo MAPS_KEY=secret-maps EAS_EXTRA_ENV_NAMES=$'TURBO_TOKEN\nMAPS_KEY' \
+    TARGETS='[{"name":"ios","platform":"ios","buildProfile":"production","envLines":"APP_BRAND=a"}]'
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals 'TURBO_TOKEN=unset MAPS_KEY=unset APP_BRAND=a' "$(cat "$ws/npx-calls")" 'fingerprint env'; then
+    pass_case
+fi
+
 case_start "fingerprint: an empty hash fails closed after the retry"
 ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
 stub "$ws" npx 'printf "{}"'
