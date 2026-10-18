@@ -300,6 +300,15 @@ on:
                 type: string
                 required: false
                 default: ''
+            force-label:
+                description: >-
+                    Pull request label that runs the pipeline regardless of affected packages;
+                    the status job then reports the run as forced. Add `labeled` to the caller's
+                    pull_request trigger types so adding the label starts a run. Empty (default)
+                    never forces.
+                type: string
+                required: false
+                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -627,6 +636,7 @@ jobs:
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
+            forced: ${{ steps.affected.outputs.forced }}
             shard-indices: ${{ steps.shard-indices.outputs.indices }}
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
             android-abis: ${{ steps.android-abis.outputs.abis }}
@@ -649,6 +659,7 @@ jobs:
                   always-affected: ${{ github.event_name != 'pull_request' }}
                   exempt-paths: ${{ inputs.exempt-paths }}
                   trigger-paths: ${{ inputs.trigger-paths }}
+                  force-label: ${{ inputs.force-label }}
 
             # The test job's matrix.shard-index must exactly match
             # inputs.shard-count: fewer indices than shard-count silently
@@ -1245,6 +1256,8 @@ jobs:
               env:
                   DETECT_RESULT: ${{ needs.detect.result }}
                   DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  DETECT_FORCED: ${{ needs.detect.outputs.forced }}
+                  FORCE_LABEL: ${{ inputs.force-label }}
                   PLAN_RESULT: ${{ needs.plan.result }}
                   NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
@@ -1291,6 +1304,11 @@ jobs:
                     summary "### Android Maestro E2E: failed (test job result: $TEST_RESULT)"
                     cancelled_hint "$TEST_RESULT"
                     exit 1
+                  fi
+                  if [ "$DETECT_FORCED" = 'true' ]; then
+                    echo "Maestro suite passed (forced by the '${FORCE_LABEL}' label)."
+                    summary "### Android Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
+                    exit 0
                   fi
                   echo "Maestro suite passed."
                   summary "### Android Maestro E2E: passed"

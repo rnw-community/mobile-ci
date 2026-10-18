@@ -196,7 +196,7 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   builds: exports the app, generates Expo Updates v1 manifests
   (`expo-ota-manifest`), publishes to a GitHub Release
   (`github-release-publish`, the same channel the native dev `.ipa`/`.apk` uses),
-  and posts deep links + QR on the PR. Needs no `EXPO_TOKEN`; only
+  and keeps deep links + QR in one sticky PR comment (`pr-preview-comment`). Needs no `EXPO_TOKEN`; only
   `contents: write` (and `pull-requests: write` for the comment) on the calling
   job, and a public repository.
 - `expo-fingerprint-guard.yml` — pull-request gate that fails when a change

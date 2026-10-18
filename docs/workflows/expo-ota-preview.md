@@ -5,8 +5,8 @@ Update** — no `eas-cli`, no `EXPO_TOKEN`, no EAS cloud, no separate hosting
 surface. It exports the app, generates [Expo Updates protocol
 v1](https://docs.expo.dev/technical-specs/expo-updates-1/) manifests, publishes
 them and the bundle to a **GitHub Release** (the same channel the native
-development `.ipa`/`.apk` uses), and posts the `expo-development-client` deep
-links plus an ASCII QR code on the pull request.
+development `.ipa`/`.apk` uses), and writes the `expo-development-client` deep
+links plus an ASCII QR code into the pull request's sticky preview comment.
 
 The installed development build loads the exact preview through
 `<scheme>://expo-development-client/?url=<manifest-url>`. Because the manifest
@@ -23,6 +23,31 @@ The workflow composes three pieces:
    so asset URLs match the flattened GitHub Release asset names.
 3. `github-release-publish` creates the release for the preview tag, uploads
    every file as an asset, and prunes older preview releases.
+4. `pr-preview-comment` updates the pull request's single sticky preview
+   comment in place (see [The preview comment](#the-preview-comment)).
+
+## The preview comment
+
+Every push edits **one** comment, found by its hidden
+`<!-- mobile-ci:preview -->` marker, instead of adding a new one, so a long
+pull request does not fill up with stale QR codes. The comment is created only
+when it does not exist yet. This workflow owns the `ios-ota` and `android-ota`
+sections. Each one shows the commit, the update's runtime fingerprint, the
+deep link and its QR code. A platform the run produced no link for has its
+section cleared. `native-dev-release.yml` with `pr-comment: true` writes the
+`ios-dev-build` / `android-dev-build` sections of the same comment, and
+neither writer touches the other's sections. See the
+[`pr-preview-comment` README](../../actions/pr-preview-comment/README.md) for
+how concurrent writers are reconciled.
+
+With `dev-release-tag-prefix` set (the `tag-prefix` the repository passes to
+`native-dev-release.yml`, `dev` by default there), each OTA section also
+answers "can I load this?". It links the newest published
+`<prefix>-<platform>-*` development build whose release notes carry the same
+runtime fingerprint (`native-dev-release.yml` records it from this version
+on), or it says **Native build needed** when there is none. The lookup reads
+the releases list with `gh`, and an unreadable list fails the job. Dev builds
+published before this version carry no fingerprint, so they never match.
 
 ## How hosting works
 
@@ -119,7 +144,8 @@ itself never publishes outside GitHub Releases.
 | `release-tag-prefix`     | no       | `ota`                          | Release tag prefix; the tag is `<prefix>-<app-scope>-<slug>`.                                   |
 | `prune-keep`             | no       | `5`                            | Number of preview releases to keep, including the current one.                                   |
 | `publish`                | no       | `true`                         | Upload the exported dist to a GitHub Release.                                                    |
-| `post-comment`           | no       | `true`                         | Post deep links and an ASCII QR code on the pull request.                                        |
+| `post-comment`           | no       | `true`                         | Write deep links, an ASCII QR code and the runtime fingerprint into the pull request's sticky preview comment, edited in place on every push. |
+| `dev-release-tag-prefix` | no       | `''`                           | `native-dev-release.yml`'s `tag-prefix` (`dev` there by default). When set, each platform section links the newest published dev build with the same runtime fingerprint, or says a native build is needed. Must be `[A-Za-z0-9._-]`. |
 | `include-expo-config`    | no       | `true`                         | Include `extra.expoClient`. Set `false` to omit app config from a public manifest.               |
 | `project-id`             | no       | `''`                           | Optional EAS project id exposed as `extra.eas.projectId`.                                        |
 | `runner-labels`          | no       | `["self-hosted","linux","x64"]`| JSON array of self-hosted runner labels.                                                        |

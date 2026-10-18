@@ -1,0 +1,233 @@
+name: pr-preview-comment
+description: >-
+  Keeps one sticky pull-request comment, found by a hidden marker, and replaces
+  only the sections this caller owns, so several workflows (the OTA preview,
+  the native development builds) share one comment without clobbering each
+  other. Edits in place, creates the comment only when none exists, and
+  verifies every write, retrying when a concurrent writer overwrote it.
+inputs:
+  pr-number:
+    description: Pull request number whose comment is updated.
+    required: true
+  sections-dir:
+    description: >-
+      Directory of `<section>.md` files, section names `[A-Za-z0-9._-]`. Each
+      file replaces that section of the comment; an empty file removes it.
+      Sections other writers own are kept as they are. Sections render in
+      name order.
+    required: true
+  title:
+    description: Markdown heading rendered at the top of the comment.
+    required: false
+    default: '## Mobile preview'
+  token:
+    description: 'Token with `pull-requests: write` (or `issues: write`) on the repository.'
+    required: false
+    default: ${{ github.token }}
+  repository:
+    description: '`owner/name` of the repository the pull request belongs to.'
+    required: false
+    default: ${{ github.repository }}
+  max-attempts:
+    description: Read-modify-write attempts before failing when concurrent writers keep overwriting this caller's sections.
+    required: false
+    default: '5'
+outputs:
+  comment-id:
+    description: Id of the sticky comment.
+    value: ${{ steps.comment.outputs.comment-id }}
+  comment-url:
+    description: URL of the sticky comment.
+    value: ${{ steps.comment.outputs.comment-url }}
+runs:
+  using: composite
+  steps:
+    - name: Update the sticky preview comment
+      id: comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        SECTIONS_DIR: ${{ inputs.sections-dir }}
+        TITLE: ${{ inputs.title }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+      run: |
+        set -euo pipefail
+        for tool in curl jq awk; do
+          if ! command -v "$tool" >/dev/null 2>&1; then
+            echo "::error::pr-preview-comment needs '${tool}' on the runner and found none on PATH."
+            exit 1
+          fi
+        done
+        case "$PR_NUMBER" in
+          ''|*[!0-9]*) echo "::error::pr-number must be a pull request number; got '${PR_NUMBER}'."; exit 1 ;;
+        esac
+        case "$MAX_ATTEMPTS" in
+          ''|*[!0-9]*|0) echo "::error::max-attempts must be a positive whole number; got '${MAX_ATTEMPTS}'."; exit 1 ;;
+        esac
+        if [ ! -d "$SECTIONS_DIR" ]; then
+          echo "::error::sections-dir '${SECTIONS_DIR}' is not a directory."
+          exit 1
+        fi
+
+        work="$(mktemp -d)"
+        trap 'rm -rf "$work"' EXIT
+        marker='<!-- mobile-ci:preview -->'
+        normalize() {
+          printf '%s\n' "$(tr -d '\r' < "$1" | grep -v '^<!-- mobile-ci:preview' || true)"
+        }
+        mkdir -p "$work/mine"
+        owned=''
+        for file in "$SECTIONS_DIR"/*.md; do
+          [ -e "$file" ] || continue
+          name="$(basename "$file" .md)"
+          case "$name" in
+            ''|*[!A-Za-z0-9._-]*) echo "::error::Section file '${file}' must be named [A-Za-z0-9._-].md."; exit 1 ;;
+          esac
+          normalize "$file" > "$work/mine/$name"
+          owned="${owned} ${name}"
+        done
+        if [ -z "$owned" ]; then
+          echo "::error::sections-dir '${SECTIONS_DIR}' holds no <section>.md file; nothing to write."
+          exit 1
+        fi
+
+        api_url="${GITHUB_API_URL:-https://api.github.com}/repos/${REPOSITORY}"
+        body="$work/response"
+        status=''
+        api() {
+          local method="$1" path="$2" data="${3:-}"
+          set -- -sS -o "$body" -w '%{http_code}' -X "$method" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28'
+          if [ -n "$data" ]; then
+            set -- "$@" -H 'Content-Type: application/json' --data-binary "@${data}"
+          fi
+          if ! status="$(curl "$@" "${api_url}/${path}")"; then
+            echo "::error::${method} ${api_url}/${path} did not complete."
+            exit 1
+          fi
+        }
+        refuse() {
+          echo "::error::$1 returned HTTP ${status}: $(cat "$body"). Updating the preview comment needs 'pull-requests: write' on the calling job."
+          exit 1
+        }
+        list_marked() {
+          local page=1
+          : > "$work/marked"
+          while :; do
+            api GET "issues/${PR_NUMBER}/comments?per_page=100&page=${page}"
+            [ "$status" = 200 ] || refuse "GET comments of #${PR_NUMBER}"
+            jq -r --arg marker "$marker" '.[] | select((.body // "") | startswith($marker)) | .id' "$body" >> "$work/marked"
+            [ "$(jq 'length' "$body")" -lt 100 ] && break
+            page=$((page + 1))
+          done
+          sort -n -o "$work/marked" "$work/marked"
+        }
+        split_sections() {
+          rm -rf "$2"
+          mkdir -p "$2"
+          tr -d '\r' < "$1" | awk -v dir="$2" '
+            /^<!-- mobile-ci:preview:section:[A-Za-z0-9._-]+:start -->$/ {
+              key = $0
+              sub(/^<!-- mobile-ci:preview:section:/, "", key)
+              sub(/:start -->$/, "", key)
+              file = dir "/" key
+              printf "" > file
+              next
+            }
+            /^<!-- mobile-ci:preview:section:[A-Za-z0-9._-]+:end -->$/ {
+              if (file != "") close(file)
+              file = ""
+              next
+            }
+            file != "" { print >> file }
+          '
+        }
+        render() {
+          split_sections "$1" "$work/sections"
+          for name in $owned; do
+            if [ -z "$(tr -d '[:space:]' < "$work/mine/$name")" ]; then
+              rm -f "$work/sections/$name"
+            else
+              cp "$work/mine/$name" "$work/sections/$name"
+            fi
+          done
+          {
+            printf '%s\n%s\n' "$marker" "$TITLE"
+            for file in "$work/sections"/*; do
+              [ -e "$file" ] || continue
+              name="$(basename "$file")"
+              printf '\n<!-- mobile-ci:preview:section:%s:start -->\n' "$name"
+              normalize "$file"
+              printf '<!-- mobile-ci:preview:section:%s:end -->\n' "$name"
+            done
+          } > "$2"
+          jq -n --rawfile body "$2" '{body: $body}' > "$work/payload"
+          if [ "$(jq '.body | length' "$work/payload")" -gt 65536 ]; then
+            echo "::error::The preview comment would be $(jq '.body | length' "$work/payload") characters; GitHub caps a comment at 65536."
+            exit 1
+          fi
+        }
+        owned_sections_match() {
+          split_sections "$1" "$work/check"
+          for name in $owned; do
+            if [ -z "$(tr -d '[:space:]' < "$work/mine/$name")" ]; then
+              [ ! -e "$work/check/$name" ] || return 1
+            else
+              [ -e "$work/check/$name" ] || return 1
+              [ "$(normalize "$work/check/$name")" = "$(cat "$work/mine/$name")" ] || return 1
+            fi
+          done
+        }
+
+        attempt=0
+        while [ "$attempt" -lt "$MAX_ATTEMPTS" ]; do
+          attempt=$((attempt + 1))
+          list_marked
+          comment_id="$(head -n 1 "$work/marked")"
+          if [ -z "$comment_id" ]; then
+            : > "$work/current"
+            render "$work/current" "$work/next"
+            api POST "issues/${PR_NUMBER}/comments" "$work/payload"
+            [ "$status" = 201 ] || refuse "POST comment on #${PR_NUMBER}"
+            comment_id="$(jq -r '.id' "$body")"
+            echo "Created the preview comment ${comment_id}."
+            list_marked
+            oldest="$(head -n 1 "$work/marked")"
+            if [ -n "$oldest" ] && [ "$oldest" != "$comment_id" ]; then
+              echo "Another writer created the preview comment ${oldest} concurrently; merging into it."
+              api DELETE "issues/comments/${comment_id}"
+              case "$status" in 204|404) ;; *) refuse "DELETE duplicate comment ${comment_id}" ;; esac
+              continue
+            fi
+          else
+            api GET "issues/comments/${comment_id}"
+            [ "$status" = 200 ] || refuse "GET comment ${comment_id}"
+            jq -r '.body // ""' "$body" > "$work/current"
+            render "$work/current" "$work/next"
+            if [ "$(normalize "$work/current")" = "$(normalize "$work/next")" ]; then
+              echo "The preview comment ${comment_id} is already up to date."
+            else
+              api PATCH "issues/comments/${comment_id}" "$work/payload"
+              [ "$status" = 200 ] || refuse "PATCH comment ${comment_id}"
+              echo "Updated the preview comment ${comment_id}."
+            fi
+          fi
+          sleep $((2 + attempt))
+          api GET "issues/comments/${comment_id}"
+          [ "$status" = 200 ] || refuse "GET comment ${comment_id}"
+          jq -r '.body // ""' "$body" > "$work/current"
+          if owned_sections_match "$work/current"; then
+            {
+              printf 'comment-id=%s\n' "$comment_id"
+              printf 'comment-url=%s\n' "$(jq -r '.html_url // ""' "$body")"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "A concurrent writer overwrote section(s)${owned} of the preview comment ${comment_id}; retrying (attempt ${attempt} of ${MAX_ATTEMPTS})."
+        done
+        echo "::error::Section(s)${owned} of the preview comment on #${PR_NUMBER} were still overwritten after ${MAX_ATTEMPTS} attempt(s)."
+        exit 1
