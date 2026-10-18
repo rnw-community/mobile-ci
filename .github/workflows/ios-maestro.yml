@@ -290,6 +290,46 @@ on:
                 type: string
                 required: false
                 default: '2.10.0'
+            ios-driver:
+                description: >-
+                    'local' (default) runs the flows on a simulator the test runner
+                    boots itself (run-maestro-ios). 'device-cloud' submits the
+                    repacked or built .app and flows-dir to devicecloud.dev from a
+                    plain Linux runner (device-cloud-runner-labels) and needs the
+                    device-cloud-api-key secret. Device Cloud runs the flows in
+                    parallel itself, so the test job submits once per target.
+                type: string
+                required: false
+                default: local
+            device-cloud-runner-labels:
+                description: >-
+                    JSON array of runner labels for the test job when the ios-driver
+                    is device-cloud. The job only uploads the app and flows to
+                    Device Cloud and waits, so any Linux runner with Node will do -
+                    no simulator, KVM or binder. Empty (default) falls back to
+                    repack-runner-labels, the plain Linux pool the repack already uses.
+                type: string
+                required: false
+                default: ''
+            device-cloud-cli-version:
+                description: Exact @devicecloud.dev/dcd npm version the device-cloud driver runs.
+                type: string
+                required: false
+                default: '5.7.1'
+            device-cloud-ios-device:
+                description: >-
+                    Device Cloud iOS device model, e.g. iphone-16 (dcd --ios-device).
+                    Empty uses Device Cloud's default.
+                type: string
+                required: false
+                default: ''
+            device-cloud-ios-version:
+                description: >-
+                    Device Cloud iOS major version, e.g. 18 (dcd --ios-version).
+                    Empty uses Device Cloud's default.
+                type: string
+                required: false
+                default: ''
             maestro-reuse-driver:
                 description: >-
                     'true' (default) keeps one Maestro XCTest driver running on one fixed
@@ -558,6 +598,12 @@ on:
                     pre-flow-command. Every value is scrubbed from the uploaded
                     Maestro artifacts. For test-user passwords and the credentials a
                     hook uses to prepare the backend under test.
+                required: false
+            device-cloud-api-key:
+                description: >-
+                    Device Cloud API key, required only when the ios-driver is
+                    device-cloud. Handed to the CLI through its environment, never
+                    as an input or on a command line.
                 required: false
 
 concurrency:
@@ -1055,13 +1101,13 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
         if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
-        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.ios-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
                 target: ${{ fromJSON(inputs.targets) }}
-                shard-index: ${{ fromJSON(needs.detect.outputs.shard-indices) }}
+                shard-index: ${{ inputs.ios-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -1073,9 +1119,51 @@ jobs:
               with:
                   persist-credentials: false
 
-            # Its own step so a driver that runs the app off this host
-            # (device-cloud, #216) can skip it with a single `if:`.
+            - name: Validate the test driver
+              shell: bash
+              env:
+                  DRIVER: ${{ inputs.ios-driver }}
+                  DRIVER_INPUT: ios-driver
+                  LOCAL_DRIVERS: local
+                  HAS_DEVICE_CLOUD_API_KEY: ${{ secrets.device-cloud-api-key != '' }}
+                  PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+                  FLOW_RECOVERY_FLOW: ${{ inputs.flow-recovery-flow }}
+                  PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+                  PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
+                  SHARD_COUNT: ${{ inputs.shard-count }}
+                  SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+              run: |
+                  set -euo pipefail
+                  known=0
+                  for candidate in $LOCAL_DRIVERS device-cloud; do
+                    if [ "$DRIVER" = "$candidate" ]; then
+                      known=1
+                    fi
+                  done
+                  if [ "$known" -ne 1 ]; then
+                    echo "::error::Unsupported $DRIVER_INPUT '$DRIVER'; expected one of: $LOCAL_DRIVERS device-cloud. Every test step is gated on an exact match, so an unknown value would run zero flows and still pass."
+                    exit 1
+                  fi
+                  [ "$DRIVER" = device-cloud ] || exit 0
+                  if [ "$HAS_DEVICE_CLOUD_API_KEY" != true ]; then
+                    echo "::error::$DRIVER_INPUT is device-cloud but the device-cloud-api-key secret is empty. Pass it in the calling job's secrets: block."
+                    exit 1
+                  fi
+                  unsupported=''
+                  [ -z "$PRE_RUN_FLOW" ] || unsupported="$unsupported pre-run-flow"
+                  [ -z "$FLOW_RECOVERY_FLOW" ] || unsupported="$unsupported flow-recovery-flow"
+                  [ -z "$PRE_TEST_COMMAND" ] || unsupported="$unsupported pre-test-command"
+                  [ -z "$PRE_FLOW_COMMAND" ] || unsupported="$unsupported pre-flow-command"
+                  if [ -n "$unsupported" ]; then
+                    echo "::error::$DRIVER_INPUT device-cloud cannot honour:${unsupported}. Each runs against a device this runner boots, and Device Cloud runs the flows remotely, so it would silently never run. Unset it, or use a local driver."
+                    exit 1
+                  fi
+                  if [ "$SHARD_COUNT" != 1 ] || [ -n "$SHARD_MANIFEST_DIR" ]; then
+                    echo "::notice::Device Cloud runs the flows in parallel itself, so the device-cloud driver submits every selected flow once per target as shard 0; shard-count and shard-manifest-dir do not apply."
+                  fi
+
             - name: Assert this host can run the packaged simulator architecture
+              if: inputs.ios-driver != 'device-cloud'
               shell: bash
               env:
                   IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
@@ -1116,6 +1204,7 @@ jobs:
                   esac
 
             - name: setup-xcode-pinned
+              if: inputs.ios-driver != 'device-cloud'
               uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.0.0 # v4.0.0
               with:
                   version: ${{ inputs.xcode-version }}
@@ -1142,6 +1231,7 @@ jobs:
                   append-to: ${{ inputs.maestro-env }}
 
             - name: run-maestro-ios
+              if: inputs.ios-driver == 'local'
               uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.0.0 # v4.0.0
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
@@ -1177,6 +1267,34 @@ jobs:
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
+
+            - name: run-maestro-device-cloud
+              if: inputs.ios-driver == 'device-cloud'
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.0.0 # v4.0.0
+              with:
+                  platform: ios
+                  app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
+                  api-key: ${{ secrets.device-cloud-api-key }}
+                  cli-version: ${{ inputs.device-cloud-cli-version }}
+                  node-version: ${{ inputs.node-version }}
+                  flows-dir: ${{ inputs.flows-dir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  include-tags: ${{ inputs.include-tags }}
+                  exclude-tags: ${{ inputs.exclude-tags }}
+                  maestro-config: ${{ inputs.maestro-config }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  retries: ${{ inputs.flow-retries }}
+                  ios-device: ${{ inputs.device-cloud-ios-device }}
+                  ios-version: ${{ inputs.device-cloud-ios-version }}
+                  junit-report: ${{ inputs.junit-report }}
+                  run-name: ${{ github.repository }}@${{ github.sha }} ios ${{ matrix.target.name }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  retention-days: ${{ inputs.artifact-retention-days }}
+                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
 
             - name: Diagnose the runner's bundled Node after a failure
               if: failure() && runner.os == 'macOS'

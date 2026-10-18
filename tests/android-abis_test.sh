@@ -52,6 +52,18 @@ else
     assert_contains "$(cat "$dir/log")" 'Set android-abis explicitly' 'error message' && pass_case
 fi
 
+case_start 'auto on the device-cloud driver fails closed, since no ABI follows from a device it never sees'
+resolve ANDROID_DRIVER=device-cloud
+assert_equals 1 "$STEP_STATUS" 'exit status' \
+    && assert_contains "$(cat "$dir/log")" 'android-driver is device-cloud' 'error message' \
+    && pass_case
+
+case_start 'an explicit android-abis on the device-cloud driver resolves and keys on it'
+resolve ANDROID_DRIVER=device-cloud ANDROID_ABIS=x86_64,arm64-v8a
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_equals '-abi-x86_64,arm64-v8a' "$(step_output "$dir" key-segment)" 'key segment' \
+    && pass_case
+
 case_start 'auto leaves an ABI already pinned in gradle-args to gradle-args, and still keys on it'
 resolve GRADLE_ARGS=$'-x lint\n-PreactNativeArchitectures=arm64-v8a'
 assert_equals 0 "$STEP_STATUS" 'exit status' \

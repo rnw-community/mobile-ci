@@ -247,6 +247,10 @@ auto-discovered or run standalone by the sharding logic.
   warm-up, `maestro-secrets-env` (masked entries merged into `maestro-env`,
   scrubbed from uploaded Maestro artifacts). Pass them explicitly, never
   `secrets: inherit`; with none passed, behaviour is unchanged.
+- `ios-maestro.yml` (`ios-driver: device-cloud`) and `android-maestro.yml`
+  (`android-driver: device-cloud`) need `device-cloud-api-key` to run the
+  flows on devicecloud.dev from a plain Linux runner instead of a Mac or KVM
+  host; see each doc's "Device Cloud driver" section.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):
   `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android),
   `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`/`eas
