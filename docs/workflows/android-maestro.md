@@ -38,6 +38,28 @@ Maestro flows ran (not a pass)" rather than blending into a green check
 silently. A `build` job that was *skipped* while the plan still listed targets
 needing one is reported as a failure too — a skipped build is not a build.
 
+## Android ABIs and the SDK cache
+
+The native build compiles only the ABI the test device runs (`android-abis:
+auto`) instead of every ABI the project declares, which on a stock React
+Native project skips three of the four native compiles. The resolved ABIs are folded
+into the native key, so **upgrading changes every Android native key**: re-run
+the warm-up ([`seed-native-cache.yml`](seed-native-cache.md)) once on the
+default branch right after bumping the pin, or every Android pull request
+compiles natively until a default-branch run has published the new bases. The
+warm-up's `android-abis` must resolve to the same ABIs as this workflow's —
+`x86_64` by default on both; a `redroid` pipeline passes `arm64-v8a` to the
+warm-up.
+
+The `build` job restores the Android SDK (cmdline-tools, platform-tools and
+the build-tools, platforms, NDK and CMake Gradle installs) from the Actions
+cache before the build, and on a hit runs no `sdkmanager` and downloads nothing
+from `dl.google.com`. It saves the SDK in a separate last step, only off
+`pull_request`, with `continue-on-error` and a 10-minute `timeout-minutes`, so
+a stalled upload never fails or holds the job. See
+[`build-android-app`](../../actions/build-android-app#android-sdk-cache) for
+the key.
+
 ## Migrating a Redroid caller (default change)
 
 `runner-labels` and `android-driver` defaults changed together: they name one
@@ -93,6 +115,7 @@ major release.
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
 | `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator through this repo's `android-emulator` action and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-abis`                  | no       | `auto`                                             | Comma-separated ABIs the native build compiles, passed to Gradle as `-PreactNativeArchitectures`. `auto` follows the test device: `emulator-arch` (`x86_64`) for `android-driver: avd`, `arm64-v8a` for `redroid`; when `gradle-args` or `build-env` already pins `reactNativeArchitectures`, `auto` leaves it to that pin. An explicit value that contradicts such a pin fails the run. Empty compiles every ABI the project declares. Part of the native key — see [Android ABIs](#android-abis-and-the-sdk-cache). |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |

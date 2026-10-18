@@ -79,6 +79,18 @@ on:
                 type: string
                 required: false
                 default: ''
+            android-abis:
+                description: >-
+                    Comma-separated ABIs the Android base compiles, passed to Gradle
+                    as -PreactNativeArchitectures. 'auto' (default) is x86_64, the
+                    ABI of android-maestro.yml's default avd driver, unless
+                    gradle-args or build-env already pins reactNativeArchitectures.
+                    Part of the native key: it must resolve to the same ABIs as the
+                    e2e workflow's android-abis, so a redroid e2e pipeline passes
+                    arm64-v8a here. Empty compiles every ABI the project declares.
+                type: string
+                required: false
+                default: auto
             ios-cache-profile:
                 type: string
                 required: false
@@ -241,8 +253,101 @@ permissions:
     contents: read
 
 jobs:
+    ios-compile-caches:
+        name: Find evicted iOS compile caches
+        if: inputs.ios-targets != '[]'
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 10
+        permissions:
+            actions: read
+        outputs:
+            targets: ${{ steps.caches.outputs.targets }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Mark the targets whose iOS compile caches are missing
+              id: caches
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.ios-targets }}
+                  XCODE_VERSION: ${{ inputs.xcode-version }}
+                  GITHUB_TOKEN: ${{ github.token }}
+                  API_URL: ${{ github.api_url }}
+                  REPOSITORY: ${{ github.repository }}
+                  REF: ${{ github.ref }}
+                  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+              run: |
+                  set -euo pipefail
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+                  for tool in curl jq; do
+                    command -v "$tool" >/dev/null 2>&1 || fail "$tool is required to look the iOS compile caches up, and is not on PATH."
+                  done
+
+                  refs=("$REF")
+                  if [ -n "$DEFAULT_BRANCH" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+                    refs+=("refs/heads/$DEFAULT_BRANCH")
+                  fi
+
+                  response="$RUNNER_TEMP/ios-compile-caches.$$.json"
+                  restorable() {
+                    local prefix="$1" ref encoded_key encoded_ref status count
+                    encoded_key="$(jq -rn --arg value "$prefix" '$value | @uri')"
+                    for ref in "${refs[@]}"; do
+                      encoded_ref="$(jq -rn --arg value "$ref" '$value | @uri')"
+                      status=0
+                      curl -fsS --retry 3 --max-time 60 \
+                        -H "Authorization: Bearer $GITHUB_TOKEN" \
+                        -H 'Accept: application/vnd.github+json' \
+                        -H 'X-GitHub-Api-Version: 2022-11-28' \
+                        -o "$response" \
+                        "$API_URL/repos/$REPOSITORY/actions/caches?key=$encoded_key&ref=$encoded_ref&per_page=1" || status=$?
+                      if [ "$status" -ne 0 ]; then
+                        fail "The Actions cache API could not be queried for '$prefix' on $ref (curl exited $status). An unreadable cache index is not an evicted cache; the calling job needs permissions: actions: read."
+                      fi
+                      count="$(jq -er '.total_count | numbers' "$response")" \
+                        || fail "The Actions cache API answered for '$prefix' on $ref without a numeric total_count."
+                      if [ "$count" -gt 0 ]; then
+                        return 0
+                      fi
+                    done
+                    return 1
+                  }
+
+                  marked='[]'
+                  refill=0
+                  target_count="$(jq -er 'length' <<< "$TARGETS")" || fail "ios-targets is not a JSON array."
+                  for index in $(seq 0 $((target_count - 1))); do
+                    target="$(jq -c ".[$index]" <<< "$TARGETS")"
+                    name="$(jq -er '.name | strings' <<< "$target")" || fail "ios-targets[$index] has no name."
+                    missing=''
+                    for prefix in "ccache-ios-${name}-macOS-xcode-${XCODE_VERSION}-" "pods-${name}-macOS-xcode-${XCODE_VERSION}-"; do
+                      if ! restorable "$prefix"; then
+                        missing="${missing:+$missing, }${prefix}*"
+                      fi
+                    done
+                    if [ -n "$missing" ]; then
+                      refill=$((refill + 1))
+                      target="$(jq -c '. + {forceNative: true}' <<< "$target")"
+                      echo "### iOS ${name}: compile caches missing" >> "$GITHUB_STEP_SUMMARY"
+                      echo "Nothing restorable under ${missing}, so the next native build would run cold; this warm-up builds the target to refill them." >> "$GITHUB_STEP_SUMMARY"
+                      echo "${name}: nothing restorable under ${missing}; planned for a native build."
+                    else
+                      echo "${name}: ccache and CocoaPods caches are restorable."
+                    fi
+                    marked="$(jq -c --argjson target "$target" '. + [$target]' <<< "$marked")"
+                  done
+                  rm -f "$response"
+                  echo "Targets planned to refill their compile caches: $refill of $target_count."
+                  echo "targets=$marked" >> "$GITHUB_OUTPUT"
+
     plan-ios:
         name: Plan iOS warm-up
+        needs: ios-compile-caches
         if: inputs.ios-targets != '[]'
         permissions:
             contents: read
@@ -253,7 +358,7 @@ jobs:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
             platform: ios
-            targets: ${{ inputs.ios-targets }}
+            targets: ${{ needs.ios-compile-caches.outputs.targets }}
             build-strategy: ${{ inputs.force-base && 'native' || 'auto' }}
             repack: false
             runner-labels: ${{ inputs.plan-runner-labels }}
@@ -275,8 +380,110 @@ jobs:
             build-command: ${{ inputs.build-command }}
             build-env: ${{ inputs.build-env }}
 
+    android-abis:
+        name: Resolve the Android ABIs
+        if: inputs.android-targets != '[]'
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 5
+        outputs:
+            abis: ${{ steps.android-abis.outputs.abis }}
+            key-segment: ${{ steps.android-abis.outputs.key-segment }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Resolve the Android ABIs
+              id: android-abis
+              shell: bash
+              env:
+                  ANDROID_ABIS: ${{ inputs.android-abis }}
+                  ANDROID_DRIVER: avd
+                  EMULATOR_ARCH: x86_64
+                  GRADLE_ARGS: ${{ inputs.gradle-args }}
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+
+                  pinned=''
+                  pinned_by=''
+                  pin() {
+                    if [ -n "$pinned" ] && [ "$pinned" != "$1" ]; then
+                      fail "reactNativeArchitectures is pinned to '$pinned' by $pinned_by and to '$1' by $2. Gradle would build one set of ABIs while the native key describes another; pin it once."
+                    fi
+                    pinned="$1"
+                    pinned_by="$2"
+                  }
+
+                  normalized_gradle_args="${GRADLE_ARGS//$'\n'/ }"
+                  normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
+                  read -r -a gradle_args <<< "$normalized_gradle_args"
+                  for arg in ${gradle_args[@]+"${gradle_args[@]}"}; do
+                    case "$arg" in
+                      -PreactNativeArchitectures=*) pin "${arg#*=}" gradle-args ;;
+                    esac
+                  done
+                  while IFS= read -r line; do
+                    case "$line" in
+                      ORG_GRADLE_PROJECT_reactNativeArchitectures=*) pin "${line#*=}" build-env ;;
+                    esac
+                  done <<< "$BUILD_ENV"
+
+                  case "$ANDROID_ABIS" in
+                    auto)
+                      if [ -n "$pinned" ]; then
+                        abis=''
+                        echo "android-abis is auto and $pinned_by already pins reactNativeArchitectures to '$pinned'; it is left to $pinned_by."
+                      else
+                        case "$ANDROID_DRIVER" in
+                          avd) abis="$EMULATOR_ARCH" ;;
+                          redroid) abis=arm64-v8a ;;
+                          *) fail "android-abis is auto but android-driver '$ANDROID_DRIVER' is neither 'avd' nor 'redroid', so no ABI follows from it. Set android-abis explicitly." ;;
+                        esac
+                      fi
+                      ;;
+                    '')
+                      abis=''
+                      ;;
+                    *)
+                      abis="$ANDROID_ABIS"
+                      if [ -n "$pinned" ] && [ "$pinned" != "$abis" ]; then
+                        fail "android-abis is '$abis' but $pinned_by pins reactNativeArchitectures to '$pinned'. Gradle would build one set of ABIs while the native key describes another; drop one of the two."
+                      fi
+                      ;;
+                  esac
+
+                  if [ -n "$abis" ]; then
+                    IFS=, read -r -a abi_list <<< "$abis"
+                    case "$abis" in
+                      ,*|*,|*,,*) abi_list=('') ;;
+                    esac
+                    for abi in "${abi_list[@]}"; do
+                      case "$abi" in
+                        armeabi-v7a|arm64-v8a|x86|x86_64) ;;
+                        *) fail "android-abis resolved to '$abis', which is not a comma-separated list of armeabi-v7a, arm64-v8a, x86 and x86_64 without spaces." ;;
+                      esac
+                    done
+                  fi
+
+                  built="${abis:-$pinned}"
+                  key_segment=''
+                  if [ -n "$built" ]; then
+                    key_segment="-abi-$built"
+                  fi
+                  echo "Android ABIs: ${built:-every ABI the project declares}"
+                  {
+                    echo "abis=$abis"
+                    echo "key-segment=$key_segment"
+                  } >> "$GITHUB_OUTPUT"
+
     plan-android:
         name: Plan Android warm-up
+        needs: android-abis
         if: inputs.android-targets != '[]'
         permissions:
             contents: read
@@ -294,7 +501,7 @@ jobs:
             timeout-minutes: ${{ inputs.plan-timeout-minutes }}
             app-artifact-prefix: android-base-app
             plan-artifact-prefix: android-base-plan
-            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}${{ needs.android-abis.outputs.key-segment }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -521,7 +728,7 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              if: '!inputs.force-base'
+              if: '!inputs.force-base && !matrix.target.forceNative'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v4.0.0 # v4.0.0
               with:
                   mode: restore
@@ -621,7 +828,7 @@ jobs:
 
     seed-android:
         name: Seed Android native app (${{ matrix.target.name }})
-        needs: plan-android
+        needs: [android-abis, plan-android]
         if: ${{ !cancelled() && needs.plan-android.result == 'success' && needs.plan-android.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
         timeout-minutes: ${{ inputs.android-timeout-minutes }}
@@ -823,6 +1030,7 @@ jobs:
               run: echo 'This host already holds the APK for the key; the base is published from it without rebuilding.'
 
             - name: build-android-app
+              id: build
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/build-android-app@v4.0.0 # v4.0.0
               with:
@@ -830,6 +1038,8 @@ jobs:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   gradle-task: ${{ inputs.gradle-task }}
                   gradle-args: ${{ inputs.gradle-args }}
+                  android-abis: ${{ needs.android-abis.outputs.abis }}
+                  android-sdk-cache-save: 'false'
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
@@ -866,3 +1076,12 @@ jobs:
               run: |
                   set -euo pipefail
                   echo "::warning::This warm-up ran off the default branch, so the base binary for native key ${NATIVE_KEY} was built but not published. A base every pull request repacks onto is only trustworthy when the default branch produced it."
+
+            - name: Save the Android SDK
+              if: github.event_name != 'pull_request' && steps.build.outcome == 'success' && steps.build.outputs.android-sdk-cache-hit != 'true'
+              continue-on-error: true
+              timeout-minutes: 10
+              uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+              with:
+                  path: ${{ steps.build.outputs.android-sdk-cache-paths }}
+                  key: ${{ steps.build.outputs.android-sdk-cache-key }}

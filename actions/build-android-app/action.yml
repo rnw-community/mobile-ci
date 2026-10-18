@@ -43,15 +43,169 @@ inputs:
       cannot be expressed as a single token.
     required: false
     default: ''
+  android-abis:
+    description: >-
+      Comma-separated ABIs to compile, passed to Gradle as
+      -PreactNativeArchitectures=<value>, e.g. x86_64 for an emulator build.
+      Empty (the default) passes nothing, so the project's own
+      reactNativeArchitectures (every ABI in a stock React Native project)
+      applies. Fails closed when gradle-args or
+      ORG_GRADLE_PROJECT_reactNativeArchitectures already pins a different
+      value.
+    required: false
+    default: ''
+  android-sdk-cache-save:
+    description: >-
+      'true' (default) saves the Android SDK cache from inside this action
+      after a successful build on any event but pull_request, with
+      continue-on-error. 'false' leaves the save to the caller, which can bound
+      it with a step timeout-minutes that a composite action step cannot carry;
+      the android-sdk-cache-* outputs give it the key and paths.
+    required: false
+    default: 'true'
 outputs:
   app-path:
     description: Path to the packaged APK (<output-dir>/app-release.apk).
     value: ${{ steps.package.outputs.app-path }}
+  android-sdk-cache-key:
+    description: Cache key of the Android SDK packages this build used.
+    value: ${{ steps.sdk-cache.outputs.key }}
+  android-sdk-cache-paths:
+    description: Newline-separated SDK directories the Android SDK cache holds.
+    value: ${{ steps.sdk-cache.outputs.paths }}
+  android-sdk-cache-hit:
+    description: "`true` when the Android SDK was restored from an exact cache hit."
+    value: ${{ steps.sdk-restore.outputs.cache-hit }}
 runs:
   using: composite
   steps:
+    - name: Resolve the Android SDK cache
+      id: sdk-cache
+      shell: bash
+      env:
+        APP_DIR: ${{ inputs.app-dir }}
+        CMDLINE_TOOLS_VERSION: ${{ inputs.cmdline-tools-version }}
+        SDK_PACKAGES: platform-tools
+      run: |
+        set -euo pipefail
+
+        sha256_stdin() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | cut -d' ' -f1
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 | cut -d' ' -f1
+          else
+            echo "::error::Neither sha256sum nor shasum is available, so the Android SDK cache key cannot be computed."
+            return 1
+          fi
+        }
+
+        tilde='~'
+        if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+          root="$ANDROID_SDK_ROOT"
+          path_root="$root"
+        else
+          root="$HOME/.android/sdk"
+          path_root="$tilde/.android/sdk"
+        fi
+
+        read -r -a packages <<< "${SDK_PACKAGES//$'\n'/ }"
+        manifest="$RUNNER_TEMP/android-sdk-manifest.$$"
+        {
+          printf 'cmdline-tools;%s\n' "$CMDLINE_TOOLS_VERSION"
+          if [ "${#packages[@]}" -gt 0 ]; then
+            printf '%s\n' "${packages[@]}" | LC_ALL=C sort -u
+          fi
+          if [ -n "$APP_DIR" ]; then
+            for file in android/build.gradle android/build.gradle.kts \
+                        android/settings.gradle android/settings.gradle.kts \
+                        android/gradle.properties android/gradle/libs.versions.toml \
+                        android/app/build.gradle android/app/build.gradle.kts; do
+              if [ -f "$APP_DIR/$file" ]; then
+                printf 'pin %s %s\n' "$file" "$(sha256_stdin < "$APP_DIR/$file")"
+              fi
+            done
+            for module_file in react-native/gradle/libs.versions.toml expo-modules-autolinking/package.json; do
+              digest=none
+              dir="$APP_DIR"
+              while :; do
+                if [ -f "$dir/node_modules/$module_file" ]; then
+                  digest="$(sha256_stdin < "$dir/node_modules/$module_file")"
+                  break
+                fi
+                case "$dir" in
+                  .|/) break ;;
+                esac
+                dir="$(dirname "$dir")"
+              done
+              printf 'module %s %s\n' "$module_file" "$digest"
+            done
+          fi
+        } > "$manifest"
+
+        digest="$(sha256_stdin < "$manifest")"
+        rm -f "$manifest"
+        if [ -z "$digest" ]; then
+          echo "::error::The Android SDK package manifest hashed to nothing."
+          exit 1
+        fi
+        key="android-sdk-v1-${RUNNER_OS}-${RUNNER_ARCH}-cmdline-${CMDLINE_TOOLS_VERSION}-$(printf '%s' "$digest" | cut -c1-16)"
+
+        echo "Android SDK root: $root"
+        echo "Android SDK cache key: $key"
+        {
+          echo "root=$root"
+          echo "key=$key"
+          echo 'paths<<ANDROID_SDK_CACHE_PATHS_EOF'
+          for package_dir in cmdline-tools platform-tools build-tools platforms ndk cmake licenses; do
+            echo "$path_root/$package_dir"
+          done
+          echo 'ANDROID_SDK_CACHE_PATHS_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore the Android SDK
+      id: sdk-restore
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ steps.sdk-cache.outputs.paths }}
+          key: ${{ steps.sdk-cache.outputs.key }}
+
+    - name: Use the restored Android SDK
+      id: sdk-cached
+      if: steps.sdk-restore.outputs.cache-hit == 'true'
+      shell: bash
+      env:
+        SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
+      run: |
+        set -euo pipefail
+        sdkmanager=''
+        for candidate in "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager; do
+          if [ -x "$candidate" ]; then
+            sdkmanager="$candidate"
+            break
+          fi
+        done
+        if [ -z "$sdkmanager" ] || [ ! -x "$SDK_ROOT/platform-tools/adb" ]; then
+          echo "::warning::The Android SDK restored into $SDK_ROOT has no sdkmanager or adb, so it is installed through android-actions/setup-android instead."
+          echo 'ready=false' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        {
+          echo "ANDROID_HOME=$SDK_ROOT"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+        } >> "$GITHUB_ENV"
+        {
+          dirname "$sdkmanager"
+          echo "$SDK_ROOT/platform-tools"
+        } >> "$GITHUB_PATH"
+        echo 'ready=true' >> "$GITHUB_OUTPUT"
+        echo "Using the Android SDK restored from the cache into $SDK_ROOT; sdkmanager is not run and nothing is downloaded."
+
     - name: Set up Android SDK
+      if: steps.sdk-cached.outputs.ready != 'true'
       uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      env:
+          ANDROID_SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
       with:
           cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
           packages: platform-tools
@@ -75,6 +229,7 @@ runs:
       env:
         GRADLE_TASK: ${{ inputs.gradle-task }}
         GRADLE_ARGS: ${{ inputs.gradle-args }}
+        ANDROID_ABIS: ${{ inputs.android-abis }}
       run: |
         set -euo pipefail
         gradle_args=()
@@ -83,13 +238,59 @@ runs:
           normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
           read -r -a gradle_args <<< "$normalized_gradle_args"
         fi
+
+        if [ -n "$ANDROID_ABIS" ]; then
+          IFS=, read -r -a abi_list <<< "$ANDROID_ABIS"
+          case "$ANDROID_ABIS" in
+            ,*|*,|*,,*) abi_list=('') ;;
+          esac
+          for abi in "${abi_list[@]}"; do
+            case "$abi" in
+              armeabi-v7a|arm64-v8a|x86|x86_64) ;;
+              *)
+                echo "::error::android-abis '$ANDROID_ABIS' must be a comma-separated list of armeabi-v7a, arm64-v8a, x86 and x86_64, without spaces."
+                exit 1
+                ;;
+            esac
+          done
+          already_pinned=false
+          for arg in ${gradle_args[@]+"${gradle_args[@]}"}; do
+            case "$arg" in
+              -PreactNativeArchitectures=*)
+                if [ "${arg#*=}" != "$ANDROID_ABIS" ]; then
+                  echo "::error::android-abis is '$ANDROID_ABIS' but gradle-args passes $arg. Gradle would build one set of ABIs while the native key describes another; drop one of the two."
+                  exit 1
+                fi
+                already_pinned=true
+                ;;
+            esac
+          done
+          env_abis="${ORG_GRADLE_PROJECT_reactNativeArchitectures:-}"
+          if [ -n "$env_abis" ] && [ "$env_abis" != "$ANDROID_ABIS" ]; then
+            echo "::error::android-abis is '$ANDROID_ABIS' but ORG_GRADLE_PROJECT_reactNativeArchitectures is '$env_abis'. Gradle would build one set of ABIs while the native key describes another; drop one of the two."
+            exit 1
+          fi
+          if [ "$already_pinned" = false ]; then
+            gradle_args+=("-PreactNativeArchitectures=$ANDROID_ABIS")
+          fi
+        fi
+
         build_start=$(date +%s)
         ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
         build_end=$(date +%s)
         {
           echo "### Android build (cold — native build ran)"
           echo "Duration: $((build_end - build_start))s"
+          echo "ABIs: ${ANDROID_ABIS:-every ABI the project declares}"
         } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Save the Android SDK
+      if: inputs.android-sdk-cache-save == 'true' && github.event_name != 'pull_request' && steps.sdk-restore.outputs.cache-hit != 'true' && steps.build.outcome == 'success'
+      continue-on-error: true
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+          path: ${{ steps.sdk-cache.outputs.paths }}
+          key: ${{ steps.sdk-cache.outputs.key }}
 
     - name: Choose the Gradle cache save key
       id: gradle-save

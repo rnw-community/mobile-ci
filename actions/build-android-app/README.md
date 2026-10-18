@@ -5,7 +5,77 @@ APK with `./gradlew --no-daemon <gradle-task>` (default task
 `assembleRelease`), verifies the embedded `assets/index.android.bundle`, and
 packages the single signed release APK as `<output-dir>/app-release.apk`.
 Restores/saves a Gradle cache (`~/.gradle/caches`, `~/.gradle/wrapper`)
-around the build.
+around the build, and an [Android SDK cache](#android-sdk-cache) in front of
+`setup-android`. `android-abis` limits the build to the ABIs a test device
+runs.
+
+## Android SDK cache
+
+Before this, `setup-android` ran uncached: the cmdline-tools, platform-tools,
+and every SDK package Gradle installs on demand (build-tools, platforms, NDK,
+CMake — the NDK alone is over a gigabyte) were downloaded on every run, and a
+`dl.google.com` outage failed the build.
+
+The action resolves the SDK root `setup-android` would use
+(`$ANDROID_SDK_ROOT`, else `~/.android/sdk`) and restores its
+`cmdline-tools`, `platform-tools`, `build-tools`, `platforms`, `ndk`, `cmake`
+and `licenses` directories under the key
+
+```
+android-sdk-v1-<runner.os>-<runner.arch>-cmdline-<cmdline-tools-version>-<16 hex>
+```
+
+where the hex digest covers the package list this action asks `sdkmanager`
+for, plus a hash of every file that pins what Gradle installs on top:
+`android/build.gradle`, `android/settings.gradle`,
+`android/gradle.properties`, `android/gradle/libs.versions.toml` and
+`android/app/build.gradle` (or their `.kts` forms) under `app-dir`, and
+`react-native/gradle/libs.versions.toml` and
+`expo-modules-autolinking/package.json` from the nearest `node_modules` (React
+Native's and Expo's default `compileSdk`, `buildTools` and `ndkVersion`). A
+version bump in any of them is a new key, so a cache never silently lacks the
+NDK the build asks for. There are no restore-keys: a partial match would carry
+every retired NDK forward forever.
+
+- **Hit**: the restored SDK is exported as `ANDROID_HOME`/`ANDROID_SDK_ROOT`
+  and put on `PATH`; `setup-android` and `sdkmanager` do not run, and nothing
+  is downloaded. A restored tree with no `sdkmanager` or `adb` falls back to
+  `setup-android` with a warning.
+- **Miss**: `setup-android` installs into that same root, Gradle adds what it
+  needs, and after a **successful** build the SDK is saved — never on a
+  `pull_request` run (a pull request's cache is scoped to its own ref, so
+  nobody else could restore it), and with `continue-on-error`, so a failed
+  upload never fails the build.
+
+A composite action step cannot carry `timeout-minutes`, so a stalled upload
+inside this action would hold the job until its own timeout. The reusable
+workflows therefore pass `android-sdk-cache-save: 'false'` and save the
+`android-sdk-cache-paths` under `android-sdk-cache-key` themselves, as the
+job's last step with `timeout-minutes: 10` and `continue-on-error: true`. Do
+the same in a workflow of your own:
+
+```yaml
+- name: Save the Android SDK
+  if: github.event_name != 'pull_request' && steps.build.outputs.android-sdk-cache-hit != 'true'
+  continue-on-error: true
+  timeout-minutes: 10
+  uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+  with:
+      path: ${{ steps.build.outputs.android-sdk-cache-paths }}
+      key: ${{ steps.build.outputs.android-sdk-cache-key }}
+```
+
+## ABIs
+
+A stock React Native project compiles its C++ for `armeabi-v7a`, `arm64-v8a`,
+`x86` and `x86_64`. A build for an emulator or a Redroid container needs one
+of them. `android-abis` passes `-PreactNativeArchitectures=<value>` to Gradle;
+it fails the step before Gradle runs when the value is not a comma-separated
+list of those four names, or when `gradle-args` (`-PreactNativeArchitectures=`)
+or the environment (`ORG_GRADLE_PROJECT_reactNativeArchitectures`) pins a
+different value. A matching pin is not repeated. `android-maestro.yml` and
+`seed-native-cache.yml` resolve the value from the driver and fold it into the
+native key; see [docs/repack.md](../../docs/repack.md#the-native-key-is-the-correctness-boundary).
 
 **Why the Gradle cache is saved after a failed or timed-out build.** A cold
 build that hits the job's `timeout-minutes` used to save nothing, so the next
@@ -85,12 +155,17 @@ preinstalled here.
 | `gradle-cache-restore-keys`    | no       | `''`         | Newline-separated fallback prefixes, tried after `<gradle-cache-key>-partial-`. |
 | `gradle-task`                  | no       | `assembleRelease` | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module. |
 | `gradle-args`                  | no       | `''`         | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease`. Not shell-quoted. |
+| `android-abis`                 | no       | `''`         | Comma-separated ABIs passed as `-PreactNativeArchitectures=<value>`, e.g. `x86_64`. Empty passes nothing, so the project's own `reactNativeArchitectures` applies. Fails closed on an unknown ABI or a contradicting pin in `gradle-args` / `ORG_GRADLE_PROJECT_reactNativeArchitectures`. See [ABIs](#abis). |
+| `android-sdk-cache-save`       | no       | `'true'`     | `'true'` saves the [Android SDK cache](#android-sdk-cache) from inside the action after a successful build, off `pull_request`, with `continue-on-error`. `'false'` leaves the save to the caller, which can bound it with `timeout-minutes`. |
 
 ## Outputs
 
 | Name       | Description                                    |
 | ---------- | -------------------------------------------------- |
 | `app-path` | Path to the packaged APK (`<output-dir>/app-release.apk`). |
+| `android-sdk-cache-key` | Key of the Android SDK cache this build restored or would save. |
+| `android-sdk-cache-paths` | Newline-separated SDK directories the Android SDK cache holds. |
+| `android-sdk-cache-hit` | `true` when the Android SDK was restored from an exact cache hit. |
 
 ## Example
 

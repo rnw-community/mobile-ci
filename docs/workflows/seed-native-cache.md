@@ -7,7 +7,18 @@ that built it, so a later `ios-maestro.yml` / `android-maestro.yml` /
 native code. Read [docs/repack.md](../repack.md) first — this page is the input
 reference.
 
-Four jobs, in two stages.
+Six jobs, in three stages.
+
+**ios-compile-caches / android-abis** run first, on the lightweight control lane
+(`control-runner-labels`). `ios-compile-caches` asks the Actions cache API whether anything is
+still restorable under each iOS target's ccache and CocoaPods key prefixes for
+the pinned Xcode (`ccache-ios-<name>-macOS-xcode-<xcode-version>-` and
+`pods-<name>-macOS-xcode-<xcode-version>-`, on this run's ref or the default
+branch), and marks a target whose caches were evicted `forceNative` (see
+[Refilling evicted iOS compile caches](#refilling-evicted-ios-compile-caches)).
+`android-abis` resolves `android-abis` the same way `android-maestro.yml`
+does, so the Android base is built for, and keyed on, the ABI the e2e device
+runs.
 
 **plan-ios / plan-android** run on the x86_64 Linux pool
 (`plan-runner-labels`) and call [`expo-base-plan.yml`](expo-base-plan.md): one
@@ -17,7 +28,8 @@ computes the native key with
 [`expo-base-binary`](../../actions/expo-base-binary) whether a base is already
 published for it. They never repack — a warm-up is looking for a key with *no*
 base, not producing a binary. Their `native-targets` output names the targets
-that still need building.
+that still need building: those with no base, plus the iOS targets marked
+`forceNative` because their compile caches are gone.
 
 **seed-ios / seed-android** then run only for those targets — one job per
 target, on the Mac pool and the Linux Gradle pool respectively — restore the
@@ -61,6 +73,7 @@ the two things a fingerprint cannot see (see
 | `cmdline-tools-version`           | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults. |
 | `gradle-task`                     | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
 | `gradle-args`                     | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
+| `android-abis`                    | no       | `auto`                                             | Comma-separated ABIs the Android base compiles, passed to Gradle as `-PreactNativeArchitectures`. `auto` is `x86_64` — the ABI of `android-maestro.yml`'s default `avd` driver — unless `gradle-args` or `build-env` already pins `reactNativeArchitectures`, which then wins. Empty compiles every ABI the project declares. Part of the native key, so it must resolve to the **same** ABIs as the e2e workflow's `android-abis`: a `redroid` e2e pipeline passes `arm64-v8a` here, or the warm-up publishes a base no pull request ever looks up. |
 | `ios-cache-profile`               | no       | `ios-native-v1`                                    | Cache-key prefix for the iOS native-app cache. |
 | `android-cache-profile`           | no       | `android-native-v1`                                | Cache-key prefix for the Android native-app cache. |
 | `expo-fingerprint-version`        | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
@@ -96,7 +109,54 @@ permissions:
 In a repository whose default workflow token permission is **read** — the
 recommended setting — a caller without this block gets a run that plans fine,
 builds fine, and fails at publish. With `base-backend: artifact` no package
-scope is needed, only `actions: read`.
+scope is needed, only `actions: read`. `actions: read` is also what
+`ios-compile-caches` lists the repository's Actions caches with; without it
+that job fails closed rather than guessing which caches exist.
+
+## Refilling evicted iOS compile caches
+
+A base can outlive the caches the Mac build that produced it saved: GitHub
+evicts cache entries after 7 days without access, or when the repository
+passes its cache quota. Planning only on a missing base meant an evicted
+ccache or CocoaPods cache was refilled by the next pull request that changed
+native code, which then compiled cold on a Mac.
+
+The warm-up now also plans an iOS target when nothing is restorable under the
+key prefixes its native build restores from — `ccache-ios-<name>-macOS-xcode-<xcode-version>-`
+or `pods-<name>-macOS-xcode-<xcode-version>-`. Such a target is built even
+though its base exists, skips the native-app cache shortcut (which would skip
+the very build that refills the caches), and its publish step finds the base
+already warm and leaves it untouched. The lookup runs on Linux, so a push that
+changes no native surface and evicted nothing still claims no Mac. Expo-lane
+DerivedData is not cached across runs at all, so it is not checked.
+
+The lookup uses the Actions cache REST API rather than
+`actions/cache/restore` with `lookup-only`: a cache's version hashes its path
+and compression method, and the ccache path is absolute under the Mac
+runner's `github.workspace`, so a lookup from a Linux runner never matches the
+entry a Mac saved and would report every cache missing on every push. An API
+error fails the job.
+
+Eviction happens with no push at all, so add a `schedule:` trigger (e.g. daily)
+next to the `push` one: on a scheduled run with every base and cache present
+the warm-up still costs only the Linux plan jobs.
+
+## Android ABIs and the SDK cache
+
+`seed-android` compiles only the ABIs `android-abis` resolves to (`x86_64` by
+default) instead of every ABI the project declares, and folds them into the
+native key. **This changes every Android native key**: the first warm-up after
+upgrading publishes new bases, and until it has run every Android pull request
+compiles natively. Run the warm-up once (`workflow_dispatch`) right after
+bumping the pin.
+
+The Android SDK the build uses (cmdline-tools, platform-tools and whatever
+Gradle installs: build-tools, platforms, NDK, CMake) is cached, keyed on the
+OS, the arch, the cmdline-tools version and a hash of the files that pin those
+packages — see [`build-android-app`](../../actions/build-android-app#android-sdk-cache).
+A hit skips `sdkmanager` and every download from `dl.google.com`. The cache is
+saved by a separate, last step of `seed-android` with `continue-on-error` and a
+10-minute `timeout-minutes`, never on a `pull_request` run.
 
 ## When to use `force-base`
 

@@ -31,7 +31,9 @@ on:
                 description: >-
                     JSON array of build targets. Each element is passed through to
                     the caller's native build job unchanged, with the native key
-                    added as nativeKey.
+                    added as nativeKey. A target with "forceNative": true is handed
+                    to the native build even when its base exists; only a caller
+                    with repack false may set it.
                 type: string
                 required: true
             build-strategy:
@@ -440,9 +442,135 @@ jobs:
                   echo "::error::build-strategy is 'repack', which forbids compiling native code, but no base binary is published at $REFERENCE for native key $NATIVE_KEY. Warm this key up on the default branch (seed-native-cache.yml), or switch this call to build-strategy: auto so a native build produces and publishes one."
                   exit 1
 
-            - name: Set up Android SDK for the repack
+            - name: Resolve the Android SDK cache
+              id: sdk-cache
               if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
+              shell: bash
+              env:
+                  APP_DIR: ''
+                  CMDLINE_TOOLS_VERSION: ${{ inputs.cmdline-tools-version }}
+                  SDK_PACKAGES: platform-tools build-tools;${{ inputs.android-build-tools-version }}
+              run: |
+                  set -euo pipefail
+
+                  sha256_stdin() {
+                    if command -v sha256sum >/dev/null 2>&1; then
+                      sha256sum | cut -d' ' -f1
+                    elif command -v shasum >/dev/null 2>&1; then
+                      shasum -a 256 | cut -d' ' -f1
+                    else
+                      echo "::error::Neither sha256sum nor shasum is available, so the Android SDK cache key cannot be computed."
+                      return 1
+                    fi
+                  }
+
+                  tilde='~'
+                  if [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+                    root="$ANDROID_SDK_ROOT"
+                    path_root="$root"
+                  else
+                    root="$HOME/.android/sdk"
+                    path_root="$tilde/.android/sdk"
+                  fi
+
+                  read -r -a packages <<< "${SDK_PACKAGES//$'\n'/ }"
+                  manifest="$RUNNER_TEMP/android-sdk-manifest.$$"
+                  {
+                    printf 'cmdline-tools;%s\n' "$CMDLINE_TOOLS_VERSION"
+                    if [ "${#packages[@]}" -gt 0 ]; then
+                      printf '%s\n' "${packages[@]}" | LC_ALL=C sort -u
+                    fi
+                    if [ -n "$APP_DIR" ]; then
+                      for file in android/build.gradle android/build.gradle.kts \
+                                  android/settings.gradle android/settings.gradle.kts \
+                                  android/gradle.properties android/gradle/libs.versions.toml \
+                                  android/app/build.gradle android/app/build.gradle.kts; do
+                        if [ -f "$APP_DIR/$file" ]; then
+                          printf 'pin %s %s\n' "$file" "$(sha256_stdin < "$APP_DIR/$file")"
+                        fi
+                      done
+                      for module_file in react-native/gradle/libs.versions.toml expo-modules-autolinking/package.json; do
+                        digest=none
+                        dir="$APP_DIR"
+                        while :; do
+                          if [ -f "$dir/node_modules/$module_file" ]; then
+                            digest="$(sha256_stdin < "$dir/node_modules/$module_file")"
+                            break
+                          fi
+                          case "$dir" in
+                            .|/) break ;;
+                          esac
+                          dir="$(dirname "$dir")"
+                        done
+                        printf 'module %s %s\n' "$module_file" "$digest"
+                      done
+                    fi
+                  } > "$manifest"
+
+                  digest="$(sha256_stdin < "$manifest")"
+                  rm -f "$manifest"
+                  if [ -z "$digest" ]; then
+                    echo "::error::The Android SDK package manifest hashed to nothing."
+                    exit 1
+                  fi
+                  key="android-sdk-v1-${RUNNER_OS}-${RUNNER_ARCH}-cmdline-${CMDLINE_TOOLS_VERSION}-$(printf '%s' "$digest" | cut -c1-16)"
+
+                  echo "Android SDK root: $root"
+                  echo "Android SDK cache key: $key"
+                  {
+                    echo "root=$root"
+                    echo "key=$key"
+                    echo 'paths<<ANDROID_SDK_CACHE_PATHS_EOF'
+                    for package_dir in cmdline-tools platform-tools build-tools platforms ndk cmake licenses; do
+                      echo "$path_root/$package_dir"
+                    done
+                    echo 'ANDROID_SDK_CACHE_PATHS_EOF'
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Restore the Android SDK
+              id: sdk-restore
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
+              uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+              with:
+                  path: ${{ steps.sdk-cache.outputs.paths }}
+                  key: ${{ steps.sdk-cache.outputs.key }}
+
+            - name: Use the restored Android SDK
+              id: sdk-cached
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && steps.sdk-restore.outputs.cache-hit == 'true'
+              shell: bash
+              env:
+                  SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
+              run: |
+                  set -euo pipefail
+                  sdkmanager=''
+                  for candidate in "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager; do
+                    if [ -x "$candidate" ]; then
+                      sdkmanager="$candidate"
+                      break
+                    fi
+                  done
+                  if [ -z "$sdkmanager" ] || [ ! -x "$SDK_ROOT/platform-tools/adb" ]; then
+                    echo "::warning::The Android SDK restored into $SDK_ROOT has no sdkmanager or adb, so it is installed through android-actions/setup-android instead."
+                    echo 'ready=false' >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  {
+                    echo "ANDROID_HOME=$SDK_ROOT"
+                    echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+                  } >> "$GITHUB_ENV"
+                  {
+                    dirname "$sdkmanager"
+                    echo "$SDK_ROOT/platform-tools"
+                  } >> "$GITHUB_PATH"
+                  echo 'ready=true' >> "$GITHUB_OUTPUT"
+                  echo "Using the Android SDK restored from the cache into $SDK_ROOT; sdkmanager is not run and nothing is downloaded."
+
+            - name: Set up Android SDK for the repack
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && steps.sdk-cached.outputs.ready != 'true'
               uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+              env:
+                  ANDROID_SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
               with:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   packages: platform-tools build-tools;${{ inputs.android-build-tools-version }}
@@ -492,8 +620,13 @@ jobs:
                   set -euo pipefail
                   mkdir -p .ci-artifacts/plan
                   target_name=$(jq -r '.name' <<< "$TARGET")
+                  force_native=$(jq -r '.forceNative == true' <<< "$TARGET")
+                  if [ "$force_native" = 'true' ] && [ "$REPACKED" = 'true' ]; then
+                    echo "::error::Target ${target_name} sets forceNative, which only a caller that does not repack (repack: false) may ask for: a repacked target already has the binary its jobs consume."
+                    exit 1
+                  fi
                   needs_native=true
-                  if [ "$BASE_FOUND" = 'true' ]; then
+                  if [ "$BASE_FOUND" = 'true' ] && [ "$force_native" != 'true' ]; then
                     needs_native=false
                   fi
                   jq -n --argjson target "$TARGET" \
@@ -510,6 +643,9 @@ jobs:
                     elif [ "$needs_native" = 'false' ]; then
                       echo "### ${PLATFORM} ${target_name}: already warm"
                       echo "Base ${BASE_REFERENCE} (from ${BASE_SOURCE}) already covers native key ${NATIVE_KEY}."
+                    elif [ "$BASE_FOUND" = 'true' ]; then
+                      echo "### ${PLATFORM} ${target_name}: native build requested"
+                      echo "Base ${BASE_REFERENCE} already covers native key ${NATIVE_KEY}, but the target sets forceNative."
                     else
                       echo "### ${PLATFORM} ${target_name}: native build needed"
                       echo "Native key ${NATIVE_KEY} has no published base (strategy: ${BUILD_STRATEGY})."
@@ -523,6 +659,15 @@ jobs:
                   path: .ci-artifacts/plan/plan.json
                   if-no-files-found: error
                   retention-days: 1
+
+            - name: Save the Android SDK
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && github.event_name != 'pull_request' && steps.sdk-restore.outputs.cache-hit != 'true'
+              continue-on-error: true
+              timeout-minutes: 10
+              uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+              with:
+                  path: ${{ steps.sdk-cache.outputs.paths }}
+                  key: ${{ steps.sdk-cache.outputs.key }}
 
     collect:
         name: Targets still needing a native build
