@@ -10,7 +10,7 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
 STEP='Redact secret values from the artifacts'
-ACTIONS=(run-maestro-ios run-maestro-android run-maestro-android-redroid)
+ACTIONS=(run-maestro-ios run-maestro-android run-maestro-android-redroid run-maestro-device-cloud)
 
 case_start 'every Maestro action redacts with the same script'
 reference="$(extract_step_script "$REPO_ROOT/actions/${ACTIONS[0]}/action.yml" "$STEP")"

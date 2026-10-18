@@ -69,7 +69,12 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `trigger-paths`               | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `.github/workflows/e2e.yml`, `e2e/**`. A pull request that changes a matching file (`base...HEAD`, renames counted at both paths) runs without turbo detection, which never attributes a file outside a workspace package to one. `**` runs every pull request, which is what an empty `target-packages` did before v3.3.0. Wins over `exempt-paths`; a diff that cannot be computed runs, with a `::warning::`. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `force-label` | no | `''` | Pull request label that runs the pipeline whatever turbo reports: with it on the pull request, `detect` reports affected without turbo (even for an `exempt-paths`-only diff) and the status summary reads `passed (forced by the <label> label)`. Add `labeled` to the caller's `pull_request` `types` so adding the label starts a run (see [Forcing a run](#forcing-a-run)). Empty never forces. |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
-| `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version. |
+| `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version; also the version the `device-cloud` driver asks Device Cloud for. |
+| `ios-driver`                    | no       | `local`                                            | `local` runs the flows on a simulator the test runner boots (`run-maestro-ios`). `device-cloud` submits the `.app` and `flows-dir` to devicecloud.dev from a plain Linux runner — see [Device Cloud driver](#device-cloud-driver). |
+| `device-cloud-runner-labels`    | no       | `''`                                               | JSON array of runner labels for the test job when the driver is `device-cloud`. The job only uploads and waits, so any Linux runner with Node works. Empty falls back to `repack-runner-labels`. |
+| `device-cloud-cli-version`      | no       | `5.7.1`                                            | Exact `@devicecloud.dev/dcd` npm version the `device-cloud` driver runs. |
+| `device-cloud-ios-device`       | no       | `''`                                               | Device Cloud iOS model, e.g. `iphone-16` (`--ios-device`). Empty uses Device Cloud's default. |
+| `device-cloud-ios-version`      | no       | `''`                                               | Device Cloud iOS major version, e.g. `18` (`--ios-version`). Empty uses Device Cloud's default. |
 | `maestro-reuse-driver`        | no       | `true`                                     | `true` passes `--no-reinstall-driver` and one `--driver-host-port` derived from the simulator UDID (the first free `127.0.0.1` port from a UDID-hashed start in 20000–30098, so shards on one host get distinct ports), to every `maestro test` invocation of the shard (pre-run flow, flows, retries, recovery flow): the XCTest driver the first invocation starts keeps running and every later invocation reuses it instead of starting its own. Each flow is still its own invocation, so `pre-flow-command`, per-flow env, retries, the recovery flow and the timing rows are unchanged. `false` starts a fresh driver per invocation. |
 | `simulator-device`            | no       | `''`                                       | Exact simulator device name to boot (e.g. `iPhone 17 Pro`), matched against `xcrun simctl list devices available` with no fuzzy matching — fails closed, listing available devices, on no exact match. Empty keeps the previous last-available heuristic (emits a `::notice::` naming its choice and recommending pinning). |
 | `simulator-reduce-motion`     | no       | `false`                                    | `true` turns on the booted simulator's Reduce Motion accessibility setting (`com.apple.Accessibility ReduceMotionEnabled`) before the app is installed and first launched, so UIKit, React Native `AccessibilityInfo` and Reanimated skip their animations. Fails closed on any value other than `true`/`false`. |
@@ -107,6 +112,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | Secret                | Required | Description |
 | --------------------- | -------- | ----------- |
 | `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in the `plan`/repack leg (install, `build-command`, fingerprint, re-bundle) and the native `build` job. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and the warm-up ([`seed-native-cache.yml`](seed-native-cache.md)) must be passed the same secret or the two never agree on a key and every pull request takes a native build. |
+| `device-cloud-api-key` | with the `device-cloud` driver | Device Cloud API key. Reaches only `run-maestro-device-cloud`, which hands it to the CLI as `DEVICE_CLOUD_API_KEY`, never on a command line. A `device-cloud` run without it fails before submitting. |
 | `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to `maestro-env` (so each becomes a Maestro `-e` argument) and exported to the test job's environment for `pre-test-command` and `pre-flow-command`. Every value is replaced with `***` in the uploaded Maestro artifacts (`maestro.log`, commands JSON, logcat) before upload; masking only covers the job log. For test-user passwords and the credentials a hook uses to prepare the backend under test. |
 
 Every secret is optional; with none passed, every job behaves exactly as it did
@@ -133,6 +139,55 @@ jobs:
 This workflow never touches a signing credential or an
 Expo/EAS token. It does need a **token permission** the caller grants; see
 [Permissions](#permissions).
+
+## Device Cloud driver
+
+`ios-driver: device-cloud` keeps the plan, build and repack half of this
+workflow and replaces only the test leg. The test job runs on
+`device-cloud-runner-labels` (default: the `repack-runner-labels` Linux pool).
+It needs no simulator, KVM or binder there, and it skips the architecture check and `setup-xcode-pinned`. It then
+runs [`run-maestro-device-cloud`](../../actions/run-maestro-device-cloud/README.md)
+against the same unpacked `Base.app` the local driver would install. That action:
+
+- selects flows exactly as the local driver does (`flows-dir`,
+  `flows-max-depth`, `flows-name-pattern`, `flows-exclude-pattern`), then
+  submits them once per target with the pinned `@devicecloud.dev/dcd`
+  (`device-cloud-cli-version`);
+- passes `include-tags` / `exclude-tags`, `maestro-config` (minus `flows:`,
+  which it refuses), `maestro-env` merged with `maestro-secrets-env` as `-e`,
+  `maestro-version`, and `flow-retries` as `--retry`;
+- downloads the run's logs, screenshots and videos (and, with `junit-report`,
+  its JUnit report) and uploads them under the same artifact name as a local
+  shard (`maestro-<platform>-<target>-shard-0`), after redacting the Maestro
+  secrets. So `status` and any reporting read the same artifact.
+
+Device Cloud runs the flows in parallel itself, so `shard-count` and
+`shard-manifest-dir` do not fan the job out: there is one submission per
+target, reported as shard 0.
+
+It fails closed:
+
+- A submission Device Cloud rejects (a bad key, an exhausted quota, an
+  unsupported device or Maestro version) is a red check carrying the
+  CLI's reason, never a skip.
+- Anything but an explicit pass of at least one flow fails. This covers a
+  failed flow, a run superseded by another, an empty result, or CLI output
+  that is not JSON.
+- The local-device hooks — `pre-run-flow`, `flow-recovery-flow`, `pre-test-command` and
+  `pre-flow-command` — each act on a device this runner boots, so setting one
+  with `device-cloud` fails the job rather than silently never running it.
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.0.0 # v4.0.0
+        with:
+            targets: ...
+            flows-dir: apps/mobile/e2e/flows
+            ios-driver: device-cloud
+        secrets:
+            device-cloud-api-key: ${{ secrets.DEVICE_CLOUD_API_KEY }}
+```
 
 ## Build strategy
 

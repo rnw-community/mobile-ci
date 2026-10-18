@@ -124,6 +124,10 @@ elif mode == 'containment':
                 if 'secrets.build-secrets-env' in str(step.get('with', '')) or 'secrets.maestro-secrets-env' in str(step.get('with', '')):
                     if not str(step.get('uses', '')).startswith(APPLY):
                         problems.append(f'{name}:{job_id}:{label} hands a secret to something other than apply-secret-env')
+                if 'secrets.device-cloud-api-key' in str(step.get('with', '')):
+                    if not str(step.get('uses', '')).startswith('rnw-community/mobile-ci/actions/run-maestro-device-cloud@') \
+                            or (step.get('with') or {}).get('api-key') != '${{ secrets.device-cloud-api-key }}':
+                        problems.append(f'{name}:{job_id}:{label} hands the Device Cloud API key to something other than run-maestro-device-cloud')
 
 elif mode == 'eas-install':
     for name in ('native-publish.yml', 'native-dev-release.yml'):
