@@ -19,15 +19,26 @@ on:
             test-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the test job only. Falls
-                    back to runner-labels when empty. Must resolve to an arm64 macOS
-                    pool regardless of the build pool's architecture: the packaged
-                    Simulator app build-ios-app produces is arm64-only (see
-                    build-ios-app's archs input, which this workflow does not expose
-                    an override for), so a test pool on any other architecture cannot
-                    launch it.
+                    back to runner-labels when empty. Must resolve to a macOS pool that
+                    can run the ios-simulator-archs slice, regardless of the build
+                    pool's architecture: an arm64 host for `arm64`; an x86_64 host, or
+                    an arm64 host with Rosetta 2 installed, for `x86_64`. The test job
+                    checks this before it boots a simulator.
                 type: string
                 required: false
                 default: ''
+            ios-simulator-archs:
+                description: >-
+                    Architecture of the Simulator `.app` the build produces: `arm64`
+                    (default) or `x86_64`, nothing else. `x86_64` is for apps whose
+                    native SDKs ship no arm64-simulator slice (ML Kit, for one); it
+                    builds with EXCLUDED_ARCHS=arm64, gets its own native key so it
+                    never repacks onto an arm64 base, and runs under Rosetta 2 on an
+                    arm64 test host. Must match the warm-up's value, or the two never
+                    agree on a key.
+                type: string
+                required: false
+                default: arm64
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, workspace, scheme, appId,
@@ -581,6 +592,7 @@ jobs:
             app-artifact-prefix: ios-e2e-app
             plan-artifact-prefix: ios-e2e-plan
             toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
+            ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -844,6 +856,8 @@ jobs:
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+                  archs: ${{ inputs.ios-simulator-archs }}
+                  excluded-archs: ${{ inputs.ios-simulator-archs == 'x86_64' && 'arm64' || 'x86_64' }}
 
             - name: setup-ccache-ios (save)
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.0.0 # v4.0.0
@@ -952,21 +966,47 @@ jobs:
               with:
                   persist-credentials: false
 
-            # build-ios-app's default archs is arm64-only (excluded-archs
-            # x86_64), and this workflow does not expose an override, so the
-            # packaged Simulator app can only launch on an arm64 host. A
-            # test-runner-labels pool on a different architecture than the
-            # build pool would otherwise fail confusingly inside simctl
-            # install; fail fast with an actionable message instead.
-            - name: Assert test runner architecture matches the packaged app
+            # Its own step so a driver that runs the app off this host
+            # (device-cloud, #216) can skip it with a single `if:`.
+            - name: Assert this host can run the packaged simulator architecture
               shell: bash
+              env:
+                  IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
+                  RUNNER_LABELS_INPUT: test-runner-labels
               run: |
                   set -euo pipefail
-                  arch=$(uname -m)
-                  if [ "$arch" != 'arm64' ]; then
-                    echo "::error::Test runner architecture is '$arch', but the packaged Simulator app is arm64-only. Set test-runner-labels to an arm64 pool."
-                    exit 1
-                  fi
+                  host=$(uname -m)
+                  case "$IOS_SIMULATOR_ARCHS" in
+                    arm64)
+                      if [ "$host" != arm64 ]; then
+                        echo "::error::This runner is '$host', but the packaged Simulator app is arm64-only (ios-simulator-archs: arm64). Point $RUNNER_LABELS_INPUT at an arm64 macOS pool, or build an x86_64 slice with ios-simulator-archs: x86_64."
+                        exit 1
+                      fi
+                      echo "Host $host runs the arm64 Simulator app natively."
+                      ;;
+                    x86_64)
+                      case "$host" in
+                        x86_64)
+                          echo "Host $host runs the x86_64 Simulator app natively."
+                          ;;
+                        arm64)
+                          if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+                            echo "::error::The packaged Simulator app is x86_64 (ios-simulator-archs: x86_64) and this arm64 runner cannot execute x86_64 code: Rosetta 2 is not installed. Install it on the host with 'softwareupdate --install-rosetta --agree-to-license', or point $RUNNER_LABELS_INPUT at a pool that has it."
+                            exit 1
+                          fi
+                          echo "Host $host runs the x86_64 Simulator app under Rosetta 2."
+                          ;;
+                        *)
+                          echo "::error::This runner is '$host'. The x86_64 Simulator app ios-simulator-archs asks for runs only on an x86_64 macOS host, or an arm64 one with Rosetta 2. Point $RUNNER_LABELS_INPUT at such a pool."
+                          exit 1
+                          ;;
+                      esac
+                      ;;
+                    *)
+                      echo "::error::ios-simulator-archs must be 'arm64' or 'x86_64'; got '$IOS_SIMULATOR_ARCHS'."
+                      exit 1
+                      ;;
+                  esac
 
             - name: setup-xcode-pinned
               uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.0.0 # v4.0.0

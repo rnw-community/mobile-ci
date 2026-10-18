@@ -69,6 +69,14 @@ on:
                 type: string
                 required: false
                 default: ''
+            ios-simulator-archs:
+                description: >-
+                    `arm64` (default) or `x86_64`: the Simulator slice an ios base is
+                    built for. Folded into the native key by expo-native-key so the
+                    two never share a base. Ignored on android.
+                type: string
+                required: false
+                default: arm64
             base-backend:
                 type: string
                 required: false
@@ -383,6 +391,7 @@ jobs:
                   toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
                   fingerprint-config: ${{ inputs.fingerprint-config }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+                  ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
 
             - name: expo-base-binary (fetch)
               id: base

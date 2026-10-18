@@ -207,6 +207,14 @@ with:
     test-runner-labels: '["self-hosted","macos-maestro"]'
 ```
 
+**Rosetta 2 on arm64 test hosts for `ios-simulator-archs: x86_64`.** An app
+built as an x86_64 Simulator slice (because a native SDK ships no
+arm64-simulator slice) runs on an arm64 host's simulator only under Rosetta 2.
+Install it once per host with `softwareupdate --install-rosetta
+--agree-to-license`. The test and capture jobs probe it with
+`arch -x86_64 /usr/bin/true` and fail closed, before any simulator boots,
+when it is missing; an x86_64 macOS host needs nothing extra.
+
 **Pin `simulator-device` once the pool has more than one host.** Left empty,
 `run-maestro-ios`/`ios-maestro.yml`'s `simulator-device` boots the last
 available iPhone-family device by `xcrun simctl list devices available`

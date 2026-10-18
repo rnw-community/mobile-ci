@@ -16,6 +16,15 @@ on:
                 type: string
                 required: false
                 default: '["self-hosted","trf-linux-amd64-4x8"]'
+            ios-simulator-archs:
+                description: >-
+                    Architecture of the Simulator `.app` seed-ios builds and
+                    publishes: `arm64` (default) or `x86_64`, nothing else. Must
+                    match the e2e and screenshot workflows' ios-simulator-archs,
+                    or the warm-up publishes under a key no pull request looks up.
+                type: string
+                required: false
+                default: arm64
             ios-targets:
                 description: >-
                     JSON array of iOS build targets: {name, appDir, workspace, scheme, prebuildCommand}.
@@ -230,6 +239,7 @@ jobs:
             app-artifact-prefix: ios-base-app
             plan-artifact-prefix: ios-base-plan
             toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
+            ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -489,7 +499,7 @@ jobs:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
+                  arch: ${{ inputs.ios-simulator-archs }}
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ matrix.target.nativeKey }}
 
@@ -527,6 +537,8 @@ jobs:
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+                  archs: ${{ inputs.ios-simulator-archs }}
+                  excluded-archs: ${{ inputs.ios-simulator-archs == 'x86_64' && 'arm64' || 'x86_64' }}
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
@@ -543,7 +555,7 @@ jobs:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
                   profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
-                  arch: arm64
+                  arch: ${{ inputs.ios-simulator-archs }}
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
                   fingerprint: ${{ matrix.target.nativeKey }}
 

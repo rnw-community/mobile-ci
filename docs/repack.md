@@ -40,8 +40,15 @@ label or a strategy means the same thing in every pipeline.
 ## The native key is the correctness boundary
 
 ```
-key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash)>
+key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash[, ios-simulator-archs])>
 ```
+
+`ios-simulator-archs` enters the identity only when it is `x86_64`: an x86_64
+Simulator base and an arm64 one never share a key, while the default `arm64`
+hashes exactly what it hashed before the input existed, so no published base
+is orphaned. The repack itself is architecture-blind - it swaps the embedded
+JavaScript bundle and assets and rewrites the Info.plist, never the Mach-O
+executable - so an x86_64 base repacks the same way an arm64 one does.
 
 `toolchain` carries the target's own `workspace` and `scheme` as well, so two
 targets that share an app directory and a fingerprint but build different
