@@ -38,7 +38,8 @@ needing one is reported as a failure too — a skipped build is not a build.
 | ---------------------------- | -------- | ----------------------------------------- | -------------- |
 | `runner-labels`               | no       | `["self-hosted","macOS","ARM64"]`          | JSON array of self-hosted runner labels for the build/test jobs. |
 | `build-runner-labels`         | no       | `''`                                       | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
-| `test-runner-labels`          | no       | `''`                                       | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. |
+| `test-runner-labels`          | no       | `''`                                       | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. Must be a macOS pool that can run the `ios-simulator-archs` slice; the test job checks this before it boots a simulator. |
+| `ios-simulator-archs`         | no       | `arm64`                                    | Simulator slice the build produces: `arm64` or `x86_64`, anything else fails closed. `x86_64` is for apps whose native SDKs ship no arm64-simulator slice (ML Kit, for one): it builds with `ARCHS=x86_64 EXCLUDED_ARCHS=arm64`, gets its own native key, and the test job accepts an x86_64 macOS host or an arm64 one where `arch -x86_64 /usr/bin/true` succeeds (Rosetta 2 installed). Must match `seed-native-cache.yml`'s value, or the warm-up publishes under a key no pull request looks up. See [x86_64 simulator builds](#x86_64-simulator-builds). |
 | `targets`                     | **yes**  | —                                          | JSON array of build targets: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. |
 | `flows-dir`                   | **yes**  | —                                          | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
 | `flows-max-depth`             | no       | `1`                                        | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
@@ -355,6 +356,24 @@ own, together with
 `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`. Making
 only `cancel-in-progress` conditional is not enough: a group shared by
 default-branch pushes still lets a third pending run replace the second. The example below does both.
+
+## x86_64 simulator builds
+
+Some native SDKs (ML Kit, for one) ship no arm64-simulator slice, so the app
+only builds for an x86_64 Simulator. Set `ios-simulator-archs: x86_64` on
+this workflow **and** on `seed-native-cache.yml` (and `store-screenshots.yml`
+if you capture screenshots):
+
+- The build passes `archs: x86_64` and `excluded-archs: arm64` to
+  `build-ios-app`.
+- The native key gets an extra `ios-simulator-archs=x86_64` component, so the
+  x86_64 base is published and looked up under its own key. The default
+  `arm64` adds nothing to the key, so switching an app *back* to arm64 lands
+  on exactly the bases it published before.
+- The test job's host check accepts an x86_64 macOS runner, or an arm64 one
+  with Rosetta 2 installed (`softwareupdate --install-rosetta
+  --agree-to-license`); it fails closed otherwise, before a simulator boots.
+  The x86_64 app then runs on the arm64 host's simulator under Rosetta.
 
 ## Permissions
 

@@ -45,6 +45,7 @@ compose() {
         FINGERPRINT="$fingerprint" \
         BUILD_ACTION_HASH="$build_action_hash" \
         CONFIG_HASH="$config_hash" \
+        IOS_SIMULATOR_ARCHS=arm64 \
         "$@"
 }
 
@@ -172,6 +173,61 @@ if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'an unsupported platform was accepted'
 else
     assert_contains "$(cat "$dir/log")" "Unsupported platform 'windows'" 'error message' && pass_case
+fi
+
+# Captured from the compose step as it stood before ios-simulator-archs
+# existed (v4.0.0). Every base already published is addressed by a key
+# composed this way, so the default must keep reproducing it byte for byte.
+GOLDEN_IOS_KEY='abc123def456-2ff4aed6e7eb'
+GOLDEN_ANDROID_KEY='abc123def456-4a6473419d68'
+
+case_start 'the default arm64 simulator key is byte-identical to the pre-archs key'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=arm64
+ios_key="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+PLATFORM=android TOOLCHAIN=cmdline-12266719-assembleRelease \
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=arm64
+android_key="$(step_output "$dir" key)"
+if assert_equals "$GOLDEN_IOS_KEY" "$ios_key" "arm64 iOS key ($(cat "$dir/log"))" \
+    && assert_equals "$GOLDEN_ANDROID_KEY" "$android_key" 'Android key'; then
+    pass_case
+fi
+
+case_start 'an x86_64 simulator base never shares a key with the arm64 one'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=x86_64
+x86_key="$(step_output "$dir" key)"
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "x86_64 was rejected: $(cat "$dir/log")"
+elif [ "$x86_key" = "$GOLDEN_IOS_KEY" ]; then
+    fail_case "x86_64 and arm64 bases both resolve to '$x86_key', so a pull request can repack onto a binary its test host cannot run"
+else
+    case "$x86_key" in
+        "${FINGERPRINT}-"????????????) pass_case ;;
+        *) fail_case "key '$x86_key' is not <fingerprint>-<12 hex>" ;;
+    esac
+fi
+
+case_start 'ios-simulator-archs does not move an Android key'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+PLATFORM=android TOOLCHAIN=cmdline-12266719-assembleRelease \
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=x86_64
+if assert_equals "$GOLDEN_ANDROID_KEY" "$(step_output "$dir" key)" "Android key ($(cat "$dir/log"))"; then
+    pass_case
+fi
+
+case_start 'an ios-simulator-archs other than arm64 or x86_64 fails closed'
+rejected=''
+for archs in '' 'i386' 'arm64 x86_64' 'ARM64' 'x86_64,arm64'; do
+    dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS="$archs"
+    if [ "$STEP_STATUS" -eq 0 ] || ! grep -q "ios-simulator-archs" "$dir/log"; then
+        rejected="$rejected '$archs'"
+    fi
+done
+if assert_equals '' "$rejected" 'values accepted or rejected without naming the input'; then
+    pass_case
 fi
 
 finish_suite

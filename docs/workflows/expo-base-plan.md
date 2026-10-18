@@ -49,6 +49,7 @@ key and the address that is empty.
 | `app-artifact-prefix` | string | yes | — | Artifact-name prefix the caller's test/capture job downloads the app under. |
 | `plan-artifact-prefix` | string | yes | — | Artifact-name prefix for the per-target plan files. |
 | `toolchain` | string | no | `''` | Pinned toolchain identity folded into the key — `xcode-<version>-<build>` on ios, `cmdline-<version>` on android. |
+| `ios-simulator-archs` | string | no | `arm64` | `arm64` or `x86_64`: the Simulator slice an ios base is built for. Folded into the native key by `expo-native-key` (only when `x86_64`, so arm64 keys are unchanged). Ignored on android. |
 | `base-backend` | string | no | `ghcr` | `ghcr` or `artifact`. |
 | `base-flavor` | string | no | `e2e` | Flavor segment of the base's address. |
 | `fingerprint-config` | string | no | `fingerprint.config.js` | Path, relative to a target's `appDir`, of the fingerprint config whose hash enters the key. |

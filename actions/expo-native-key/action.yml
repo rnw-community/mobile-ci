@@ -40,6 +40,15 @@ inputs:
       toolchain gets a different key instead of being repacked onto.
     required: false
     default: ''
+  ios-simulator-archs:
+    description: >-
+      Architecture of the iOS Simulator `.app` the base is built for - `arm64`
+      or `x86_64`, nothing else. `x86_64` is folded into the key so an x86_64
+      base and an arm64 base never share an address; `arm64` adds nothing,
+      keeping every key published before this input existed. Ignored on
+      android beyond validation.
+    required: false
+    default: arm64
   fingerprint-config:
     description: >-
       Path, relative to working-directory, of the @expo/fingerprint config
@@ -161,8 +170,16 @@ runs:
         FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
         BUILD_ACTION_HASH: ${{ steps.build-identity.outputs.build-action-hash }}
         CONFIG_HASH: ${{ steps.build-identity.outputs.config-hash }}
+        IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
       run: |
         set -euo pipefail
+        case "$IOS_SIMULATOR_ARCHS" in
+          arm64|x86_64) ;;
+          *)
+            echo "::error::ios-simulator-archs must be 'arm64' or 'x86_64'; got '$IOS_SIMULATOR_ARCHS'. A universal or unknown simulator slice has no single host that is guaranteed to run it, so no key is composed for it."
+            exit 1
+            ;;
+        esac
         if [ -z "$FINGERPRINT" ]; then
           echo "::error::@expo/fingerprint produced an empty hash; a base binary must never be published or fetched under an empty key."
           exit 1
@@ -179,7 +196,11 @@ runs:
           fi
         }
 
-        identity=$(printf '%s\n' "$PLATFORM" "$FLAVOR" "$TOOLCHAIN" "$BUILD_ACTION_HASH" "$CONFIG_HASH" | sha256_stdin)
+        identity_lines=("$PLATFORM" "$FLAVOR" "$TOOLCHAIN" "$BUILD_ACTION_HASH" "$CONFIG_HASH")
+        if [ "$PLATFORM" = ios ] && [ "$IOS_SIMULATOR_ARCHS" != arm64 ]; then
+          identity_lines+=("ios-simulator-archs=$IOS_SIMULATOR_ARCHS")
+        fi
+        identity=$(printf '%s\n' "${identity_lines[@]}" | sha256_stdin)
         if [ -z "$identity" ]; then
           echo "::error::The build identity came out empty."
           exit 1
@@ -187,5 +208,9 @@ runs:
 
         key="${FINGERPRINT}-$(printf '%s' "$identity" | cut -c1-12)"
         echo "key=$key" >> "$GITHUB_OUTPUT"
-        echo "Native key ($PLATFORM/$FLAVOR): $key"
+        if [ "$PLATFORM" = ios ]; then
+          echo "Native key ($PLATFORM/$FLAVOR/$IOS_SIMULATOR_ARCHS): $key"
+        else
+          echo "Native key ($PLATFORM/$FLAVOR): $key"
+        fi
         echo "  fingerprint=$FINGERPRINT toolchain=${TOOLCHAIN:-none} build-action=$BUILD_ACTION_HASH config=$CONFIG_HASH"
