@@ -141,6 +141,37 @@ asserted at repack time". Keep the file small enough that each claim can be
 defended, and remember that changing it changes the key — which is exactly what
 you want, and why the file's hash is in there.
 
+### Targets that differ only in brand assets or per-target config
+
+The target name is not part of the key. Two white-label targets whose native
+config differs only in something the fingerprint does not see (brand icons and
+splash images referenced from outside `app.config`, a per-brand
+`google-services.json`, a per-target config file read by a config plugin)
+resolve to the **same key**, so they share one base and the repack ships one
+brand's binary for the other. `expo-base-plan.yml` therefore fails closed when
+two targets with different `appId` get the same key, naming both targets, the
+key and the sources they share; `assert-distinct-fingerprints.yml` runs the same
+check ahead of a release pipeline. Targets with the same `appId` sharing a key
+are a legitimate dedupe and pass.
+
+The fix is to make the fingerprint see the difference with `extraSources` in
+`fingerprint.config.js` - do not add the target name to the key, which would
+double native builds for binaries that really are identical:
+
+```js
+const brand = process.env.APP_BRAND ?? 'default';
+
+module.exports = {
+    extraSources: [
+        { type: 'dir', filePath: `assets/brands/${brand}`, reasons: ['brand-assets'] },
+        { type: 'file', filePath: `config/${brand}/google-services.json`, reasons: ['brand-config'] },
+    ],
+};
+```
+
+`APP_BRAND` must be in the workflow's `fingerprint-env` and `build-env` alike,
+so the key is computed under the env the build sees.
+
 ## The base binary
 
 `expo-base-binary` addresses a base as
