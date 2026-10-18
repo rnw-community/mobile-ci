@@ -3,6 +3,26 @@ name: assert-distinct-fingerprints
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (assert)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             platform:
                 description: ios or android.
                 type: string
@@ -71,6 +91,11 @@ jobs:
             matrix:
                 target: ${{ fromJSON(inputs.targets) }}
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -148,9 +173,14 @@ jobs:
         name: No two appIds share a native key
         needs: key
         if: ${{ !cancelled() && needs.key.result == 'success' }}
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         timeout-minutes: 10
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   pattern: distinct-keys-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}-*
