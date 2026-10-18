@@ -67,9 +67,13 @@ folded in beside it:
 - **the pinned toolchain and everything that changes what it produces** — the
   Xcode version and build with `rct-use-prebuilt-rncore`, `rct-use-rn-dep` and
   `expo-use-precompiled-modules` on ios, the cmdline-tools version with
-  `gradle-task` and `gradle-args` on android — so neither a toolchain bump nor
-  a flipped switch nor a changed Gradle task can leave a base reachable that
-  was built the other way;
+  `gradle-task`, `gradle-args` and the resolved `android-abis` on android — so
+  neither a toolchain bump nor a flipped switch nor a changed Gradle task nor
+  another ABI can leave a base reachable that was built the other way. The
+  e2e workflow and the warm-up must therefore resolve the same ABIs:
+  `android-maestro.yml`'s `android-abis: auto` follows the driver (`x86_64` for
+  `avd`, `arm64-v8a` for `redroid`), `seed-native-cache.yml`'s is `x86_64`, so
+  a `redroid` pipeline passes `android-abis: arm64-v8a` to the warm-up;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
   invalidates every base published while it was in force.
 
@@ -377,9 +381,11 @@ jobs:
 ```
 
 It plans on Linux first: one job per target computes the key and asks whether a
-base already exists for it. Only the targets with no base reach a Mac or a
-Gradle build at all, so a push that changes no native surface costs Linux
-minutes and nothing else.
+base already exists for it, and one job asks the Actions cache API whether each
+iOS target's ccache and CocoaPods caches are still restorable. Only the targets
+with no base, or with evicted iOS compile caches, reach a Mac or a Gradle build
+at all, so a push that changes no native surface costs Linux minutes and
+nothing else.
 
 `force-base: true` rebuilds and re-publishes every target's base. That is the
 answer to the two things the key cannot see — an ignored package that changed

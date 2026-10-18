@@ -26,7 +26,19 @@ pool by default):
    [`expo-repack`](../../actions/expo-repack) repacks it and uploads it as
    `<app-artifact-prefix>-<target name>` — the artifact the caller's test or
    capture job already downloads;
-5. records the target's decision as `<plan-artifact-prefix>-<target name>`.
+5. records the target's decision as `<plan-artifact-prefix>-<target name>`:
+   it needs a native build when no base was found, or when the target carries
+   `"forceNative": true` (the warm-up sets it on an iOS target whose compile
+   caches were evicted). Only a caller with `repack: false` may set
+   `forceNative`; a repacking caller that does fails the job, because a
+   repacked target already has the binary its jobs consume.
+
+On android, the repack's Android SDK (`platform-tools` and
+`build-tools;<android-build-tools-version>`) is restored from the Actions cache
+first, keyed like [`build-android-app`'s](../../actions/build-android-app#android-sdk-cache);
+a hit runs no `sdkmanager` and downloads nothing. The cache is saved by the
+job's last step, never on `pull_request`, with `continue-on-error` and a
+10-minute `timeout-minutes`.
 
 The collecting job also fails closed when two targets with different `appId`
 resolve to the same native key (same-`appId` targets sharing a key are a
@@ -49,7 +61,7 @@ key and the address that is empty.
 | Name | Type | Required | Default | Description |
 | ---- | ---- | -------- | ------- | ----------- |
 | `platform` | string | yes | — | `ios` or `android`. |
-| `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. |
+| `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. A target with `"forceNative": true` is handed to the native build even when its base exists; only a caller with `repack: false` may set it. |
 | `build-strategy` | string | no | `auto` | `auto`, `repack` or `native`. Resolved by the caller, never here. |
 | `repack` | boolean | no | `true` | Repack the base when one is found. The warm-up sets it false: it is looking for a key with no base, not producing this commit's binary. |
 | `runner-labels` | string | no | `'["self-hosted","trf-linux-amd64-2x4"]'` | JSON array of runner labels for the plan jobs. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
@@ -86,7 +98,7 @@ key and the address that is empty.
 
 | Name | Description |
 | ---- | ----------- |
-| `native-targets` | JSON array of the targets whose native key has no published base, each carrying its `nativeKey`. `[]` means no expensive runner has to be claimed at all. |
+| `native-targets` | JSON array of the targets whose native key has no published base, or that set `forceNative`, each carrying its `nativeKey`. `[]` means no expensive runner has to be claimed at all. |
 
 ## Secrets
 

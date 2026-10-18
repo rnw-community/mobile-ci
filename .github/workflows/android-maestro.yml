@@ -321,6 +321,19 @@ on:
                 type: string
                 required: false
                 default: avd
+            android-abis:
+                description: >-
+                    Comma-separated ABIs the native build compiles, passed to Gradle
+                    as -PreactNativeArchitectures. 'auto' (default) follows the
+                    test device: emulator-arch (x86_64) for android-driver avd,
+                    arm64-v8a for redroid; when gradle-args or build-env already
+                    pins reactNativeArchitectures, auto leaves it to that pin.
+                    Empty compiles the project's own reactNativeArchitectures
+                    (every ABI in a stock project). Part of the native key, so
+                    seed-native-cache.yml must resolve to the same ABIs.
+                type: string
+                required: false
+                default: auto
             emulator-api-level:
                 type: string
                 required: false
@@ -616,6 +629,8 @@ jobs:
             affected: ${{ steps.affected.outputs.affected }}
             shard-indices: ${{ steps.shard-indices.outputs.indices }}
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
+            android-abis: ${{ steps.android-abis.outputs.abis }}
+            android-abi-key: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -662,6 +677,94 @@ jobs:
                   fi
                   indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
                   echo "indices=$indices" >> "$GITHUB_OUTPUT"
+
+            - name: Resolve the Android ABIs
+              id: android-abis
+              shell: bash
+              env:
+                  ANDROID_ABIS: ${{ inputs.android-abis }}
+                  ANDROID_DRIVER: ${{ inputs.android-driver }}
+                  EMULATOR_ARCH: ${{ inputs.emulator-arch }}
+                  GRADLE_ARGS: ${{ inputs.gradle-args }}
+                  BUILD_ENV: ${{ inputs.build-env }}
+              run: |
+                  set -euo pipefail
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+
+                  pinned=''
+                  pinned_by=''
+                  pin() {
+                    if [ -n "$pinned" ] && [ "$pinned" != "$1" ]; then
+                      fail "reactNativeArchitectures is pinned to '$pinned' by $pinned_by and to '$1' by $2. Gradle would build one set of ABIs while the native key describes another; pin it once."
+                    fi
+                    pinned="$1"
+                    pinned_by="$2"
+                  }
+
+                  normalized_gradle_args="${GRADLE_ARGS//$'\n'/ }"
+                  normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
+                  read -r -a gradle_args <<< "$normalized_gradle_args"
+                  for arg in ${gradle_args[@]+"${gradle_args[@]}"}; do
+                    case "$arg" in
+                      -PreactNativeArchitectures=*) pin "${arg#*=}" gradle-args ;;
+                    esac
+                  done
+                  while IFS= read -r line; do
+                    case "$line" in
+                      ORG_GRADLE_PROJECT_reactNativeArchitectures=*) pin "${line#*=}" build-env ;;
+                    esac
+                  done <<< "$BUILD_ENV"
+
+                  case "$ANDROID_ABIS" in
+                    auto)
+                      if [ -n "$pinned" ]; then
+                        abis=''
+                        echo "android-abis is auto and $pinned_by already pins reactNativeArchitectures to '$pinned'; it is left to $pinned_by."
+                      else
+                        case "$ANDROID_DRIVER" in
+                          avd) abis="$EMULATOR_ARCH" ;;
+                          redroid) abis=arm64-v8a ;;
+                          *) fail "android-abis is auto but android-driver '$ANDROID_DRIVER' is neither 'avd' nor 'redroid', so no ABI follows from it. Set android-abis explicitly." ;;
+                        esac
+                      fi
+                      ;;
+                    '')
+                      abis=''
+                      ;;
+                    *)
+                      abis="$ANDROID_ABIS"
+                      if [ -n "$pinned" ] && [ "$pinned" != "$abis" ]; then
+                        fail "android-abis is '$abis' but $pinned_by pins reactNativeArchitectures to '$pinned'. Gradle would build one set of ABIs while the native key describes another; drop one of the two."
+                      fi
+                      ;;
+                  esac
+
+                  if [ -n "$abis" ]; then
+                    IFS=, read -r -a abi_list <<< "$abis"
+                    case "$abis" in
+                      ,*|*,|*,,*) abi_list=('') ;;
+                    esac
+                    for abi in "${abi_list[@]}"; do
+                      case "$abi" in
+                        armeabi-v7a|arm64-v8a|x86|x86_64) ;;
+                        *) fail "android-abis resolved to '$abis', which is not a comma-separated list of armeabi-v7a, arm64-v8a, x86 and x86_64 without spaces." ;;
+                      esac
+                    done
+                  fi
+
+                  built="${abis:-$pinned}"
+                  key_segment=''
+                  if [ -n "$built" ]; then
+                    key_segment="-abi-$built"
+                  fi
+                  echo "Android ABIs: ${built:-every ABI the project declares}"
+                  {
+                    echo "abis=$abis"
+                    echo "key-segment=$key_segment"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Resolve the build strategy
               id: build-strategy
@@ -722,7 +825,7 @@ jobs:
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
             app-artifact-prefix: android-e2e-app
             plan-artifact-prefix: android-e2e-plan
-            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+            toolchain: cmdline-${{ inputs.cmdline-tools-version }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}${{ needs.detect.outputs.android-abi-key }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -955,6 +1058,8 @@ jobs:
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   gradle-task: ${{ inputs.gradle-task }}
                   gradle-args: ${{ inputs.gradle-args }}
+                  android-abis: ${{ needs.detect.outputs.android-abis }}
+                  android-sdk-cache-save: 'false'
                   output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
                   gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
@@ -988,6 +1093,15 @@ jobs:
               run: |
                   echo "### Android ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Pull requests on this native surface now repack instead of running Gradle.' >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Save the Android SDK
+              if: github.event_name != 'pull_request' && steps.build.outcome == 'success' && steps.build.outputs.android-sdk-cache-hit != 'true'
+              continue-on-error: true
+              timeout-minutes: 10
+              uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+              with:
+                  path: ${{ steps.build.outputs.android-sdk-cache-paths }}
+                  key: ${{ steps.build.outputs.android-sdk-cache-key }}
 
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
