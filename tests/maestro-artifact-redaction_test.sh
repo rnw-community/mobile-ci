@@ -79,6 +79,27 @@ assert_equals 0 "$STEP_STATUS" 'exit status' \
     && assert_equals '*** and axb' "$(cat "$artifacts/maestro.log")" 'maestro.log' \
     && pass_case
 
+case_start 'a multi-line value is redacted line by line, wherever its lines land'
+dir="$(new_workspace "$ACTION" "$STEP")"
+artifacts="$dir/work/artifacts"
+mkdir -p "$artifacts"
+printf 'first: line-one-secret\nlater: line-two-secret\n' > "$artifacts/maestro.log"
+run_step "$dir" ARTIFACTS_DIR="$artifacts" REDACT_ENV_NAMES='PEM' PEM=$'line-one-secret\nline-two-secret'
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_equals $'first: ***\nlater: ***' "$(cat "$artifacts/maestro.log")" 'maestro.log' \
+    && pass_case
+
+case_start 'a failed rewrite deletes the artifacts instead of uploading them half-redacted'
+dir="$(new_workspace "$ACTION" "$STEP")"
+artifacts="$dir/work/artifacts"
+mkdir -p "$artifacts"
+printf 'token=tok-9\n' > "$artifacts/maestro.log"
+stub "$dir" perl 'exit 13'
+run_step "$dir" ARTIFACTS_DIR="$artifacts" REDACT_ENV_NAMES='API_TOKEN' API_TOKEN='tok-9'
+assert_equals 1 "$STEP_STATUS" 'exit status' \
+    && assert_equals 'absent' "$([ -e "$artifacts" ] && echo present || echo absent)" 'artifacts dir' \
+    && pass_case
+
 case_start 'a bad name fails closed and leaves nothing to upload'
 dir="$(new_workspace "$ACTION" "$STEP")"
 artifacts="$dir/work/artifacts"

@@ -1066,12 +1066,19 @@ runs:
           esac
           value="$(printenv "$name" || true)"
           [ -n "$value" ] || continue
-          while IFS= read -r -d '' file; do
-            if grep -qIF -- "$value" "$file"; then
-              REDACT_VALUE="$value" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"
-              redacted=$((redacted + 1))
-            fi
-          done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          while IFS= read -r value_line || [ -n "$value_line" ]; do
+            [ -n "$value_line" ] || continue
+            while IFS= read -r -d '' file; do
+              if grep -qIF -- "$value_line" "$file"; then
+                if ! REDACT_VALUE="$value_line" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"; then
+                  echo "::error::Redacting '$name' from an artifact file failed; removing the artifacts rather than upload them unredacted."
+                  rm -rf "$ARTIFACTS_DIR"
+                  exit 1
+                fi
+                redacted=$((redacted + 1))
+              fi
+            done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          done <<< "$value"
         done
         echo "Redacted secret values from ${redacted} artifact file(s)."
 

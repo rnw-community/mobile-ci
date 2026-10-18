@@ -4,8 +4,8 @@ description: >-
   ::add-mask:: before anything else can print it, and exports them to the job
   through $GITHUB_ENV with a random delimiter no value can collide with. Fails
   closed on a malformed entry without echoing it. Emits a SHA-256 digest of the
-  entries for anything that must change when a value rotates, and never the
-  values themselves.
+  entries for anything that must change when a value rotates; only the
+  job-local lines output (allow-multiline false) carries values.
 inputs:
   env:
     description: >-

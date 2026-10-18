@@ -159,7 +159,7 @@ suite runner; set `junit-report: false` to keep the previous single-flow path.
 | `artifacts-dir`      | yes      | —             | Directory final-state capture (screenshot, `logcat-full.txt`, `logcat-crash.txt`, `logcat-events.txt`) and the per-failed-attempt `logcat-events/<flow>-attempt-<n>.txt` are written to. |
 | `artifact-name`      | yes      | —             | Uploaded artifact name.                                               |
 | `retention-days`     | no       | `7`           | Uploaded artifact retention in days.                                   |
-| `redact-env-names` | no | `''` | Newline- or space-separated names of job environment variables (`apply-secret-env`'s `names`) whose values are replaced with `***` in every text file under `artifacts-dir` before upload — so a secret a flow typed never survives in `maestro.log`, a commands JSON or a logcat. Runs on failure too; a bad name or a host without `perl` deletes the artifacts and fails rather than upload them unredacted. |
+| `redact-env-names` | no | `''` | Newline- or space-separated names of job environment variables (`apply-secret-env`'s `names`) whose values are replaced with `***` in every text file under `artifacts-dir` before upload — so a secret a flow typed never survives in `maestro.log`, a commands JSON or a logcat. A multi-line value is redacted line by line. Runs on failure too; a bad name, a host without `perl` or a failed rewrite deletes the artifacts and fails rather than upload them unredacted. |
 
 ## ActivityManager startSeq race
 
