@@ -53,7 +53,9 @@ prefix (`<prefix>-<app-scope>-`) and ordered by last update, and never deletes a
 release updated within the grace window. To delete a pull request's previews
 when it closes, pass the same prefix to
 [`pr-closed-cleanup-reusable.yml`](pr-closed-cleanup-reusable.md)'s
-`ota-preview-release-tag-prefix`. Assets are hash-named and immutable;
+`ota-preview-release-tag-prefix`, and call
+[`preview-sweep-reusable.yml`](preview-sweep-reusable.md) on a schedule to
+catch the ones a cleanup missed. Assets are hash-named and immutable;
 the manifest referenced by the comment is the one published with that commit.
 
 When `public-base-url` is empty the workflow publishes to GitHub Releases and
