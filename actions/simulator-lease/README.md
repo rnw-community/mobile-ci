@@ -42,7 +42,7 @@ applies on a developer's Mac, so a local run reproduces the CI simulator.
 
 **One boot, already slim.** simslim keeps a device's disable overrides on the
 host, in a store keyed by the device's UDID that `launchd_sim` reads when the
-device starts ([simslim `disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)).
+device starts ([simslim `disabled_store.go`](https://github.com/MobAI-App/simslim/blob/v0.12.2/disabled_store.go)).
 So with `slim-profile` set and `slim-repair: true` (both defaults), `acquire`
 creates the device and leaves it **shut down**, and the slim step runs
 `simslim on --profile` against it: simslim writes the overrides offline and

@@ -354,7 +354,7 @@ is needed, and nothing is left behind on the host.
 
 **Raw clones do not carry slimming.** simslim keeps the overrides on the host in
 a store keyed by the device's UDID
-([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)),
+([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/v0.12.2/disabled_store.go)),
 not inside the device, so `xcrun simctl clone` of a slimmed template produces a
 **stock** clone with a new UDID
 ([#161](https://github.com/rnw-community/mobile-ci/issues/161)). The same holds
