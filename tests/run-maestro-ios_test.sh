@@ -8,6 +8,8 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 # shellcheck source=tests/lib/exclude-pattern-cases.sh
 . "$REPO_ROOT/tests/lib/exclude-pattern-cases.sh"
+# shellcheck source=tests/lib/maestro-tag-junit-cases.sh
+. "$REPO_ROOT/tests/lib/maestro-tag-junit-cases.sh"
 
 ACTION="$REPO_ROOT/actions/run-maestro-ios/action.yml"
 SHARD_STEP='Run Maestro shard'
@@ -36,7 +38,7 @@ invoke_shard() {
         FLOWS_NAME_PATTERN='*.flow.yaml' FLOWS_EXCLUDE_PATTERN='' SHARD_MANIFEST_DIR='' \
         SHARD_INDEX=0 SHARD_COUNT=1 PRE_RUN_FLOW=flows/prime.yaml \
         FLOW_RECOVERY_FLOW=flows/recover.yaml FLOW_RETRIES=1 PRE_FLOW_COMMAND='' \
-        MAESTRO_ENV='' MAESTRO_CONFIG='' \
+        MAESTRO_ENV='' MAESTRO_CONFIG='' INCLUDE_TAGS='' EXCLUDE_TAGS='' JUNIT_REPORT=false MAESTRO_SCRIPTS_DIR="$REPO_ROOT/scripts/maestro" \
         "$@"
 }
 
@@ -178,5 +180,22 @@ invoke_exclude() {
 }
 
 run_exclude_pattern_cases flow
+
+prepare_tagged() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$SHARD_STEP")"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"; case "$*" in *fail.flow.yaml*) exit 1 ;; esac'
+    printf '%s\n' "$dir"
+}
+
+invoke_tagged() {
+    local dir="$1"
+    shift
+    invoke_shard "$dir" MAESTRO_REUSE_DRIVER=false PRE_RUN_FLOW='' FLOW_RECOVERY_FLOW='' FLOW_RETRIES=0 \
+        JUNIT_REPORT=true MAESTRO_DEBUG_OUTPUT_DIRECTORY="$dir/artifacts" "$@"
+}
+
+run_maestro_tag_junit_cases
 
 finish_suite

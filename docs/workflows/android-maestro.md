@@ -73,7 +73,11 @@ major release.
 | `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
 | `pre-flow-command`              | no       | `''`                                               | Consumer-owned shell command run **before every flow attempt**, each retry included, after `pre-run-flow` and the warm-up. Never run before `pre-run-flow` or `flow-recovery-flow` themselves. Runs with `FLOW_PATH`, `FLOW_NAME`, `APP_ID`, `ANDROID_SERIAL` and `MAESTRO_FLOW_ENV_FILE` in its environment. Unlike the best-effort `flow-recovery-flow` it is a **precondition**: a non-zero exit fails that attempt without running the flow, consuming one of its `1 + flow-retries` attempts and triggering the recovery flow like any other failed attempt. Every `KEY=VALUE` line it appends to `$MAESTRO_FLOW_ENV_FILE` becomes an extra `-e KEY=VALUE` argument for that one flow's `maestro test` — see [Per-flow preconditions](#per-flow-preconditions). Passed to both `android-driver` options. |
 | `maestro-env`                   | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. Passed to both `android-driver` options. |
-| `maestro-config`                | no       | `''`                                               | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both `android-driver` options. |
+| `maestro-config`                | no       | `''`                                               | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Its `includeTags`/`excludeTags` are honoured when the shard is planned — see [Tag selection](#tag-selection). Passed to both `android-driver` options. |
+| `include-tags` | no | `''` | Comma-separated Maestro tags; only flows whose config section's `tags:` holds any of them run. Applied when the shard is planned (exclude wins), added to `maestro-config`'s `includeTags`, and passed to `maestro test`. Fails closed on an unparsable flow config section or an empty selection — see [Tag selection](#tag-selection). |
+| `exclude-tags` | no | `''` | Comma-separated Maestro tags; flows holding any of them never run, even when `include-tags` selects them. Added to `maestro-config`'s `excludeTags` — see [Tag selection](#tag-selection). |
+| `junit-report` | no | `true` | `true` writes each flow's final-attempt JUnit report (`maestro test --format junit`) to `junit/<flow>.xml` inside the shard's existing Maestro artifact; `false` writes none — see [JUnit reports](#junit-reports). |
+| `artifact-retention-days` | no | `7` | Retention in days of each shard's Maestro artifact (debug output, final-state capture, JUnit reports), passed to the `run-maestro-*` action's `retention-days`. |
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `infra-retries`                 | no       | `1`                                                | Per-flow retry budget, separate from `flow-retries`, spent only on a failed attempt that hit ActivityManager's `startProcessLocked ... with non-zero startSeq` race (no app process started after a `clearState` relaunch); retried with a `::warning::` even when `flow-retries` is `0`. `avd` driver only — see [run-maestro-android](../../actions/run-maestro-android/README.md#activitymanager-startseq-race). |
 | `settle-before-flow`            | no       | `true`                                             | `true` force-stops the app and waits up to 5 s for its process to be gone before every flow attempt, which removes that race; app data is untouched. `avd` driver only. |
@@ -406,6 +410,53 @@ Maestro snapshots never contains it and every selector inside the sheet times
 out at its assertion budget. The fix is one workspace-config key —
 `platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
 `--config` actually reaches the CLI.
+
+## Tag selection
+
+`include-tags` / `exclude-tags` select flows by the `tags:` list in each flow's
+config section (the YAML document before the first `---`; block `- smoke` and
+inline `[smoke, checkout]` lists both work), with Maestro's own semantics:
+
+- a flow runs when `include-tags` is empty **or** it carries **any** listed tag;
+- a flow carrying **any** `exclude-tags` tag never runs — exclude wins;
+- both are comma-separated, entries trimmed, empty entries ignored.
+
+Maestro applies tags only when it plans a **directory**; handed a single flow
+file it ignores them, and the `run-maestro-*` actions every shard runs always hand it single files. So the selection
+happens when the shard is planned, before the index-modulo split or
+`shard-manifest-dir` assignment, and every shard computes the same list. The
+inputs are also passed to each flow's `maestro test` as `--include-tags` /
+`--exclude-tags`, which is a no-op for a single file today.
+
+`maestro-config`'s `includeTags` / `excludeTags` are honoured too, with no
+input set: they are added to `include-tags` / `exclude-tags` exactly as `maestro
+test <dir> --include-tags …` adds them, so a workspace config that already
+excludes `android-only` keeps doing so here. Before this, those keys were
+silently ignored.
+
+The tags are read by Maestro's own YAML parser: `scripts/maestro/MaestroTagSelection.java`
+runs on the Java source launcher with the `lib/` jars of the `maestro` CLI the
+job installed, so the runner needs nothing beyond the **JDK** Maestro already
+runs on (a bare JRE cannot launch a source file). Selection fails the step,
+rather than running an unfiltered shard, when the config section of any
+discovered flow does not parse or its `tags:` is not a list, when the YAML
+reader cannot run, or when no flow is left. A `shard-manifest-dir` entry naming
+a flow the tags deselected is skipped with a log line, not rejected. None of
+this runs — no JVM is started — when neither input is set and `maestro-config`
+does not mention `includeTags`/`excludeTags`.
+
+## JUnit reports
+
+With `junit-report: true` (the default) every flow's `maestro test` also gets
+`--format junit --output <artifacts-dir>/junit/<flow>.xml`, so the shard's
+existing artifact (same name as before) carries one JUnit file per flow, for
+test-summary tooling such as `mikepenz/action-junit-report` with
+`report_paths: '**/junit/*.xml'`. A retried flow keeps only its final attempt's
+report. A flow whose final attempt produced no report (its `pre-flow-command`
+failed, or Maestro died before reporting) gets a one-case JUnit failure in its
+place, so no failed flow is missing. `pre-run-flow` and `flow-recovery-flow`
+write none. `--format junit` makes Maestro run the single flow through its
+suite runner; set `junit-report: false` to keep the previous single-flow path.
 
 ## Debug artifacts
 

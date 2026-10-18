@@ -127,9 +127,37 @@ inputs:
       directory, and this action always passes individual flow files, so
       without this input a workspace config is silently ignored. Relative
       paths resolve against the job's working directory. Fails closed when
-      set to a path that is not a file. Leave empty to pass no --config.
+      set to a path that is not a file. Its includeTags/excludeTags are
+      honoured when the shard is planned (see include-tags). Leave empty to
+      pass no --config.
     required: false
     default: ''
+  include-tags:
+    description: >-
+      Comma-separated Maestro tags: only flows whose config section's `tags:`
+      list holds any of them are run. Applied when the shard is planned,
+      with Maestro's own semantics (exclude-tags wins), and also passed to
+      every flow's `maestro test` as --include-tags. Added to the
+      includeTags of maestro-config, as `maestro test <dir>` does. An
+      unparsable flow config section, or a selection left with no flow,
+      fails the step. Leave empty to select by maestro-config alone.
+    required: false
+    default: ''
+  exclude-tags:
+    description: >-
+      Comma-separated Maestro tags: flows whose `tags:` list holds any of
+      them are never run, even when include-tags selects them. Added to
+      the excludeTags of maestro-config. See include-tags.
+    required: false
+    default: ''
+  junit-report:
+    description: >-
+      When 'true', every flow's final attempt writes a JUnit report
+      (`maestro test --format junit`) to junit/ in artifacts-dir, one file
+      per flow, so the shard's artifact carries its test results. 'false'
+      writes none.
+    required: false
+    default: 'true'
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -441,6 +469,10 @@ runs:
           SETTLE_BEFORE_FLOW: ${{ inputs.settle-before-flow }}
           ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
           PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
+          INCLUDE_TAGS: ${{ inputs.include-tags }}
+          EXCLUDE_TAGS: ${{ inputs.exclude-tags }}
+          JUNIT_REPORT: ${{ inputs.junit-report }}
+          MAESTRO_SCRIPTS_DIR: ${{ github.action_path }}/../../scripts/maestro
       run: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
     - name: Capture final device state
