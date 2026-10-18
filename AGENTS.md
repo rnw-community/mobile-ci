@@ -208,7 +208,10 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   deep-link/flow scene manifest with a per-cell seed hook
   (`capture-mode: direct`, required for Android), with a gated fastlane
   upload job and optional App Store slot-resolution validation.
-- `pr-closed-cleanup-reusable.yml` — cancels zombie runs on a closed PR's branch.
+- `pr-closed-cleanup-reusable.yml` — cancels zombie runs on a closed PR's branch,
+  and opt-in deletes its OTA previews once those runs have stopped.
+- `preview-sweep-reusable.yml` — scheduled, dry-run-by-default sweep of OTA
+  preview releases of closed PRs and of stale branch previews.
 
 Full input/secret/permission tables and a copy-pasteable example live in
 `docs/workflows/<name>.md` for each workflow above — read the doc for the
@@ -233,7 +236,8 @@ auto-discovered or run standalone by the sharding logic.
 ### Secrets
 
 - `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
-  `pr-closed-cleanup-reusable.yml`, `expo-fingerprint-guard.yml` need **no
+  `pr-closed-cleanup-reusable.yml`, `preview-sweep-reusable.yml`,
+  `expo-fingerprint-guard.yml` need **no
   secrets at all** — no
   `EXPO_TOKEN`, no signing credentials.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):

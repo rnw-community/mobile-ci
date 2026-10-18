@@ -29,6 +29,18 @@ on:
                 type: string
                 required: false
                 default: '["ubuntu-latest"]'
+            wait-for-runs-timeout-minutes:
+                description: >-
+                    With ota-preview-release-tag-prefix set, how long to wait after cancelling for every
+                    run of the closed pull request to stop before deleting its previews. A run still
+                    active at the deadline fails the cleanup and nothing is deleted; 0 checks once.
+                type: number
+                required: false
+                default: 10
+
+concurrency:
+    group: pr-closed-cleanup-${{ github.repository }}-${{ github.event.pull_request.number }}
+    cancel-in-progress: false
 
 jobs:
     cancel-queued-runs:
@@ -88,8 +100,84 @@ jobs:
                       done
                     done
 
+            -   name: Wait for the closed PR's runs to stop
+                if: inputs.ota-preview-release-tag-prefix != '' && github.event.pull_request.head.repo.full_name == github.repository
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+                    CURRENT_RUN_ID: ${{ github.run_id }}
+                    PR_NUMBER: ${{ github.event.pull_request.number }}
+                    REPOSITORY: ${{ github.repository }}
+                    WAIT_TIMEOUT_MINUTES: ${{ inputs.wait-for-runs-timeout-minutes }}
+                    POLL_INTERVAL_SECONDS: '15'
+                run: |
+                    set -euo pipefail
+                    case "$WAIT_TIMEOUT_MINUTES" in
+                      ''|*[!0-9]*)
+                        echo "::error::wait-for-runs-timeout-minutes must be a whole number of minutes; got '${WAIT_TIMEOUT_MINUTES}'."
+                        exit 1
+                        ;;
+                    esac
+                    case "$PR_NUMBER" in
+                      ''|*[!0-9]*)
+                        echo "::error::No pull request number in the event; call this workflow from a 'pull_request: types: [closed]' trigger."
+                        exit 1
+                        ;;
+                    esac
+
+                    deadline=$(( $(date +%s) + WAIT_TIMEOUT_MINUTES * 60 ))
+                    while :; do
+                      active=''
+                      for status in queued in_progress waiting requested pending; do
+                        page=1
+                        while :; do
+                          if ! response=$(gh api --method GET \
+                            "repos/${REPOSITORY}/actions/runs" \
+                            -f "branch=${HEAD_BRANCH}" \
+                            -f "status=${status}" \
+                            -f "per_page=100" \
+                            -f "page=${page}"); then
+                            echo "::error::Cannot list ${status} runs on ${HEAD_BRANCH}; refusing to delete previews while a run may still be publishing."
+                            exit 1
+                          fi
+                          runs=$(printf '%s' "$response" | jq -r --arg repo "$REPOSITORY" --arg current "$CURRENT_RUN_ID" --argjson pr_number "$PR_NUMBER" '
+                            .workflow_runs[]
+                            | select(.head_repository.full_name == $repo)
+                            | select(.event == "pull_request" or .event == "pull_request_target")
+                            | select(([.pull_requests[]?.number] | length) == 0 or ([.pull_requests[]?.number] | index($pr_number)))
+                            | select((.id | tostring) != $current)
+                            | "\(.id)\t\(.status)\t\(.html_url)"
+                          ')
+                          if [ -n "$runs" ]; then
+                            active="${active}${runs}
+                    "
+                          fi
+                          [ "$(printf '%s' "$response" | jq '.workflow_runs | length')" -lt 100 ] && break
+                          page=$((page + 1))
+                        done
+                      done
+
+                      if [ -z "$active" ]; then
+                        echo "No run of #${PR_NUMBER} is active on ${HEAD_BRANCH}."
+                        exit 0
+                      fi
+                      if [ "$(date +%s)" -ge "$deadline" ]; then
+                        echo "::error::Runs of #${PR_NUMBER} still active after ${WAIT_TIMEOUT_MINUTES} minute(s); refusing to delete its previews while one may still publish. Raise wait-for-runs-timeout-minutes, or re-run this job once they stop:"
+                        printf '%s' "$active" | sed 's/^/  /'
+                        exit 1
+                      fi
+                      printf 'Waiting for %s run(s) of #%s to stop:\n' "$(printf '%s' "$active" | grep -c .)" "$PR_NUMBER"
+                      printf '%s' "$active" | sed 's/^/  /'
+                      printf '%s' "$active" | while IFS="$(printf '\t')" read -r run_id _; do
+                        [ -n "$run_id" ] || continue
+                        gh api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+                      done
+                      sleep "$POLL_INTERVAL_SECONDS"
+                    done
+
     delete-ota-previews:
         name: Delete the closed PR's OTA preview releases
+        needs: [cancel-queued-runs]
         if: inputs.ota-preview-release-tag-prefix != '' && github.event.pull_request.head.repo.full_name == github.repository
         runs-on: ${{ fromJSON(inputs.ota-preview-cleanup-runner-labels) }}
         timeout-minutes: 10
