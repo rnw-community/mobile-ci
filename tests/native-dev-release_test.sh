@@ -262,4 +262,97 @@ else
     fail_case "$order"
 fi
 
+# Issue #224: every dev build records the runtime fingerprint the OTA preview
+# matches against (build-meta.json and a release-notes marker), and an opt-in
+# pr-comment job writes each platform's build into the pull request's sticky
+# preview comment.
+FP='4444444444444444444444444444444444444444'
+
+for job in ios-dev-release android-dev-release; do
+    case_start "$job build-meta.json carries the runtime fingerprint"
+    compute_meta "$job" EMBEDDED_BUILD_NUMBER='' EMBEDDED_VERSION='' FINGERPRINT="$FP"
+    meta="$(cat "$workspace/runner-temp/build-meta.json" 2>/dev/null || true)"
+    if assert_equals 0 "$STEP_STATUS" 'step status' \
+        && assert_equals "$FP" "$(printf '%s' "$meta" | jq -r '.fingerprint')" 'fingerprint'; then
+        pass_case
+    fi
+
+    case_start "$job release notes carry the fingerprint marker the OTA preview matches"
+    workspace="$(new_workflow_workspace "$WORKFLOW" "$job" 'Create GitHub Release (draft)')"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$workspace" gh '[ "$2" = view ] && exit 1; printf "%s\n" "$@" >> "$FAKE_GH_ARGS"'
+    run_step "$workspace" FAKE_GH_ARGS="$workspace/gh-args" TAG=dev-ios-482 ARTIFACT_PATH=a META_PATH=b SUMS_PATH=c \
+        BUILD_NUMBER='482.1' FINGERPRINT="$FP"
+    if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+        && assert_contains "$(cat "$workspace/gh-args")" "<!-- mobile-ci:fingerprint:${FP} -->" 'notes marker'; then
+        pass_case
+    fi
+done
+
+RENDER='Render development build comment sections'
+render_dev() {
+    workspace="$(new_workflow_workspace "$WORKFLOW" pr-comment "$RENDER")"
+    run_step "$workspace" SECTIONS_DIR="$workspace/runner-temp/sections" \
+        SERVER_URL='https://github.com' REPOSITORY='acme/app' HEAD_SHA='abcdef0123456789' \
+        RUN_URL='https://github.com/acme/app/actions/runs/7' \
+        ENABLE_IOS=true IOS_RESULT=success IOS_TAG=dev-ios-12 IOS_ASSET=app.ipa IOS_FINGERPRINT="$FP" \
+        ENABLE_ANDROID=true ANDROID_RESULT=success ANDROID_TAG=dev-android-12 ANDROID_ASSET=app.apk ANDROID_FINGERPRINT="$FP" \
+        "$@"
+}
+
+case_start 'each built platform gets a section with its install link and fingerprint'
+render_dev
+ios="$(cat "$workspace/runner-temp/sections/ios-dev-build.md" 2>/dev/null || true)"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_contains "$ios" 'https://github.com/acme/app/releases/download/dev-ios-12/app.ipa' 'install link' \
+    && assert_contains "$ios" '[dev-ios-12](https://github.com/acme/app/releases/tag/dev-ios-12)' 'release link' \
+    && assert_contains "$ios" "$FP" 'fingerprint' \
+    && assert_contains "$(cat "$workspace/runner-temp/sections/android-dev-build.md" 2>/dev/null || true)" 'app.apk' 'android'; then
+    pass_case
+fi
+
+case_start 'a failed platform says so, and a disabled one leaves its section alone'
+render_dev ANDROID_RESULT=failure ENABLE_IOS=false IOS_RESULT=skipped
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals no "$([ -e "$workspace/runner-temp/sections/ios-dev-build.md" ] && echo yes || echo no)" 'iOS section file' \
+    && assert_contains "$(cat "$workspace/runner-temp/sections/android-dev-build.md" 2>/dev/null || true)" 'failure' 'android failure'; then
+    pass_case
+fi
+
+case_start 'the pr-comment job is opt-in, pull-request-only, and needs no new permission from existing callers'
+if failure="$(WORKFLOW_YML="$WORKFLOW" python3 - <<'PYTHON' 2>&1
+import os
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
+inputs = workflow[True]['workflow_call']['inputs']
+problems = []
+if inputs.get('pr-comment', {}).get('default', 'MISSING') is not False:
+    problems.append('pr-comment must be a boolean input defaulting to false')
+job = workflow['jobs'].get('pr-comment', {})
+condition = str(job.get('if', ''))
+for needle in ('inputs.pr-comment', "github.event_name == 'pull_request'"):
+    if needle not in condition:
+        problems.append(f'pr-comment job if: lacks {needle}')
+if 'permissions' in job:
+    problems.append('pr-comment must not request permissions: GitHub refuses to start a run whose caller does not grant them, even when the job is skipped')
+for job_id in ('ios-dev-release', 'android-dev-release'):
+    names = [step.get('name') for step in workflow['jobs'][job_id]['steps']]
+    if 'Compute runtime fingerprint' not in names or names.index('Compute runtime fingerprint') > names.index('Compute build metadata'):
+        problems.append(f'{job_id}: no runtime fingerprint before the build metadata')
+    outputs = workflow['jobs'][job_id].get('outputs', {})
+    for key in ('tag', 'fingerprint', 'asset-name'):
+        if key not in outputs:
+            problems.append(f'{job_id}: missing output {key}')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
+    pass_case
+else
+    fail_case "$failure"
+fi
+
 finish_suite

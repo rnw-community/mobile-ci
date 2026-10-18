@@ -67,6 +67,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `target-packages`             | no       | `''`                                       | Newline-separated package names gating this pipeline on `pull_request` events: a pull request that affects none of them (per `turbo ls --affected`) skips the run. Empty derives them from the `name` in each `targets[].appDir`'s `package.json`. Fails closed: an unreadable or nameless `package.json`, a target package `turbo ls` does not list, or a `turbo` failure, fails the detect job, and a missing base SHA reports affected. Every non-`pull_request` event runs. |
 | `exempt-paths`                | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `docs/**`, `**/*.md`, `apps/website/**`. A pull request whose every changed file (`base...HEAD`) matches one skips the run without turbo detection. One non-exempt file, an empty diff, or a diff that cannot be computed (logged as a `::warning::`) runs normal detection instead. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `trigger-paths`               | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `.github/workflows/e2e.yml`, `e2e/**`. A pull request that changes a matching file (`base...HEAD`, renames counted at both paths) runs without turbo detection, which never attributes a file outside a workspace package to one. `**` runs every pull request, which is what an empty `target-packages` did before v3.3.0. Wins over `exempt-paths`; a diff that cannot be computed runs, with a `::warning::`. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
+| `force-label` | no | `''` | Pull request label that runs the pipeline whatever turbo reports: with it on the pull request, `detect` reports affected without turbo (even for an `exempt-paths`-only diff) and the status summary reads `passed (forced by the <label> label)`. Add `labeled` to the caller's `pull_request` `types` so adding the label starts a run (see [Forcing a run](#forcing-a-run)). Empty never forces. |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version. |
 | `maestro-reuse-driver`        | no       | `true`                                     | `true` passes `--no-reinstall-driver` and one `--driver-host-port` derived from the simulator UDID (the first free `127.0.0.1` port from a UDID-hashed start in 20000–30098, so shards on one host get distinct ports), to every `maestro test` invocation of the shard (pre-run flow, flows, retries, recovery flow): the XCTest driver the first invocation starts keeps running and every later invocation reuses it instead of starting its own. Each flow is still its own invocation, so `pre-flow-command`, per-flow env, retries, the recovery flow and the timing rows are unchanged. `false` starts a fresh driver per invocation. |
@@ -516,3 +517,27 @@ jobs:
 `fingerprint-env` must pass exactly what the default-branch warm-up passes; a
 single differing byte gives the pull request a different native key, and every
 pull request takes a Mac slot again.
+
+## Forcing a run
+
+Set `force-label` (for example `e2e:force`) to let a reviewer run the suite on a
+pull request turbo reports as unaffected. Add `labeled` to the caller's
+`pull_request` types, or adding the label does nothing until the next push.
+Since every labelling then starts a run, and this workflow's concurrency
+cancels the pull request's run in progress, gate the calling job so other
+labels are ignored:
+
+```yaml
+on:
+    pull_request:
+        types: [opened, synchronize, reopened, labeled]
+jobs:
+    e2e:
+        if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha> # <next release>
+        with:
+            force-label: e2e:force
+```
+
+The label is read from the triggering event's payload, so it applies to every
+later push to the pull request until it is removed.

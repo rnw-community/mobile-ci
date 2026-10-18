@@ -43,6 +43,7 @@ code never has to hand-parse the release tag or scrape release notes:
     "buildNumber": "482.1",
     "embeddedBuildNumber": "482.1",
     "embeddedVersion": "1.4.2",
+    "fingerprint": "4f1c0e9b2a7d8c6e5f4a3b2c1d0e9f8a7b6c5d4e",
     "commitSha": "b0389d2c2c3f9e1d1234567890abcdef1234567",
     "branch": "main",
     "builtAt": "2026-08-10T12:34:56Z",
@@ -60,6 +61,7 @@ code never has to hand-parse the release tag or scrape release notes:
 | `buildNumber` | yes              | `<run_number>.<run_attempt>`, the same deterministic build number used elsewhere in the job. This is what the workflow exported to the build as `DEVELOPMENT_BUILD_NUMBER`, not what the binary carries — read `embeddedBuildNumber` for that. |
 | `embeddedBuildNumber` | no       | The build number read back from the built binary: iOS `CFBundleVersion` from the `.ipa`'s `Info.plist`, Android `versionCode` (`aapt2 dump badging` for an `.apk`, `bundletool dump manifest` for an `.aab`). Omitted when the Android host has no `aapt2`/`bundletool` (the job warns); never omitted on iOS, where an unreadable `Info.plist` fails the job. See [Embedded build number](#embedded-build-number). |
 | `embeddedVersion` | no           | The version read back from the built binary: iOS `CFBundleShortVersionString`, Android `versionName`. Omitted when it could not be read or is empty. |
+| `fingerprint` | no               | The platform's runtime fingerprint (`native-fingerprint` hash), the runtime version an `expo-ota-preview.yml` update must carry to load on this build. See [Runtime fingerprint](#runtime-fingerprint). |
 | `commitSha`   | yes              | `github.sha` for the run that produced the build. |
 | `branch`      | yes              | `github.ref_name` for the run that produced the build. |
 | `builtAt`     | yes              | UTC build timestamp, ISO 8601 (`date -u +%Y-%m-%dT%H:%M:%SZ`). |
@@ -189,6 +191,7 @@ android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
 | `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
+| `pr-comment`                 | no       | `false`                                   | On a `pull_request` event, write each enabled platform's build (release and install link, runtime fingerprint, or the failure and the run link) into the pull request's sticky preview comment, the one `expo-ota-preview.yml` writes too. The calling job must then also grant `pull-requests: write`. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
 | `build-timeout-minutes`      | no       | `120`                                     | Dev-release job timeout (both platforms). |
 | `publish-env`                | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-dev-release` and `android-dev-release`, before `eas build` and the pre-build-command hook. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
@@ -242,6 +245,26 @@ inherit` or an explicit `secrets:` block in the caller workflow.
 
 The caller workflow needs `permissions: contents: write` (or an equivalent
 token) — both jobs create and prune GitHub Releases and tags.
+
+With `pr-comment: true` it also needs `pull-requests: write`. The comment job
+requests no permissions of its own and inherits the calling job's, so a
+caller that does not opt in needs no new grant. A job that requested
+`pull-requests: write` would make GitHub refuse to start the whole run for
+every caller that does not grant it, even with the job skipped. For the same
+reason the workflow no longer sets a top-level `permissions:` block. Every
+other job declares its own (`contents: write` for the build jobs, none for
+`status`).
+
+## Runtime fingerprint
+
+Each job computes the platform's `native-fingerprint` hash (the same
+tokenless `@expo/fingerprint` hash `expo-ota-preview.yml` uses as the update's
+runtime version) after installing dependencies and before any pre-build
+hook. It records the hash as `fingerprint` in `build-meta.json`, and in the
+release notes as a visible line plus a `<!-- mobile-ci:fingerprint:<hash> -->`
+marker. That marker is how `expo-ota-preview.yml`'s `dev-release-tag-prefix`
+finds the dev build an OTA update can load on. A fingerprint that cannot be
+computed fails the job.
 
 ## Example
 

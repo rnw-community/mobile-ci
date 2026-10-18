@@ -62,10 +62,21 @@ on:
                 required: false
                 default: true
             post-comment:
-                description: Post the deep links and an ASCII QR code as a pull-request comment.
+                description: >-
+                    Write the deep links, an ASCII QR code and the runtime fingerprint into the pull
+                    request's sticky preview comment (one comment, edited in place on every push).
                 type: boolean
                 required: false
                 default: true
+            dev-release-tag-prefix:
+                description: >-
+                    The tag-prefix the repository passes to native-dev-release.yml (its default is dev).
+                    When set, each platform's comment section links the newest published development
+                    build whose runtime fingerprint matches the update, or says a native build is
+                    needed. Empty (default) skips the lookup.
+                type: string
+                required: false
+                default: ''
             include-expo-config:
                 description: Include extra.expoClient from `expo config --json`. Set false to omit app config.
                 type: boolean
@@ -489,34 +500,71 @@ jobs:
                     fi
                   done
 
-            - name: Post preview comment
+            - name: Render preview comment sections
               if: inputs.post-comment && github.event_name == 'pull_request'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
                   LINK_IOS: ${{ steps.links.outputs.link-ios }}
                   LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+                  RUNTIME_IOS: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.fingerprint-ios.outputs.hash }}
+                  RUNTIME_ANDROID: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.fingerprint-android.outputs.hash }}
+                  DEV_RELEASE_TAG_PREFIX: ${{ inputs.dev-release-tag-prefix }}
                   QR_DIR: ${{ runner.temp }}/ota-qr
+                  SECTIONS_DIR: ${{ runner.temp }}/preview-comment-sections
               run: |
                   set -euo pipefail
-                  if [ -z "${LINK_IOS:-}" ] && [ -z "${LINK_ANDROID:-}" ]; then
-                    echo "No platform deep links were produced; skipping comment."
-                    exit 0
+                  case "$DEV_RELEASE_TAG_PREFIX" in
+                    *[!A-Za-z0-9._-]*)
+                      echo "::error::dev-release-tag-prefix must be only [A-Za-z0-9._-]; got '${DEV_RELEASE_TAG_PREFIX}'."
+                      exit 1
+                      ;;
+                  esac
+                  rm -rf "$SECTIONS_DIR"
+                  mkdir -p "$SECTIONS_DIR"
+                  releases="$RUNNER_TEMP/dev-releases.json"
+                  if [ -n "$DEV_RELEASE_TAG_PREFIX" ]; then
+                    if ! gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" > "$releases.pages"; then
+                      echo "::error::Cannot list releases to find a development build matching the runtime fingerprint."
+                      exit 1
+                    fi
+                    jq -s 'add // []' "$releases.pages" > "$releases"
                   fi
-                  body="$RUNNER_TEMP/ota-preview-comment.md"
-                  {
-                    echo "## OTA preview (no EAS Update)"
-                    echo
-                    echo "Open one of these links on a device with the development build installed."
-                    echo
-                  } > "$body"
-                  for entry in "iOS:$LINK_IOS" "Android:$LINK_ANDROID"; do
+                  for entry in "ios:iOS:$LINK_IOS:$RUNTIME_IOS" "android:Android:$LINK_ANDROID:$RUNTIME_ANDROID"; do
                     platform="${entry%%:*}"
-                    link="${entry#*:}"
+                    rest="${entry#*:}"
+                    label="${rest%%:*}"
+                    rest="${rest#*:}"
+                    runtime="${rest##*:}"
+                    link="${rest%:*}"
+                    section="$SECTIONS_DIR/${platform}-ota.md"
+                    : > "$section"
                     [ -n "$link" ] || continue
-                    qr_code="$(cat "$QR_DIR/$(printf '%s' "$platform" | tr '[:upper:]' '[:lower:]').txt" 2>/dev/null || true)"
+                    qr_code="$(cat "$QR_DIR/${platform}.txt" 2>/dev/null || true)"
                     {
-                      echo "### ${platform}"
+                      echo "### ${label}: OTA update"
+                      echo
+                      echo "Commit \`${HEAD_SHA:0:7}\`, runtime fingerprint \`${runtime:-unknown}\`."
+                      echo
+                      if [ -n "$DEV_RELEASE_TAG_PREFIX" ]; then
+                        match="$(jq -r --arg prefix "${DEV_RELEASE_TAG_PREFIX}-${platform}-" --arg marker "<!-- mobile-ci:fingerprint:${runtime} -->" '
+                          [.[]
+                            | select(.draft == false)
+                            | select(.tag_name | startswith($prefix))
+                            | select((.body // "") | contains($marker))]
+                          | sort_by(.created_at) | last // empty
+                          | "[\(.tag_name)](\(.html_url))"
+                        ' "$releases")"
+                        if [ -n "$runtime" ] && [ -n "$match" ]; then
+                          echo "Development build ${match} has this fingerprint: install it, then open the link below."
+                        else
+                          echo "**Native build needed:** no published \`${DEV_RELEASE_TAG_PREFIX}-${platform}-*\` development build has this fingerprint, so this update will not load on one. Build one with native-dev-release first."
+                        fi
+                        echo
+                      fi
+                      echo "Open on a device with the development build installed:"
                       echo
                       echo '`'"${link}"'`'
                       echo
@@ -531,7 +579,12 @@ jobs:
                       echo '```'
                       echo
                       echo "</details>"
-                      echo
-                    } >> "$body"
+                    } > "$section"
                   done
-                  gh pr comment "$PR_NUMBER" --body-file "$body"
+
+            - name: Update the sticky preview comment
+              if: inputs.post-comment && github.event_name == 'pull_request'
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.1.0 # v4.1.0
+              with:
+                  pr-number: ${{ github.event.pull_request.number }}
+                  sections-dir: ${{ runner.temp }}/preview-comment-sections

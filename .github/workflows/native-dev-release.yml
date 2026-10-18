@@ -171,6 +171,14 @@ on:
                 type: string
                 required: false
                 default: '5'
+            pr-comment:
+                description: >-
+                    On a pull_request event, write each platform's development build (install link,
+                    runtime fingerprint, or the failure) into the pull request's sticky preview comment.
+                    The calling job must then also grant pull-requests: write.
+                type: boolean
+                required: false
+                default: false
             asc-key-path:
                 description: >-
                     Optional path, relative to app-dir, the App Store Connect API key (.p8) is
@@ -231,9 +239,6 @@ concurrency:
     group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: false
 
-permissions:
-    contents: read
-
 jobs:
     ios-dev-release:
         name: iOS development build and release
@@ -242,6 +247,10 @@ jobs:
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         permissions:
             contents: write
+        outputs:
+            tag: ${{ steps.release.outputs.tag }}
+            fingerprint: ${{ steps.fingerprint.outputs.hash }}
+            asset-name: ${{ steps.meta.outputs.asset-name }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
@@ -452,6 +461,13 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Compute runtime fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
+              with:
+                  platform: ios
+                  working-directory: ${{ inputs.app-dir }}
+
             - name: Compute deterministic build number
               shell: bash
               env:
@@ -616,6 +632,7 @@ jobs:
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
                   EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
                   EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -642,15 +659,20 @@ jobs:
                     --arg sha256 "$sha256" \
                     --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
                     --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
+                    --arg fingerprint "${FINGERPRINT:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
                      + {buildNumber: $buildNumber}
                      + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
                      + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + (if $fingerprint == "" then {} else {fingerprint: $fingerprint} end)
                      + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
-                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
-                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "meta-path=$meta_path"
+                    echo "asset-name=$asset_name"
+                    echo "sums-path=$sums_path"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Create GitHub Release (draft)
               id: release
@@ -662,20 +684,28 @@ jobs:
                   META_PATH: ${{ steps.meta.outputs.meta-path }}
                   SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
               run: |
                   set -euo pipefail
+                  notes="Automated development build. Build number: ${BUILD_NUMBER}."
+                  if [ -n "${FINGERPRINT:-}" ]; then
+                    notes="${notes}
+
+                  Runtime fingerprint: \`${FINGERPRINT}\`
+                  <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
+                  fi
                   if gh release view "$TAG" >/dev/null 2>&1; then
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
                       --title "iOS dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                      --notes "$notes"
                     gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "iOS dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      --notes "$notes" \
                       "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -734,6 +764,10 @@ jobs:
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         permissions:
             contents: write
+        outputs:
+            tag: ${{ steps.release.outputs.tag }}
+            fingerprint: ${{ steps.fingerprint.outputs.hash }}
+            asset-name: ${{ steps.meta.outputs.asset-name }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
@@ -943,6 +977,13 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Compute runtime fingerprint
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
+              with:
+                  platform: android
+                  working-directory: ${{ inputs.app-dir }}
+
             - name: Compute deterministic build number
               shell: bash
               env:
@@ -1095,6 +1136,7 @@ jobs:
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
                   EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
                   EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -1121,15 +1163,20 @@ jobs:
                     --arg sha256 "$sha256" \
                     --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
                     --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
+                    --arg fingerprint "${FINGERPRINT:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
                      + {buildNumber: $buildNumber}
                      + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
                      + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + (if $fingerprint == "" then {} else {fingerprint: $fingerprint} end)
                      + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
-                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
-                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "meta-path=$meta_path"
+                    echo "asset-name=$asset_name"
+                    echo "sums-path=$sums_path"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Create GitHub Release (draft)
               id: release
@@ -1141,20 +1188,28 @@ jobs:
                   META_PATH: ${{ steps.meta.outputs.meta-path }}
                   SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
               run: |
                   set -euo pipefail
+                  notes="Automated development build. Build number: ${BUILD_NUMBER}."
+                  if [ -n "${FINGERPRINT:-}" ]; then
+                    notes="${notes}
+
+                  Runtime fingerprint: \`${FINGERPRINT}\`
+                  <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
+                  fi
                   if gh release view "$TAG" >/dev/null 2>&1; then
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
                       --title "Android dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                      --notes "$notes"
                     gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "Android dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      --notes "$notes" \
                       "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -1206,11 +1261,68 @@ jobs:
                     gh release delete "$tag" --yes --cleanup-tag
                   done
 
+    pr-comment:
+        name: Update the pull request's preview comment
+        needs: [ios-dev-release, android-dev-release]
+        if: >-
+            !cancelled() && inputs.pr-comment && github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 10
+        steps:
+            - name: Render development build comment sections
+              shell: bash
+              env:
+                  SECTIONS_DIR: ${{ runner.temp }}/preview-comment-sections
+                  SERVER_URL: ${{ github.server_url }}
+                  REPOSITORY: ${{ github.repository }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  IOS_RESULT: ${{ needs.ios-dev-release.result }}
+                  IOS_TAG: ${{ needs.ios-dev-release.outputs.tag }}
+                  IOS_ASSET: ${{ needs.ios-dev-release.outputs.asset-name }}
+                  IOS_FINGERPRINT: ${{ needs.ios-dev-release.outputs.fingerprint }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  ANDROID_RESULT: ${{ needs.android-dev-release.result }}
+                  ANDROID_TAG: ${{ needs.android-dev-release.outputs.tag }}
+                  ANDROID_ASSET: ${{ needs.android-dev-release.outputs.asset-name }}
+                  ANDROID_FINGERPRINT: ${{ needs.android-dev-release.outputs.fingerprint }}
+              run: |
+                  set -euo pipefail
+                  rm -rf "$SECTIONS_DIR"
+                  mkdir -p "$SECTIONS_DIR"
+                  render() {
+                    local platform="$1" label="$2" enabled="$3" result="$4" tag="$5" asset="$6" fingerprint="$7"
+                    [ "$enabled" = 'true' ] || return 0
+                    {
+                      echo "### ${label}: development build"
+                      echo
+                      if [ "$result" = 'success' ] && [ -n "$tag" ] && [ -n "$asset" ]; then
+                        echo "Commit \`${HEAD_SHA:0:7}\`, runtime fingerprint \`${fingerprint:-unknown}\`."
+                        echo
+                        echo "[${tag}](${SERVER_URL}/${REPOSITORY}/releases/tag/${tag}): install [\`${asset}\`](${SERVER_URL}/${REPOSITORY}/releases/download/${tag}/${asset})."
+                      else
+                        echo "The ${label} development build of commit \`${HEAD_SHA:0:7}\` did not publish (result: ${result}); see [the run](${RUN_URL})."
+                      fi
+                    } > "$SECTIONS_DIR/${platform}-dev-build.md"
+                  }
+                  render ios iOS "$ENABLE_IOS" "$IOS_RESULT" "$IOS_TAG" "$IOS_ASSET" "$IOS_FINGERPRINT"
+                  render android Android "$ENABLE_ANDROID" "$ANDROID_RESULT" "$ANDROID_TAG" "$ANDROID_ASSET" "$ANDROID_FINGERPRINT"
+
+            - name: Update the sticky preview comment
+              if: inputs.enable-ios || inputs.enable-android
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.1.0 # v4.1.0
+              with:
+                  pr-number: ${{ github.event.pull_request.number }}
+                  sections-dir: ${{ runner.temp }}/preview-comment-sections
+
     status:
         name: Native dev release result
         needs: [ios-dev-release, android-dev-release]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        permissions: {}
         steps:
             - name: Report
               shell: bash
