@@ -46,6 +46,7 @@ compose() {
         BUILD_ACTION_HASH="$build_action_hash" \
         CONFIG_HASH="$config_hash" \
         IOS_SIMULATOR_ARCHS=arm64 \
+        SECRETS_DIGEST='' \
         "$@"
 }
 
@@ -92,6 +93,41 @@ elif [ "$before" = "$after_toolchain" ]; then
 else
     pass_case
 fi
+
+case_start 'no secrets digest leaves every existing key exactly where it was'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST=''
+expected_identity="$(printf '%s\n' ios e2e 'xcode-26.4.1-17E202' buildhash confighash | sha256sum | cut -c1-12)"
+assert_equals 0 "$STEP_STATUS" 'compose exit status' \
+    && assert_equals "${FINGERPRINT}-${expected_identity}" "$(step_output "$dir" key)" 'key without secrets' \
+    && pass_case
+
+case_start 'a rotated build secret moves the key, through its digest alone'
+digest_a="$(printf 'a' | sha256sum | cut -d' ' -f1)"
+digest_b="$(printf 'b' | sha256sum | cut -d' ' -f1)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST=''
+without="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST="$digest_a"
+with_a="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST="$digest_b"
+with_b="$(step_output "$dir" key)"
+if [ -z "$with_a" ] || [ "$with_a" = "$without" ]; then
+    fail_case "a secrets digest left the key at '$without'"
+elif [ "$with_a" = "$with_b" ]; then
+    fail_case 'two different secrets digests gave the same key, so a rotated Maps key repacks onto a base compiled with the old one'
+else
+    assert_not_contains "$(cat "$dir/log")" "$digest_b" 'the digest is not logged' && pass_case
+fi
+
+case_start 'a secrets digest that is not a SHA-256 is refused, since it may be a secret value'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST='AIzaSyPlainTextKey'
+assert_equals 1 "$STEP_STATUS" 'compose exit status' \
+    && assert_not_contains "$(cat "$dir/outputs")" 'key=' 'no key is written' \
+    && pass_case
 
 case_start 'the key carries the fingerprint it was composed from'
 dir="$(new_workspace "$ACTION" "$KEY_STEP")"

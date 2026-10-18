@@ -215,6 +215,7 @@ against the profile and, by default, repairs drift in-job.
 | `artifacts-dir`         | yes      | —             | Directory Maestro debug output and final-state capture is written to. |
 | `artifact-name`         | yes      | —             | Uploaded artifact name.                                            |
 | `retention-days`        | no       | `7`           | Uploaded artifact retention in days.                               |
+| `redact-env-names` | no | `''` | Newline- or space-separated names of job environment variables (`apply-secret-env`'s `names`) whose values are replaced with `***` in every text file under `artifacts-dir` before upload — so a secret a flow typed never survives in `maestro.log`, a commands JSON or a logcat. Runs on failure too; a bad name or a host without `perl` deletes the artifacts and fails rather than upload them unredacted. |
 
 A per-flow timing table (flow, duration, status, attempts) is appended to
 `$GITHUB_STEP_SUMMARY` after every shard run, including a priming-flow row

@@ -102,7 +102,15 @@ key and the address that is empty.
 
 ## Secrets
 
-None. The base store authenticates with the job's own `GITHUB_TOKEN`.
+| Secret                | Required | Description |
+| --------------------- | -------- | ----------- |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in the plan job, before install, `build-command`, the fingerprint and the re-bundle. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and every caller of one native surface must pass the same secret. |
+
+The base store authenticates with the job's own `GITHUB_TOKEN`. The plan
+record and the repacked-app artifact carry no secret: the plan is the target,
+its native key and `needsNative`, and the key carries only the digest. A value
+the consumer's `app.config` itself embeds in the app is in the app, as it would
+be in any build.
 
 ## Permissions
 

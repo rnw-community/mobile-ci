@@ -157,7 +157,35 @@ major release.
 | `build-timeout-minutes`         | no       | `60`                                               | Build job timeout. |
 | `test-timeout-minutes`          | no       | `75`                                               | Test job timeout. |
 
-No `secrets:` block — this workflow never touches a release signing credential
+## Secrets
+
+| Secret                | Required | Description |
+| --------------------- | -------- | ----------- |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in the `plan`/repack leg (install, `build-command`, fingerprint, re-bundle) and the native `build` job. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and the warm-up ([`seed-native-cache.yml`](seed-native-cache.md)) must be passed the same secret or the two never agree on a key and every pull request takes a native build. |
+| `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to `maestro-env` (so each becomes a Maestro `-e` argument) and exported to the test job's environment for `pre-test-command` and `pre-flow-command`. Every value is replaced with `***` in the uploaded Maestro artifacts (`maestro.log`, commands JSON, logcat) before upload; masking only covers the job log. For test-user passwords and the credentials a hook uses to prepare the backend under test. |
+
+Every secret is optional; with none passed, every job behaves exactly as it did
+without the `secrets:` block. Pass them explicitly — `secrets: inherit` would
+hand every repository secret to a third-party workflow.
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.0.0 # v4.0.0
+        with:
+            targets: ...
+            flows-dir: apps/mobile/e2e/flows
+            maestro-env: |
+                TEST_USER=e2e@example.com
+        secrets:
+            build-secrets-env: |
+                TURBO_TOKEN=${{ secrets.TURBO_TOKEN }}
+                MAPS_API_KEY=${{ secrets.MAPS_API_KEY }}
+            maestro-secrets-env: |
+                TEST_PASSWORD=${{ secrets.E2E_TEST_PASSWORD }}
+```
+
+This workflow never touches a release signing credential
 or an Expo/EAS token. The `android-keystore-*` inputs default to the published
 React Native **debug** keystore constants, which are not secrets; a release key
 belongs in [`native-publish.yml`](native-publish.md). The workflow does need a

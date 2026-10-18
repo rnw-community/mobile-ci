@@ -40,7 +40,7 @@ label or a strategy means the same thing in every pipeline.
 ## The native key is the correctness boundary
 
 ```
-key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash[, ios-simulator-archs])>
+key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash[, ios-simulator-archs][, build-secrets digest])>
 ```
 
 `ios-simulator-archs` enters the identity only when it is `x86_64`: an x86_64
@@ -75,7 +75,11 @@ folded in beside it:
   `avd`, `arm64-v8a` for `redroid`), `seed-native-cache.yml`'s is `x86_64`, so
   a `redroid` pipeline passes `android-abis: arm64-v8a` to the warm-up;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
-  invalidates every base published while it was in force.
+  invalidates every base published while it was in force;
+- **a SHA-256 digest of `build-secrets-env`**, when the caller passes that
+  secret, so rotating a value compiled into the base moves the key. Only the
+  digest enters the key, never a value, and with no secret passed this
+  component is absent and every existing key is unchanged.
 
 An empty fingerprint is never a key. The step fails rather than publishing or
 fetching under one.
@@ -96,9 +100,14 @@ When that promise breaks, run the warm-up with `force-base: true`.
 **Secrets and values compiled into the binary.** A key baked into the native
 build at compile time (`GOOGLE_MAPS_KEY` in an `AndroidManifest` placeholder,
 say) lives in the base, not in the JavaScript bundle. Rotating it does not move
-the fingerprint, so every pull request keeps repacking onto a base carrying the
-old value. Rotate it and run the warm-up with `force-base: true` in the same
-change.
+the fingerprint. Pass it through the `build-secrets-env` secret — to the warm-up
+and to every e2e and screenshot caller alike — and its digest moves the key, so
+the next default-branch run publishes a base with the new value. A value passed
+any other way (a plain `build-env` line, a runner-level env) is invisible to the
+key: rotate it and run the warm-up with `force-base: true` in the same change.
+Every value in `build-secrets-env` is digested, so rotating one the native build
+never reads (a turbo cache token) also moves the key once; keep such a token in
+`build-secrets-env` only if the install or bundle needs it.
 
 **Env the key sees but the build does not.** `expo-native-key` exports
 `extra-env` while it fingerprints. Anything the app's `app.config` branches on

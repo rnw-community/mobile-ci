@@ -185,6 +185,15 @@ on:
                 type: string
                 required: false
                 default: ''
+        secrets:
+            build-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for
+                    a multi-line value) exported for the install, build-command,
+                    fingerprint and repack steps. Only a SHA-256 digest of them
+                    enters the native key, so the caller's warm-up must pass the
+                    same secret or the two never agree on a key.
+                required: false
         outputs:
             native-targets:
                 description: >-
@@ -265,6 +274,13 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              id: build-secrets
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -418,6 +434,7 @@ jobs:
                   fingerprint-config: ${{ inputs.fingerprint-config }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
                   ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
+                  secrets-digest: ${{ steps.build-secrets.outputs.digest }}
 
             - name: expo-base-binary (fetch)
               id: base

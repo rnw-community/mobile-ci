@@ -245,6 +245,19 @@ on:
                 required: false
                 default: 60
 
+        secrets:
+            build-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for a
+                    multi-line value) exported, after build-env, in every job that
+                    installs, bundles or compiles the app: the plan/repack leg and
+                    the native build. For what a real build needs but a log must
+                    never show - a remote turbo cache token, a Maps API key compiled
+                    into the base. Only a SHA-256 digest of the entries enters the
+                    native key, so rotating one moves the key, and the warm-up must
+                    be passed the same secret or the two never agree on a key.
+                required: false
+
 concurrency:
     group: seed-native-cache-${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: false
@@ -379,6 +392,8 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
             build-env: ${{ inputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
 
     android-abis:
         name: Resolve the Android ABIs
@@ -516,6 +531,8 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
             build-env: ${{ inputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
 
     seed-ios:
         name: Seed iOS native app (${{ matrix.target.name }})
@@ -579,6 +596,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -885,6 +908,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager

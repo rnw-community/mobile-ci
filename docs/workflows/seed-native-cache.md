@@ -90,7 +90,15 @@ the two things a fingerprint cannot see (see
 | `ios-timeout-minutes`             | no       | `90`                                               | `seed-ios` job timeout. |
 | `android-timeout-minutes`         | no       | `60`                                               | `seed-android` job timeout. |
 
-No `secrets:` block.
+## Secrets
+
+| Secret                | Required | Description |
+| --------------------- | -------- | ----------- |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan legs and the `seed-ios`/`seed-android` builds. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and every e2e and screenshot caller must pass this warm-up the same secret, or the two never agree on a key. |
+
+Every secret is optional; with none passed, every job behaves exactly as it did
+without the `secrets:` block. Pass them explicitly — `secrets: inherit` would
+hand every repository secret to a third-party workflow.
 
 ## Permissions
 

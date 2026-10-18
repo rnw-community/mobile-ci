@@ -1047,39 +1047,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -1429,39 +1400,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -1783,39 +1725,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
