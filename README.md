@@ -133,6 +133,7 @@ full input reference, and the same doc's siblings under
 | ------------------------------- | --------------------------------------------------------------------------------------------- |
 | [`setup-xcode-pinned`](actions/setup-xcode-pinned/README.md)     | Select a pre-installed Xcode by exact version+build; hard-assert the match. |
 | [`native-fingerprint`](actions/native-fingerprint/README.md)     | Tokenless `@expo/fingerprint` hash of an app's native surface. |
+| [`node-pm-cache`](actions/node-pm-cache/README.md)                | Restore the package-manager store on every event, save it only off pull requests (bounded, non-fatal). |
 | [`native-app-cache`](actions/native-app-cache/README.md)         | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
 | [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
 | [`xcode-cache`](actions/xcode-cache/README.md)                   | Restore/save DerivedData + resolved Swift Package clones + the Xcode 26 compilation cache (CAS), keyed on toolchain + project fingerprint; `github` or network-free `local` backend. Emits the `xcodebuild` arguments that point Xcode at all three. |
@@ -207,9 +208,12 @@ is hand-tuned, falling back to modulo when unset.
 
 Every reusable workflow above resolves the JS package manager once per job that
 installs JS dependencies, after checkout and before `actions/setup-node`. The
-result drives pnpm provisioning everywhere, and setup-node's dependency
-`cache:` in the jobs that configure one (the `ios-maestro` /
-`android-maestro` / `store-screenshots` build jobs). Resolution order:
+result drives pnpm provisioning everywhere, and the
+[`node-pm-cache`](actions/node-pm-cache/README.md) dependency cache in the jobs
+that configure one (the `ios-maestro` / `android-maestro` / `store-screenshots`
+build jobs, `expo-base-plan`, `expo-ota-preview`, `expo-fingerprint-guard`).
+That cache is restored on every event but saved only off pull requests, as a
+bounded non-fatal step, so a stalled upload can never cancel a finished job. Resolution order:
 
 1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;
 2. `package.json` at the repository root —
@@ -225,10 +229,9 @@ so a dependency change re-keys the native caches whichever manager you use.
 
 Nothing to match on, several root lockfiles at once, or an unsupported value
 fails the job with an actionable `::error::` instead of guessing. In the jobs
-that do configure setup-node's cache, the resolved manager's own root lockfile
-must exist — `actions/setup-node` has nothing to key the cache on otherwise —
-and its absence is reported by this step rather than by setup-node's generic
-"Dependencies lock file is not found". Existing
+that do configure the dependency cache, the resolved manager's own root lockfile
+must exist — the cache key is derived from it — and its absence is reported by
+this step rather than by the cache action. Existing
 Yarn consumers need no change: a repo with `yarn.lock` (and/or
 `packageManager: yarn@…`) resolves to `yarn`, exactly what these workflows
 hardcoded before.

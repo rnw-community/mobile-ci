@@ -331,18 +331,31 @@ jobs:
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-                  cache: ${{ steps.package-manager.outputs.pm }}
 
             - name: Enable corepack
               if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
 
+            - name: Restore package manager cache
+              id: pm-cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.0.0 # v4.0.0
+              with:
+                  mode: restore
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
+
             - name: Install dependencies
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save package manager cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.0.0 # v4.0.0
+              with:
+                  mode: save
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
+                  cache-hit: ${{ steps.pm-cache.outputs.cache-hit }}
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
