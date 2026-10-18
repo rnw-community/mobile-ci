@@ -240,6 +240,13 @@ auto-discovered or run standalone by the sharding logic.
   `expo-fingerprint-guard.yml` need **no
   secrets at all** — no
   `EXPO_TOKEN`, no signing credentials.
+- `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml` and
+  `store-screenshots.yml` optionally take `build-secrets-env` (masked
+  `KEY=VALUE` env for install, bundle, repack and native build; only a digest
+  enters the native key, so pass the warm-up the same secret) and, except the
+  warm-up, `maestro-secrets-env` (masked entries merged into `maestro-env`,
+  scrubbed from uploaded Maestro artifacts). Pass them explicitly, never
+  `secrets: inherit`; with none passed, behaviour is unchanged.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):
   `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android),
   `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`/`eas

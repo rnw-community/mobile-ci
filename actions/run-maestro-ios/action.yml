@@ -281,6 +281,15 @@ inputs:
     description: Uploaded artifact retention in days.
     required: false
     default: '7'
+  redact-env-names:
+    description: >-
+      Newline- or space-separated names of job environment variables (as
+      apply-secret-env's names output lists them) whose values are replaced
+      with *** in every text file under artifacts-dir before it is uploaded,
+      so a secret a flow typed never survives in maestro.log, a commands
+      JSON or a logcat. Leave empty (default) to upload unchanged.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -1376,6 +1385,47 @@ runs:
           else
             echo "::warning::'perl' is not on PATH; skipping the bounded simulator shutdown."
           fi
+
+    - name: Redact secret values from the artifacts
+      if: always() && inputs.redact-env-names != ''
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        REDACT_ENV_NAMES: ${{ inputs.redact-env-names }}
+      run: |
+        set -euo pipefail
+        if ! command -v perl >/dev/null 2>&1; then
+          echo "::error::perl is not on PATH, so the secret values in $ARTIFACTS_DIR cannot be redacted; refusing to upload them unredacted."
+          rm -rf "$ARTIFACTS_DIR"
+          exit 1
+        fi
+        [ -d "$ARTIFACTS_DIR" ] || exit 0
+        redacted=0
+        for name in $REDACT_ENV_NAMES; do
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::redact-env-names entry '$name' is not a variable name."
+              rm -rf "$ARTIFACTS_DIR"
+              exit 1
+              ;;
+          esac
+          value="$(printenv "$name" || true)"
+          [ -n "$value" ] || continue
+          while IFS= read -r value_line || [ -n "$value_line" ]; do
+            [ -n "$value_line" ] || continue
+            while IFS= read -r -d '' file; do
+              if grep -qIF -- "$value_line" "$file"; then
+                if ! REDACT_VALUE="$value_line" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"; then
+                  echo "::error::Redacting '$name' from an artifact file failed; removing the artifacts rather than upload them unredacted."
+                  rm -rf "$ARTIFACTS_DIR"
+                  exit 1
+                fi
+                redacted=$((redacted + 1))
+              fi
+            done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          done <<< "$value"
+        done
+        echo "Redacted secret values from ${redacted} artifact file(s)."
 
     - name: Upload Maestro artifacts
       if: always()

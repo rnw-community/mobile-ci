@@ -623,6 +623,28 @@ on:
                 required: false
                 default: 75
 
+        secrets:
+            build-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for a
+                    multi-line value) exported, after build-env, in every job that
+                    installs, bundles or compiles the app: the plan/repack leg and
+                    the native build. For what a real build needs but a log must
+                    never show - a remote turbo cache token, a Maps API key compiled
+                    into the base. Only a SHA-256 digest of the entries enters the
+                    native key, so rotating one moves the key, and the warm-up must
+                    be passed the same secret or the two never agree on a key.
+                required: false
+            maestro-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries appended to
+                    maestro-env (one line each, no multi-line values) and exported
+                    to the test job's environment for pre-test-command and
+                    pre-flow-command. Every value is scrubbed from the uploaded
+                    Maestro artifacts. For test-user passwords and the credentials a
+                    hook uses to prepare the backend under test.
+                required: false
+
 concurrency:
     group: android-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -858,6 +880,8 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
             build-env: ${{ inputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
 
     build:
         name: Build (${{ matrix.target.name }})
@@ -920,6 +944,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -1170,6 +1200,15 @@ jobs:
                     exit 1
                   fi
 
+            - name: Apply maestro-secrets-env
+              id: maestro-secrets
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+                  append-to: ${{ inputs.maestro-env }}
+
             - name: run-maestro-android-redroid
               if: inputs.android-driver == 'redroid'
               uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.0.0 # v4.0.0
@@ -1190,7 +1229,8 @@ jobs:
                   pre-test-command: ${{ inputs.pre-test-command }}
                   pre-flow-command: ${{ inputs.pre-flow-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
-                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
+                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
                   maestro-config: ${{ inputs.maestro-config }}
                   include-tags: ${{ inputs.include-tags }}
                   exclude-tags: ${{ inputs.exclude-tags }}
@@ -1223,7 +1263,8 @@ jobs:
                   pre-test-command: ${{ inputs.pre-test-command }}
                   pre-flow-command: ${{ inputs.pre-flow-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
-                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
+                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
                   maestro-config: ${{ inputs.maestro-config }}
                   include-tags: ${{ inputs.include-tags }}
                   exclude-tags: ${{ inputs.exclude-tags }}

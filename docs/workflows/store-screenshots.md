@@ -933,13 +933,17 @@ the three it took.
 | `ASC_API_KEY`         | no       | App Store Connect API key contents (`.p8`). When set, written to `asc-key-path` (or `$RUNNER_TEMP`) before `upload-command` runs and removed afterward - same contract as `native-publish.yml`'s `ASC_API_KEY`. Also the key the dedupe gate signs with. |
 | `ASC_KEY_ID`          | with `asc-dedupe-screenshots` | App Store Connect API key ID for the dedupe gate's JWT. |
 | `ASC_ISSUER_ID`       | with `asc-dedupe-screenshots` | App Store Connect API issuer ID (UUID) for the dedupe gate's JWT. |
-| `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - same fail-closed parser and masking as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
+| `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md), the same parser as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan/repack legs and the `build-ios`/`build-android` jobs, parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest enters the native key, never a value, so the warm-up must be passed the same secret. See [ios-maestro.md](ios-maestro.md#secrets). |
+| `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to the resolved `maestro-env` and exported to the capture jobs' environment for `seed-command`. A capture job uploads only screenshots. |
 
 Unlike `native-publish.yml`, none of these secrets are hard-required even
 when `upload-screenshots` is `true` - `upload-command` is entirely
 consumer-owned, and some fastlane setups authenticate a different way (e.g.
 `FASTLANE_SESSION` threaded through `EAS_EXTRA_ENV`). The two capture
-pipelines themselves need no secrets at all.
+pipelines themselves need no secrets at all; `build-secrets-env` and
+`maestro-secrets-env` are there for an app whose build or seed hook does, and
+with neither passed every job behaves exactly as before.
 
 ## Concurrency
 

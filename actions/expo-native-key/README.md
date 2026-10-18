@@ -43,6 +43,7 @@ contract and what the ignore list does and does not cover.
 | `ios-simulator-archs`  | no       | `arm64`                 | Simulator slice the iOS base is built for: `arm64` or `x86_64`, anything else fails. `x86_64` is folded into the build identity so the two slices never share a key; `arm64` adds nothing, so every key published before this input existed is unchanged. Ignored on android beyond validation. |
 | `fingerprint-config`   | no       | `fingerprint.config.js` | Path, relative to `working-directory`, of the fingerprint config whose hash enters the key. |
 | `fingerprint-version`  | no       | `0.20.6`                | Pinned `@expo/fingerprint` npm version.                                                   |
+| `secrets-digest`       | no       | `''`                    | SHA-256 digest of the build secrets the base is compiled with (`apply-secret-env`'s `digest`), folded into the build identity so rotating one moves the key. Anything but 64 lowercase hex fails the step, since it may be a value. Empty leaves every key exactly as it was. |
 
 ## Outputs
 

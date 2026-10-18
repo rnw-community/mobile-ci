@@ -858,6 +858,26 @@ on:
                     in logs before being written. Same fail-closed parser and masking
                     as native-publish.yml's EAS_EXTRA_ENV.
                 required: false
+            build-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for a
+                    multi-line value) exported, after build-env, in every job that
+                    installs, bundles or compiles the app: the plan/repack leg and
+                    the native build. For what a real build needs but a log must
+                    never show - a remote turbo cache token, a Maps API key compiled
+                    into the base. Only a SHA-256 digest of the entries enters the
+                    native key, so rotating one moves the key, and the warm-up must
+                    be passed the same secret or the two never agree on a key.
+                required: false
+            maestro-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries appended to
+                    maestro-env (one line each, no multi-line values) and exported
+                    to the capture job's environment for seed-command. Only
+                    screenshots are uploaded from a capture job. For test-user
+                    passwords and the credentials a seed hook uses to prepare the
+                    backend it captures against.
+                required: false
 
 concurrency:
     group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -1471,6 +1491,8 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ needs.validate-manifest.outputs.build-command }}
             build-env: ${{ needs.validate-manifest.outputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
 
     build-ios:
         name: Build iOS (${{ matrix.target.name }})
@@ -1535,6 +1557,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -1810,6 +1838,8 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ needs.validate-manifest.outputs.build-command }}
             build-env: ${{ needs.validate-manifest.outputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
 
     build-android:
         name: Build Android (${{ matrix.target.name }})
@@ -1872,6 +1902,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -2134,6 +2170,15 @@ jobs:
                   TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
 
+            - name: Apply maestro-secrets-env
+              id: maestro-secrets
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+                  append-to: ${{ needs.validate-manifest.outputs.maestro-env }}
+
             - name: capture-screenshots-ios
               id: capture
               uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.0.0 # v4.0.0
@@ -2159,7 +2204,7 @@ jobs:
                   locales: ${{ join(matrix.entry.locales, ',') }}
                   appearances: ${{ join(matrix.entry.appearances, ',') }}
                   orientation: ${{ matrix.entry.orientation || 'portrait' }}
-                  maestro-env: ${{ needs.validate-manifest.outputs.maestro-env }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
                   locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
                   maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
@@ -2229,6 +2274,15 @@ jobs:
                     exit 1
                   fi
 
+            - name: Apply maestro-secrets-env
+              id: maestro-secrets
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+                  append-to: ${{ needs.validate-manifest.outputs.maestro-env }}
+
             - name: redroid-container (start)
               id: redroid
               if: inputs.android-driver == 'redroid'
@@ -2278,7 +2332,7 @@ jobs:
                   seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
                   settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
                   status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
-                  maestro-env: ${{ needs.validate-manifest.outputs.maestro-env }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
                   locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
                   maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
                   maestro-version: ${{ inputs.maestro-version }}
@@ -2404,39 +2458,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.0.0 # v4.0.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
