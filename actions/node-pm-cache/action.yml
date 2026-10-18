@@ -1,15 +1,13 @@
 name: node-pm-cache
 description: >-
-  Restores the package manager's download store on every event and saves it
-  only off pull requests, as bounded best-effort steps. Replaces
+  Restores the package manager's download store on every event and exposes
+  the path and key for the calling workflow's own bounded, best-effort
+  `actions/cache/save` step, which runs only off pull requests. Replaces
   actions/setup-node's `cache:` option, whose save runs in an unboundable post
   step on every event: a stalled upload there cancels a job whose real work
   already succeeded, and a pull-request save is scoped to that PR's ref, so
   nothing else can ever restore it.
 inputs:
-  mode:
-    description: '`restore` (before installing dependencies) or `save` (after).'
-    required: true
   package-manager:
     description: '`npm`, `yarn` or `pnpm`. The manager must already be on PATH.'
     required: true
@@ -17,23 +15,16 @@ inputs:
     description: Directory holding the lockfile.
     required: false
     default: '.'
-  cache-hit:
-    description: >-
-      `save` mode only: the `cache-hit` output of the `restore` call. An exact
-      hit is never re-saved.
-    required: false
-    default: ''
-  save-timeout-minutes:
-    description: Upper bound for the save step; a stall past it is abandoned, not fatal.
-    required: false
-    default: '10'
 outputs:
   cache-hit:
-    description: '`true` when an exact-key entry was restored (`restore` mode).'
+    description: '`true` when an exact-key entry was restored.'
     value: ${{ steps.restore.outputs.cache-hit }}
   cache-key:
     description: The computed cache key.
     value: ${{ steps.resolve.outputs.key }}
+  path:
+    description: The resolved store path, for the calling workflow's `actions/cache/save` step.
+    value: ${{ steps.resolve.outputs.path }}
 runs:
   using: composite
   steps:
@@ -98,18 +89,9 @@ runs:
 
     - name: Restore package manager cache
       id: restore
-      if: inputs.mode == 'restore'
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ steps.resolve.outputs.path }}
         key: ${{ steps.resolve.outputs.key }}
         restore-keys: ${{ steps.resolve.outputs.restore-prefix }}
 
-    - name: Save package manager cache
-      if: inputs.mode == 'save' && github.event_name != 'pull_request' && inputs.cache-hit != 'true'
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      timeout-minutes: ${{ fromJSON(inputs.save-timeout-minutes) }}
-      continue-on-error: true
-      with:
-        path: ${{ steps.resolve.outputs.path }}
-        key: ${{ steps.resolve.outputs.key }}

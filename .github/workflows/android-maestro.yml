@@ -1101,7 +1101,6 @@ jobs:
               id: pm-cache
               uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.0.0 # v4.0.0
               with:
-                  mode: restore
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Install dependencies
@@ -1111,11 +1110,13 @@ jobs:
               run: eval "$INSTALL_COMMAND"
 
             - name: Save package manager cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.0.0 # v4.0.0
+              if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+              timeout-minutes: 10
+              continue-on-error: true
               with:
-                  mode: save
-                  package-manager: ${{ steps.package-manager.outputs.pm }}
-                  cache-hit: ${{ steps.pm-cache.outputs.cache-hit }}
+                  path: ${{ steps.pm-cache.outputs.path }}
+                  key: ${{ steps.pm-cache.outputs.cache-key }}
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
