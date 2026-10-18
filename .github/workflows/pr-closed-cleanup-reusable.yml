@@ -3,6 +3,16 @@ name: pr-closed-cleanup-reusable
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
             ota-preview-release-tag-prefix:
                 description: >-
                     The release-tag-prefix the caller passes to expo-ota-preview.yml. When set, the
@@ -23,7 +33,7 @@ on:
 jobs:
     cancel-queued-runs:
         name: Cancel queued/in-progress runs for the closed PR branch
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         permissions:
             actions: write
 

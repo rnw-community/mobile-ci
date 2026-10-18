@@ -3,6 +3,26 @@ name: store-screenshots
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             config-path:
                 description: >-
                     Optional repository-relative path to a JSON file in the calling
@@ -849,7 +869,7 @@ permissions:
 jobs:
     validate-manifest:
         name: Validate capture manifest and scenes
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
             has-ios: ${{ steps.validate.outputs.has-ios }}
             has-android: ${{ steps.validate.outputs.has-android }}
@@ -1426,6 +1446,8 @@ jobs:
             actions: read
         uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.0.0 # v4.0.0
         with:
+            control-runner-labels: ${{ inputs.control-runner-labels }}
+            runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
             platform: ios
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.ios-target) }}
             build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
@@ -1473,6 +1495,10 @@ jobs:
             CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -1753,6 +1779,8 @@ jobs:
             actions: read
         uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.0.0 # v4.0.0
         with:
+            control-runner-labels: ${{ inputs.control-runner-labels }}
+            runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
             platform: android
             targets: ${{ format('[{0}]', needs.validate-manifest.outputs.android-target) }}
             build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
@@ -1804,6 +1832,10 @@ jobs:
             APP_DIR: ${{ matrix.target.appDir }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -2034,6 +2066,10 @@ jobs:
                 entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -2159,6 +2195,10 @@ jobs:
                 entry: ${{ fromJSON(needs.validate-manifest.outputs.android-entries) }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -2292,6 +2332,10 @@ jobs:
             HAS_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required inputs and capture results
               shell: bash
               env:
@@ -2643,7 +2687,7 @@ jobs:
         name: Store screenshots result
         needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-android, upload]
         if: always()
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         steps:
             - name: Report
               shell: bash
