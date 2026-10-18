@@ -3,6 +3,16 @@ name: swift-ios
 on:
     workflow_call:
         inputs:
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             runs-on-json:
                 description: JSON array of runner labels for the build and test jobs.
                 type: string
@@ -314,6 +324,10 @@ jobs:
         runs-on: ${{ fromJSON(inputs.runs-on-json) }}
         timeout-minutes: ${{ inputs.validate-timeout-minutes }}
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
@@ -390,6 +404,10 @@ jobs:
             matrix:
                 shard: ${{ fromJSON(inputs.shards-json) }}
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false

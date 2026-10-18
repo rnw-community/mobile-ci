@@ -30,6 +30,7 @@ either fails with an error naming the missing tool.
 | ------------------------------------ | -------- | ------------------- | ----------- |
 | `ota-preview-release-tag-prefix`     | no       | `''`                | The `release-tag-prefix` the caller passes to `expo-ota-preview.yml` (its default is `ota`). Set it to delete the closed PR's previews; empty leaves releases untouched. Must be `[A-Za-z0-9._-]`. Requires `contents: write` on the calling job. |
 | `ota-preview-cleanup-runner-labels`  | no       | `'["ubuntu-latest"]'` | JSON array of runner labels for the preview cleanup job. The runner needs `curl` and `jq`. |
+| `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
 
 Everything else — the PR's head branch, PR number, and current run id —
 comes from `github.event.pull_request.*` and `github.run_id` in the *calling*

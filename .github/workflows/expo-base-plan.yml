@@ -3,6 +3,26 @@ name: expo-base-plan
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             platform:
                 description: '`ios` or `android`.'
                 type: string
@@ -181,6 +201,10 @@ jobs:
             APP_DIR: ${{ matrix.target.appDir }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate platform
               shell: bash
               env:
@@ -478,10 +502,14 @@ jobs:
         name: Targets still needing a native build
         needs: plan
         if: ${{ !cancelled() && needs.plan.result == 'success' }}
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
             targets: ${{ steps.collect.outputs.targets }}
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   pattern: ${{ inputs.plan-artifact-prefix }}-*

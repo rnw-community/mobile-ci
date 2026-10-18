@@ -83,6 +83,7 @@ number is what this workflow's shape exists to attack.
 | --------------------------- | -------------------------------------------------- |
 | `runs-on-json`              | `["self-hosted","trf-macos-arm64-4x7"]` (build **and** test) |
 | `publish-runs-on-json`      | `["self-hosted","trf-macos-arm64-6x12"]`           |
+| `runs-on-cache-bypass`      | `false` — opt-in `runs-on/action` before artifact traffic on a RunsOn `extras=s3-cache` runner (see [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md)) |
 | `validate-timeout-minutes`  | `45` (applies to `build` and to each `test` shard)  |
 | `publish-timeout-minutes`   | `90`                                               |
 
