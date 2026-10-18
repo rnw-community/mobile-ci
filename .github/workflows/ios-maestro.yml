@@ -141,10 +141,46 @@ on:
                     directory, and the actions below always pass individual flow files,
                     so without this input a workspace config is silently ignored.
                     Relative paths resolve against the job's working directory. Fails
-                    closed when set to a path that is not a file.
+                    closed when set to a path that is not a file. Its
+                    includeTags/excludeTags are honoured when shards are planned
+                    (see include-tags).
                 type: string
                 required: false
                 default: ''
+            include-tags:
+                description: >-
+                    Comma-separated Maestro tags: only flows whose config section's
+                    `tags:` list holds any of them are run. Applied when shards are
+                    planned, with Maestro's own semantics (exclude-tags wins), added
+                    to maestro-config's includeTags, and also passed to `maestro
+                    test`. An unparsable flow config section, or a selection left
+                    with no flow, fails the test job.
+                type: string
+                required: false
+                default: ''
+            exclude-tags:
+                description: >-
+                    Comma-separated Maestro tags: flows whose `tags:` list holds any
+                    of them are never run, even when include-tags selects them.
+                    Added to maestro-config's excludeTags.
+                type: string
+                required: false
+                default: ''
+            junit-report:
+                description: >-
+                    When true, every flow's final attempt writes a JUnit report
+                    (`maestro test --format junit`) to junit/ inside the shard's
+                    existing Maestro artifact.
+                type: boolean
+                required: false
+                default: true
+            artifact-retention-days:
+                description: >-
+                    Retention in days of each shard's Maestro artifact (debug
+                    output, final-state capture, JUnit reports).
+                type: number
+                required: false
+                default: 7
             flow-retries:
                 description: >-
                     Non-negative retry budget per flow; each flow gets up to
@@ -991,6 +1027,9 @@ jobs:
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
                   maestro-env: ${{ inputs.maestro-env }}
                   maestro-config: ${{ inputs.maestro-config }}
+                  include-tags: ${{ inputs.include-tags }}
+                  exclude-tags: ${{ inputs.exclude-tags }}
+                  junit-report: ${{ inputs.junit-report }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   maestro-reuse-driver: ${{ inputs.maestro-reuse-driver }}
@@ -1003,6 +1042,7 @@ jobs:
                   simulator-requires: ${{ inputs.simulator-requires }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  retention-days: ${{ inputs.artifact-retention-days }}
 
             - name: Diagnose the runner's bundled Node after a failure
               if: failure() && runner.os == 'macOS'

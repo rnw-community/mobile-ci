@@ -104,6 +104,7 @@ jobs:
               shell: bash
               env:
                   COMPOSE_MEDIA_REQUIRE_TOOLS: '1'
+                  MAESTRO_TAGS_REQUIRE_TOOLS: '1'
               run: tests/run-tests.sh
 
             - name: Shellcheck the test harness and every extracted step script
@@ -112,7 +113,7 @@ jobs:
                   set -euo pipefail
                   sudo apt-get update && sudo apt-get install -y shellcheck
                   shellcheck -s bash tests/run-tests.sh tests/lib/*.sh tests/*_test.sh
-                  shellcheck -x scripts/*.sh scripts/media/*.sh
+                  shellcheck -x scripts/*.sh scripts/media/*.sh scripts/maestro/*.sh
                   scratch="$RUNNER_TEMP/extracted-steps"
                   rm -rf "$scratch"
                   mkdir -p "$scratch"
