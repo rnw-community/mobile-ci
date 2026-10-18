@@ -448,6 +448,8 @@ jobs:
                   PLATFORM: ${{ inputs.platform }}
                   TARGET: ${{ toJSON(matrix.target) }}
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  FINGERPRINT: ${{ steps.native-key.outputs.fingerprint }}
+                  CONFIG_HASH: ${{ steps.native-key.outputs.config-hash }}
                   BASE_FOUND: ${{ steps.base.outputs.found }}
                   BASE_SOURCE: ${{ steps.base.outputs.source }}
                   BASE_REFERENCE: ${{ steps.base.outputs.reference }}
@@ -463,8 +465,10 @@ jobs:
                   fi
                   jq -n --argjson target "$TARGET" \
                         --arg key "$NATIVE_KEY" \
+                        --arg fingerprint "$FINGERPRINT" \
+                        --arg configHash "$CONFIG_HASH" \
                         --argjson needsNative "$needs_native" \
-                     '$target + {nativeKey: $key, needsNative: $needsNative}' \
+                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash, needsNative: $needsNative}' \
                      > .ci-artifacts/plan/plan.json
                   {
                     if [ "$needs_native" = 'false' ] && [ "$REPACKED" = 'true' ]; then
@@ -513,6 +517,13 @@ jobs:
                     echo "::error::Expected one plan per target ($expected), found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
                     exit 1
                   fi
-                  targets=$(jq -sc 'map(select(.needsNative)) | map(del(.needsNative))' "${plans[@]}")
+                  echo "plans=$(jq -sc '.' "${plans[@]}")" >> "$GITHUB_OUTPUT"
+                  targets=$(jq -sc 'map(select(.needsNative)) | map(del(.needsNative, .fingerprint, .configHash))' "${plans[@]}")
                   echo "targets=$targets" >> "$GITHUB_OUTPUT"
                   echo "Targets needing a native build: $(jq -r 'map(.name) | join(", ") | if . == "" then "(none)" else . end' <<< "$targets")"
+
+            - name: assert-distinct-fingerprints
+              uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@v4.0.0 # v4.0.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  plans: ${{ steps.collect.outputs.plans }}

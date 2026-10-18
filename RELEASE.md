@@ -112,7 +112,8 @@ being cut) that consumers pin to in practice. **No
    the tagged commit must point at that same tag — the reusable workflows
    (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
    `store-screenshots.yml`, `expo-base-plan.yml`, `swift-ios.yml`,
-   `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`; `native-publish.yml`
+   `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`,
+   `assert-distinct-fingerprints.yml`; `native-publish.yml`
    and `native-dev-release.yml` have none) **and** the composite actions that
    call sibling actions (`run-maestro-android-redroid/action.yml` →
    `redroid-container`, `run-maestro-android/action.yml` →
@@ -134,6 +135,7 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/swift-ios.yml \
                .github/workflows/expo-ota-preview.yml \
                .github/workflows/expo-fingerprint-guard.yml \
+               .github/workflows/assert-distinct-fingerprints.yml \
                actions/expo-native-key/action.yml \
                actions/run-maestro-android-redroid/action.yml \
                actions/run-maestro-android/action.yml; do

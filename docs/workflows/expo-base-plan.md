@@ -28,6 +28,14 @@ pool by default):
    capture job already downloads;
 5. records the target's decision as `<plan-artifact-prefix>-<target name>`.
 
+The collecting job also fails closed when two targets with different `appId`
+resolve to the same native key (same-`appId` targets sharing a key are a
+legitimate dedupe): the error names both targets, the key and the fingerprint
+sources they share. See [docs/repack.md](../repack.md#targets-that-differ-only-in-brand-assets-or-per-target-config)
+for the `extraSources` fix and
+[`assert-distinct-fingerprints.yml`](assert-distinct-fingerprints.md) for the same
+check ahead of a build pipeline.
+
 A collecting job then folds every target's decision into the `native-targets`
 output. One plan per target is required: a plan that never arrived is not an
 empty set of native builds, it is a target whose strategy nobody decided, and
