@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fails when two targets of one platform with different appId resolve to the
 # same native key. Usage: assert-distinct-native-keys.sh <platform> <plans-json>
-# <plans-json> is a JSON array of {name, appId, nativeKey, appDir?, fingerprint?,
+# <plans-json> is a JSON array of {name, appId (required), nativeKey, appDir?, fingerprint?,
 # configHash?}. Same appId sharing a key is a legitimate dedupe and passes.
 set -euo pipefail
 
@@ -13,9 +13,9 @@ if ! jq -e 'type == "array"' >/dev/null 2>&1 <<< "$plans"; then
   exit 1
 fi
 
-malformed=$(jq -r '[to_entries[] | select((.value.name // "") == "" or (.value.nativeKey // "") == "") | .key] | join(", ")' <<< "$plans")
+malformed=$(jq -r '[to_entries[] | select((.value.name // "") == "" or (.value.appId // "") == "" or (.value.nativeKey // "") == "") | .key] | join(", ")' <<< "$plans")
 if [ -n "$malformed" ]; then
-  echo "::error::Plan entries at index $malformed have no name or no nativeKey; a target without a key cannot be proven distinct."
+  echo "::error::Plan entries at index $malformed have no name, appId or nativeKey; a target without an appId or key cannot be proven distinct."
   exit 1
 fi
 

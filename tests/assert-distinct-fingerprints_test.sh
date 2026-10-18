@@ -50,7 +50,16 @@ run_step "$dir" PLATFORM=ios PLANS='[{"name":"brand-a","appId":"com.a","nativeKe
 if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'an empty key passed'
 else
-    assert_contains "$(cat "$dir/log")" 'no nativeKey' 'error message' && pass_case
+    assert_contains "$(cat "$dir/log")" 'no name, appId or nativeKey' 'error message' && pass_case
+fi
+
+case_start 'two targets that both omit appId cannot be proven distinct'
+dir="$(new_workspace "$ACTION" "$STEP")"
+run_step "$dir" PLATFORM=ios PLANS='[{"name":"a","nativeKey":"k"},{"name":"b","nativeKey":"k"}]' ASSERT_SCRIPT="$SCRIPT"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'targets without appId passed'
+else
+    pass_case
 fi
 
 case_start 'plans that are not a JSON array fail closed'
