@@ -878,6 +878,11 @@ on:
                     passwords and the credentials a seed hook uses to prepare the
                     backend it captures against.
                 required: false
+        outputs:
+            result:
+                description: >-
+                    The status job's verdict: passed or failed.
+                value: ${{ jobs.status.outputs.result }}
 
 concurrency:
     group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -2715,8 +2720,11 @@ jobs:
         needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-android, upload]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        outputs:
+            result: ${{ steps.report.outputs.result }}
         steps:
             - name: Report
+              id: report
               shell: bash
               env:
                   VALIDATE_RESULT: ${{ needs.validate-manifest.result }}
@@ -2733,6 +2741,8 @@ jobs:
                   UPLOAD_ENABLED: ${{ needs.validate-manifest.outputs.upload-screenshots }}
                   UPLOAD_RESULT: ${{ needs.upload.result }}
               run: |
+                  result=failed
+                  trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
                   fail() {
                     echo "$1"
                     if [ "$2" = 'cancelled' ]; then
@@ -2785,4 +2795,5 @@ jobs:
                   if [ "$UPLOAD_ENABLED" = "true" ] && [ "$UPLOAD_RESULT" != "success" ]; then
                     fail "Upload job failed." "$UPLOAD_RESULT"
                   fi
+                  result=passed
                   echo "Store screenshots completed successfully for platforms:$ran_platforms."

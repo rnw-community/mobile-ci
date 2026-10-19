@@ -925,6 +925,27 @@ the resolution order is the usual one — explicit `with:` value > `config-path`
 value > the built-in `auto` — and the `validate-manifest` job logs which of
 the three it took.
 
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed` or `failed`. |
+
+Read it from a caller job that `needs:` this one. GitHub skips a dependent
+job when its need fails, so a notification job must opt in with `if:
+always()` (or `!cancelled()`) to see a `failed` result:
+
+```yaml
+    notify:
+        needs: screenshots
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - env:
+                  RESULT: ${{ needs.screenshots.outputs.result }}
+              run: echo "store-screenshots: $RESULT"
+```
+
 ## Secrets
 
 | Name                | Required | Description |

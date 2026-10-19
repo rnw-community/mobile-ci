@@ -108,6 +108,27 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `test-timeout-minutes`        | no       | `75`                                       | Test job timeout. |
 | `tolerate-test-failures`      | no       | `false`                                    | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite, usually passed per target from the caller (e.g. `${{ matrix.package == 'flaky' }}`). |
 
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed`, `failed`, or `skipped` when no target package was affected. A skip is a green check, not a pass, so a notification job should not report it as one. |
+
+Read it from a caller job that `needs:` this one. GitHub skips a dependent
+job when its need fails, so a notification job must opt in with `if:
+always()` (or `!cancelled()`) to see a `failed` result:
+
+```yaml
+    notify:
+        needs: e2e
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - env:
+                  RESULT: ${{ needs.e2e.outputs.result }}
+              run: echo "ios-maestro: $RESULT"
+```
+
 ## Secrets
 
 | Secret                | Required | Description |

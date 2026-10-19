@@ -49,7 +49,7 @@ run_targets() {
     shift
     run_step "$workspace" APP_DIR=apps/mobile TARGETS='' ENABLE_IOS=true ENABLE_ANDROID=false \
         BUILD_PROFILE=production SUBMIT_PROFILE=production MODE=native WRITE_STORE_RECORD=false \
-        RELEASE_TAG_INPUT='' REF_TYPE=branch REF_NAME=main "$@"
+        RELEASE_TAG_INPUT='' REF_TYPE=branch REF_NAME=main RECORD_SCOPE='' "$@"
 }
 
 target_field() {

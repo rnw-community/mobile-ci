@@ -295,8 +295,8 @@ render_dev() {
     run_step "$workspace" SECTIONS_DIR="$workspace/runner-temp/sections" \
         SERVER_URL='https://github.com' REPOSITORY='acme/app' HEAD_SHA='abcdef0123456789' \
         RUN_URL='https://github.com/acme/app/actions/runs/7' \
-        ENABLE_IOS=true IOS_RESULT=success IOS_TAG=dev-ios-12 IOS_ASSET=app.ipa IOS_FINGERPRINT="$FP" \
-        ENABLE_ANDROID=true ANDROID_RESULT=success ANDROID_TAG=dev-android-12 ANDROID_ASSET=app.apk ANDROID_FINGERPRINT="$FP" \
+        ENABLE_IOS=true IOS_RESULT=success IOS_TAG=dev-ios-12 IOS_ASSET=app.ipa IOS_FINGERPRINT="$FP" IOS_INSTALL_URL='' \
+        ENABLE_ANDROID=true ANDROID_RESULT=success ANDROID_TAG=dev-android-12 ANDROID_ASSET=app.apk ANDROID_FINGERPRINT="$FP" ANDROID_INSTALL_URL='' \
         "$@"
 }
 

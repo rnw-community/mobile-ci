@@ -191,7 +191,8 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   code?" decision the e2e, screenshot and warm-up workflows call. Not normally
   called directly by a consumer.
 - `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
-- `native-dev-release.yml` — dev-profile build published to a GitHub Release.
+- `native-dev-release.yml` — dev-profile build published to a GitHub Release,
+  or to EAS internal distribution (`distribution: eas`) for private-repo testers.
 - `expo-ota-preview.yml` — EAS-free, tokenless OTA JS preview for development
   builds: exports the app, generates Expo Updates v1 manifests
   (`expo-ota-manifest`), publishes to a GitHub Release
@@ -252,7 +253,8 @@ auto-discovered or run standalone by the sharding logic.
   flows on devicecloud.dev from a plain Linux runner instead of a Mac or KVM
   host; see each doc's "Device Cloud driver" section.
 - `native-publish.yml` (opt-in secrets, only for the platforms you enable):
-  `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android),
+  `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android) —
+  the last two optional with `credentials-source: eas`,
   `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`/`eas
   submit`, e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`).
 - `native-dev-release.yml` (opt-in secrets): `EXPO_TOKEN` (required by both

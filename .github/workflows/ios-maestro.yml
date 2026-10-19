@@ -613,6 +613,12 @@ on:
                     device-cloud. Handed to the CLI through its environment, never
                     as an input or on a command line.
                 required: false
+        outputs:
+            result:
+                description: >-
+                    The status job's verdict: passed, failed, or skipped when no
+                    target package was affected (a skip is a green check, not a pass).
+                value: ${{ jobs.status.outputs.result }}
 
 concurrency:
     group: ios-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -1366,8 +1372,11 @@ jobs:
         needs: [detect, plan, build, test]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        outputs:
+            result: ${{ steps.report.outputs.result }}
         steps:
             - name: Report
+              id: report
               shell: bash
               env:
                   DETECT_RESULT: ${{ needs.detect.result }}
@@ -1379,6 +1388,8 @@ jobs:
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
               run: |
+                  result=failed
+                  trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
                   summary() {
                     printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
                   }
@@ -1394,6 +1405,7 @@ jobs:
                     exit 1
                   fi
                   if [ "$DETECT_AFFECTED" != "true" ]; then
+                    result=skipped
                     echo "::notice::iOS Maestro E2E skipped: target packages untouched, so every build/test leg was skipped and zero Maestro flows ran. This is not a pass."
                     summary "### iOS Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
                     exit 0
@@ -1422,9 +1434,11 @@ jobs:
                     exit 1
                   fi
                   if [ "$DETECT_FORCED" = 'true' ]; then
+                    result=passed
                     echo "Maestro suite passed (forced by the '${FORCE_LABEL}' label)."
                     summary "### iOS Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
                     exit 0
                   fi
+                  result=passed
                   echo "Maestro suite passed."
                   summary "### iOS Maestro E2E: passed"

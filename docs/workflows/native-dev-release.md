@@ -1,7 +1,9 @@
 # native-dev-release.yml
 
-`workflow_call` reusable workflow: EAS local development build per enabled
-platform, published as a GitHub Release rather than to a store.
+`workflow_call` reusable workflow: EAS development build per enabled
+platform, published as a GitHub Release (default) or to EAS internal
+distribution (`distribution: eas`, see [EAS distribution](#eas-distribution))
+rather than to a store.
 
 Two independent jobs, each gated by its own `enable-*` input:
 **ios-dev-release** and **android-dev-release**. Each: computes a
@@ -21,7 +23,93 @@ which releases are kept or deleted. A final **status** job aggregates the
 enabled jobs into a single required check. Both jobs need `permissions:
 contents: write` to create/prune releases.
 
+## EAS distribution
+
+A GitHub Release asset is only downloadable by someone who can read the
+repository, and it is a file, not an install link: a signed `.ipa` reaches a
+registered iPhone only through Xcode or Apple Configurator on a Mac.
+`distribution: eas` hands testers an EAS internal distribution link they open
+on the device instead:
+
+- With the default `build-location: local`, the job builds with `eas build
+  --local` as before, runs the embedded build number read-back and the
+  post-build hook, then uploads the binary with `eas upload --platform
+  <platform> --build-path <artifact> --non-interactive --json`. EAS records it
+  as an internal distribution build and returns its build page.
+- With `build-location: cloud`, the job runs `eas build --non-interactive
+  --json --wait` on EAS servers instead, and reads the finished build from that
+  JSON. The build profile must have `distribution: internal`, and on Android
+  produce an `.apk` (`android.buildType: apk`). Nothing is built on the runner,
+  so a cloud build cannot run a post-build command or
+  `ios-verify-embedded-build-number`; asking for either fails the job rather
+  than skipping it. The runner's environment does not reach the EAS builder
+  either: `publish-env`, `EAS_EXTRA_ENV` and `DEVELOPMENT_BUILD_NUMBER` apply
+  only to the steps on the runner (the pre-build hook, and `eas build`'s local
+  evaluation of the app config). A value the build itself needs must be in the
+  build profile's `env` or an EAS environment variable.
+
+Either way the job outputs the build page,
+`https://expo.dev/accounts/<owner>/projects/<slug>/builds/<id>`, as
+`install-url` and its id as `build-id`, and links it from the job summary and,
+with `pr-comment`, the pull request comment. Testers open the page on the
+device to install; an iOS device must be registered in the profile's ad hoc
+provisioning (`eas device:create`). No GitHub Release is created or pruned;
+EAS's own build retention applies.
+
+The step fails closed when `eas upload` exits 0 without a build URL, when the
+URL is not an EAS build page, and, for a cloud build, when the build did not
+finish, is not internal distribution, has no artifact, or is an Android
+`.aab`. Combining `distribution: eas` with `android-artifact-extension: aab`
+fails before the build: no device can install an `.aab`.
+
+`EXPO_TOKEN` must belong to an account that can upload to the project in
+`app.json` / `app.config.*`.
+
+Access to the link is governed by EAS, not by the repository: per Expo's
+[internal distribution](https://docs.expo.dev/build/internal-distribution/)
+documentation, anyone with an internal build's URL can open it by default.
+When the binary must stay restricted, turn off unauthenticated access to
+internal builds in the EAS project settings, so testers must sign in to an
+Expo account with access to the project.
+
+## Outputs
+
+| Name                  | Description |
+| --------------------- | ----------- |
+| `ios-install-url`     | EAS build page of the iOS build with `distribution: eas`; empty otherwise. |
+| `ios-build-id`        | EAS build id of the iOS build with `distribution: eas`; empty otherwise. |
+| `ios-release-url`     | GitHub Release of the iOS build with `distribution: github-release`; empty otherwise. |
+| `ios-fingerprint`     | [Runtime fingerprint](#runtime-fingerprint) of the iOS build. |
+| `android-install-url` | EAS build page of the Android build with `distribution: eas`; empty otherwise. |
+| `android-build-id`    | EAS build id of the Android build with `distribution: eas`; empty otherwise. |
+| `android-release-url` | GitHub Release of the Android build with `distribution: github-release`; empty otherwise. |
+| `android-fingerprint` | [Runtime fingerprint](#runtime-fingerprint) of the Android build. |
+
+A caller's notification job reads them as `needs.<job>.outputs.<name>`:
+
+```yaml
+jobs:
+    dev-release:
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: false
+            enable-android: true
+            distribution: eas
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    notify:
+        needs: dev-release
+        runs-on: ubuntu-latest
+        steps:
+            - env:
+                  INSTALL_URL: ${{ needs.dev-release.outputs.android-install-url }}
+              run: echo "Android dev build: $INSTALL_URL"
+```
+
 ## Release assets
+
+With `distribution: github-release` (the default):
 
 Every dev release carries three assets: the build artifact (`app.ipa` /
 `app.apk` by default, or `app.aab`), a `SHA256SUMS` file, and a `build-meta.json` file.
@@ -183,11 +271,13 @@ android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
+| `distribution`               | no       | `github-release`                          | `github-release` attaches the build to a pruned GitHub Release. `eas` uploads it to EAS internal distribution and outputs its install page — see [EAS distribution](#eas-distribution). Needs an `apk` on Android. Fails closed on any other value. |
+| `build-location`             | no       | `local`                                   | `local` runs `eas build --local` on the runner. `cloud` builds on EAS servers (`eas build --json --wait`); it needs `distribution: eas`, a build profile with `distribution: internal`, and no post-build command or `ios-verify-embedded-build-number`. `publish-env`, `EAS_EXTRA_ENV` and `DEVELOPMENT_BUILD_NUMBER` do not reach the EAS builder; put build-time values in the profile's `env` or EAS environment variables. Fails closed on any other value. |
 | `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, after the App Store Connect key (if any) is written. Receives `DEVELOPMENT_BUILD_NUMBER` and `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
 | `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build. Receives `DEVELOPMENT_BUILD_NUMBER` — see [Hook environment](#hook-environment). |
 | `ios-verify-embedded-build-number` | no | `false`                                | Fail the iOS job, before any release is created, when the built `.ipa`'s `CFBundleVersion` differs from `DEVELOPMENT_BUILD_NUMBER`. Turn on only once the app wires that variable into its build number — see [Embedded build number](#embedded-build-number). No Android equivalent: `versionCode` is an integer and can never equal `<run_number>.<run_attempt>`. |
-| `ios-post-build-command`     | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the iOS EAS build and the embedded build number read-back, before the GitHub Release is created; a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.ipa`), `EMBEDDED_BUILD_NUMBER` (`CFBundleVersion`) and `EMBEDDED_VERSION` (`CFBundleShortVersionString`). |
-| `android-post-build-command` | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the Android EAS build and the embedded build number read-back, before the GitHub Release is created; a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.apk`/`.aab`), `EMBEDDED_BUILD_NUMBER` (`versionCode`) and `EMBEDDED_VERSION` (`versionName`), both empty when the host has no tool to read them. |
+| `ios-post-build-command`     | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the iOS EAS build and the embedded build number read-back, before the build is published (GitHub Release or `eas upload`); a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.ipa`), `EMBEDDED_BUILD_NUMBER` (`CFBundleVersion`) and `EMBEDDED_VERSION` (`CFBundleShortVersionString`). |
+| `android-post-build-command` | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the Android EAS build and the embedded build number read-back, before the build is published (GitHub Release or `eas upload`); a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.apk`/`.aab`), `EMBEDDED_BUILD_NUMBER` (`versionCode`) and `EMBEDDED_VERSION` (`versionName`), both empty when the host has no tool to read them. |
 | `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
 | `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
@@ -244,7 +334,9 @@ inherit` or an explicit `secrets:` block in the caller workflow.
 ## Permissions
 
 The caller workflow needs `permissions: contents: write` (or an equivalent
-token) — both jobs create and prune GitHub Releases and tags.
+token) — both jobs create and prune GitHub Releases and tags. With
+`distribution: eas` no release is touched, but the jobs still declare
+`contents: write`, so the caller must keep granting it.
 
 With `pr-comment: true` it also needs `pull-requests: write`. The comment job
 requests no permissions of its own and inherits the calling job's, so a

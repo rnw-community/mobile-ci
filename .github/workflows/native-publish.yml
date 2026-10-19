@@ -273,6 +273,31 @@ on:
                 type: string
                 required: false
                 default: ''
+            credentials-source:
+                description: >-
+                    secrets (default) requires ASC_API_KEY, ASC_KEY_ID and
+                    ASC_ISSUER_ID for iOS and GOOGLE_SERVICE_ACCOUNT_JSON for
+                    Android. eas makes them optional: eas build and eas submit then
+                    use the credentials stored on EAS for the project (eas
+                    credentials), so the submit profile must not name an
+                    ascApiKeyPath or serviceAccountKeyPath. A key that is passed is
+                    still written and used. EXPO_TOKEN stays required. Fails closed
+                    on any other value.
+                type: string
+                required: false
+                default: secrets
+            record-scope:
+                description: >-
+                    Names this call's store build record (store-record-<record-scope>.json
+                    instead of store-record-<app-dir>.json), its build and marker
+                    artifacts and its concurrency group, so a caller can run this
+                    workflow once per brand in a matrix without the calls
+                    overwriting or cancelling each other. Calls that share a run
+                    must each set a distinct, non-empty value. Letters, digits, '.', '_' and single '-'
+                    between them. Empty (default) keeps the app-dir names.
+                type: string
+                required: false
+                default: ''
             publish-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs of non-secret env appended to
@@ -293,7 +318,9 @@ on:
                 description: Expo access token, required by ios-publish and android-publish.
                 required: false
             ASC_API_KEY:
-                description: App Store Connect API key contents (.p8), required by ios-publish.
+                description: >-
+                    App Store Connect API key contents (.p8), required by ios-publish
+                    unless credentials-source is eas.
                 required: false
             ASC_KEY_ID:
                 description: >-
@@ -310,7 +337,9 @@ on:
                     EXPO_ASC_ISSUER_ID.
                 required: false
             GOOGLE_SERVICE_ACCOUNT_JSON:
-                description: Google Play service account key JSON contents, required by android-publish.
+                description: >-
+                    Google Play service account key JSON contents, required by
+                    android-publish unless credentials-source is eas.
                 required: false
             EAS_EXTRA_ENV:
                 description: >-
@@ -340,9 +369,16 @@ on:
             marketing-version:
                 description: The exported STORE_MARKETING_VERSION, empty when none.
                 value: ${{ jobs.plan.outputs.marketing-version }}
+            submissions:
+                description: >-
+                    JSON object of target name to {platform, submissionId,
+                    submissionUrl} for every target whose eas submit succeeded; {}
+                    when nothing was submitted. submissionId and submissionUrl are
+                    empty when the EAS log named no submission page.
+                value: ${{ jobs.status.outputs.submissions }}
 
 concurrency:
-    group: native-publish-${{ github.workflow }}-${{ github.ref }}
+    group: native-publish-${{ github.workflow }}-${{ github.ref }}-${{ inputs.record-scope }}
     cancel-in-progress: false
 
 # No workflow-level permissions: a called workflow's job that declares more than
@@ -365,6 +401,7 @@ jobs:
             record: ${{ steps.targets.outputs.record }}
             release-tag: ${{ steps.targets.outputs.release-tag }}
             record-asset: ${{ steps.targets.outputs.record-asset }}
+            marker-prefix: ${{ steps.targets.outputs.marker-prefix }}
             build-number: ${{ steps.version.outputs.build-number }}
             marketing-version: ${{ steps.version.outputs.marketing-version }}
             fingerprints: ${{ steps.fingerprints.outputs.fingerprints }}
@@ -400,8 +437,13 @@ jobs:
                   RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
                   REF_TYPE: ${{ github.ref_type }}
                   REF_NAME: ${{ github.ref_name }}
+                  RECORD_SCOPE: ${{ inputs.record-scope }}
               run: |
                   set -euo pipefail
+                  if [ -n "$RECORD_SCOPE" ] && ! printf '%s\n' "$RECORD_SCOPE" | grep -Eqx '[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*'; then
+                    echo "::error::record-scope '$RECORD_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
+                    exit 1
+                  fi
                   case "$MODE" in
                     native|auto|ota-only) ;;
                     *)
@@ -505,6 +547,12 @@ jobs:
                   case "$scope" in
                     ''|.) scope=root ;;
                   esac
+                  artifact_scope=''
+                  if [ -n "$RECORD_SCOPE" ]; then
+                    scope="$RECORD_SCOPE"
+                    artifact_scope="${RECORD_SCOPE}--"
+                    resolved="$(jq -c --arg scope "$artifact_scope" 'map(.artifactSuffix = "-\($scope)\(.name)")' <<< "$resolved")"
+                  fi
 
                   {
                     echo "ios-targets=$(jq -c 'map(select(.platform == "ios"))' <<< "$resolved")"
@@ -515,6 +563,7 @@ jobs:
                     echo "record=$record"
                     echo "release-tag=$release_tag"
                     echo "record-asset=store-record-${scope}.json"
+                    echo "marker-prefix=store-submitted-${RECORD_SCOPE}--"
                   } >> "$GITHUB_OUTPUT"
                   jq -r '.[] | "Target \(.name): \(.platform), build profile \(.buildProfile), submit profile \(.submitProfile), \(if .envLines == "" then 0 else (.envLines | split("\n") | length) end) profile env variable(s)"' <<< "$resolved"
 
@@ -945,6 +994,7 @@ jobs:
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+            HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -954,18 +1004,28 @@ jobs:
             - name: Validate required secrets
               shell: bash
               env:
+                  CREDENTIALS_SOURCE: ${{ inputs.credentials-source }}
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
                   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
+                  case "$CREDENTIALS_SOURCE" in
+                    secrets|eas) ;;
+                    *)
+                      echo "::error::credentials-source must be secrets or eas; got '$CREDENTIALS_SOURCE'."
+                      exit 1
+                      ;;
+                  esac
                   missing=()
                   [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
-                  [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
-                  [ -z "${ASC_KEY_ID:-}" ] && missing+=(ASC_KEY_ID)
-                  [ -z "${ASC_ISSUER_ID:-}" ] && missing+=(ASC_ISSUER_ID)
+                  if [ "$CREDENTIALS_SOURCE" = secrets ] || [ -n "${ASC_API_KEY:-}${ASC_KEY_ID:-}${ASC_ISSUER_ID:-}" ]; then
+                    [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
+                    [ -z "${ASC_KEY_ID:-}" ] && missing+=(ASC_KEY_ID)
+                    [ -z "${ASC_ISSUER_ID:-}" ] && missing+=(ASC_ISSUER_ID)
+                  fi
                   if [ "${#missing[@]}" -gt 0 ]; then
-                    echo "::error::ios-publish requires secrets: ${missing[*]}. ASC_KEY_ID and ASC_ISSUER_ID must accompany ASC_API_KEY, otherwise EAS cannot resolve the key non-interactively and falls back to an interactive prompt that cannot be answered in CI. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    echo "::error::ios-publish requires secrets: ${missing[*]}. ASC_KEY_ID and ASC_ISSUER_ID must accompany ASC_API_KEY, otherwise EAS cannot resolve the key non-interactively and falls back to an interactive prompt that cannot be answered in CI; with credentials-source: eas pass none of the three to use the key stored on EAS. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
                   fi
 
@@ -1187,6 +1247,7 @@ jobs:
 
             - name: Write App Store Connect API key
               id: asc-key
+              if: env.HAS_ASC_KEY == 'true'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -1244,6 +1305,7 @@ jobs:
                   retention-days: 14
 
             - name: EAS submit (iOS)
+              id: submit
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -1255,14 +1317,20 @@ jobs:
                   EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
+                  submit_log="$RUNNER_TEMP/ios-publish/eas-submit.log"
+                  mkdir -p "$(dirname "$submit_log")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
                     --platform ios \
                     --profile "$SUBMIT_PROFILE" \
                     --non-interactive \
-                    --path "$ARTIFACT_PATH"
+                    --path "$ARTIFACT_PATH" 2>&1 | tee "$submit_log"
+                  submission_url="$(grep -Eo 'https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/submissions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$submit_log" | tail -n 1 || true)"
+                  if [ -z "$submission_url" ]; then
+                    echo "::warning::eas submit succeeded but its log names no EAS submission page, so the submissions output carries no id for this target."
+                  fi
+                  echo "submission-url=$submission_url" >> "$GITHUB_OUTPUT"
 
             - name: Record the submitted target
-              if: needs.plan.outputs.record == 'true'
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
@@ -1270,29 +1338,35 @@ jobs:
                   BUILD_PROFILE: ${{ matrix.target.buildProfile }}
                   SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
                   FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
+                  RECORD: ${{ needs.plan.outputs.record }}
+                  SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
               run: |
                   set -euo pipefail
                   fingerprint=''
                   if [ -n "$FINGERPRINTS" ]; then
                     fingerprint="$(jq -r --arg name "$TARGET_NAME" '.[$name] // ""' <<< "$FINGERPRINTS")"
                   fi
-                  if [ -z "$fingerprint" ]; then
+                  if [ "$RECORD" = true ] && [ -z "$fingerprint" ]; then
                     echo "::error::The plan job computed no fingerprint for target $TARGET_NAME, so its submitted build cannot be recorded."
                     exit 1
+                  fi
+                  submission_id=''
+                  if [ -n "$SUBMISSION_URL" ]; then
+                    submission_id="${SUBMISSION_URL##*/}"
                   fi
                   marker_dir="$RUNNER_TEMP/store-submitted"
                   mkdir -p "$marker_dir"
                   jq -n --arg name "$TARGET_NAME" --arg platform "$TARGET_PLATFORM" \
                     --arg buildProfile "$BUILD_PROFILE" --arg submitProfile "$SUBMIT_PROFILE" \
                     --arg fingerprint "$fingerprint" \
-                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint}' \
+                    --arg submissionUrl "$SUBMISSION_URL" --arg submissionId "$submission_id" \
+                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint, submissionUrl: $submissionUrl, submissionId: $submissionId}' \
                     > "$marker_dir/${TARGET_NAME}.json"
 
             - name: Upload the submitted-target marker
-              if: needs.plan.outputs.record == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-submitted-${{ matrix.target.name }}
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
                   path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
                   retention-days: 14
                   overwrite: true
@@ -1627,6 +1701,7 @@ jobs:
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+            HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -1636,14 +1711,24 @@ jobs:
             - name: Validate required secrets
               shell: bash
               env:
+                  CREDENTIALS_SOURCE: ${{ inputs.credentials-source }}
                   GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
               run: |
                   set -euo pipefail
+                  case "$CREDENTIALS_SOURCE" in
+                    secrets|eas) ;;
+                    *)
+                      echo "::error::credentials-source must be secrets or eas; got '$CREDENTIALS_SOURCE'."
+                      exit 1
+                      ;;
+                  esac
                   missing=()
                   [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
-                  [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ] && missing+=(GOOGLE_SERVICE_ACCOUNT_JSON)
+                  if [ "$CREDENTIALS_SOURCE" = secrets ] && [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ]; then
+                    missing+=(GOOGLE_SERVICE_ACCOUNT_JSON)
+                  fi
                   if [ "${#missing[@]}" -gt 0 ]; then
-                    echo "::error::android-publish requires secrets: ${missing[*]}. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    echo "::error::android-publish requires secrets: ${missing[*]} (credentials-source: eas uses the Google service account key stored on EAS instead of GOOGLE_SERVICE_ACCOUNT_JSON). Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
                   fi
 
@@ -2050,6 +2135,7 @@ jobs:
 
             - name: Write Google service account key
               id: google-key
+              if: env.HAS_GOOGLE_KEY == 'true'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -2069,6 +2155,7 @@ jobs:
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: EAS submit (Android)
+              id: submit
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -2080,14 +2167,20 @@ jobs:
                   GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.google-key.outputs.key-path }}
               run: |
                   set -euo pipefail
+                  submit_log="$RUNNER_TEMP/android-publish/eas-submit.log"
+                  mkdir -p "$(dirname "$submit_log")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
                     --platform android \
                     --profile "$SUBMIT_PROFILE" \
                     --non-interactive \
-                    --path "$ARTIFACT_PATH"
+                    --path "$ARTIFACT_PATH" 2>&1 | tee "$submit_log"
+                  submission_url="$(grep -Eo 'https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/submissions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$submit_log" | tail -n 1 || true)"
+                  if [ -z "$submission_url" ]; then
+                    echo "::warning::eas submit succeeded but its log names no EAS submission page, so the submissions output carries no id for this target."
+                  fi
+                  echo "submission-url=$submission_url" >> "$GITHUB_OUTPUT"
 
             - name: Record the submitted target
-              if: needs.plan.outputs.record == 'true'
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
@@ -2095,29 +2188,35 @@ jobs:
                   BUILD_PROFILE: ${{ matrix.target.buildProfile }}
                   SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
                   FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
+                  RECORD: ${{ needs.plan.outputs.record }}
+                  SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
               run: |
                   set -euo pipefail
                   fingerprint=''
                   if [ -n "$FINGERPRINTS" ]; then
                     fingerprint="$(jq -r --arg name "$TARGET_NAME" '.[$name] // ""' <<< "$FINGERPRINTS")"
                   fi
-                  if [ -z "$fingerprint" ]; then
+                  if [ "$RECORD" = true ] && [ -z "$fingerprint" ]; then
                     echo "::error::The plan job computed no fingerprint for target $TARGET_NAME, so its submitted build cannot be recorded."
                     exit 1
+                  fi
+                  submission_id=''
+                  if [ -n "$SUBMISSION_URL" ]; then
+                    submission_id="${SUBMISSION_URL##*/}"
                   fi
                   marker_dir="$RUNNER_TEMP/store-submitted"
                   mkdir -p "$marker_dir"
                   jq -n --arg name "$TARGET_NAME" --arg platform "$TARGET_PLATFORM" \
                     --arg buildProfile "$BUILD_PROFILE" --arg submitProfile "$SUBMIT_PROFILE" \
                     --arg fingerprint "$fingerprint" \
-                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint}' \
+                    --arg submissionUrl "$SUBMISSION_URL" --arg submissionId "$submission_id" \
+                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint, submissionUrl: $submissionUrl, submissionId: $submissionId}' \
                     > "$marker_dir/${TARGET_NAME}.json"
 
             - name: Upload the submitted-target marker
-              if: needs.plan.outputs.record == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-submitted-${{ matrix.target.name }}
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
                   path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
                   retention-days: 14
                   overwrite: true
@@ -2158,7 +2257,7 @@ jobs:
             - name: Download the submitted-target markers
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  pattern: store-submitted-*
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
                   merge-multiple: true
                   path: ${{ runner.temp }}/store-submitted
 
@@ -2233,7 +2332,42 @@ jobs:
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         permissions:
             contents: read
+        outputs:
+            submissions: ${{ steps.submissions.outputs.submissions }}
         steps:
+            - name: Apply RunsOn cache bypass
+              if: needs.plan.outputs.decision == 'native'
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.2.0 # v4.2.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Download the submitted-target markers
+              if: needs.plan.outputs.decision == 'native'
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
+                  merge-multiple: true
+                  path: ${{ runner.temp }}/store-submitted
+
+            - name: Collect the submissions
+              id: submissions
+              shell: bash
+              env:
+                  MARKER_DIR: ${{ runner.temp }}/store-submitted
+              run: |
+                  set -euo pipefail
+                  markers=()
+                  if [ -d "$MARKER_DIR" ]; then
+                    while IFS= read -r -d '' marker; do
+                      markers+=("$marker")
+                    done < <(find "$MARKER_DIR" -maxdepth 1 -type f -name '*.json' -print0 | LC_ALL=C sort -z)
+                  fi
+                  submissions='{}'
+                  if [ "${#markers[@]}" -gt 0 ]; then
+                    submissions="$(jq -cs 'map({(.name): {platform, submissionId: (.submissionId // ""), submissionUrl: (.submissionUrl // "")}}) | add' "${markers[@]}")"
+                  fi
+                  echo "Submissions: $submissions"
+                  echo "submissions=$submissions" >> "$GITHUB_OUTPUT"
+
             - name: Report
               shell: bash
               env:
