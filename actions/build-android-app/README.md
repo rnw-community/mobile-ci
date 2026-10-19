@@ -79,8 +79,12 @@ The action therefore bounds the compilers running at once across the whole
 build. `native-compile-jobs` empty derives the bound from the cgroup: one job
 per CPU of quota (`cpu.max`, or the cgroup v1 CFS quota, rounded up) and one
 per GiB of memory limit (`memory.max`, or `memory.limit_in_bytes`) above a
-4 GiB reserve for the Gradle and Kotlin JVMs, whichever is lower, at least 1
-(4 on a 4-CPU / 8 GiB runner). An unparseable limit fails the step; a runner
+5 GiB reserve for everything that is not a compiler, whichever is lower, at
+least 1 (3 on a 4-CPU / 8 GiB runner). The reserve is measured, not guessed: on
+that runner the Gradle daemon and two Kotlin daemons held about 4.2 GiB during
+the native phase of a Maestro build, and the Gradle daemon plus eas-cli about
+4.6 GiB in `eas build --local`, while single React Native Skia translation
+units reach 2.7 GiB. An unparseable limit fails the step; a runner
 with no limit is left to `ninja`.
 
 The bound is enforced by a compiler launcher, written to
