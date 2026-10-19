@@ -1,0 +1,15 @@
+[
+  {
+    "id": "01a153fd-a6d9-7808-bf96-f8bc88585bf0",
+    "createdAt": "2026-10-19T11:48:14.681Z",
+    "group": "b4395088-173d-4e72-aff7-644abf0e8b41",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 25.2.0",
+    "runtimeVersion": "b610ebf53eaa44559a28a9bddbcd2bbe395db69e",
+    "platform": "ios",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fd-a6d9-7808-bf96-f8bc88585bf0",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e",
+    "assetMapUrl": "https://storage.googleapis.com/updates-assets-metadata-production/production/7ea9a247-3671-4697-a41f-59ebadd95ec8/a2fcdd4d-43a5-4276-977c-69f304ee3e72?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20261019%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261019T114833Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=2d276a9b4b6c0e3c10eddc2643edaa2a5bb1f671ca4de7dc1e1fbb951ca3e119cb6a0f558df388677a71595406fc13ab6c28a5896fe5966e3360b172f39e2e586620325882a45332609f9242d58edd13b63d1e8774b9c28c145561ead19636489cbbe10851022edad3bea7b3818d46d171e935d24607016e6fb4dd0ce731a217a8860a14dec57629f86dca778bfa82edf625ec3eda7b9a20dc3bceb1e9c30d765021e469c073cdbe7f03165f6c5102009636ac7ead10880eb7c8f8b535b1e54e56486297e86f13bfab6faed4249f29343815de96966b0d461cdf0d002fc5e752c08b4649f908da896988b84adb31cf31ae9c18738fca8d0621f5624f797b246f"
+  }
+]

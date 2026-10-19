@@ -5,7 +5,7 @@
 
 A **plan** job runs first, on `control-runner-labels`: it expands the publish
 targets (see [Targets](#targets)), resolves each target's `eas.json` build
-profile env following `extends` (see [eas.json profile env](#easjson-profile-env)),
+profile env and channel following `extends` (see [eas.json profile env](#easjson-profile-env)),
 resolves the build number and marketing version (see
 [Build number](#build-number-and-marketing-version)), and in `mode: auto` /
 `ota-only` decides whether this release needs a store build at all (see
@@ -55,12 +55,14 @@ decided `ota` passes it without building.
 | `build-profile`                    | no       | `production`                              | EAS build profile (`eas.json` `build.<profile>`) used for both platforms, and the default of a `targets` entry's `buildProfile`. |
 | `submit-profile`                   | no       | `production`                              | EAS submit profile (`eas.json` `submit.<profile>`) used for both platforms, and the default of a `targets` entry's `submitProfile`. |
 | `targets`                          | no       | `''`                                      | JSON array of publish targets replacing `enable-ios` / `enable-android` / `build-profile` / `submit-profile` when non-empty. See [Targets](#targets). |
-| `mode`                             | no       | `native`                                  | `native` always builds and submits (today's behaviour). `auto` builds only when a target's native runtime changed since the last store build, else outputs `decision=ota`. `ota-only` never builds and fails when it would have to. See [Native or OTA](#native-or-ota-mode-and-the-store-build-record). |
-| `release-tag`                      | no       | `''`                                      | Tag whose GitHub Release carries the store build record. Empty uses the triggering tag on a tag-triggered run. Required (directly or via the trigger) by `mode: auto` / `ota-only` and `write-store-record`. |
+| `mode`                             | no       | `native`                                  | `native` always builds and submits (today's behaviour). `auto` builds only when a target's native runtime changed since the `ota-baseline`, else outputs `decision=ota`. `ota-only` never builds and fails when it would have to. See [Native or OTA](#native-or-ota-mode-and-the-store-build-record). |
+| `ota-baseline`                     | no       | `github-release`                          | What `auto` / `ota-only` compare against: `github-release` the store build record on a GitHub Release (needs a release tag), `eas-channel` the latest update and build on each target's EAS channel (needs `EXPO_TOKEN`, no tag). See [Against the EAS channel](#against-the-eas-channel-ota-baseline-eas-channel). |
+| `eas-channel-baseline`             | no       | `update-or-build`                         | `ota-baseline: eas-channel`: `update-or-build`, or `build` to require a matching finished EAS build (`eas-channel-fingerprint`'s `baseline`). |
+| `release-tag`                      | no       | `''`                                      | Tag whose GitHub Release carries the store build record. Empty uses the triggering tag on a tag-triggered run. Required (directly or via the trigger) by `mode: auto` / `ota-only` with `ota-baseline: github-release`, and by `write-store-record`. |
 | `write-store-record`               | no       | `false`                                   | Write the store build record in `mode: native` too, to seed a baseline before switching to `auto`. |
 | `build-number`                     | no       | `''`                                      | `''` exports nothing. `auto` exports `STORE_BUILD_NUMBER` = whole minutes since the Unix epoch at which the workflow run was created. A positive integer up to `2100000000` is exported as is. See [Build number](#build-number-and-marketing-version). |
 | `marketing-version`                | no       | `auto`                                    | `auto` exports `STORE_MARKETING_VERSION` from a release tag shaped `[<prefix>@][v]X[.Y[.Z]]` and nothing otherwise; `tag` fails without such a tag; `none` exports nothing; any other value must be `X[.Y[.Z]]` and is exported as is. |
-| `fingerprint-version`              | no       | `0.20.6`                                  | Pinned `@expo/fingerprint` version the plan job fingerprints targets with (only in `mode: auto` / `ota-only` or with `write-store-record`). |
+| `fingerprint-version`              | no       | `0.20.6`                                  | Deprecated and ignored: runtime versions come from the project's own `expo-updates` (`ota-runtime-version`). |
 | `plan-timeout-minutes`             | no       | `30`                                      | `plan` and `record` job timeout. |
 | `ios-pre-submit-command`           | no       | `''`                                      | Optional consumer-owned command (e.g. a fastlane lane) run in `app-dir` before the iOS build, after the App Store Connect key is written. Receives the profile env and `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
 | `ios-post-submit-command`          | no       | `''`                                      | Optional consumer-owned command (e.g. fastlane metadata/screenshots) run in `app-dir` after `eas submit` succeeds. Receives `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
@@ -83,9 +85,9 @@ decided `ota` passes it without building.
 | Name                | Description |
 | ------------------- | ----------- |
 | `decision`          | `native` when the run built and submitted, `ota` when every target's native runtime matches the baseline and nothing was built. Always `native` in `mode: native`. |
-| `changed-targets`   | Comma-separated targets whose fingerprint differs from the baseline (every target when there is none). Empty in `mode: native`. |
+| `changed-targets`   | Comma-separated targets whose runtime differs from the baseline (every target when there is none). Empty in `mode: native`. |
 | `baseline-tag`      | Release tag of the store build record compared against; empty when none. |
-| `fingerprints`      | JSON object of target name to `@expo/fingerprint` hash: the runtime version an OTA for that target must carry under `runtimeVersion: {policy: "fingerprint"}`. Empty unless the plan fingerprinted. |
+| `fingerprints`      | JSON object of target name to the runtime version an OTA for that target must carry: the runtime version `ota-runtime-version` resolves with the project's `expo-updates`, under the target's build env. Empty unless the plan fingerprinted. |
 | `build-number`      | The exported `STORE_BUILD_NUMBER`, empty when none. |
 | `marketing-version` | The exported `STORE_MARKETING_VERSION`, empty when none. |
 | `submissions`       | JSON object of target name to `{platform, submissionId, submissionUrl}` for every target whose `eas submit` succeeded, e.g. `{"acme-ios":{"platform":"ios","submissionId":"<uuid>","submissionUrl":"https://expo.dev/accounts/acme/projects/app/submissions/<uuid>"}}`. `{}` when nothing was submitted (or `decision` is `ota`). The id and URL are read from the `eas submit` log and are empty, with a warning, when the log names no submission page. |
@@ -206,7 +208,10 @@ The plan job resolves every target's `build.<buildProfile>.env` from
 profile's env over its parent's, the child winning), and every publish and
 lint-gate job appends it to `$GITHUB_ENV` first, so `eas build --local`,
 `eas submit`, `expo prebuild` in the lint gate, and every hook see the same
-variables. It fails closed on:
+variables. The resolution is the
+[`eas-profile-env`](../../actions/eas-profile-env/README.md) action, shared with
+`eas-update` and `eas-channel-fingerprint`, which also resolves each profile's
+`channel` (used by `ota-baseline: eas-channel`). It fails closed on:
 
 - a missing or non-object `eas.json`;
 - an unknown profile, including one named by `extends` (the error names the
@@ -264,16 +269,20 @@ are exported to the publish jobs (build, submit, hooks) after `publish-env`.
 
 `mode: native` (default) builds and submits every target, as before.
 
-`mode: auto` and `mode: ota-only` first fingerprint every target with
-`@expo/fingerprint` (`fingerprint-version`, the same tool and the same
-`fingerprint.config.js` in `app-dir` that `native-fingerprint`,
-`expo-fingerprint-guard.yml` and `expo-ota-preview.yml` use) under the env its
-build gets: `EAS_BUILD_PROFILE`, the resolved profile env, `publish-env`, then
+`mode: auto` and `mode: ota-only` compare against `ota-baseline`. With the
+default `github-release` they first resolve every target's runtime version
+with [`ota-runtime-version`](../../actions/ota-runtime-version/README.md) — the
+project's own `expo-updates`, the value the shipped binary and `eas update`
+agree on (before v4.2.0, the pinned `@expo/fingerprint` of
+`fingerprint-version`, which is now ignored) — under the env its build gets: `EAS_BUILD_PROFILE`, the resolved profile env, `publish-env`, then
 `STORE_BUILD_NUMBER` / `STORE_MARKETING_VERSION`. The `EAS_EXTRA_ENV` secret is
 not part of it. They then compare each fingerprint with the one recorded for
 that target in the **baseline**: among every non-draft release other than this
 run's tag, the store build record with the latest `recordedAt` whose targets
-include every current target (same name and platform).
+include every current target (same name and platform). A record written before
+v4.2.0 holds `@expo/fingerprint` hashes; where those differ from the
+`expo-updates` runtime, the first `auto` run after upgrading builds natively
+once (the safe direction) and records the runtime from then on.
 
 | Mode       | No baseline | Every fingerprint equal  | Any fingerprint changed |
 | ---------- | ----------- | ------------------------ | ----------------------- |
@@ -285,11 +294,11 @@ The decision is all-or-nothing: if any target changed, every target is built,
 so the release's record always describes one consistent set of shipped
 binaries. A step summary lists each target's shipped and current runtime.
 
-**The OTA itself is the caller's.** This repository's only EAS-free OTA path,
-`expo-ota-preview.yml`, publishes pull-request previews for development
-builds; it is not a production update channel. So `decision=ota` builds
-nothing and the caller publishes the update through whatever channel its
-production app is configured for, gated on the output:
+**The OTA itself is the caller's.** `decision=ota` builds nothing; the caller
+publishes the update through whatever channel its production app is
+configured for — with [`eas-update`](../../actions/eas-update/README.md) for
+EAS Update — gated on the output (the EAS-free `expo-ota-preview.yml` serves
+pull-request previews for development builds, not production):
 
 ```yaml
 jobs:
@@ -346,6 +355,56 @@ job rather than being skipped. All of this needs a release tag: `mode: auto` /
 `ota-only` without one fails the plan job, because an unrecorded store build
 would leave a stale baseline that a later run could wrongly match.
 
+### Against the EAS channel: `ota-baseline: eas-channel`
+
+For an app that ships its OTAs with EAS Update, the channel itself is the
+baseline. Every target's `eas.json` build profile must set a `channel` (the
+plan fails naming the target otherwise). The plan installs dependencies and
+runs [`eas-channel-fingerprint`](../../actions/eas-channel-fingerprint/README.md)
+with every target: it resolves each target's runtime version with the
+project's `expo-updates` under the target's profile env and compares it with
+the latest update on every branch the channel serves and the latest finished
+build on it, under the same build env as above (profile env, `publish-env`,
+the store version, never `EAS_EXTRA_ENV`). `eas-channel-baseline: build`
+accepts only a matching finished EAS build.
+
+| Mode       | Channel unreadable, or empty | Every runtime on its channel | Any runtime missing from its channel |
+| ---------- | ---------------------------- | ---------------------------- | ------------------------------------ |
+| `auto`     | build                        | `decision=ota`, no build     | build                                |
+| `ota-only` | **fail**                     | `decision=ota`, no build     | **fail**                             |
+
+No release tag and no store build record are involved, so this works on a
+branch push (a `development` or `rc-x.y` channel) as well as on a tag; pass
+`write-store-record: true` to record store builds anyway. The `EXPO_TOKEN`
+secret must reach the workflow. Builds from `eas build --local` are not
+recorded on EAS, so for them only the channel's updates count: publish an
+update after each store build (e.g. with
+[`eas-update`](../../actions/eas-update/README.md) on `decision=native` too)
+if the next run must find the new runtime there.
+
+```yaml
+    publish:
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@<sha> # <tag>
+        with:
+            app-dir: apps/mobile
+            mode: auto
+            ota-baseline: eas-channel
+        secrets: inherit
+    ota:
+        needs: publish
+        if: needs.publish.outputs.decision == 'ota'
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@<sha> # <tag>
+            # install dependencies, then:
+            - uses: rnw-community/mobile-ci/actions/eas-update@v4.2.0 # v4.2.0
+              with:
+                  app-dir: apps/mobile
+                  channel: production
+                  eas-profile: production
+                  expo-token: ${{ secrets.EXPO_TOKEN }}
+```
+
 ## Hook environment
 
 The four `*-pre-submit-command` / `*-post-submit-command` hooks run with
@@ -385,7 +444,7 @@ a hook resolves the same app config the build does. `ASC_KEY_ID` /
 
 | Name                            | Required | Description |
 | ---------------------------------- | -------- | -------------- |
-| `EXPO_TOKEN`                        | no*      | Expo access token, required by `ios-publish` and `android-publish`. |
+| `EXPO_TOKEN`                        | no*      | Expo access token, required by `ios-publish` and `android-publish`, and by `plan` with `ota-baseline: eas-channel`. |
 | `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish` unless `credentials-source` is `eas`. |
 | `ASC_KEY_ID`                        | no*      | App Store Connect API key ID matching `ASC_API_KEY`, exported to the iOS build and submit steps as `EXPO_ASC_KEY_ID`. |
 | `ASC_ISSUER_ID`                     | no*      | App Store Connect API key issuer ID matching `ASC_API_KEY`, exported as `EXPO_ASC_ISSUER_ID`. |
@@ -452,7 +511,7 @@ calling job:
 | Opt-in                                                   | Calling job grant |
 | -------------------------------------------------------- | ----------------- |
 | `build-number: auto` (private repository)                | `actions: read`   |
-| `mode: auto` / `ota-only`, or `write-store-record: true` | `contents: write` |
+| `mode: auto` / `ota-only` with `ota-baseline: github-release`, or `write-store-record: true` | `contents: write` |
 
 The workflow declares no workflow-level `permissions:`: a called workflow's
 job that asks for more than its caller grants fails the whole run at startup,

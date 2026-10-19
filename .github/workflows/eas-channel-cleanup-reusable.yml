@@ -1,0 +1,317 @@
+name: eas-channel-cleanup-reusable
+
+on:
+    workflow_call:
+        inputs:
+            app-dir:
+                description: App directory holding the Expo app config and eas.json; eas-cli runs there.
+                type: string
+                required: false
+                default: '.'
+            channel-template:
+                description: >-
+                    Channel of a closed pull request, `{number}` replaced with its number. Deleted together
+                    with the branch of the same name. Empty, or a run with no pull request number, skips it.
+                type: string
+                required: false
+                default: 'pr-{number}'
+            pr-number:
+                description: Pull request number for channel-template. Empty uses the triggering pull request's.
+                type: string
+                required: false
+                default: ''
+            sweep-pattern:
+                description: >-
+                    Shell glob of channels to sweep, e.g. `rc-*`: every matching channel whose newest
+                    activity (creation, edit or latest update) is older than max-age-days is deleted with its
+                    same-name branch. Empty (default) sweeps nothing.
+                type: string
+                required: false
+                default: ''
+            max-age-days:
+                description: Days without activity after which a channel matching sweep-pattern is deleted.
+                type: number
+                required: false
+                default: 30
+            protected-channels:
+                description: >-
+                    Newline-separated shell globs of channels (and branches) never deleted. Every channel an
+                    eas.json build profile sets, and every channel EAS marks protected, is never deleted
+                    either.
+                type: string
+                required: false
+                default: |
+                    production
+                    main
+            delete-subscribed-builds:
+                description: >-
+                    EAS refuses to delete a channel that builds still subscribe to (e.g. a pull request's
+                    cloud builds). true deletes those builds on the channel, then the channel; false
+                    (default) keeps the channel and fails the job naming it. Deleting a build is permanent.
+                type: boolean
+                required: false
+                default: false
+            dry-run:
+                description: Log what would be deleted and delete nothing.
+                type: boolean
+                required: false
+                default: false
+            eas-cli-version:
+                description: Pinned eas-cli npm version.
+                type: string
+                required: false
+                default: '20.5.1'
+            install-command:
+                description: >-
+                    Command run at the repository root before eas-cli, for an app config that requires
+                    installed packages (e.g. `corepack enable && pnpm install --frozen-lockfile`). Empty
+                    installs nothing, enough for app.json or a dependency-free app.config.js.
+                type: string
+                required: false
+                default: ''
+            node-version:
+                type: string
+                required: false
+                default: '22'
+            runner-labels:
+                description: JSON array of runner labels for the cleanup job.
+                type: string
+                required: false
+                default: '["ubuntu-latest"]'
+            timeout-minutes:
+                type: number
+                required: false
+                default: 15
+        secrets:
+            EXPO_TOKEN:
+                description: Expo access token allowed to delete the project's channels and branches.
+                required: true
+
+concurrency:
+    group: eas-channel-cleanup-${{ github.repository }}-${{ inputs.app-dir }}-${{ inputs.channel-template }}-${{ inputs.pr-number || github.event.pull_request.number }}-${{ inputs.sweep-pattern }}
+    cancel-in-progress: false
+
+permissions:
+    contents: read
+
+jobs:
+    cleanup:
+        name: Delete EAS channels
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        permissions:
+            contents: read
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Install dependencies
+              if: inputs.install-command != ''
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Delete EAS channels
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+                  CHANNEL_TEMPLATE: ${{ inputs.channel-template }}
+                  PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+                  SWEEP_PATTERN: ${{ inputs.sweep-pattern }}
+                  MAX_AGE_DAYS: ${{ inputs.max-age-days }}
+                  PROTECTED_CHANNELS: ${{ inputs.protected-channels }}
+                  DRY_RUN: ${{ inputs.dry-run }}
+                  DELETE_SUBSCRIBED_BUILDS: ${{ inputs.delete-subscribed-builds }}
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+              run: |
+                  set -euo pipefail
+                  fail() {
+                    echo "::error::$*"
+                    exit 1
+                  }
+                  [ -n "${EXPO_TOKEN:-}" ] || fail "The cleanup needs the EXPO_TOKEN secret; pass it via secrets: inherit or an explicit secrets: block."
+                  for flag in "dry-run=$DRY_RUN" "delete-subscribed-builds=$DELETE_SUBSCRIBED_BUILDS"; do
+                    case "${flag#*=}" in
+                      true|false) ;;
+                      *) fail "${flag%%=*} must be true or false; got '${flag#*=}'." ;;
+                    esac
+                  done
+                  case "$MAX_AGE_DAYS" in
+                    ''|*[!0-9]*|0) fail "max-age-days must be a whole number of at least 1; got '$MAX_AGE_DAYS'." ;;
+                  esac
+                  printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+                  case "$PR_NUMBER" in
+                    *[!0-9]*) fail "The pull request number must be digits; got '$PR_NUMBER'." ;;
+                  esac
+                  pr_channel=''
+                  if [ -n "$CHANNEL_TEMPLATE" ] && [ -n "$PR_NUMBER" ]; then
+                    pr_channel="${CHANNEL_TEMPLATE//\{number\}/$PR_NUMBER}"
+                    printf '%s' "$pr_channel" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+                      || fail "channel-template must resolve to a channel name of [A-Za-z0-9._/-] starting with a letter or digit; got '$pr_channel'."
+                  fi
+
+                  protected=()
+                  while IFS= read -r pattern; do
+                    pattern="$(printf '%s' "$pattern" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                    [ -z "$pattern" ] || protected+=("$pattern")
+                  done <<< "$PROTECTED_CHANNELS"
+                  if [ -f eas.json ]; then
+                    profile_channels="$(jq -r '(.build // {}) | to_entries[] | .value.channel? // empty | strings' eas.json 2>/dev/null)" \
+                      || fail "eas.json is not readable JSON, so the channels its build profiles bake into binaries cannot be protected."
+                    while IFS= read -r profile_channel; do
+                      [ -z "$profile_channel" ] || protected+=("$profile_channel")
+                    done <<< "$profile_channels"
+                  fi
+                  is_protected() {
+                    local pattern
+                    for pattern in "${protected[@]}"; do
+                      # shellcheck disable=SC2254
+                      case "$1" in $pattern) return 0 ;; esac
+                    done
+                    return 1
+                  }
+
+                  eas() {
+                    npx --yes "eas-cli@${EAS_CLI_VERSION}" "$@" --json --non-interactive
+                  }
+                  err="$RUNNER_TEMP/eas-channel-cleanup.err"
+                  failures=0
+                  deleted=()
+                  report_failure() {
+                    cat "$err" >&2 || true
+                    echo "::error::$1"
+                    failures=$((failures + 1))
+                  }
+                  delete_branch() {
+                    if eas branch:delete "$1" > /dev/null 2> "$err"; then
+                      deleted+=("branch $1")
+                      echo "Deleted branch $1."
+                    elif grep -qF "Could not find branch $1" "$err"; then
+                      echo "No branch $1 to delete."
+                    else
+                      report_failure "Cannot delete branch $1."
+                    fi
+                  }
+                  delete_subscribed_builds() {
+                    local builds id
+                    while :; do
+                      if ! builds="$(eas build:list --channel "$1" --limit 50 2> "$err")" \
+                        || ! jq -e 'type == "array"' <<< "$builds" > /dev/null 2>&1; then
+                        report_failure "Cannot list the builds subscribed to channel $1; it is kept."
+                        return 1
+                      fi
+                      [ "$(jq 'length' <<< "$builds")" -gt 0 ] || return 0
+                      for id in $(jq -r '.[].id' <<< "$builds"); do
+                        if ! npx --yes "eas-cli@${EAS_CLI_VERSION}" build:delete "$id" --non-interactive > /dev/null 2> "$err"; then
+                          report_failure "Cannot delete build $id subscribed to channel $1; the channel is kept."
+                          return 1
+                        fi
+                        deleted+=("build $id")
+                        echo "Deleted build $id, which subscribed to channel $1."
+                      done
+                    done
+                  }
+                  delete_channel() {
+                    local name="$1" why="$2" view
+                    if is_protected "$name"; then
+                      echo "Keeping $name: protected by protected-channels or an eas.json build profile."
+                      return 0
+                    fi
+                    if view="$(eas channel:view "$name" 2> "$err")"; then
+                      if ! jq -e --arg name "$name" '.currentPage | type == "object" and .name == $name and ((.isProtected // false) | type == "boolean")' <<< "$view" > /dev/null 2>&1; then
+                        report_failure "Cannot tell whether channel $name is protected: eas channel:view printed an answer this cleanup cannot read. It is kept."
+                        return 0
+                      fi
+                      if jq -e '.currentPage.isProtected == true' <<< "$view" > /dev/null; then
+                        echo "Keeping $name: EAS marks it protected."
+                        return 0
+                      fi
+                      if [ "$DRY_RUN" = true ]; then
+                        echo "Would delete channel $name and branch $name ($why)."
+                        return 0
+                      fi
+                      if ! eas channel:delete "$name" > /dev/null 2> "$err"; then
+                        if ! grep -qi 'builds that subscribe' "$err"; then
+                          report_failure "Cannot delete channel $name."
+                          return 0
+                        fi
+                        if [ "$DELETE_SUBSCRIBED_BUILDS" != true ]; then
+                          report_failure "Channel $name still has builds subscribed to it; it is kept. Set delete-subscribed-builds to delete them first."
+                          return 0
+                        fi
+                        delete_subscribed_builds "$name" || return 0
+                        if ! eas channel:delete "$name" > /dev/null 2> "$err"; then
+                          report_failure "Cannot delete channel $name after deleting its builds."
+                          return 0
+                        fi
+                      fi
+                      deleted+=("channel $name")
+                      echo "Deleted channel $name ($why)."
+                    elif grep -qF "Could not find channel with the name $name" "$err"; then
+                      echo "No channel $name to delete."
+                      [ "$DRY_RUN" = true ] && return 0
+                    else
+                      report_failure "Cannot read channel $name; it is kept."
+                      return 0
+                    fi
+                    delete_branch "$name"
+                  }
+
+                  if [ -n "$pr_channel" ]; then
+                    delete_channel "$pr_channel" "pull request #$PR_NUMBER is closed"
+                  fi
+
+                  if [ -n "$SWEEP_PATTERN" ]; then
+                    cutoff=$(( $(date +%s) - MAX_AGE_DAYS * 86400 ))
+                    page_size=25
+                    offset=0
+                    stale=()
+                    while :; do
+                      page="$(eas channel:list --limit "$page_size" --offset "$offset" 2> "$err")" \
+                        || { cat "$err" >&2; fail "Cannot list the project's channels; nothing was swept."; }
+                      rows="$(jq -r '
+                        .currentPage
+                        | if type == "array" then .[] else error("no page") end
+                        | [.name, ([.createdAt, .updatedAt, (.updateBranches[]?.updateGroups[]?[]?.createdAt)]
+                                   | map(select(type == "string") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | max // 0)]
+                        | @tsv' <<< "$page" 2> "$err")" \
+                        || { cat "$err" >&2; fail "eas channel:list printed a page this sweep cannot read; nothing was swept."; }
+                      while IFS="$(printf '\t')" read -r name last_activity; do
+                        [ -n "$name" ] || continue
+                        # shellcheck disable=SC2254
+                        case "$name" in
+                          $SWEEP_PATTERN)
+                            if [ "$last_activity" -lt "$cutoff" ]; then
+                              stale+=("$name")
+                            fi
+                            ;;
+                        esac
+                      done <<< "$rows"
+                      [ "$(jq '.currentPage | length' <<< "$page")" -eq "$page_size" ] || break
+                      offset=$((offset + page_size))
+                    done
+                    echo "${#stale[@]} channel(s) matching '$SWEEP_PATTERN' saw no activity for ${MAX_AGE_DAYS} day(s)."
+                    for name in ${stale[@]+"${stale[@]}"}; do
+                      delete_channel "$name" "no activity for ${MAX_AGE_DAYS} day(s)"
+                    done
+                  fi
+
+                  {
+                    echo "### EAS channel cleanup$([ "$DRY_RUN" = true ] && echo ' (dry run)')"
+                    echo
+                    if [ "${#deleted[@]}" -eq 0 ]; then
+                      echo "Nothing deleted${pr_channel:+ for \`$pr_channel\`}."
+                    else
+                      printf -- '- deleted %s\n' "${deleted[@]}"
+                    fi
+                  } >> "$GITHUB_STEP_SUMMARY"
+                  [ "$failures" -eq 0 ] || fail "$failures deletion(s) failed; see the errors above."

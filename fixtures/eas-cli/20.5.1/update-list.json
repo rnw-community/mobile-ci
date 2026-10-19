@@ -1,0 +1,14 @@
+{
+  "name": "ci-validate-2ef95bd-fixture",
+  "id": "01a153f8-eae6-7713-91a5-7ea6baa03185",
+  "currentPage": [
+    {
+      "branch": "ci-validate-2ef95bd-fixture",
+      "message": "\"fixture 20.5.1\" (14 seconds ago by vitalyiegorov)",
+      "runtimeVersion": "b610ebf53eaa44559a28a9bddbcd2bbe395db69e",
+      "isRollBackToEmbedded": false,
+      "group": "9df55439-c3c8-4044-9b13-1f48e0d508e3",
+      "platforms": "ios"
+    }
+  ]
+}

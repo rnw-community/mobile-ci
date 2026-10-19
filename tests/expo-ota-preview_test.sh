@@ -141,4 +141,226 @@ else
     fail_case "$failure"
 fi
 
+# ota-backend eas publishes through eas-update instead of exporting, manifesting
+# and releasing on GitHub; the backend step validates the choice and resolves
+# the channel and platform the action gets.
+BACKEND_STEP='Resolve the OTA backend'
+
+backend() {
+    workspace="$(new_workflow_workspace "$WORKFLOW" preview "$BACKEND_STEP")"
+    run_step "$workspace" OTA_BACKEND=eas EAS_CHANNEL_TEMPLATE='pr-{number}' PLATFORMS='ios,android' PR_NUMBER=42 \
+        DEV_BUILD_SOURCE=github-release GITHUB_RELEASE_ONLY='' EAS_ONLY='' "$@"
+}
+
+case_start 'ota-backend eas resolves the pull request channel and both platforms to all'
+backend
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals pr-42 "$(step_output "$workspace" channel)" 'channel' \
+    && assert_equals all "$(step_output "$workspace" platform)" 'platform'; then
+    pass_case
+fi
+
+case_start 'ota-backend eas outside a pull request takes a fixed channel and one platform'
+backend PR_NUMBER='' EAS_CHANNEL_TEMPLATE=development PLATFORMS=' android '
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals development "$(step_output "$workspace" channel)" 'channel' \
+    && assert_equals android "$(step_output "$workspace" platform)" 'platform'; then
+    pass_case
+fi
+
+case_start 'ota-backend github-release resolves only the platform'
+backend OTA_BACKEND=github-release PR_NUMBER='' PLATFORMS=ios
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals ios "$(step_output "$workspace" platform)" 'platform' \
+    && assert_equals '' "$(step_output "$workspace" channel)" 'no channel'; then
+    pass_case
+fi
+
+for bad in 'OTA_BACKEND=s3|ota-backend must be' 'PR_NUMBER=|has no pull request' 'PLATFORMS=web|platforms must name' \
+    'DEV_BUILD_SOURCE=s3|dev-build-source must be' \
+    'GITHUB_RELEASE_ONLY=runtime-version-ios public-base-url |ota-backend eas ignores runtime-version-ios public-base-url' \
+    'EAS_ONLY=eas-rollout-percentage |cannot honour eas-rollout-percentage'; do
+    case_start "the OTA backend step fails closed on ${bad%%|*}"
+    if [ "${bad%%=*}" = EAS_ONLY ]; then
+        backend OTA_BACKEND=github-release "${bad%%|*}"
+    else
+        backend "${bad%%|*}"
+    fi
+    if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$workspace/log")" "${bad#*|}" 'message'; then
+        pass_case
+    fi
+done
+
+case_start 'an EAS preview section names its channel'
+render_setup
+render EAS_CHANNEL=pr-42
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$workspace/runner-temp/sections/ios-ota.md")" "EAS Update channel \`pr-42\`" 'channel named'; then
+    pass_case
+fi
+
+case_start 'ota-backend eas skips the GitHub Release path and feeds eas-update into the links and the comment'
+if failure="$(WORKFLOW="$WORKFLOW" python3 - <<'PYTHON' 2>&1
+import os
+import sys
+
+import yaml
+
+steps = yaml.safe_load(open(os.environ['WORKFLOW'], encoding='utf-8'))['jobs']['preview']['steps']
+by_name = {step.get('name'): step for step in steps}
+problems = []
+for name in ['Export JS bundle', 'Compute preview tag and base URL', 'Generate Expo Updates manifests',
+             'Publish to GitHub Release', 'Check the pull request head is current']:
+    if "inputs.ota-backend != 'eas'" not in str(by_name[name].get('if', '')):
+        problems.append(f'{name} still runs under ota-backend eas')
+eas = by_name['Publish the EAS update']
+if not eas.get('uses', '').startswith('rnw-community/mobile-ci/actions/eas-update@'):
+    problems.append('the EAS update is not published through eas-update')
+if eas.get('with', {}).get('expo-token') != '${{ secrets.EXPO_TOKEN }}':
+    problems.append('eas-update does not get the EXPO_TOKEN secret')
+if eas.get('with', {}).get('ios-runtime-version') != '${{ steps.runtime.outputs.ios-runtime-version }}':
+    problems.append('eas-update does not check the runtime ota-runtime-version resolved')
+runtime = by_name['Resolve the runtime versions']
+if not runtime.get('uses', '').startswith('rnw-community/mobile-ci/actions/ota-runtime-version@'):
+    problems.append('the runtime version does not come from ota-runtime-version')
+if any('actions/native-fingerprint@' in (step.get('uses') or '') for step in steps):
+    problems.append('a step still uses native-fingerprint for the runtime version')
+manifest = by_name['Generate Expo Updates manifests']['with']
+if 'steps.runtime.outputs.ios-runtime-version' not in manifest['runtime-version-ios']:
+    problems.append('the GitHub Release manifest does not target the resolved runtime')
+result = by_name['Collect the published update']['env']
+if 'steps.eas.outputs.ios-manifest-url' not in result['EAS_URL_IOS']:
+    problems.append('the EAS manifest URL is not collected')
+render = by_name['Render preview comment sections']
+if render['env']['LINK_IOS'] != '${{ steps.result.outputs.ios-deep-link }}':
+    problems.append('the comment does not use the collected deep link')
+for name in ['Generate QR codes', 'Render preview comment sections', 'Update the sticky preview comment']:
+    if "steps.result.outputs.skipped-reason != 'stale-head'" not in str(by_name[name].get('if', '')):
+        problems.append(f'{name} still runs for a stale head')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
+    pass_case
+else
+    fail_case "$failure"
+fi
+
+# Both backends hand the comment and the workflow outputs the same shape, and
+# a stale pull-request run publishes nothing and leaves the comment alone.
+RESULT_STEP='Collect the published update'
+
+collect() {
+    workspace="$(new_workflow_workspace "$WORKFLOW" preview "$RESULT_STEP")"
+    printf '{"id":"manifest-ios-id"}\n' > "$workspace/manifest-ios.json"
+    run_step "$workspace" OTA_BACKEND=github-release SCHEME=myapp PUBLISH=true STALE=false \
+        MANIFEST_IOS="$workspace/manifest-ios.json" MANIFEST_ANDROID='' \
+        RELEASE_URL_IOS='https://github.com/acme/app/releases/download/t/ios-manifest.json' RELEASE_URL_ANDROID='' \
+        RELEASE_RUNTIME_IOS=rv-i RELEASE_RUNTIME_ANDROID='' \
+        EAS_PUBLISHED='' EAS_SKIPPED_REASON='' EAS_ID_IOS='' EAS_ID_ANDROID='' EAS_URL_IOS='' EAS_URL_ANDROID='' \
+        EAS_RUNTIME_IOS='' EAS_RUNTIME_ANDROID='' "$@"
+}
+
+case_start 'the GitHub Release backend reports the manifest id, runtime, URL and deep link'
+collect
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals true "$(step_output "$workspace" published)" 'published' \
+    && assert_equals manifest-ios-id "$(step_output "$workspace" ios-update-id)" 'update id' \
+    && assert_equals rv-i "$(step_output "$workspace" ios-runtime-version)" 'runtime' \
+    && assert_equals 'myapp://expo-development-client/?url=https%3A%2F%2Fgithub.com%2Facme%2Fapp%2Freleases%2Fdownload%2Ft%2Fios-manifest.json' "$(step_output "$workspace" ios-deep-link)" 'deep link' \
+    && assert_equals '' "$(step_output "$workspace" android-deep-link)" 'no android'; then
+    pass_case
+fi
+
+case_start 'the EAS backend reports the same outputs from eas-update'
+collect OTA_BACKEND=eas EAS_PUBLISHED=false EAS_SKIPPED_REASON=already-published EAS_ID_ANDROID=u-a \
+    EAS_URL_ANDROID=https://u.expo.dev/p/group/g EAS_RUNTIME_ANDROID=rv-a
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals false "$(step_output "$workspace" published)" 'published' \
+    && assert_equals already-published "$(step_output "$workspace" skipped-reason)" 'reason' \
+    && assert_equals u-a "$(step_output "$workspace" android-update-id)" 'update id' \
+    && assert_equals 'myapp://expo-development-client/?url=https%3A%2F%2Fu.expo.dev%2Fp%2Fgroup%2Fg' "$(step_output "$workspace" android-deep-link)" 'deep link' \
+    && assert_equals '' "$(step_output "$workspace" ios-deep-link)" 'no ios'; then
+    pass_case
+fi
+
+case_start 'a stale head reports nothing to link'
+collect STALE=true
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals stale-head "$(step_output "$workspace" skipped-reason)" 'reason' \
+    && assert_equals '' "$(step_output "$workspace" ios-deep-link)" 'no link'; then
+    pass_case
+fi
+
+case_start 'publish false is reported as skipped'
+collect PUBLISH=false
+if assert_equals publish-disabled "$(step_output "$workspace" skipped-reason)" 'reason'; then
+    pass_case
+fi
+
+HEAD_STEP='Check the pull request head is current'
+head_check() {
+    workspace="$(new_workflow_workspace "$WORKFLOW" preview "$HEAD_STEP")"
+    stub "$workspace" gh "$1"
+    run_step "$workspace" GH_TOKEN=t REPOSITORY=acme/app PR_NUMBER=42 EVENT_HEAD=aaa
+}
+
+case_start 'the GitHub Release backend notices a head that moved on'
+head_check 'echo bbb'
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals true "$(step_output "$workspace" stale)" 'stale'; then
+    pass_case
+fi
+head_check 'echo aaa'
+if assert_equals false "$(step_output "$workspace" stale)" 'current'; then
+    pass_case
+fi
+
+case_start 'an unreadable pull request head fails closed'
+head_check 'exit 1'
+if assert_equals 1 "$STEP_STATUS" 'status'; then
+    pass_case
+fi
+
+case_start 'dev-build-source eas links the matching EAS build, else says a native build is needed'
+render_setup
+mkdir -p "$workspace/runner-temp/eas-dev-builds"
+printf '[01a153b5](https://expo.dev/accounts/acme/projects/app/builds/01a153b5-x)\n' > "$workspace/runner-temp/eas-dev-builds/ios.md"
+: > "$workspace/runner-temp/eas-dev-builds/android.md"
+render DEV_BUILD_SOURCE=eas DEV_BUILDS_DIR="$workspace/runner-temp/eas-dev-builds" DEV_RELEASE_TAG_PREFIX=''
+ios="$(cat "$workspace/runner-temp/sections/ios-ota.md")"
+android="$(cat "$workspace/runner-temp/sections/android-ota.md")"
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_contains "$ios" 'EAS development build [01a153b5](https://expo.dev/accounts/acme/projects/app/builds/01a153b5-x)' 'ios build' \
+    && assert_contains "$android" 'no finished EAS Android build' 'android native build needed'; then
+    pass_case
+fi
+
+DEV_BUILDS_STEP='Find matching EAS development builds'
+case_start 'the EAS development build lookup queries by runtime version and fails closed'
+workspace="$(new_workflow_workspace "$WORKFLOW" preview "$DEV_BUILDS_STEP")"
+# shellcheck disable=SC2016
+stub "$workspace" npx 'printf "%s\n" "$*" >> "$(dirname "$0")/../npx-calls"; [ -z "${LIST_FAIL:-}" ] || exit 1; echo "[{\"id\":\"01a153b5-x\",\"app\":{\"slug\":\"app\",\"ownerAccount\":{\"name\":\"acme\"}}}]"'
+run_step "$workspace" EXPO_TOKEN=t EAS_CLI_VERSION=20.5.1 DEV_BUILD_PROFILE=development RUNTIME_IOS=rv-i RUNTIME_ANDROID='' \
+    DEV_BUILDS_DIR="$workspace/out"
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$workspace/npx-calls")" 'build:list --platform ios --runtime-version rv-i --status finished --limit 1 --build-profile development --json' 'query' \
+    && assert_equals '[01a153b5](https://expo.dev/accounts/acme/projects/app/builds/01a153b5-x)' "$(cat "$workspace/out/ios.md")" 'link' \
+    && assert_equals '' "$(cat "$workspace/out/android.md")" 'no android'; then
+    run_step "$workspace" EXPO_TOKEN=t EAS_CLI_VERSION=20.5.1 DEV_BUILD_PROFILE='' RUNTIME_IOS=rv-i RUNTIME_ANDROID='' \
+        DEV_BUILDS_DIR="$workspace/out" LIST_FAIL=1
+    if assert_equals 1 "$STEP_STATUS" 'unreadable builds fail closed'; then
+        pass_case
+    fi
+fi
+
+case_start 'an EAS build without app identity is named by id, never linked to a null URL'
+workspace="$(new_workflow_workspace "$WORKFLOW" preview "$DEV_BUILDS_STEP")"
+stub "$workspace" npx 'echo "[{\"id\":\"01a153b5-x\"}]"'
+run_step "$workspace" EXPO_TOKEN=t EAS_CLI_VERSION=20.5.1 DEV_BUILD_PROFILE='' RUNTIME_IOS=rv-i RUNTIME_ANDROID='' \
+    DEV_BUILDS_DIR="$workspace/out"
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals "\`01a153b5-x\`" "$(cat "$workspace/out/ios.md")" 'plain id'; then
+    pass_case
+fi
+
 finish_suite

@@ -123,17 +123,37 @@ on:
             mode:
                 description: >-
                     native (default) always builds and submits. auto compares every
-                    target's @expo/fingerprint against the store build record of the
-                    last release whose record shows every target shipped, and builds
-                    only when one changed (decision=native) or no such record exists;
+                    target's native runtime against the ota-baseline and builds only
+                    when one changed (decision=native) or there is no baseline;
                     otherwise it builds nothing and outputs decision=ota for the
                     caller's OTA publish. ota-only never builds: it fails when there is
-                    no baseline or a fingerprint changed. auto and ota-only need a
-                    release tag (a tag-triggered run or release-tag) and write the
-                    store build record after a successful submit.
+                    no baseline or a runtime changed. With ota-baseline github-release,
+                    auto and ota-only need a release tag (a tag-triggered run or
+                    release-tag) and write the store build record after a successful
+                    submit.
                 type: string
                 required: false
                 default: native
+            ota-baseline:
+                description: >-
+                    What mode auto / ota-only compare against. github-release (default)
+                    compares every target's @expo/fingerprint with the store build record
+                    of the last release whose record shows every target shipped.
+                    eas-channel compares every target's runtime version with the latest
+                    update and the latest finished build on the channel its eas.json build
+                    profile sets (eas-channel-fingerprint); it needs EXPO_TOKEN and no
+                    release tag, and an unreadable channel decides native.
+                type: string
+                required: false
+                default: github-release
+            eas-channel-baseline:
+                description: >-
+                    ota-baseline eas-channel - update-or-build (default) accepts a runtime matching the
+                    channel's latest update or latest finished EAS build; build accepts only a finished EAS
+                    build (eas-channel-fingerprint's baseline input).
+                type: string
+                required: false
+                default: update-or-build
             release-tag:
                 description: >-
                     Tag whose GitHub Release receives the store build record. Empty uses
@@ -169,7 +189,9 @@ on:
                 required: false
                 default: auto
             fingerprint-version:
-                description: Pinned @expo/fingerprint npm version used by mode auto / ota-only and the store build record.
+                description: >-
+                    Deprecated and ignored: the runtime versions mode auto / ota-only and the store build
+                    record compare now come from the project's own expo-updates (ota-runtime-version).
                 type: string
                 required: false
                 default: '0.20.6'
@@ -315,7 +337,7 @@ on:
 
         secrets:
             EXPO_TOKEN:
-                description: Expo access token, required by ios-publish and android-publish.
+                description: Expo access token, required by ios-publish and android-publish, and by plan with ota-baseline eas-channel.
                 required: false
             ASC_API_KEY:
                 description: >-
@@ -394,8 +416,8 @@ jobs:
         env:
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
         outputs:
-            ios-targets: ${{ steps.targets.outputs.ios-targets }}
-            android-targets: ${{ steps.targets.outputs.android-targets }}
+            ios-targets: ${{ steps.resolved.outputs.ios-targets }}
+            android-targets: ${{ steps.resolved.outputs.android-targets }}
             has-ios: ${{ steps.targets.outputs.has-ios }}
             has-android: ${{ steps.targets.outputs.has-android }}
             record: ${{ steps.targets.outputs.record }}
@@ -404,7 +426,7 @@ jobs:
             marker-prefix: ${{ steps.targets.outputs.marker-prefix }}
             build-number: ${{ steps.version.outputs.build-number }}
             marketing-version: ${{ steps.version.outputs.marketing-version }}
-            fingerprints: ${{ steps.fingerprints.outputs.fingerprints }}
+            fingerprints: ${{ steps.fingerprints.outputs.runtime-versions || steps.eas-baseline.outputs.runtime-versions }}
             baseline-tag: ${{ steps.baseline.outputs.baseline-tag }}
             decision: ${{ steps.decide.outputs.decision }}
             changed-targets: ${{ steps.decide.outputs.changed-targets }}
@@ -422,19 +444,20 @@ jobs:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
 
-            - name: Resolve publish targets and their eas.json profile env
+            - name: Resolve publish targets
               id: targets
               shell: bash
               env:
-                  APP_DIR: ${{ inputs.app-dir }}
                   TARGETS: ${{ inputs.targets }}
                   ENABLE_IOS: ${{ inputs.enable-ios }}
                   ENABLE_ANDROID: ${{ inputs.enable-android }}
                   BUILD_PROFILE: ${{ inputs.build-profile }}
                   SUBMIT_PROFILE: ${{ inputs.submit-profile }}
                   MODE: ${{ inputs.mode }}
+                  OTA_BASELINE: ${{ inputs.ota-baseline }}
                   WRITE_STORE_RECORD: ${{ inputs.write-store-record }}
                   RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
+                  APP_DIR: ${{ inputs.app-dir }}
                   REF_TYPE: ${{ github.ref_type }}
                   REF_NAME: ${{ github.ref_name }}
                   RECORD_SCOPE: ${{ inputs.record-scope }}
@@ -451,17 +474,15 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  case "$OTA_BASELINE" in
+                    github-release|eas-channel) ;;
+                    *)
+                      echo "::error::ota-baseline must be github-release or eas-channel; got '$OTA_BASELINE'."
+                      exit 1
+                      ;;
+                  esac
                   if ! command -v jq >/dev/null 2>&1; then
                     echo "::error::The plan job needs jq to read eas.json; point control-runner-labels at a runner that has it."
-                    exit 1
-                  fi
-                  eas_json="$APP_DIR/eas.json"
-                  if [ ! -f "$eas_json" ]; then
-                    echo "::error::No eas.json at '$eas_json'; the build profile env cannot be resolved."
-                    exit 1
-                  fi
-                  if ! jq -e 'type == "object"' "$eas_json" >/dev/null 2>&1; then
-                    echo "::error::'$eas_json' is not a JSON object."
                     exit 1
                   fi
 
@@ -500,32 +521,7 @@ jobs:
                       | map({name: ., platform: ., buildProfile: $build, submitProfile: $submit, artifactSuffix: ""})')"
                   fi
 
-                  resolved="$(jq -c --argjson targets "$requested" '
-                    def resolve($name; $seen):
-                      if any($seen[]; . == $name) then
-                        error("eas.json build profile \($seen[0] | tojson) extends itself: \(($seen + [$name]) | join(" -> "))")
-                      elif ((.build // {}) | type) != "object" or ((.build // {}) | has($name) | not) then
-                        error("eas.json has no build profile \($name | tojson)\(if ($seen | length) > 0 then " (extended by \($seen[-1] | tojson))" else "" end)")
-                      else
-                        .build[$name] as $profile
-                        | if ($profile | type) != "object" then error("eas.json build profile \($name | tojson) is not an object") else . end
-                        | ($profile.env // {}) as $env
-                        | if ($env | type) != "object" then error("eas.json build profile \($name | tojson) env is not an object") else . end
-                        | ($env | to_entries | map(select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$") | not) | .key)) as $bad
-                        | if ($bad | length) > 0 then error("eas.json build profile \($name | tojson) env name(s) \($bad | join(", ")) must match ^[A-Za-z_][A-Za-z0-9_]*$") else . end
-                        | ($env | to_entries | map(select((.value | type) != "string" or (.value | test("[\r\n]"))) | .key)) as $bad_values
-                        | if ($bad_values | length) > 0 then error("eas.json build profile \($name | tojson) env value(s) of \($bad_values | join(", ")) must be single-line strings") else . end
-                        | if $profile.extends == null then {}
-                          elif ($profile.extends | type) != "string" then error("eas.json build profile \($name | tojson) extends is not a string")
-                          else resolve($profile.extends; $seen + [$name]) end
-                        | . + $env
-                      end;
-                    . as $eas
-                    | $targets
-                    | map(.buildProfile as $profile
-                          | . + {envLines: ($eas | resolve($profile; []) | to_entries | map("\(.key)=\(.value)") | join("\n"))})' "$eas_json" 2> "$jq_error")" || report_jq_error
-
-                  count="$(jq 'length' <<< "$resolved")"
+                  count="$(jq 'length' <<< "$requested")"
                   if [ "$count" -eq 0 ]; then
                     echo "::error::No publish target: enable-ios and enable-android are both false and targets is empty."
                     exit 1
@@ -536,7 +532,7 @@ jobs:
                     release_tag="$REF_NAME"
                   fi
                   record=false
-                  if [ "$MODE" != native ] || [ "$WRITE_STORE_RECORD" = true ]; then
+                  if { [ "$MODE" != native ] && [ "$OTA_BASELINE" = github-release ]; } || [ "$WRITE_STORE_RECORD" = true ]; then
                     record=true
                     if [ -z "$release_tag" ]; then
                       echo "::error::mode '$MODE'$([ "$WRITE_STORE_RECORD" = true ] && echo ' with write-store-record') needs a release tag to read and write the store build record: trigger the run from a tag or set release-tag. Without one a shipped build would go unrecorded and a later run would compare against a stale baseline."
@@ -551,21 +547,62 @@ jobs:
                   if [ -n "$RECORD_SCOPE" ]; then
                     scope="$RECORD_SCOPE"
                     artifact_scope="${RECORD_SCOPE}--"
-                    resolved="$(jq -c --arg scope "$artifact_scope" 'map(.artifactSuffix = "-\($scope)\(.name)")' <<< "$resolved")"
+                    requested="$(jq -c --arg scope "$artifact_scope" 'map(.artifactSuffix = "-\($scope)\(.name)")' <<< "$requested")"
+                  fi
+
+                  eas_baseline=false
+                  if [ "$MODE" != native ] && [ "$OTA_BASELINE" = eas-channel ]; then
+                    eas_baseline=true
+                  fi
+                  install=false
+                  if [ "$record" = true ] || [ "$eas_baseline" = true ]; then
+                    install=true
                   fi
 
                   {
-                    echo "ios-targets=$(jq -c 'map(select(.platform == "ios"))' <<< "$resolved")"
-                    echo "android-targets=$(jq -c 'map(select(.platform == "android"))' <<< "$resolved")"
-                    echo "has-ios=$(jq -r 'any(.[]; .platform == "ios")' <<< "$resolved")"
-                    echo "has-android=$(jq -r 'any(.[]; .platform == "android")' <<< "$resolved")"
-                    echo "targets=$resolved"
+                    echo "requested=$requested"
+                    echo "profiles=$(jq -c '[.[].buildProfile] | unique | join("\n")' <<< "$requested")"
+                    echo "has-ios=$(jq -r 'any(.[]; .platform == "ios")' <<< "$requested")"
+                    echo "has-android=$(jq -r 'any(.[]; .platform == "android")' <<< "$requested")"
                     echo "record=$record"
+                    echo "eas-baseline=$eas_baseline"
+                    echo "install=$install"
                     echo "release-tag=$release_tag"
                     echo "record-asset=store-record-${scope}.json"
                     echo "marker-prefix=store-submitted-${RECORD_SCOPE}--"
                   } >> "$GITHUB_OUTPUT"
-                  jq -r '.[] | "Target \(.name): \(.platform), build profile \(.buildProfile), submit profile \(.submitProfile), \(if .envLines == "" then 0 else (.envLines | split("\n") | length) end) profile env variable(s)"' <<< "$resolved"
+
+            - name: Resolve every target's eas.json build profile
+              id: profile-env
+              uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.2.0 # v4.2.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  profiles: ${{ fromJSON(steps.targets.outputs.profiles) }}
+
+            - name: Attach the eas.json profile env and channel to every target
+              id: resolved
+              shell: bash
+              env:
+                  REQUESTED: ${{ steps.targets.outputs.requested }}
+                  PROFILES: ${{ steps.profile-env.outputs.resolved }}
+                  EAS_BASELINE: ${{ steps.targets.outputs.eas-baseline }}
+              run: |
+                  set -euo pipefail
+                  resolved="$(jq -c --argjson profiles "$PROFILES" \
+                    'map(. + ($profiles[.buildProfile] | {envLines, channel: (.channel // "")}))' <<< "$REQUESTED")"
+                  if [ "$EAS_BASELINE" = true ]; then
+                    missing="$(jq -r '[.[] | select(.channel == "") | .name] | join(", ")' <<< "$resolved")"
+                    if [ -n "$missing" ]; then
+                      echo "::error::ota-baseline eas-channel needs a channel in the eas.json build profile of every target; ${missing} has none, so there is no channel to compare with."
+                      exit 1
+                    fi
+                  fi
+                  {
+                    echo "ios-targets=$(jq -c 'map(select(.platform == "ios"))' <<< "$resolved")"
+                    echo "android-targets=$(jq -c 'map(select(.platform == "android"))' <<< "$resolved")"
+                    echo "targets=$resolved"
+                  } >> "$GITHUB_OUTPUT"
+                  jq -r '.[] | "Target \(.name): \(.platform), build profile \(.buildProfile), submit profile \(.submitProfile), channel \(if .channel == "" then "<none>" else .channel end), \(if .envLines == "" then 0 else (.envLines | split("\n") | length) end) profile env variable(s)"' <<< "$resolved"
 
             - name: Resolve the store build number and marketing version
               id: version
@@ -651,7 +688,7 @@ jobs:
                   echo "STORE_BUILD_NUMBER=${build_number:-<not exported>} STORE_MARKETING_VERSION=${marketing_version:-<not exported>}"
 
             - name: Resolve package manager
-              if: steps.targets.outputs.record == 'true'
+              if: steps.targets.outputs.install == 'true'
               id: package-manager
               shell: bash
               env:
@@ -743,118 +780,49 @@ jobs:
                   echo "pm=$pm" >> "$GITHUB_OUTPUT"
 
             - name: Setup pnpm
-              if: steps.targets.outputs.record == 'true' && steps.package-manager.outputs.pm == 'pnpm'
+              if: steps.targets.outputs.install == 'true' && steps.package-manager.outputs.pm == 'pnpm'
               uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
             - name: Setup Node
-              if: steps.targets.outputs.record == 'true'
+              if: steps.targets.outputs.install == 'true'
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
 
             - name: Enable corepack
-              if: steps.targets.outputs.record == 'true' && inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              if: steps.targets.outputs.install == 'true' && inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
 
             - name: Install dependencies
-              if: steps.targets.outputs.record == 'true'
+              if: steps.targets.outputs.install == 'true'
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
 
             - name: Build workspace JS dependencies
-              if: steps.targets.outputs.record == 'true' && inputs.build-command != ''
+              if: steps.targets.outputs.install == 'true' && inputs.build-command != ''
               shell: bash
               env:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
-            - name: Fingerprint every target under its build env
+            - name: Resolve every target's runtime version under its build env
               if: steps.targets.outputs.record == 'true'
               id: fingerprints
-              working-directory: ${{ inputs.app-dir }}
-              shell: bash
-              env:
-                  TARGETS: ${{ steps.targets.outputs.targets }}
-                  PUBLISH_ENV: ${{ inputs.publish-env }}
-                  STORE_BUILD_NUMBER_VALUE: ${{ steps.version.outputs.build-number }}
-                  STORE_MARKETING_VERSION_VALUE: ${{ steps.version.outputs.marketing-version }}
-                  FINGERPRINT_VERSION: ${{ inputs.fingerprint-version }}
-                  EAS_EXTRA_ENV_NAMES: ${{ steps.eas-extra-env.outputs.names }}
-              run: |
-                  set -euo pipefail
-                  excluded_env=()
-                  for excluded_name in ${EAS_EXTRA_ENV_NAMES:-}; do
-                    excluded_env+=(-u "$excluded_name")
-                  done
-                  publish_env=()
-                  while IFS= read -r line; do
-                    [ -n "$line" ] || continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::publish-env line '$line' is missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
-                        echo "::error::publish-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    publish_env+=("$line")
-                  done <<< "$PUBLISH_ENV"
-                  store_env=()
-                  [ -z "$STORE_BUILD_NUMBER_VALUE" ] || store_env+=("STORE_BUILD_NUMBER=$STORE_BUILD_NUMBER_VALUE")
-                  [ -z "$STORE_MARKETING_VERSION_VALUE" ] || store_env+=("STORE_MARKETING_VERSION=$STORE_MARKETING_VERSION_VALUE")
-
-                  fingerprints='{}'
-                  count="$(jq 'length' <<< "$TARGETS")"
-                  index=0
-                  while [ "$index" -lt "$count" ]; do
-                    target="$(jq -c ".[$index]" <<< "$TARGETS")"
-                    index=$((index + 1))
-                    name="$(jq -r '.name' <<< "$target")"
-                    platform="$(jq -r '.platform' <<< "$target")"
-                    build_profile="$(jq -r '.buildProfile' <<< "$target")"
-                    target_env=("EAS_BUILD_PROFILE=$build_profile")
-                    while IFS= read -r line; do
-                      [ -n "$line" ] && target_env+=("$line")
-                    done < <(jq -r '.envLines' <<< "$target")
-                    out_file="$RUNNER_TEMP/native-publish-fingerprint-${name}.json"
-                    error_file="$RUNNER_TEMP/native-publish-fingerprint-${name}.err"
-                    generate() {
-                      env ${excluded_env[@]+"${excluded_env[@]}"} "${target_env[@]}" ${publish_env[@]+"${publish_env[@]}"} ${store_env[@]+"${store_env[@]}"} \
-                        npx --yes "$@" "@expo/fingerprint@${FINGERPRINT_VERSION}" fingerprint:generate --platform "$platform" > "$out_file" 2> "$error_file"
-                    }
-                    status=0
-                    generate || status=$?
-                    if [ "$status" -ne 0 ] || [ ! -s "$out_file" ]; then
-                      echo "::warning::@expo/fingerprint produced ${status}/empty output for target $name; retrying with a fresh npm cache and --prefer-online."
-                      status=0
-                      npm_config_cache="$(mktemp -d)" generate --prefer-online || status=$?
-                    fi
-                    if [ "$status" -ne 0 ] || [ ! -s "$out_file" ]; then
-                      cat "$error_file" >&2 || true
-                      echo "::error::@expo/fingerprint failed for target $name (status $status); its native runtime cannot be compared."
-                      exit 1
-                    fi
-                    hash="$(jq -r '.hash // ""' "$out_file")"
-                    if [ -z "$hash" ]; then
-                      echo "::error::@expo/fingerprint wrote no hash for target $name."
-                      exit 1
-                    fi
-                    echo "Fingerprint $name ($platform): $hash"
-                    fingerprints="$(jq -c --arg name "$name" --arg hash "$hash" '. + {($name): $hash}' <<< "$fingerprints")"
-                  done
-                  echo "fingerprints=$fingerprints" >> "$GITHUB_OUTPUT"
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.2.0 # v4.2.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  targets: ${{ steps.resolved.outputs.targets }}
+                  env: |
+                      ${{ inputs.publish-env }}
+                      ${{ steps.version.outputs.build-number != '' && format('STORE_BUILD_NUMBER={0}', steps.version.outputs.build-number) || '' }}
+                      ${{ steps.version.outputs.marketing-version != '' && format('STORE_MARKETING_VERSION={0}', steps.version.outputs.marketing-version) || '' }}
+                  unset-env: ${{ steps.eas-extra-env.outputs.names }}
 
             - name: Resolve the store baseline
-              if: inputs.mode != 'native'
+              if: inputs.mode != 'native' && inputs.ota-baseline == 'github-release'
               id: baseline
               shell: bash
               env:
@@ -862,7 +830,7 @@ jobs:
                   REPOSITORY: ${{ github.repository }}
                   RELEASE_TAG: ${{ steps.targets.outputs.release-tag }}
                   RECORD_ASSET: ${{ steps.targets.outputs.record-asset }}
-                  TARGETS: ${{ steps.targets.outputs.targets }}
+                  TARGETS: ${{ steps.resolved.outputs.targets }}
               run: |
                   set -euo pipefail
                   listing="$RUNNER_TEMP/native-publish-releases.tsv"
@@ -910,21 +878,63 @@ jobs:
                   echo "baseline-tag=$baseline_tag" >> "$GITHUB_OUTPUT"
                   echo "baseline-file=$baseline_file" >> "$GITHUB_OUTPUT"
 
+            - name: Compare every target with its EAS channel
+              if: steps.targets.outputs.eas-baseline == 'true'
+              id: eas-baseline
+              uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.2.0 # v4.2.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  targets: ${{ steps.resolved.outputs.targets }}
+                  baseline: ${{ inputs.eas-channel-baseline }}
+                  env: |
+                      ${{ inputs.publish-env }}
+                      ${{ steps.version.outputs.build-number != '' && format('STORE_BUILD_NUMBER={0}', steps.version.outputs.build-number) || '' }}
+                      ${{ steps.version.outputs.marketing-version != '' && format('STORE_MARKETING_VERSION={0}', steps.version.outputs.marketing-version) || '' }}
+                  unset-env: ${{ steps.eas-extra-env.outputs.names }}
+                  eas-cli-version: ${{ inputs.eas-cli-version }}
+                  expo-token: ${{ secrets.EXPO_TOKEN }}
+
             - name: Decide between a native build and an OTA
               id: decide
               shell: bash
               env:
                   MODE: ${{ inputs.mode }}
-                  TARGETS: ${{ steps.targets.outputs.targets }}
-                  FINGERPRINTS: ${{ steps.fingerprints.outputs.fingerprints }}
+                  OTA_BASELINE: ${{ inputs.ota-baseline }}
+                  TARGETS: ${{ steps.resolved.outputs.targets }}
+                  FINGERPRINTS: ${{ steps.fingerprints.outputs.runtime-versions }}
                   BASELINE_TAG: ${{ steps.baseline.outputs.baseline-tag }}
                   BASELINE_FILE: ${{ steps.baseline.outputs.baseline-file }}
+                  EAS_DECISION: ${{ steps.eas-baseline.outputs.decision }}
+                  EAS_REASON: ${{ steps.eas-baseline.outputs.reason }}
+                  EAS_CHANGED_TARGETS: ${{ steps.eas-baseline.outputs.changed-targets }}
               run: |
                   set -euo pipefail
                   if [ "$MODE" = native ]; then
                     echo "decision=native" >> "$GITHUB_OUTPUT"
                     echo "changed-targets=" >> "$GITHUB_OUTPUT"
                     echo "Mode native: building and submitting every target."
+                    exit 0
+                  fi
+                  if [ "$OTA_BASELINE" = eas-channel ]; then
+                    case "$EAS_DECISION" in
+                      ota|native) ;;
+                      *)
+                        echo "::error::eas-channel-fingerprint returned no decision; refusing to choose between a native build and an OTA."
+                        exit 1
+                        ;;
+                    esac
+                    if [ "$EAS_DECISION" = native ] && [ "$MODE" = ota-only ]; then
+                      echo "::error::mode ota-only: ${EAS_REASON}. An OTA would target a runtime no build on the channel has; a store build is required."
+                      exit 1
+                    fi
+                    echo "decision=$EAS_DECISION" >> "$GITHUB_OUTPUT"
+                    echo "changed-targets=$EAS_CHANGED_TARGETS" >> "$GITHUB_OUTPUT"
+                    echo "Decision: $EAS_DECISION ($EAS_REASON)."
+                    {
+                      echo "### Native publish decision: \`$EAS_DECISION\`"
+                      echo
+                      echo "$EAS_REASON."
+                    } >> "$GITHUB_STEP_SUMMARY"
                     exit 0
                   fi
                   changed=()

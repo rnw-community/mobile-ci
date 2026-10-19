@@ -163,6 +163,10 @@ full input reference, and the same doc's siblings under
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 | [`load-consumer-config`](actions/load-consumer-config/README.md) | Reads a consumer-owned JSON config file out of the checkout and validates it against an allowlist of keys, so a reusable workflow can resolve its inputs from a checked-in file instead of JSON-in-YAML `with:` blobs. |
 | [`expo-ota-manifest`](actions/expo-ota-manifest/README.md)       | Generate Expo Updates protocol v1 manifests per platform from an `expo export` output — EAS-free, tokenless OTA hosting. |
+| [`eas-update`](actions/eas-update/README.md)                     | Publish an EAS Update (`eas update --json`) to a channel, auto-creating it or pointing it at a branch, under an `eas.json` profile's env and environment; outputs update/group ids, runtime versions, manifest URLs and `expo-dev-client` deep links per platform; fails closed on a missing token, unparsable output or a missing platform. |
+| [`eas-channel-fingerprint`](actions/eas-channel-fingerprint/README.md) | "Can this commit ship as an OTA on channel X?": the project's `expo-updates` runtime version vs the latest update and build on the channel; `decision=ota\|native` with a reason, `native` whenever EAS cannot be read. |
+| [`ota-runtime-version`](actions/ota-runtime-version/README.md)   | The one runtime-version source for every OTA path: the project's own `expo-updates runtimeversion:resolve` per platform or target, under an `eas.json` profile's env — used by both `expo-ota-preview.yml` backends, both `native-publish.yml` baselines, `native-dev-release.yml`'s build marker and `eas-channel-fingerprint`. |
+| [`eas-profile-env`](actions/eas-profile-env/README.md)           | Resolve `eas.json` build profiles through `extends`: merged env, channel and EAS environment, failing closed on cycles, unknown profiles and malformed env — shared by `native-publish.yml`, `eas-update` and `eas-channel-fingerprint`. |
 | [`github-release-publish`](actions/github-release-publish/README.md) | Publish a directory to a GitHub Release as flat-named assets under a stable tag, pruning older previews. |
 | [`pr-preview-comment`](actions/pr-preview-comment/README.md)     | One sticky pull-request comment, found by a hidden marker and edited in place, whose sections each workflow owns (OTA update, native dev build); verified read-modify-write with retry against concurrent writers. |
 
@@ -178,13 +182,14 @@ input/output table and a usage example.
 | [`expo-base-plan.yml`](.github/workflows/expo-base-plan.yml)  | The shared decision the e2e and screenshot workflows call, not something a consumer normally calls directly: one leg per target on the Linux pool — `expo-native-key` → `expo-base-binary` fetch → `expo-repack` when a base exists, and a `native-targets` output naming the keys that still need a Mac or a Gradle build. |
 | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The warm-up: builds natively for every key that has no base yet and **publishes the base binary** pull requests repack, on a schedule or dispatch. Run it on the default branch after a native change so the next pull request takes no Mac slot. |
 | [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `build` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `xcodebuild-test` `mode: build` → `xcode-cache` save) → `test` (one matrix shard per `shards-json` entry: `xcode-cache` restore → `simulator-lease` → optional `xcodebuild-affected-tests` on a pull request → `xcodebuild-test` `mode: test`), both secretless, then an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). N shards share one compile through the restored DerivedData cache. |
-| [`native-publish.yml`](docs/workflows/native-publish.md)     | `plan` (targets, `eas.json` profile env with `extends`, build number, optional fingerprint-vs-store-record OTA decision) → per-target `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification, then an optional store build record on the release. Signing and store keys from GitHub secrets or EAS-stored credentials. |
+| [`native-publish.yml`](docs/workflows/native-publish.md)     | `plan` (targets, `eas.json` profile env with `extends`, build number, optional OTA decision against the store build record or, with `ota-baseline: eas-channel`, the EAS channel) → per-target `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification, then an optional store build record on the release. Signing and store keys from GitHub secrets or EAS-stored credentials. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (or an EAS cloud build) of the development profile → publish to a pruned GitHub Release, or to EAS internal distribution with an install link. |
 | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `android-emulator` (default, `avd`) or `redroid-container` (`android-driver: redroid`) + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
-| [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `native-fingerprint` → `expo export` → `expo-ota-manifest` → `github-release-publish` → `pr-preview-comment` (deep link, QR, runtime fingerprint and the matching dev build in one sticky comment). EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`. |
+| [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `ota-runtime-version` → `expo export` → `expo-ota-manifest` → `github-release-publish` → `pr-preview-comment` (deep link, QR, runtime version and the matching dev build in one sticky comment). EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`; `ota-backend: eas` publishes it with `eas-update` instead, for private repositories. |
 | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | `native-fingerprint` on the pull-request head → `native-fingerprint` on a merge-base `git worktree` → hash comparison + `fingerprint:diff`. Fails a pull request that silently moves the native runtime fingerprint out from under published OTA updates, unless an override label acknowledges it. |
 | [`assert-distinct-fingerprints.yml`](docs/workflows/assert-distinct-fingerprints.md) | Release-pipeline pre-flight: one `expo-native-key` per target, then `assert-distinct-fingerprints` fails when two targets with different `appId` share a native key. Runs before any build starts. |
 | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) | Cancels queued/in-progress workflow runs left behind on a closed PR's branch, so a serialized self-hosted fleet does not starve on zombie runs, and opt-in deletes the PR's `expo-ota-preview.yml` releases once every run of the PR has stopped. Zero required inputs — everything is derived from the calling workflow's `pull_request: closed` event context. |
+| [`eas-channel-cleanup-reusable.yml`](docs/workflows/eas-channel-cleanup-reusable.md) | Deletes a closed pull request's EAS Update channel and branch (`channel-template`, e.g. `pr-{number}`) and sweeps channels matching a pattern idle for `max-age-days`; never a channel in the deny-list (`production`, `main` by default), one an `eas.json` profile sets, or one EAS marks protected. Dry-run input. |
 | [`preview-sweep-reusable.yml`](docs/workflows/preview-sweep-reusable.md) | Scheduled backstop for the cleanup above: deletes `expo-ota-preview.yml` releases of closed PRs and branch previews older than `max-age-days`, never an open PR's or one inside the grace period, capped per run. Dry run by default. |
 
 `store-screenshots.yml` additionally accepts a `config-path` pointing at a
@@ -209,6 +214,27 @@ and fixture directories under `flows-dir` are never swept into a shard; an
 optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
 overrides the computed index-modulo split for consumers whose shard balance
 is hand-tuned, falling back to modulo when unset.
+
+### Choosing an OTA backend
+
+Two ways to ship JavaScript over the air, both loaded by an `expo-updates`
+build whose runtime version matches:
+
+| | GitHub Release (EAS-free) | EAS Update |
+| --- | --- | --- |
+| Pieces | `expo-ota-preview.yml` (default `ota-backend: github-release`): `expo-ota-manifest` + `github-release-publish` | `eas-update`, `eas-channel-fingerprint`, `expo-ota-preview.yml` with `ota-backend: eas`, `native-publish.yml` with `ota-baseline: eas-channel`, `eas-channel-cleanup-reusable.yml` |
+| Token | none — the job's `GITHUB_TOKEN` | `EXPO_TOKEN` |
+| Repository | **public only**: a device downloads release assets anonymously | public or private |
+| Use | pull-request previews for development builds only: a static host sends no protocol headers and supports no code signing, rollout or rollback | previews, and production channels (development, staging, release candidates, per-brand production) with channel/branch management, code signing, rollouts, rollback and the EAS dashboard |
+| Cleanup | `pr-closed-cleanup-reusable.yml` + `preview-sweep-reusable.yml` | `eas-channel-cleanup-reusable.yml` |
+
+Pick the GitHub Release backend for a public app that wants previews without
+an Expo account; pick EAS Update for a private repository or whenever an
+update has to reach store builds. Both resolve the runtime version the same
+way (`ota-runtime-version`), produce the same outputs and post the same sticky
+preview comment; switching is one input. A job holding an `EXPO_TOKEN` that
+can publish to (or delete) a production channel belongs in a GitHub
+Environment with required reviewers or a branch policy.
 
 ### Package manager
 

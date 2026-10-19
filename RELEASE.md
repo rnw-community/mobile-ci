@@ -118,7 +118,10 @@ being cut) that consumers pin to in practice. **No
    composite actions that
    call sibling actions (`run-maestro-android-redroid/action.yml` →
    `redroid-container`, `run-maestro-android/action.yml` →
-   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`).
+   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`,
+   `eas-update/action.yml` → `apply-secret-env` / `eas-profile-env`,
+   `eas-channel-fingerprint/action.yml` → `eas-profile-env` /
+   `ota-runtime-version`, `ota-runtime-version/action.yml` → `eas-profile-env`).
    The reusable-workflow self-references (four workflows →
    `expo-base-plan.yml`) are checked by the same loop. Fail
    closed: any reference whose tag or trailing comment does not match the
@@ -140,6 +143,9 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/native-publish.yml \
                .github/workflows/native-dev-release.yml \
                actions/expo-native-key/action.yml \
+               actions/eas-update/action.yml \
+               actions/eas-channel-fingerprint/action.yml \
+               actions/ota-runtime-version/action.yml \
                actions/run-maestro-android-redroid/action.yml \
                actions/run-maestro-android/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
