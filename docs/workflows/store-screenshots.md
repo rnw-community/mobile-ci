@@ -925,6 +925,14 @@ the resolution order is the usual one — explicit `with:` value > `config-path`
 value > the built-in `auto` — and the `validate-manifest` job logs which of
 the three it took.
 
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed` or `failed`. |
+
+Read it from a caller job that `needs:` this one, e.g. `needs.screenshots.outputs.result`; it is set even when the run fails.
+
 ## Secrets
 
 | Name                | Required | Description |

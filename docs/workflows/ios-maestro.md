@@ -107,6 +107,14 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `build-timeout-minutes`       | no       | `60`                                       | Build job timeout. |
 | `test-timeout-minutes`        | no       | `75`                                       | Test job timeout. |
 
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed`, `failed`, or `skipped` when no target package was affected. A skip is a green check, not a pass, so a notification job should not report it as one. |
+
+Read it from a caller job that `needs:` this one, e.g. `needs.e2e.outputs.result`; it is set even when the run fails.
+
 ## Secrets
 
 | Secret                | Required | Description |

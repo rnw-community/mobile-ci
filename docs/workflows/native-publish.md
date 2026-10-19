@@ -13,7 +13,7 @@ resolves the build number and marketing version (see
 defaults it only does the first three and always decides `native`, so the
 publish jobs run as before.
 
-Then one of each publish job per target: **ios-publish** (writes the App Store Connect API key to a temp
+Then one of each publish job per target: **ios-publish** (writes the App Store Connect API key, when one is passed, to a temp
 file, `eas build --local --platform ios`, uploads the `.ipa`, `eas submit`,
 removes the key in `always()`) — **android-lint-gate** (optional, prebuilds
 the Android project and runs `gradlew :app:lintVitalRelease` plus a
@@ -28,7 +28,7 @@ uploads the `lint-results-*` reports when it fails — see
 **android-publish** (needs
 `android-lint-gate`; `eas build --local --platform android`, verifies the
 built `.aab` contains the required 64-bit ABI, uploads the artifact, writes
-the Google service account key to `$RUNNER_TEMP` (or `google-key-path` if
+the Google service account key, when one is passed, to `$RUNNER_TEMP` (or `google-key-path` if
 set), `eas submit`, removes the key in `always()`). When a store build record
 is kept, a **record** job writes it to the release after the submits. A final
 **status** job aggregates every job into a single required check; a run that
@@ -74,6 +74,8 @@ decided `ota` passes it without building.
 | `lint-timeout-minutes`             | no       | `30`                                      | `android-lint-gate` job timeout. |
 | `android-lint-gate-gradle-args`    | no       | `''`                                      | Extra whitespace-split arguments appended after `:app:lintVitalRelease` in the `android-lint-gate` job, e.g. `-PreactNativeArchitectures=arm64-v8a`. Not shell-quoted. |
 | `android-lint-gate-gradle-cache`   | no       | `true`                                    | Restore/save the Gradle User Home (`caches` + `wrapper`) in the `android-lint-gate` job via `gradle/actions/setup-gradle` with `cache-provider: basic`. Saved only from default-branch runs, read-only elsewhere. `false` skips `setup-gradle` entirely. See [Android lint gate](#android-lint-gate-gradle-cache-and-reports). |
+| `credentials-source`               | no       | `secrets`                                 | `secrets` requires `ASC_API_KEY` / `ASC_KEY_ID` / `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android). `eas` makes them optional and lets `eas build` / `eas submit` use the credentials stored on EAS. `EXPO_TOKEN` stays required. Fails closed on any other value. See [Credentials](#credentials). |
+| `record-scope`                     | no       | `''`                                      | Names this call's store build record (`store-record-<record-scope>.json`), its build and marker artifacts and its concurrency group, so one call per brand in a matrix cannot overwrite, queue behind or cancel another. `[A-Za-z0-9._]` with single `-` between them; anything else fails the plan job. Empty keeps the `app-dir` names. See [One call per brand](#one-call-per-brand-record-scope). |
 | `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`, after the resolved `eas.json` profile env (overriding it outside `eas build`, with a warning when the values differ) and before `eas build`/`eas submit` (or, for `android-lint-gate`, `expo prebuild`) and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
 
 ## Outputs
@@ -86,6 +88,7 @@ decided `ota` passes it without building.
 | `fingerprints`      | JSON object of target name to `@expo/fingerprint` hash: the runtime version an OTA for that target must carry under `runtimeVersion: {policy: "fingerprint"}`. Empty unless the plan fingerprinted. |
 | `build-number`      | The exported `STORE_BUILD_NUMBER`, empty when none. |
 | `marketing-version` | The exported `STORE_MARKETING_VERSION`, empty when none. |
+| `submissions`       | JSON object of target name to `{platform, submissionId, submissionUrl}` for every target whose `eas submit` succeeded, e.g. `{"acme-ios":{"platform":"ios","submissionId":"<uuid>","submissionUrl":"https://expo.dev/accounts/acme/projects/app/submissions/<uuid>"}}`. `{}` when nothing was submitted (or `decision` is `ota`). The id and URL are read from the `eas submit` log and are empty, with a warning, when the log names no submission page. |
 
 ## Targets
 
@@ -124,6 +127,67 @@ Each target is its own `ios-publish` / `android-lint-gate` /
 never cancels another brand's submit. A non-array, an empty array, an unknown
 key, an unknown platform, or a duplicate name fails the plan job before
 anything builds.
+
+## One call per brand: `record-scope`
+
+`targets` runs every brand in one call. A caller that instead calls this
+workflow once per brand, in its own matrix, must give each call a distinct
+`record-scope`:
+
+```yaml
+jobs:
+    publish:
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-android: true
+            build-profile: ${{ matrix.brand }}
+            submit-profile: ${{ matrix.brand }}
+            record-scope: ${{ matrix.brand }}
+            credentials-source: eas
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+```
+
+Without it every call shares one concurrency group (GitHub keeps one call
+running and one pending and cancels the rest), one `store-record-<app-dir>.json`
+on the release (the last writer wins), the same `ios-publish-build` /
+`android-publish-build` artifact names (the second upload fails), and one
+`store-submitted-*` marker namespace (a call can record another brand's
+fingerprint). With it the record is `store-record-<record-scope>.json`, every
+per-target artifact name carries `-<record-scope>--<name>`, and the markers
+are `store-submitted-<record-scope>--<name>`. A scope may not contain `--` or
+start or end with `-`, so no scope's artifact prefix is another's.
+
+## Credentials
+
+With `credentials-source: secrets` (the default), `ios-publish` requires
+`ASC_API_KEY`, `ASC_KEY_ID` and `ASC_ISSUER_ID`, and `android-publish`
+requires `GOOGLE_SERVICE_ACCOUNT_JSON`, as before.
+
+With `credentials-source: eas` they are optional, and the jobs rely on the
+credentials stored on EAS for the project (`eas credentials`): `eas build
+--local` downloads the signing credentials (it does with either source, given
+`credentialsSource: remote`, the default), and `eas submit
+--non-interactive` uses the App Store Connect API key and the Google service
+account key uploaded there for submissions. This is how one `EXPO_TOKEN`
+serves several Apple teams or Play accounts: each app's keys live with the
+app on EAS, not as per-team GitHub secrets. For that, the submit profile must
+not name `ascApiKeyPath` / `ascApiKeyId` / `ascApiKeyIssuerId` or
+`serviceAccountKeyPath` — `eas submit` would then read the file and fail
+because nothing wrote it — and non-interactive iOS submits still need
+`ascAppId` in the profile.
+
+A key that is passed is still written and exported, so a job can mix: EAS
+for submit, a secret for a hook. A partial App Store Connect set
+(`ASC_API_KEY` without `ASC_KEY_ID` / `ASC_ISSUER_ID`, or the reverse) still
+fails closed. `EXPO_TOKEN` stays required in both modes. Without a written
+key, the hooks get an empty `EXPO_ASC_API_KEY_PATH` /
+`GOOGLE_APPLICATION_CREDENTIALS` / `GOOGLE_SERVICE_ACCOUNT_KEY_PATH`.
 
 ## eas.json profile env
 
@@ -257,7 +321,8 @@ the safe direction, but no OTA ever ships.
 `eas submit` succeeds (before the post-submit hook, whose failure does not
 un-ship a binary), and the `record` job merges the markers into
 `store-record-<app-dir scope>.json` (e.g. `store-record-apps-mobile.json`, or
-`store-record-root.json` for `.`) and uploads it to the release-tag's GitHub
+`store-record-root.json` for `.`; `store-record-<record-scope>.json` when
+`record-scope` is set) and uploads it to the release-tag's GitHub
 Release, creating a release from the existing tag when there is none:
 
 ```json
@@ -317,15 +382,16 @@ a hook resolves the same app config the build does. `ASC_KEY_ID` /
 | Name                            | Required | Description |
 | ---------------------------------- | -------- | -------------- |
 | `EXPO_TOKEN`                        | no*      | Expo access token, required by `ios-publish` and `android-publish`. |
-| `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish`. |
+| `ASC_API_KEY`                       | no*      | App Store Connect API key contents (`.p8`), required by `ios-publish` unless `credentials-source` is `eas`. |
 | `ASC_KEY_ID`                        | no*      | App Store Connect API key ID matching `ASC_API_KEY`, exported to the iOS build and submit steps as `EXPO_ASC_KEY_ID`. |
 | `ASC_ISSUER_ID`                     | no*      | App Store Connect API key issuer ID matching `ASC_API_KEY`, exported as `EXPO_ASC_ISSUER_ID`. |
-| `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish`. Written to disk at the path resolved by the `google-key-path` input (or `$RUNNER_TEMP` if empty). |
+| `GOOGLE_SERVICE_ACCOUNT_JSON`       | no*      | Google Play service account key JSON contents, required by `android-publish` unless `credentials-source` is `eas`. Written to disk at the path resolved by the `google-key-path` input (or `$RUNNER_TEMP` if empty). |
 | `EAS_EXTRA_ENV`                     | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of `plan` (before its install and `build-command`, so a remote cache token reaches them; the per-target fingerprint unsets every `EAS_EXTRA_ENV` name, keeping it out of the recorded fingerprints as before), `ios-publish`, `android-lint-gate`, and `android-publish`. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md): fails closed on a malformed line without echoing it, masks each value (`::add-mask::`) before writing it to `$GITHUB_ENV` with a collision-proof delimiter, so it never appears unredacted in logs (empty values are not masked), and accepts `KEY<<DELIMITER` … `DELIMITER` for a multi-line value. Use this for secrets `eas build`/`eas submit`, the `android-lint-gate` prebuild, or a pre/post-submit-command hook need on the environment — e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`. |
 
 \* `ASC_KEY_ID` and `ASC_ISSUER_ID` must accompany `ASC_API_KEY`: without them EAS cannot
 resolve the key non-interactively and falls back to an interactive prompt that cannot be
-answered in CI, so `ios-publish` fails closed when any of the three is missing.
+answered in CI, so `ios-publish` fails closed when any of the three is missing (with
+`credentials-source: eas`, when some but not all three are passed).
 
 \* `EXPO_TOKEN`, `ASC_API_KEY`, and `GOOGLE_SERVICE_ACCOUNT_JSON` are declared
 optional at the `workflow_call` level (so a caller that only enables one
