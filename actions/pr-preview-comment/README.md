@@ -62,7 +62,7 @@ fail the step. Talks to the REST API with `curl` and `jq` and does not need
   run: |
       mkdir -p "$SECTIONS_DIR"
       printf '### Storybook\n\n[Open](https://example.com/pr)\n' > "$SECTIONS_DIR/web-storybook.md"
-- uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.0.0 # v4.0.0
+- uses: rnw-community/mobile-ci/actions/pr-preview-comment@validate/v4.1 # validate/v4.1 fleet-validation pin
   with:
       pr-number: ${{ github.event.pull_request.number }}
       sections-dir: ${{ runner.temp }}/preview-sections

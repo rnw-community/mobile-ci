@@ -19,7 +19,7 @@ on a mixed fleet. Place it before the first step that touches artifacts.
 | `applied` | `true` when `runs-on/action` ran in this job. |
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.0.0 # v4.0.0
+- uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@validate/v4.1 # validate/v4.1 fleet-validation pin
   with:
       enabled: ${{ inputs.runs-on-cache-bypass }}
 ```
