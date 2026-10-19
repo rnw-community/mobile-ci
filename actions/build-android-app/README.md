@@ -81,12 +81,19 @@ per CPU of quota (`cpu.max`, or the cgroup v1 CFS quota, rounded up) and one
 per GiB of memory limit (`memory.max`, or `memory.limit_in_bytes`) above a
 4 GiB reserve for the Gradle and Kotlin JVMs, whichever is lower, at least 1
 (4 on a 4-CPU / 8 GiB runner). An unparseable limit fails the step; a runner
-with no limit is left to `ninja`. The bound is enforced by exporting
+with no limit is left to `ninja`.
+
+The bound is enforced by a compiler launcher, written to
+`$RUNNER_TEMP/mobile-ci-compile-slots/compile-slot.sh`, that runs each
+compiler while holding one of N `flock` slots. The step exports
 `CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER` (read by CMake 3.17
-and later on a project's first configure) as `scripts/compile-slot.sh`, which
-runs each compiler while holding one of N `flock` slots. A launcher the caller
-already exports, such as `ccache`, is kept behind the slot. The bound only
-schedules compilers, so it never changes what is built or the native key.
+and later on a project's first configure), `MOBILE_CI_COMPILE_SLOTS` and
+`MOBILE_CI_COMPILE_SLOTS_DIR` through `$GITHUB_ENV`, so the bound also covers
+any later CMake build in the same job. A launcher the caller already exports,
+such as `ccache`, is kept behind the slot. The bound only schedules compilers,
+so it never changes what is built or the native key. `native-publish.yml` and
+`native-dev-release.yml` run the same step before `eas build --local` for
+Android.
 
 ## ABIs
 
