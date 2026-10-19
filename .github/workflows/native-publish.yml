@@ -292,8 +292,8 @@ on:
                     instead of store-record-<app-dir>.json), its build and marker
                     artifacts and its concurrency group, so a caller can run this
                     workflow once per brand in a matrix without the calls
-                    overwriting or cancelling each other. Give every call in the run
-                    a distinct value. Letters, digits, '.', '_' and single '-'
+                    overwriting or cancelling each other. Calls that share a run
+                    must each set a distinct, non-empty value. Letters, digits, '.', '_' and single '-'
                     between them. Empty (default) keeps the app-dir names.
                 type: string
                 required: false
@@ -401,7 +401,7 @@ jobs:
             record: ${{ steps.targets.outputs.record }}
             release-tag: ${{ steps.targets.outputs.release-tag }}
             record-asset: ${{ steps.targets.outputs.record-asset }}
-            artifact-scope: ${{ steps.targets.outputs.artifact-scope }}
+            marker-prefix: ${{ steps.targets.outputs.marker-prefix }}
             build-number: ${{ steps.version.outputs.build-number }}
             marketing-version: ${{ steps.version.outputs.marketing-version }}
             fingerprints: ${{ steps.fingerprints.outputs.fingerprints }}
@@ -563,7 +563,7 @@ jobs:
                     echo "record=$record"
                     echo "release-tag=$release_tag"
                     echo "record-asset=store-record-${scope}.json"
-                    echo "artifact-scope=$artifact_scope"
+                    echo "marker-prefix=store-submitted-${RECORD_SCOPE}--"
                   } >> "$GITHUB_OUTPUT"
                   jq -r '.[] | "Target \(.name): \(.platform), build profile \(.buildProfile), submit profile \(.submitProfile), \(if .envLines == "" then 0 else (.envLines | split("\n") | length) end) profile env variable(s)"' <<< "$resolved"
 
@@ -1366,7 +1366,7 @@ jobs:
             - name: Upload the submitted-target marker
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-submitted-${{ needs.plan.outputs.artifact-scope }}${{ matrix.target.name }}
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
                   path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
                   retention-days: 14
                   overwrite: true
@@ -2216,7 +2216,7 @@ jobs:
             - name: Upload the submitted-target marker
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-submitted-${{ needs.plan.outputs.artifact-scope }}${{ matrix.target.name }}
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
                   path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
                   retention-days: 14
                   overwrite: true
@@ -2257,7 +2257,7 @@ jobs:
             - name: Download the submitted-target markers
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  pattern: store-submitted-${{ needs.plan.outputs.artifact-scope }}*
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
                   merge-multiple: true
                   path: ${{ runner.temp }}/store-submitted
 
@@ -2344,7 +2344,7 @@ jobs:
               if: needs.plan.outputs.decision == 'native'
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  pattern: store-submitted-${{ needs.plan.outputs.artifact-scope }}*
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
                   merge-multiple: true
                   path: ${{ runner.temp }}/store-submitted
 

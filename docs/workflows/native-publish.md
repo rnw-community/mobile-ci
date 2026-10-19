@@ -75,7 +75,7 @@ decided `ota` passes it without building.
 | `android-lint-gate-gradle-args`    | no       | `''`                                      | Extra whitespace-split arguments appended after `:app:lintVitalRelease` in the `android-lint-gate` job, e.g. `-PreactNativeArchitectures=arm64-v8a`. Not shell-quoted. |
 | `android-lint-gate-gradle-cache`   | no       | `true`                                    | Restore/save the Gradle User Home (`caches` + `wrapper`) in the `android-lint-gate` job via `gradle/actions/setup-gradle` with `cache-provider: basic`. Saved only from default-branch runs, read-only elsewhere. `false` skips `setup-gradle` entirely. See [Android lint gate](#android-lint-gate-gradle-cache-and-reports). |
 | `credentials-source`               | no       | `secrets`                                 | `secrets` requires `ASC_API_KEY` / `ASC_KEY_ID` / `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android). `eas` makes them optional and lets `eas build` / `eas submit` use the credentials stored on EAS. `EXPO_TOKEN` stays required. Fails closed on any other value. See [Credentials](#credentials). |
-| `record-scope`                     | no       | `''`                                      | Names this call's store build record (`store-record-<record-scope>.json`), its build and marker artifacts and its concurrency group, so one call per brand in a matrix cannot overwrite, queue behind or cancel another. `[A-Za-z0-9._]` with single `-` between them; anything else fails the plan job. Empty keeps the `app-dir` names. See [One call per brand](#one-call-per-brand-record-scope). |
+| `record-scope`                     | no       | `''`                                      | Names this call's store build record (`store-record-<record-scope>.json`), its build and marker artifacts and its concurrency group, so one call per brand in a matrix cannot overwrite, queue behind or cancel another; calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them; anything else fails the plan job. Empty keeps the `app-dir` names. See [One call per brand](#one-call-per-brand-record-scope). |
 | `publish-env`                      | no       | `''`                                      | Newline-separated `KEY=VALUE` pairs of non-secret env appended to `$GITHUB_ENV` at the start of `ios-publish`, `android-lint-gate`, and `android-publish`, after the resolved `eas.json` profile env (overriding it outside `eas build`, with a warning when the values differ) and before `eas build`/`eas submit` (or, for `android-lint-gate`, `expo prebuild`) and the pre/post-submit-command hooks. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. For secret values use the `EAS_EXTRA_ENV` secret instead — inputs are not masked in logs. |
 
 ## Outputs
@@ -161,7 +161,11 @@ on the release (the last writer wins), the same `ios-publish-build` /
 fingerprint). With it the record is `store-record-<record-scope>.json`, every
 per-target artifact name carries `-<record-scope>--<name>`, and the markers
 are `store-submitted-<record-scope>--<name>`. A scope may not contain `--` or
-start or end with `-`, so no scope's artifact prefix is another's.
+start or end with `-`, so no scope's artifact prefix is another's. An unscoped
+call's markers are `store-submitted---<name>`, a prefix no scoped call can
+produce, so a scoped call never reads an unscoped one's markers or the reverse.
+Two unscoped calls in one run still share everything: calls that share a run
+must each set a distinct, non-empty `record-scope`.
 
 ## Credentials
 

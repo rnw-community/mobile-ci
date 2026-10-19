@@ -123,8 +123,10 @@ on:
                     the build on EAS servers (eas build --json --wait) and needs
                     distribution eas, a build profile with distribution internal,
                     and no post-build command or embedded build number check, since
-                    the binary never reaches the runner. Fails closed on any other
-                    value.
+                    the binary never reaches the runner. publish-env, EAS_EXTRA_ENV
+                    and DEVELOPMENT_BUILD_NUMBER do not reach the EAS builder; put
+                    build-time values in the profile env or EAS environment
+                    variables. Fails closed on any other value.
                 type: string
                 required: false
                 default: local

@@ -25,10 +25,11 @@ contents: write` to create/prune releases.
 
 ## EAS distribution
 
-A GitHub Release asset is only installable by someone who can read the
-repository, and an `.ipa` downloaded from it cannot be installed on an iPhone
-at all. `distribution: eas` hands testers an EAS internal distribution link
-instead:
+A GitHub Release asset is only downloadable by someone who can read the
+repository, and it is a file, not an install link: a signed `.ipa` reaches a
+registered iPhone only through Xcode or Apple Configurator on a Mac.
+`distribution: eas` hands testers an EAS internal distribution link they open
+on the device instead:
 
 - With the default `build-location: local`, the job builds with `eas build
   --local` as before, runs the embedded build number read-back and the
@@ -41,7 +42,11 @@ instead:
   produce an `.apk` (`android.buildType: apk`). Nothing is built on the runner,
   so a cloud build cannot run a post-build command or
   `ios-verify-embedded-build-number`; asking for either fails the job rather
-  than skipping it.
+  than skipping it. The runner's environment does not reach the EAS builder
+  either: `publish-env`, `EAS_EXTRA_ENV` and `DEVELOPMENT_BUILD_NUMBER` apply
+  only to the steps on the runner (the pre-build hook, and `eas build`'s local
+  evaluation of the app config). A value the build itself needs must be in the
+  build profile's `env` or an EAS environment variable.
 
 Either way the job outputs the build page,
 `https://expo.dev/accounts/<owner>/projects/<slug>/builds/<id>`, as
@@ -59,6 +64,13 @@ fails before the build: no device can install an `.aab`.
 
 `EXPO_TOKEN` must belong to an account that can upload to the project in
 `app.json` / `app.config.*`.
+
+Access to the link is governed by EAS, not by the repository: per Expo's
+[internal distribution](https://docs.expo.dev/build/internal-distribution/)
+documentation, anyone with an internal build's URL can open it by default.
+When the binary must stay restricted, turn off unauthenticated access to
+internal builds in the EAS project settings, so testers must sign in to an
+Expo account with access to the project.
 
 ## Outputs
 
@@ -260,7 +272,7 @@ android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
 | `eas-cli-version`            | no       | `20.5.1`                                  | Pinned `eas-cli` npm version invoked via `npx eas-cli@<version>`. |
 | `build-profile`              | no       | `development`                             | EAS build profile (`eas.json` `build.<profile>`) used for both platforms. |
 | `distribution`               | no       | `github-release`                          | `github-release` attaches the build to a pruned GitHub Release. `eas` uploads it to EAS internal distribution and outputs its install page — see [EAS distribution](#eas-distribution). Needs an `apk` on Android. Fails closed on any other value. |
-| `build-location`             | no       | `local`                                   | `local` runs `eas build --local` on the runner. `cloud` builds on EAS servers (`eas build --json --wait`); it needs `distribution: eas`, a build profile with `distribution: internal`, and no post-build command or `ios-verify-embedded-build-number`. Fails closed on any other value. |
+| `build-location`             | no       | `local`                                   | `local` runs `eas build --local` on the runner. `cloud` builds on EAS servers (`eas build --json --wait`); it needs `distribution: eas`, a build profile with `distribution: internal`, and no post-build command or `ios-verify-embedded-build-number`. `publish-env`, `EAS_EXTRA_ENV` and `DEVELOPMENT_BUILD_NUMBER` do not reach the EAS builder; put build-time values in the profile's `env` or EAS environment variables. Fails closed on any other value. |
 | `ios-pre-build-command`      | no       | `''`                                      | Optional consumer-owned command (e.g. patching `eas.json` or asserting a computed build number) run in `app-dir` before the iOS EAS build, after the App Store Connect key (if any) is written. Receives `DEVELOPMENT_BUILD_NUMBER` and `EXPO_ASC_API_KEY_PATH` — see [Hook environment](#hook-environment). |
 | `android-pre-build-command`  | no       | `''`                                      | Optional consumer-owned command run in `app-dir` before the Android EAS build. Receives `DEVELOPMENT_BUILD_NUMBER` — see [Hook environment](#hook-environment). |
 | `ios-verify-embedded-build-number` | no | `false`                                | Fail the iOS job, before any release is created, when the built `.ipa`'s `CFBundleVersion` differs from `DEVELOPMENT_BUILD_NUMBER`. Turn on only once the app wires that variable into its build number — see [Embedded build number](#embedded-build-number). No Android equivalent: `versionCode` is an integer and can never equal `<run_number>.<run_attempt>`. |

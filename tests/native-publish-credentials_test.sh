@@ -107,7 +107,7 @@ case_start 'record-scope: empty keeps the app-dir record name and the artifact n
 run_targets
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
     && assert_equals store-record-apps-mobile.json "$(step_output "$workspace" record-asset)" 'record asset' \
-    && assert_equals '' "$(step_output "$workspace" artifact-scope)" 'artifact scope' \
+    && assert_equals 'store-submitted---' "$(step_output "$workspace" marker-prefix)" 'reserved unscoped marker prefix' \
     && assert_equals ',' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" targets)")" 'artifact suffixes'; then
     pass_case
 fi
@@ -116,9 +116,20 @@ case_start 'record-scope: names the record and scopes every per-call artifact'
 run_targets RECORD_SCOPE=brand-a
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
     && assert_equals store-record-brand-a.json "$(step_output "$workspace" record-asset)" 'record asset' \
-    && assert_equals 'brand-a--' "$(step_output "$workspace" artifact-scope)" 'artifact scope' \
+    && assert_equals 'store-submitted-brand-a--' "$(step_output "$workspace" marker-prefix)" 'marker prefix' \
     && assert_equals '-brand-a--ios,-brand-a--android' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" targets)")" 'artifact suffixes'; then
     pass_case
+fi
+
+case_start 'record-scope: the unscoped marker prefix matches no scoped marker, and no scope matches another'
+if python3 -c '
+import fnmatch, sys
+names = ["store-submitted-brand-a--ios", "store-submitted-brand-a-x--ios", "store-submitted---ios"]
+cases = {"store-submitted---*": ["store-submitted---ios"], "store-submitted-brand-a--*": ["store-submitted-brand-a--ios"]}
+sys.exit(any(fnmatch.filter(names, p) != want for p, want in cases.items()))'; then
+    pass_case
+else
+    fail_case 'a marker prefix matched another call'\''s marker'
 fi
 
 for scope in 'brand--a' '-brand' 'brand-' 'a/b' 'a b'; do
@@ -229,8 +240,8 @@ if 'jobs.status.outputs.submissions' not in str(call.get('outputs', {}).get('sub
     problems.append('workflow output submissions must read jobs.status.outputs.submissions')
 if 'submissions' not in jobs['status'].get('outputs', {}):
     problems.append('status job must output submissions')
-if 'artifact-scope' not in jobs['plan'].get('outputs', {}):
-    problems.append('plan job must output artifact-scope')
+if 'marker-prefix' not in jobs['plan'].get('outputs', {}):
+    problems.append('plan job must output marker-prefix')
 
 
 def step(job, name):
@@ -256,12 +267,12 @@ for job, key_step, flag, secret in (
     upload = step(job, 'Upload the submitted-target marker')
     if 'if' in upload:
         problems.append(f'{job}: the marker upload must run on every submit')
-    if 'needs.plan.outputs.artifact-scope' not in str(upload.get('with', {}).get('name', '')):
-        problems.append(f'{job}: the marker artifact name must carry artifact-scope')
+    if str(upload.get('with', {}).get('name', '')) != '${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}':
+        problems.append(f'{job}: the marker artifact must be named <marker-prefix><target name>')
 for job in ('record', 'status'):
     download = step(job, 'Download the submitted-target markers')
-    if 'needs.plan.outputs.artifact-scope' not in str(download.get('with', {}).get('pattern', '')):
-        problems.append(f'{job}: the marker download pattern must carry artifact-scope')
+    if str(download.get('with', {}).get('pattern', '')) != '${{ needs.plan.outputs.marker-prefix }}*':
+        problems.append(f'{job}: the marker download pattern must be <marker-prefix>*')
 if problems:
     sys.exit('\n'.join(problems))
 PYTHON
