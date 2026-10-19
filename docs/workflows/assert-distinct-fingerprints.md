@@ -59,5 +59,5 @@ jobs:
                 [{"name":"brand-a","appDir":"apps/mobile","appId":"com.a"},{"name":"brand-b","appDir":"apps/mobile","appId":"com.b"}]
     publish:
         needs: distinct-keys
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.0.0 # v4.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.1.0 # v4.1.0
 ```
