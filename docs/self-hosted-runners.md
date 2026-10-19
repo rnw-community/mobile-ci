@@ -258,9 +258,18 @@ persistent `launchctl disable` overrides into that one simulator's launchd
 database, cutting a booted simulator to roughly a quarter of the memory. The
 host itself is never touched, and `simslim off` restores stock.
 
-The order is always **boot → slim → install → drive**: slimming after the app
-is installed and fixtures are seeded wastes a boot cycle, and slimming is only
-possible on a device that exists.
+For a newly created device, use **create → apply profile offline and boot once →
+verify → check required features → install/seed → drive**. Do not boot a stock
+device just to slim it. For an already booted pool device, verify first and
+repair drift before installing the app. The local live-repair helper below
+avoids a reboot when preserving an existing session matters.
+
+**Upstream audit:** the latest published release checked on 2026-10-18 is
+[v0.12.2](https://github.com/MobAI-App/simslim/releases/tag/v0.12.2), already
+pinned by these actions. Its macos-arm64 release asset digest matches our
+`simslim-sha256` default. Use the
+[tagged source](https://github.com/MobAI-App/simslim/tree/v0.12.2) when checking
+behavior; documentation on upstream `main` can describe unreleased changes.
 
 **The profile lives here.** [`profiles/ci.json`](../profiles/ci.json) keeps the
 `store` category (App Store, push notifications, StoreKit, media) and the `web`
@@ -292,24 +301,38 @@ pinned tag and source it:
 
 ```bash
 brew install mobai-app/tap/simslim
-curl -fsSL https://raw.githubusercontent.com/rnw-community/mobile-ci/v2/scripts/slim-simulator.sh \
+curl -fsSL https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.0.0/scripts/slim-simulator.sh \
     -o /usr/local/bin/slim-simulator.sh
 
 xcrun simctl boot "$udid"
+export SIMSLIM_PROFILE_REF=v4.0.0
 . /usr/local/bin/slim-simulator.sh && slim_simulator "$udid"
+simslim verify "$udid" --profile "$(simslim_profile_path)"
+simslim doctor "$udid" --requires push,storekit,universal-links
 xcrun simctl install "$udid" MyApp.app
 ```
 
+The explicit verification also keeps this sequence safe with older published
+helpers that only verified before repair. Update the helper and profile ref
+together when adopting another exact mobile-ci release or reviewed commit.
+
 `slim_simulator <udid>` verifies against the profile and only applies the
-missing delta (`simslim on --no-reboot --profile`) when the device has drifted,
-so it is idempotent and never drops an installed app or a seeded fixture.
+missing disables (`simslim on --no-reboot --profile`) when the device has drifted,
+then verifies again. Live slimming stops managed services immediately but
+cannot re-enable services disabled beyond the requested profile. That remaining
+drift fails the helper; apply `simslim on --profile` before installing/seeding
+to restore the exact profile with a reboot. The helper itself never erases apps
+or fixtures. Choose the `doctor --requires` features for your own tests;
+`verify` proves the configured overrides, while `doctor` checks the backing
+services for named capabilities, not end-to-end push delivery or purchases.
 `slim_booted_simulators` does the same for every booted device, and running the
 script instead of sourcing it does exactly that. It fails fast with the
 Homebrew hint when `simslim` is missing. The profile is taken from
 `$SIMSLIM_PROFILE` when set, then from `profiles/ci.json` next to the script's
 parent directory, and otherwise downloaded from `$SIMSLIM_PROFILE_REF`
-(default `v2`) — so a lone copy of the script still slims against the same
-profile CI uses.
+(default `v4.0.0`). Set that ref to the exact release/SHA you fetched the helper
+from when using a standalone copy, or supply a local `SIMSLIM_PROFILE`. A
+repository checkout resolves its bundled profile without a download.
 
 **Provisioning: pay for it once.** The overrides persist across reboots, so
 slim a host's devices at provisioning time and let the job only verify:
@@ -337,9 +360,9 @@ always stock. With `slim-profile` set (the default, `bundled`) and
 it once, already slim; the job verifies and measures it. No image preparation
 is needed, and nothing is left behind on the host.
 
-**Templates do not carry slimming.** simslim keeps the overrides on the host in
+**Raw clones do not carry slimming.** simslim keeps the overrides on the host in
 a store keyed by the device's UDID
-([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)),
+([`disabled_store.go`](https://github.com/MobAI-App/simslim/blob/v0.12.2/disabled_store.go)),
 not inside the device, so `xcrun simctl clone` of a slimmed template produces a
 **stock** clone with a new UDID
 ([#161](https://github.com/rnw-community/mobile-ci/issues/161)). The same holds
@@ -349,25 +372,29 @@ answer for worker clones is `simslim watch`, which slims each clone no-reboot as
 it boots; `xcodebuild-test` runs it for the length of the test run when given
 `slim-profile` (`swift-ios.yml` passes the lease's). Baking `mobile-ci-template-*` devices
 into the image buys nothing, and `template-strategy: auto` is deprecated
-accordingly; `template-device` still clones a named device that carries
+accordingly; `template-device` still uses raw `simctl clone` for a named device that carries
 something other than slimming, and the clone is slimmed before first boot like
-a created one.
+a created one. This is different from v0.12.2's `simslim clone`: that command
+explicitly copies the managed profile and repairs source-path references,
+boots/audits the clone, and leaves it shut down. It is useful for an intentional
+local app/data clone, but is not the clone operation this lease action invokes.
+Do not replace the lease's create-and-slim path merely to add a template.
 
 **The fleet base image should still ship slim pool devices.** Measured inside
 pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
 simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,
 a Safari extension, Spotlight — with about **2 GB in the compressor and ~14 MB
 of free pages**. The UI-test step there was memory-starved, not CPU-bound. The
-devices `run-maestro-ios` and `capture-screenshots-ios` boot by name keep their
-overrides across `simctl erase` (the store is keyed by UDID), so slimming them
-once in the image, with the loop above, holds for every job.
+devices `run-maestro-ios` and `capture-screenshots-ios` boot by name can be
+pre-slimmed in the image. Jobs must still verify the device after any reset;
+an image label or unchanged device name is not evidence of its live profile.
 
 **What resets a simulator to stock.** Anything that gives the device a new
-UDID — delete-and-recreate, `simctl clone`, and every device created from a
-newly installed runtime — comes up stock with no error anywhere (`simctl
-erase` keeps the overrides, because simslim's store is keyed by UDID and lives
-outside the device) - the simulator just
-runs heavy again, and a pool that was sized for slim simulators starts
+UDID — delete-and-recreate, raw `simctl clone`, and every device created from a
+newly installed runtime — starts without the source's overrides. Treat erase
+and runtime/Xcode updates as verification boundaries too: `simslim erase`
+explicitly clears the overrides, and a successful reset alone does not prove a
+profile match. A pool that was sized for slim simulators starts
 swapping. `simslim verify` in the job catches exactly this and fails the shard
 naming the drift; re-run the loop above on that host. `simulator-slim-repair`
 defaults to `'true'`, so the shard repairs itself in-job with `simslim on` (a
@@ -383,9 +410,11 @@ the flows depend on in `simulator-requires` (`simslim doctor --list` prints the
 IDs) so a profile edit that drops one fails the job before the first flow
 instead of as a flaky assertion.
 
-**Runtime floor and the pinned binary.** Only iOS 18.5 and newer runtimes keep
-the overrides across a reboot; older runtimes accept them and silently come
-back stock. The actions reuse a `simslim` already on `PATH` when its
+**Runtime floor and the pinned binary.** Persistent slimming requires iOS 18.5
+or newer; v0.12.2 rejects an older runtime before persistent mutation. Its
+`--no-reboot` mode can slim an older runtime for the current boot session only,
+which must be repeated after every boot; that is not the persistent CI path.
+The actions reuse a `simslim` already on `PATH` when its
 `simslim version` matches the pinned `simslim-version` exactly, and otherwise
 download the `macos-arm64` release tarball into `$HOME/.simslim-pinned`,
 check its SHA-256 against the `simslim-sha256` input, and extract the binary
@@ -397,6 +426,21 @@ the default `simslim-version` and must be bumped with it; an empty
 above keeps the job off the network and the supply chain in the host's hands. Intel hosts must preinstall (`go install
 github.com/mobai-app/simslim/cmd/simslim@v<version>`); no x86_64 release
 asset exists and the install step fails closed on `uname -m != arm64`.
+
+**Measure capacity, not just service counts.** `simslim status` counts managed
+labels, not all simulator processes. `simslim measure` reports simulator
+`phys_footprint`; summing process RSS double-counts shared mappings. Record
+measurements after the same settle interval on the same runtime/profile,
+alongside test duration, retries, host memory, compressor and swap-out rate.
+Upstream's roughly 4x example is not a sizing guarantee for this fleet. A
+correct profile is a prerequisite, not permission to increase concurrency
+without a representative workload and host-pressure acceptance.
+
+Keep the `simslim watch` process job-scoped and stop it after xcodebuild; it
+observes newly booted workers, not devices you can pre-slim by name. Run it only
+inside an isolated runner guest/device set, since a host-wide watcher could
+also change another job's simulators. For a future runtime or profile change,
+verify both override state and the consumer's required features before load.
 
 **Optional disk hygiene.** `simslim disk-plan <udid>` reports reclaimable
 per-device caches, logs, and temporary files read-only; `simslim disk-clean
@@ -865,6 +909,84 @@ guarantee):
 
 - **~23 seconds** cold boot to `sys.boot_completed`.
 - **~4.2GB RSS** at a 4 vCPU / 8GiB host shape.
+
+### Android equivalents to SimSlim
+
+SimSlim manages Apple simulator launchd services; it does not run on Android.
+Google's [Automated Test Device (ATD) images](https://developer.android.com/studio/test/managed-devices#use-automated-test-devices)
+are the closest platform-supported equivalent: they reduce background work
+and omit apps/services for instrumented tests. Gradle's `aosp-atd` image source
+omits Google services; `google-atd` includes Google Play services, which is
+different from a Play Store image. These Gradle source names are not SDK target
+IDs to copy into `emulator-target`. Check exact API/ABI/target packages with
+`sdkmanager --list`; do not
+assume an ATD counterpart exists for the fleet's pinned image.
+
+ATDs remove SystemUI, Settings and other bundled apps, and disable hardware
+rendering. Google's documentation excludes screenshot tests that require
+hardware rendering. This fleet's API 34 / x86_64 compatibility canary below
+shows that this app's four-flow Maestro compatibility subset does not complete
+on either ATD target, while it completes on `google_apis` on the same Omarchy
+host. This result is specific to this app and flow set; it does not establish
+that every app is incompatible with ATDs. The `android-emulator` action can
+request a different SDK target, but accepting a target string does not prove
+its image can run a consumer.
+
+**API 34 / x86_64 compatibility canary (2026-10-18)** — all four runs used the
+same APK SHA-256
+(`dfb4daf188885ea0893aa65801336b534745fc68106f324c1bbae56117bf0395`), the
+same four selected flows in one Maestro shard, and a Nexus 4 guest configured
+with 2 GiB RAM and 2 cores on a 4 CPU / 8 GiB worker. The metadata-revision
+guard changed between
+baseline and later runs.
+The Ubuntu baseline and Omarchy control used `google_apis`; the two Omarchy ATD
+runs used the SDK targets `google_atd` and `aosp_atd` (Gradle image sources
+`google-atd` and `aosp-atd`).
+
+| Image and physical host | Run | Selected flows |
+| --- | --- | --- |
+| `google_apis`, Ubuntu baseline | [39099635352](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39099635352) | 4/4 passed |
+| `google_atd`, Omarchy | [39100202202](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39100202202) | 3/4 passed; theme flow failed twice |
+| `aosp_atd`, Omarchy | [39100743990](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39100743990) | 3/4 passed; theme flow failed twice |
+| `google_apis`, Omarchy host-matched control | [39101269470](https://github.com/vitalyiegorov/suuudokuuu/actions/runs/39101269470) | 4/4 passed |
+
+Both ATD runs failed `10.themes-screen.flow.yaml` after `hideKeyboard`. Android
+logged a `key_back_press`; the assertion hierarchy showed the app's “Discard
+changes?” modal and no Save button. The artifacts do not include a successful
+pre-command hierarchy, so whether an IME was visible before that Back event is
+unproven. The ATD failure and final screenshots are black; they do not establish
+a blank app screen. Google's [ATD documentation](https://developer.android.com/studio/test/managed-devices#use-automated-test-devices)
+notes the rendering and bundled-app restrictions relevant to interpreting
+those captures.
+
+These failed suites establish no ATD speed or memory savings. SDK image setup
+ran before resource collection in the same job cgroup, so retained image
+file-cache can inflate raw memory figures; the ATD jobs also approached or
+reached their 8 GiB cgroup limit. Keep full images for Maestro and capture.
+Smaller-worker experiments remain pending; compare completed suites with cache
+effects controlled.
+
+For the existing AVD lane, use the controls already implemented:
+
+- Preinstall the exact SDK image and require working KVM acceleration.
+- Keep the job headless, with boot animation/audio/camera disabled as configured
+  by [`android-emulator`](../actions/android-emulator/README.md). These flags
+  reduce incidental work; `-no-window` still renders frames for UI automation.
+- Size RAM/cores from the runner's cgroup, leave room for Maestro's JVM, and
+  share host emulator slots across test and capture jobs. A guest RAM limit is
+  not a limit on total emulator process memory.
+- Always stop the job's emulator and release its slot. Snapshot reuse is a
+  separate boot-time optimization: the current default disables snapshot saves
+  but permits loading an existing snapshot. It does not prove a clean app or
+  device state; retain the consumer's reset/seed hooks.
+
+Avoid blanket `pm disable-user` lists: disabling a package can remove services
+behind permissions, links, purchases or test-driver setup. Evaluate any image
+or service change in a separate lane with the same flows, screenshots and
+fixtures, recording cgroup memory/OOM events, host paging, boot time, duration
+and retries. Keep full images for visual/system integrations until equivalent
+behavior is demonstrated. Emulator flag semantics are documented in the
+[Android command-line reference](https://developer.android.com/studio/run/emulator-commandline).
 
 ### Choosing an Android driver
 
