@@ -88,6 +88,10 @@ against GitHub. See
 [RELEASE.md#validating-a-not-yet-tagged-self-reference-on-the-fleet](RELEASE.md#validating-a-not-yet-tagged-self-reference-on-the-fleet)
 for the SHA-pin-then-restore workaround used on #103 and #105/#107.
 
+A self-reference to a newly added action or workflow pins to the upcoming
+release tag, never the latest existing one: that tag lacks the new path, and
+`self-test`'s `self-reference-resolution` job fails the pull request.
+
 ## Validating changes locally
 
 ```bash

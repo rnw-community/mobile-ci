@@ -79,7 +79,7 @@ What it does:
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.0.0 # v4.0.0
+- uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.1.0 # v4.1.0
   with:
       platform: android
       app-path: .ci-artifacts/app-release.apk

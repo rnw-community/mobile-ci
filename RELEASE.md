@@ -204,7 +204,10 @@ this procedure, and `git tag` on this repo's own commit is created from that
 same commit immediately after. `self-test`'s `dry-lint-local-refs` job
 rewrites these self-references to relative paths before schema-checking
 them, so a not-yet-existent tag never has to actually resolve during CI on
-the release PR.
+the release PR. `self-test`'s `self-reference-resolution` job does check, on
+every pull request, that a self-reference to a tag that already exists names an
+action or workflow present at that tag: a new action must be pinned to the
+upcoming release tag, never to the last one, which lacks it.
 
 The floating major tag (`v1`, `v2`, ...) is a separate, deliberately mutable
 pointer used only by *consumers* who choose to float — the one matching the
