@@ -122,7 +122,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.0.0 # v4.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.1.0 # v4.1.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -180,7 +180,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.0.0 # v4.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.1.0 # v4.1.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
