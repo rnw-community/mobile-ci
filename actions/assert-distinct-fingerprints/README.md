@@ -27,6 +27,7 @@ any build starts and then runs this action. Both share
 | ---------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------ |
 | `platform` | yes      | -       | `ios` or `android`.                                                                                          |
 | `plans`    | yes      | -       | JSON array of `{name, appId, nativeKey, appDir?, fingerprint?, configHash?}`, one per target.                 |
+| `require-app-id` | no | `true` | `true` requires an `appId` on every target. `false` lets targets that all omit `appId` (the `seed-native-cache.yml` target shape) skip the comparison with a notice; a mix of targets with and without `appId` still fails. `expo-base-plan.yml` passes `false`. |
 
 ## Example
 
