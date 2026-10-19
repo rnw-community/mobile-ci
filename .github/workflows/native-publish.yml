@@ -1871,6 +1871,141 @@ jobs:
                   ANDROID_PRE_SUBMIT_COMMAND: ${{ inputs.android-pre-submit-command }}
               run: eval "$ANDROID_PRE_SUBMIT_COMMAND"
 
+            - name: Fit the native build into the container limits
+              id: native-jobs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
+                  v1_unbounded_bytes=1125899906842624
+                  reserve_mib=5120
+                  memory_bytes=''
+                  cpu_quota=''
+                  cpu_period=''
+
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+
+                  is_uint() {
+                    case "$1" in
+                      '' | *[!0-9]*) return 1 ;;
+                    esac
+                    return 0
+                  }
+
+                  if [ -f "$cgroup_root/cgroup.controllers" ]; then
+                    if [ -f "$cgroup_root/memory.max" ]; then
+                      value="$(cat "$cgroup_root/memory.max")"
+                      if [ "$value" != max ]; then
+                        is_uint "$value" || fail "Unparseable $cgroup_root/memory.max '$value'; expected a byte count or 'max'. Refusing to compile native code with a parallelism this step cannot bound."
+                        memory_bytes="$value"
+                      fi
+                    fi
+                    if [ -f "$cgroup_root/cpu.max" ]; then
+                      read -r cpu_quota cpu_period < "$cgroup_root/cpu.max" || true
+                      [ "$cpu_quota" = max ] && cpu_quota=''
+                    fi
+                  else
+                    if [ -f "$cgroup_root/memory/memory.limit_in_bytes" ]; then
+                      value="$(cat "$cgroup_root/memory/memory.limit_in_bytes")"
+                      is_uint "$value" || fail "Unparseable $cgroup_root/memory/memory.limit_in_bytes '$value'; expected a byte count."
+                      [ "$value" -lt "$v1_unbounded_bytes" ] && memory_bytes="$value"
+                    fi
+                    if [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+                      cpu_quota="$(cat "$cgroup_root/cpu/cpu.cfs_quota_us")"
+                      cpu_period="$(cat "$cgroup_root/cpu/cpu.cfs_period_us" 2>/dev/null || true)"
+                      [ "$cpu_quota" = -1 ] && cpu_quota=''
+                    fi
+                  fi
+                  if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
+                    fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
+                  fi
+
+                  jobs=''
+                  basis=''
+                  if [ -n "$cpu_quota" ]; then
+                    jobs=$(((cpu_quota + cpu_period - 1) / cpu_period))
+                    basis="CPU quota $cpu_quota/$cpu_period"
+                  fi
+                  if [ -n "$memory_bytes" ]; then
+                    memory_mib=$((memory_bytes / 1048576))
+                    memory_jobs=$(((memory_mib - reserve_mib) / 1024))
+                    [ "$memory_jobs" -lt 1 ] && memory_jobs=1
+                    if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
+                      jobs="$memory_jobs"
+                    fi
+                    basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB reserve"
+                  fi
+                  if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
+                    if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
+                      fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
+                    fi
+                    jobs="$NATIVE_COMPILE_JOBS"
+                    basis='native-compile-jobs input'
+                  fi
+
+                  echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
+                  if [ -z "$jobs" ]; then
+                    echo "No cgroup CPU or memory limit found; native compile parallelism is left to ninja."
+                    exit 0
+                  fi
+
+                  slots_dir="$RUNNER_TEMP/mobile-ci-compile-slots"
+                  launcher="$slots_dir/compile-slot.sh"
+                  mkdir -p "$slots_dir"
+                  cat > "$launcher" <<'COMPILE_SLOT'
+                  #!/bin/sh
+                  set -eu
+                  slots="${MOBILE_CI_COMPILE_SLOTS:?MOBILE_CI_COMPILE_SLOTS is not set}"
+                  dir="${MOBILE_CI_COMPILE_SLOTS_DIR:?MOBILE_CI_COMPILE_SLOTS_DIR is not set}"
+                  try_slots() {
+                    slot=0
+                    while [ "$slot" -lt "$slots" ]; do
+                      exec 9> "$dir/slot.$slot"
+                      if flock -n 9; then
+                        return 0
+                      fi
+                      exec 9>&-
+                      slot=$((slot + 1))
+                    done
+                    return 1
+                  }
+                  if ! try_slots; then
+                    exec 8> "$dir/gate"
+                    flock 8
+                    until try_slots; do
+                      sleep 0.2
+                    done
+                    exec 8>&-
+                  fi
+                  status=0
+                  "$@" 9>&- || status=$?
+                  exit "$status"
+                  COMPILE_SLOT
+                  chmod +x "$launcher"
+
+                  jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+                  chain_launcher() {
+                    case "$1" in
+                      "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
+                      '') printf '%s' "$launcher" ;;
+                      *) printf '%s;%s' "$launcher" "$1" ;;
+                    esac
+                  }
+                  {
+                    echo "MOBILE_CI_COMPILE_SLOTS=$jobs"
+                    echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
+                    echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
+                    echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+                    case " ${JAVA_TOOL_OPTIONS:-} " in
+                      *" $jvm_heap_return "*) ;;
+                      *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
+                    esac
+                  } >> "$GITHUB_ENV"
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return)."
+
             - name: EAS build (Android)
               id: build
               working-directory: ${{ inputs.app-dir }}

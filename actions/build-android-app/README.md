@@ -65,6 +65,48 @@ the same in a workflow of your own:
       key: ${{ steps.build.outputs.android-sdk-cache-key }}
 ```
 
+## Native compile parallelism
+
+The Android Gradle plugin runs the SDK's `ninja` directly, so
+`CMAKE_BUILD_PARALLEL_LEVEL` never reaches it, and `ninja` sizes itself from
+the CPUs the process may be scheduled on, not from the container's cgroup
+quota. On a 4-CPU / 8 GiB runner container on a 24-thread host that is 26
+compilers per CMake project, with several projects building at once; the
+build only finished while the container could page into host swap, and is
+OOM-killed without it.
+
+The action therefore bounds the compilers running at once across the whole
+build. `native-compile-jobs` empty derives the bound from the cgroup: one job
+per CPU of quota (`cpu.max`, or the cgroup v1 CFS quota, rounded up) and one
+per GiB of memory limit (`memory.max`, or `memory.limit_in_bytes`) above a
+5 GiB reserve for everything that is not a compiler, whichever is lower, at
+least 1 (3 on a 4-CPU / 8 GiB runner). The reserve is measured, not guessed: on
+that runner the Gradle daemon and two Kotlin daemons held about 4.2 GiB during
+the native phase of a Maestro build, and the Gradle daemon plus eas-cli about
+4.6 GiB in `eas build --local`, while single React Native Skia translation
+units reach 2.7 GiB. An unparseable limit fails the step; a runner
+with no limit is left to `ninja`.
+
+The bound is enforced by a compiler launcher, written to
+`$RUNNER_TEMP/mobile-ci-compile-slots/compile-slot.sh`, that runs each
+compiler while holding one of N `flock` slots. The step exports
+`CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER` (read by CMake 3.17
+and later on a project's first configure), `MOBILE_CI_COMPILE_SLOTS` and
+`MOBILE_CI_COMPILE_SLOTS_DIR` through `$GITHUB_ENV`, so the bound also covers
+any later CMake build in the same job. A launcher the caller already exports,
+such as `ccache`, is kept behind the slot. The bound only schedules compilers,
+so it never changes what is built or the native key.
+
+The same step appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
+-XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
+already sets there. The Kotlin compile daemons sit idle through the native phase
+holding up to a 2 GiB heap each, and that phase is when a single Skia
+translation unit can need 3.5 GiB. With these options an idle JVM runs a
+periodic GC and returns its free heap to the kernel; on the runner image a JVM
+idling at 300 MB live drops from 1917 MiB to 572 MiB resident. `native-publish.yml` and
+`native-dev-release.yml` run the same step before `eas build --local` for
+Android.
+
 ## ABIs
 
 A stock React Native project compiles its C++ for `armeabi-v7a`, `arm64-v8a`,
@@ -156,6 +198,7 @@ preinstalled here.
 | `gradle-task`                  | no       | `assembleRelease` | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module. |
 | `gradle-args`                  | no       | `''`         | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease`. Not shell-quoted. |
 | `android-abis`                 | no       | `''`         | Comma-separated ABIs passed as `-PreactNativeArchitectures=<value>`, e.g. `x86_64`. Empty passes nothing, so the project's own `reactNativeArchitectures` applies. Fails closed on an unknown ABI or a contradicting pin in `gradle-args` / `ORG_GRADLE_PROJECT_reactNativeArchitectures`. See [ABIs](#abis). |
+| `native-compile-jobs`          | no       | `''`         | Most C/C++ compilers the CMake builds inside Gradle run at once, across every native module. Empty derives it from the cgroup limits. See [Native compile parallelism](#native-compile-parallelism). |
 | `android-sdk-cache-save`       | no       | `'true'`     | `'true'` saves the [Android SDK cache](#android-sdk-cache) from inside the action after a successful build, off `pull_request`, with `continue-on-error`. `'false'` leaves the save to the caller, which can bound it with `timeout-minutes`. |
 
 ## Outputs

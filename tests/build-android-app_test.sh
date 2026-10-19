@@ -267,4 +267,250 @@ else
     pass_case
 fi
 
+# Native compile parallelism. The Android Gradle plugin runs the SDK's ninja
+# directly, and ninja sizes itself from the CPUs the process may be scheduled
+# on, not from the container's cgroup quota: a 4-CPU / 8 GiB runner on a
+# 24-thread host started 26 clang processes per CMake project, four projects
+# at once, and the kernel killed the build. The bound comes from the cgroup
+# and is enforced by a compiler launcher that holds one of N slot locks.
+JOBS_STEP='Fit the native build into the container limits'
+BUILD_STEP='Build APK (Release)'
+GIB=1073741824
+
+jobs_cgroup_v2() {
+    mkdir -p "$1"
+    printf 'cpu memory pids\n' > "$1/cgroup.controllers"
+    printf '%s\n' "$2" > "$1/memory.max"
+    printf '%s\n' "$3" > "$1/cpu.max"
+}
+
+run_jobs() {
+    run_step "$workspace" NATIVE_COMPILE_JOBS='' CGROUP_ROOT="$workspace/cgroup" "$@"
+}
+
+case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 3 native jobs at once, memory bounding it below the CPUs'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'memory, not CPUs, bounds the jobs on a runner with more CPUs than memory'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((7 * GIB)) '800000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a fractional CPU quota rounds up and a tiny memory limit still compiles one job'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((3 * GIB)) '150000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 1 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a cgroup v1 runner is bounded the same way'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+mkdir -p "$workspace/cgroup/memory" "$workspace/cgroup/cpu"
+printf '%s\n' $((8 * GIB)) > "$workspace/cgroup/memory/memory.limit_in_bytes"
+printf '200000\n' > "$workspace/cgroup/cpu/cpu.cfs_quota_us"
+printf '100000\n' > "$workspace/cgroup/cpu/cpu.cfs_period_us"
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a runner without cgroup limits leaves native parallelism to ninja'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals '' "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'native-compile-jobs overrides the derived bound'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs NATIVE_COMPILE_JOBS=3
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a native-compile-jobs that is not a positive integer fails closed'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs NATIVE_COMPILE_JOBS=0
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'native-compile-jobs' 'log'; then
+    pass_case
+fi
+
+case_start 'an unreadable memory limit fails closed instead of compiling unbounded'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" 'lots' '400000 100000'
+run_jobs
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'memory.max' 'log'; then
+    pass_case
+fi
+
+launcher_from_step() {
+    workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+    jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+    run_jobs NATIVE_COMPILE_JOBS="$1"
+    slot_launcher="$workspace/runner-temp/mobile-ci-compile-slots/compile-slot.sh"
+    slots_dir="$workspace/runner-temp/mobile-ci-compile-slots"
+}
+
+case_start 'the compile slot launcher never runs more compilers than it has slots'
+launcher_from_step 3
+probe="$(mktemp -d)"
+mkdir -p "$probe/running"
+cat > "$probe/compiler" <<'COMPILER'
+#!/bin/sh
+touch "$PROBE/running/$$"
+ls "$PROBE/running" | wc -l >> "$PROBE/concurrency"
+sleep 0.3
+rm "$PROBE/running/$$"
+echo ran >> "$PROBE/ran"
+COMPILER
+chmod +x "$probe/compiler"
+pids=''
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=3 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" \
+        "$slot_launcher" "$probe/compiler" &
+    pids="$pids $!"
+done
+launcher_failed=0
+for pid in $pids; do
+    wait "$pid" || launcher_failed=1
+done
+peak="$(sort -n "$probe/concurrency" 2>/dev/null | tail -1)"
+if assert_equals 0 "$launcher_failed" 'launcher status' \
+    && assert_equals 10 "$(wc -l < "$probe/ran" | tr -d ' ')" 'compilers run' \
+    && [ "${peak:-99}" -le 3 ]; then
+    pass_case
+else
+    [ "$launcher_failed" = 0 ] && fail_case "peak concurrency ${peak:-unknown} exceeds 3 slots"
+fi
+
+case_start "the compile slot launcher passes the compiler's exit status through"
+launcher_from_step 2
+status=0
+MOBILE_CI_COMPILE_SLOTS=2 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" "$slot_launcher" sh -c 'exit 7' || status=$?
+if assert_equals 7 "$status" 'exit status'; then
+    pass_case
+fi
+
+case_start 'a long-lived process a chained launcher leaves behind does not keep the slot'
+launcher_from_step 1
+probe="$(mktemp -d)"
+cat > "$probe/daemonizing" <<'DAEMON'
+#!/bin/sh
+sleep 30 &
+echo ran >> "$PROBE/ran"
+DAEMON
+chmod +x "$probe/daemonizing"
+PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=1 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" "$slot_launcher" "$probe/daemonizing" > /dev/null
+status=0
+PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=1 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" timeout 5 "$slot_launcher" "$probe/daemonizing" > /dev/null || status=$?
+if assert_equals 0 "$status" 'second compile status (124 means it waited on a slot the first one leaked)' \
+    && assert_equals 2 "$(wc -l < "$probe/ran" | tr -d ' ')" 'compilers run'; then
+    pass_case
+fi
+
+case_start 'a bounded runner hands every later CMake configure in the job the compile slot launcher'
+launcher_from_step ''
+job_env="$(cat "$workspace/env")"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
+    && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
+    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=3' 'job env' \
+    && assert_contains "$job_env" "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir" 'job env'; then
+    pass_case
+fi
+
+case_start "the caller's own compiler launcher runs behind the slot, and a second run does not nest the slot"
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+slot_launcher="$workspace/runner-temp/mobile-ci-compile-slots/compile-slot.sh"
+run_jobs CMAKE_CXX_COMPILER_LAUNCHER=ccache CMAKE_C_COMPILER_LAUNCHER="$slot_launcher;ccache"
+job_env="$(cat "$workspace/env")"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
+    && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
+    && assert_not_contains "$job_env" "$slot_launcher;$slot_launcher" 'job env'; then
+    pass_case
+fi
+
+G1_RETURN='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+
+case_start 'a bounded runner makes idle JVMs hand their unused heap back, keeping the fleet JAVA_TOOL_OPTIONS'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs JAVA_TOOL_OPTIONS='-XX:MaxRAM=8192m -XX:ActiveProcessorCount=4'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/env")" "JAVA_TOOL_OPTIONS=-XX:MaxRAM=8192m -XX:ActiveProcessorCount=4 $G1_RETURN" 'job env'; then
+    pass_case
+fi
+
+case_start 'a second run does not repeat the JVM heap-return options'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs JAVA_TOOL_OPTIONS="-XX:MaxRAM=8192m $G1_RETURN"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'JAVA_TOOL_OPTIONS' 'job env'; then
+    pass_case
+fi
+
+case_start 'an unbounded runner leaves JAVA_TOOL_OPTIONS alone'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs JAVA_TOOL_OPTIONS='-XX:MaxRAM=8192m'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'JAVA_TOOL_OPTIONS' 'job env'; then
+    pass_case
+fi
+
+case_start 'an unbounded runner sets no compiler launcher'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'COMPILER_LAUNCHER' 'job env'; then
+    pass_case
+fi
+
+case_start 'the build summary names the native compile bound'
+workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
+printf '#!/bin/sh\n' > "$workspace/work/gradlew"
+chmod +x "$workspace/work/gradlew"
+run_step "$workspace" GRADLE_TASK=assembleRelease GRADLE_ARGS='' ANDROID_ABIS='' MOBILE_CI_COMPILE_SLOTS=4
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/summary")" 'Native compile jobs: 4' 'summary'; then
+    pass_case
+fi
+
+case_start 'the eas build --local Android lanes bound native compiles with the same step'
+differing=''
+for lane in native-publish.yml:android-publish native-dev-release.yml:android-dev-release; do
+    if [ "$(extract_step_script "$ACTION" "$JOBS_STEP")" != "$(extract_workflow_step_script "$REPO_ROOT/.github/workflows/${lane%%:*}" "${lane#*:}" "$JOBS_STEP" 2>&1)" ]; then
+        differing="$differing ${lane%%:*}"
+    fi
+done
+if [ -n "$differing" ]; then
+    fail_case "'$JOBS_STEP' is missing from, or differs from build-android-app's in:$differing"
+else
+    pass_case
+fi
+
 finish_suite
