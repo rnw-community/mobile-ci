@@ -28,8 +28,10 @@ the section that matches your task; skip the other.
 - `fixtures/` — minimal inputs the tests and `self-test.yml` run this repo's
   own actions against (a two-test Swift Package for `swift-test`, `simctl`
   listings for `simulator-lease`, path-to-test maps for
-  `xcodebuild-affected-tests`, and budgie's original media scripts, which are
-  the pixel-parity reference for `compose-media`).
+  `xcodebuild-affected-tests`, budgie's original media scripts, which are
+  the pixel-parity reference for `compose-media`, and recorded eas-cli
+  `--json` output per eas-cli version under `eas-cli/` for the EAS Update
+  parsers).
 - `tests/` — `run-tests.sh` plus one `<action>_test.sh` per action under test.
   Each suite extracts the step's `run:` body from the parsed `action.yml` and
   executes it against `fixtures/` with stubbed binaries, so no test duplicates
@@ -199,7 +201,9 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   (`github-release-publish`, the same channel the native dev `.ipa`/`.apk` uses),
   and keeps deep links + QR in one sticky PR comment (`pr-preview-comment`). Needs no `EXPO_TOKEN`; only
   `contents: write` (and `pull-requests: write` for the comment) on the calling
-  job, and a public repository.
+  job, and a public repository. `ota-backend: eas` publishes the same preview
+  as an EAS Update (`eas-update`) instead, for private repositories; it needs
+  `EXPO_TOKEN`.
 - `expo-fingerprint-guard.yml` — pull-request gate that fails when a change
   moves the Expo native runtime fingerprint, so a fingerprint-policy app never
   silently orphans its published OTA updates; overridable with a label.
@@ -213,6 +217,20 @@ carte tier — see [README.md](README.md#pick-your-tier)):
   and opt-in deletes its OTA previews once those runs have stopped.
 - `preview-sweep-reusable.yml` — scheduled, dry-run-by-default sweep of OTA
   preview releases of closed PRs and of stale branch previews.
+- `eas-channel-cleanup-reusable.yml` — deletes a closed PR's EAS Update
+  channel and branch and sweeps channels matching a pattern that went idle;
+  never a protected channel (deny-list, `eas.json` profile channels,
+  EAS-protected).
+
+For EAS Update outside these workflows, compose the actions directly:
+`eas-update` publishes to a channel, `eas-channel-fingerprint` decides
+`ota|native` against what a channel serves (also `native-publish.yml`'s
+`ota-baseline: eas-channel`), and `eas-profile-env` resolves an `eas.json`
+profile's env, channel and environment. `ota-runtime-version` is the one
+runtime-version source every OTA path uses (the project's own
+`expo-updates`); `native-fingerprint` is a native-build cache key only. Which
+OTA backend to use:
+[README.md#choosing-an-ota-backend](README.md#choosing-an-ota-backend).
 
 Full input/secret/permission tables and a copy-pasteable example live in
 `docs/workflows/<name>.md` for each workflow above — read the doc for the
@@ -260,6 +278,10 @@ auto-discovered or run standalone by the sharding logic.
 - `native-dev-release.yml` (opt-in secrets): `EXPO_TOKEN` (required by both
   enabled dev-release jobs), `ASC_API_KEY` (optional, iOS only),
   `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`).
+- `eas-channel-cleanup-reusable.yml`: `EXPO_TOKEN` (required).
+- `expo-ota-preview.yml` with `ota-backend: eas`: `EXPO_TOKEN` (required),
+  `EAS_EXTRA_ENV` (optional); `native-publish.yml` with `ota-baseline:
+  eas-channel` also needs `EXPO_TOKEN` in its plan job.
 
 See each workflow's `docs/workflows/<name>.md#secrets` for which job
 requires which secret and how the job fails fast when one is missing.

@@ -340,7 +340,7 @@ if 'permissions' in job:
     problems.append('pr-comment must not request permissions: GitHub refuses to start a run whose caller does not grant them, even when the job is skipped')
 for job_id in ('ios-dev-release', 'android-dev-release'):
     names = [step.get('name') for step in workflow['jobs'][job_id]['steps']]
-    if 'Compute runtime fingerprint' not in names or names.index('Compute runtime fingerprint') > names.index('Compute build metadata'):
+    if 'Compute the runtime version' not in names or names.index('Compute the runtime version') > names.index('Compute build metadata'):
         problems.append(f'{job_id}: no runtime fingerprint before the build metadata')
     outputs = workflow['jobs'][job_id].get('outputs', {})
     for key in ('tag', 'fingerprint', 'asset-name'):

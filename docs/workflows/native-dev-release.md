@@ -149,7 +149,7 @@ code never has to hand-parse the release tag or scrape release notes:
 | `buildNumber` | yes              | `<run_number>.<run_attempt>`, the same deterministic build number used elsewhere in the job. This is what the workflow exported to the build as `DEVELOPMENT_BUILD_NUMBER`, not what the binary carries — read `embeddedBuildNumber` for that. |
 | `embeddedBuildNumber` | no       | The build number read back from the built binary: iOS `CFBundleVersion` from the `.ipa`'s `Info.plist`, Android `versionCode` (`aapt2 dump badging` for an `.apk`, `bundletool dump manifest` for an `.aab`). Omitted when the Android host has no `aapt2`/`bundletool` (the job warns); never omitted on iOS, where an unreadable `Info.plist` fails the job. See [Embedded build number](#embedded-build-number). |
 | `embeddedVersion` | no           | The version read back from the built binary: iOS `CFBundleShortVersionString`, Android `versionName`. Omitted when it could not be read or is empty. |
-| `fingerprint` | no               | The platform's runtime fingerprint (`native-fingerprint` hash), the runtime version an `expo-ota-preview.yml` update must carry to load on this build. See [Runtime fingerprint](#runtime-fingerprint). |
+| `fingerprint` | no               | The platform's runtime version (`ota-runtime-version`), the one an `expo-ota-preview.yml` update must carry to load on this build. See [Runtime fingerprint](#runtime-fingerprint). |
 | `commitSha`   | yes              | `github.sha` for the run that produced the build. |
 | `branch`      | yes              | `github.ref_name` for the run that produced the build. |
 | `builtAt`     | yes              | UTC build timestamp, ISO 8601 (`date -u +%Y-%m-%dT%H:%M:%SZ`). |
@@ -349,14 +349,18 @@ other job declares its own (`contents: write` for the build jobs, none for
 
 ## Runtime fingerprint
 
-Each job computes the platform's `native-fingerprint` hash (the same
-tokenless `@expo/fingerprint` hash `expo-ota-preview.yml` uses as the update's
-runtime version) after installing dependencies and before any pre-build
-hook. It records the hash as `fingerprint` in `build-meta.json`, and in the
-release notes as a visible line plus a `<!-- mobile-ci:fingerprint:<hash> -->`
-marker. That marker is how `expo-ota-preview.yml`'s `dev-release-tag-prefix`
-finds the dev build an OTA update can load on. A fingerprint that cannot be
-computed fails the job.
+Each job resolves the platform's runtime version with
+[`ota-runtime-version`](../../actions/ota-runtime-version/README.md) — the
+project's own `expo-updates`, under `build-profile`'s `eas.json` env, the same
+source `expo-ota-preview.yml` uses for the update — after installing
+dependencies and before any pre-build hook. It records it as `fingerprint` in
+`build-meta.json`, and in the release notes as a visible line plus a
+`<!-- mobile-ci:fingerprint:<runtime> -->` marker. That marker is how
+`expo-ota-preview.yml`'s `dev-release-tag-prefix` finds the dev build an OTA
+update can load on. A runtime version that cannot be resolved fails the job.
+Before v4.2.0 the marker carried the pinned `@expo/fingerprint` hash of
+`native-fingerprint`, which can differ from the build's real runtime; builds
+from then on match by construction.
 
 ## Example
 

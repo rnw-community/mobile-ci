@@ -13,17 +13,19 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
 WORKFLOW_YML="$REPO_ROOT/.github/workflows/native-publish.yml"
-TARGETS_STEP='Resolve publish targets and their eas.json profile env'
+TARGETS_STEP='Resolve publish targets'
+ATTACH_STEP='Attach the eas.json profile env and channel to every target'
+PROFILE_ENV_YML="$REPO_ROOT/actions/eas-profile-env/action.yml"
 VERSION_STEP='Resolve the store build number and marketing version'
 BASELINE_STEP='Resolve the store baseline'
 DECIDE_STEP='Decide between a native build and an OTA'
-FINGERPRINT_STEP='Fingerprint every target under its build env'
 
 EAS_JSON='{
   "cli": {"appVersionSource": "local"},
   "build": {
     "base": {"env": {"APP_VARIANT": "base", "SHARED": "from-base"}},
-    "production": {"extends": "base", "env": {"APP_VARIANT": "production"}},
+    "production": {"extends": "base", "env": {"APP_VARIANT": "production"}, "channel": "production"},
+    "no-channel": {"env": {"APP_VARIANT": "internal"}},
     "brand-a": {"extends": "production", "env": {"APP_BRAND": "a"}},
     "brand-b": {"extends": "production", "env": {"APP_BRAND": "b"}},
     "loop-a": {"extends": "loop-b"},
@@ -41,15 +43,40 @@ targets_workspace() {
     workspace="$(new_workflow_workspace "$WORKFLOW_YML" plan "$TARGETS_STEP")"
     mkdir -p "$workspace/work/apps/mobile"
     printf '%s\n' "$EAS_JSON" > "$workspace/work/apps/mobile/eas.json"
+    mv "$workspace/step.sh" "$workspace/targets.sh"
+    extract_step_script "$PROFILE_ENV_YML" 'Resolve the eas.json build profiles' > "$workspace/profile-env.sh"
+    extract_workflow_step_script "$WORKFLOW_YML" plan "$ATTACH_STEP" > "$workspace/attach.sh"
     printf '%s\n' "$workspace"
 }
 
+# run_targets runs the plan's three target steps in job order - targets, the
+# eas-profile-env action the workflow calls, then the attach step - each fed the
+# previous one's outputs the way the workflow wires them, and stops at the first
+# failing step like the job does.
 run_targets() {
-    local workspace="$1"
+    local workspace="$1" app_dir=apps/mobile arg
     shift
+    for arg in "$@"; do
+        case "$arg" in APP_DIR=*) app_dir="${arg#APP_DIR=}" ;; esac
+    done
+    : > "$workspace/log.all"
+    cp "$workspace/targets.sh" "$workspace/step.sh"
     run_step "$workspace" APP_DIR=apps/mobile TARGETS='' ENABLE_IOS=true ENABLE_ANDROID=false \
-        BUILD_PROFILE=production SUBMIT_PROFILE=production MODE=native WRITE_STORE_RECORD=false \
-        RELEASE_TAG_INPUT='' REF_TYPE=branch REF_NAME=main RECORD_SCOPE='' "$@"
+        BUILD_PROFILE=production SUBMIT_PROFILE=production MODE=native OTA_BASELINE=github-release \
+        WRITE_STORE_RECORD=false RELEASE_TAG_INPUT='' REF_TYPE=branch REF_NAME=main RECORD_SCOPE='' "$@"
+    cat "$workspace/log" >> "$workspace/log.all"
+    if [ "$STEP_STATUS" -eq 0 ]; then
+        cp "$workspace/profile-env.sh" "$workspace/step.sh"
+        run_step "$workspace" APP_DIR="$app_dir" PROFILES="$(jq -r . <<< "$(step_output "$workspace" profiles)")"
+        cat "$workspace/log" >> "$workspace/log.all"
+    fi
+    if [ "$STEP_STATUS" -eq 0 ]; then
+        cp "$workspace/attach.sh" "$workspace/step.sh"
+        run_step "$workspace" REQUESTED="$(step_output "$workspace" requested)" \
+            PROFILES="$(step_output "$workspace" resolved)" EAS_BASELINE="$(step_output "$workspace" eas-baseline)"
+        cat "$workspace/log" >> "$workspace/log.all"
+    fi
+    mv "$workspace/log.all" "$workspace/log"
 }
 
 target_field() {
@@ -223,6 +250,51 @@ if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals store-record-root.js
     pass_case
 fi
 
+# --- ota-baseline eas-channel -----------------------------------------------------
+
+case_start "targets: an unknown ota-baseline fails closed"
+ws="$(targets_workspace)"
+run_targets "$ws" MODE=auto OTA_BASELINE=play-store
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(log_of "$ws")" 'ota-baseline must be' 'message'; then
+    pass_case
+fi
+
+case_start "targets: ota-baseline eas-channel needs no release tag, installs, and attaches each profile's channel"
+ws="$(targets_workspace)"
+run_targets "$ws" MODE=auto OTA_BASELINE=eas-channel ENABLE_ANDROID=true
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals false "$(step_output "$ws" record)" 'no store record without write-store-record' \
+    && assert_equals true "$(step_output "$ws" eas-baseline)" 'eas baseline' \
+    && assert_equals true "$(step_output "$ws" install)" 'dependencies installed for the runtime resolution' \
+    && assert_equals 'production,production' "$(target_field "$ws" '[.[].channel] | join(",")')" 'channels'; then
+    pass_case
+fi
+
+case_start "targets: ota-baseline eas-channel with write-store-record still needs a release tag"
+ws="$(targets_workspace)"
+run_targets "$ws" MODE=auto OTA_BASELINE=eas-channel WRITE_STORE_RECORD=true
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(log_of "$ws")" 'needs a release tag' 'message'; then
+    pass_case
+fi
+
+case_start "targets: ota-baseline eas-channel fails closed on a target whose profile sets no channel"
+ws="$(targets_workspace)"
+run_targets "$ws" MODE=ota-only OTA_BASELINE=eas-channel TARGETS='[{"platform":"ios","buildProfile":"no-channel"},{"platform":"android"}]'
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_contains "$(log_of "$ws")" 'no-channel-ios has none' 'names the target' \
+    && assert_equals '' "$(step_output "$ws" targets)" 'no targets'; then
+    pass_case
+fi
+
+case_start "targets: mode native ignores ota-baseline eas-channel and installs nothing"
+ws="$(targets_workspace)"
+run_targets "$ws" OTA_BASELINE=eas-channel TARGETS='[{"platform":"ios","buildProfile":"no-channel"}]'
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals false "$(step_output "$ws" eas-baseline)" 'no eas baseline' \
+    && assert_equals false "$(step_output "$ws" install)" 'no install'; then
+    pass_case
+fi
+
 # --- build number ---------------------------------------------------------------
 
 version_workspace() {
@@ -337,55 +409,44 @@ for row in 'tag|release-2026' 'tag|' '1.2.3.4|v1.0.0' 'one|v1.0.0'; do
     fi
 done
 
-# --- fingerprints ------------------------------------------------------------------
+# --- runtime versions ----------------------------------------------------------------
+# The plan resolves every target's runtime version with ota-runtime-version (the
+# project's own expo-updates; its env handling is pinned in
+# ota-runtime-version_test.sh) under the env its build gets: the target's
+# profile env, publish-env, then the store version - never EAS_EXTRA_ENV. The
+# EAS channel comparison resolves under the very same env.
 
-case_start "fingerprint: each target is hashed under its profile env, then publish-env, then the store version"
-ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
-# shellcheck disable=SC2016
-stub "$ws" npx '
-printf "%s APP_BRAND=%s APP_VARIANT=%s EXTRA=%s STORE_BUILD_NUMBER=%s EAS_BUILD_PROFILE=%s\n" "${*: -1}" "${APP_BRAND:-}" "${APP_VARIANT:-}" "${EXTRA:-}" "${STORE_BUILD_NUMBER:-}" "${EAS_BUILD_PROFILE:-}" >> "$(dirname "$0")/../npx-calls"
-printf "{\"hash\":\"hash-%s-%s\"}" "${APP_BRAND:-none}" "${*: -1}"'
-run_step "$ws" FINGERPRINT_VERSION=0.20.6 PUBLISH_ENV=$'EXTRA=1\nAPP_VARIANT=override' \
-    STORE_BUILD_NUMBER_VALUE=29854170 STORE_MARKETING_VERSION_VALUE='' \
-    TARGETS='[{"name":"a-ios","platform":"ios","buildProfile":"brand-a","envLines":"APP_VARIANT=production\nAPP_BRAND=a"},
-              {"name":"b-android","platform":"android","buildProfile":"brand-b","envLines":"APP_BRAND=b"}]'
-if assert_equals 0 "$STEP_STATUS" 'status' \
-    && assert_equals '{"a-ios":"hash-a-ios","b-android":"hash-b-android"}' "$(step_output "$ws" fingerprints)" 'fingerprints' \
-    && assert_contains "$(cat "$ws/npx-calls")" 'ios APP_BRAND=a APP_VARIANT=override EXTRA=1 STORE_BUILD_NUMBER=29854170 EAS_BUILD_PROFILE=brand-a' 'ios env'; then
-    pass_case
-fi
+case_start "runtime versions: both baselines resolve through ota-runtime-version under the build's env"
+if failure="$(WORKFLOW="$WORKFLOW_YML" python3 - <<'PYTHON' 2>&1
+import os
+import sys
 
-case_start "fingerprint: EAS_EXTRA_ENV the plan job applied for the install stays out of every fingerprint"
-ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
-# shellcheck disable=SC2016
-stub "$ws" npx '
-printf "TURBO_TOKEN=%s MAPS_KEY=%s APP_BRAND=%s\n" "${TURBO_TOKEN:-unset}" "${MAPS_KEY:-unset}" "${APP_BRAND:-unset}" >> "$(dirname "$0")/../npx-calls"
-printf "{\"hash\":\"h\"}"'
-run_step "$ws" FINGERPRINT_VERSION=0.20.6 PUBLISH_ENV='' STORE_BUILD_NUMBER_VALUE='' STORE_MARKETING_VERSION_VALUE='' \
-    TURBO_TOKEN=secret-turbo MAPS_KEY=secret-maps EAS_EXTRA_ENV_NAMES=$'TURBO_TOKEN\nMAPS_KEY' \
-    TARGETS='[{"name":"ios","platform":"ios","buildProfile":"production","envLines":"APP_BRAND=a"}]'
-if assert_equals 0 "$STEP_STATUS" 'status' \
-    && assert_equals 'TURBO_TOKEN=unset MAPS_KEY=unset APP_BRAND=a' "$(cat "$ws/npx-calls")" 'fingerprint env'; then
-    pass_case
-fi
+import yaml
 
-case_start "fingerprint: an empty hash fails closed after the retry"
-ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
-stub "$ws" npx 'printf "{}"'
-run_step "$ws" FINGERPRINT_VERSION=0.20.6 PUBLISH_ENV='' STORE_BUILD_NUMBER_VALUE='' STORE_MARKETING_VERSION_VALUE='' \
-    TARGETS='[{"name":"ios","platform":"ios","buildProfile":"production","envLines":""}]'
-if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(log_of "$ws")" 'wrote no hash' 'message'; then
+steps = {step.get('name'): step for step in yaml.safe_load(open(os.environ['WORKFLOW'], encoding='utf-8'))['jobs']['plan']['steps']}
+problems = []
+for name, action in (("Resolve every target's runtime version under its build env", 'ota-runtime-version'),
+                     ('Compare every target with its EAS channel', 'eas-channel-fingerprint')):
+    step = steps[name]
+    if not step.get('uses', '').startswith(f'rnw-community/mobile-ci/actions/{action}@'):
+        problems.append(f'{name} does not use {action}')
+        continue
+    given = step.get('with', {})
+    if given.get('targets') != '${{ steps.resolved.outputs.targets }}':
+        problems.append(f'{name} does not resolve the attached targets')
+    env = given.get('env', '')
+    for needle in ('inputs.publish-env', "format('STORE_BUILD_NUMBER={0}'", "format('STORE_MARKETING_VERSION={0}'"):
+        if needle not in env:
+            problems.append(f'{name} env lacks {needle}')
+    if given.get('unset-env') != '${{ steps.eas-extra-env.outputs.names }}':
+        problems.append(f'{name} does not keep EAS_EXTRA_ENV out')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
     pass_case
-fi
-
-case_start "fingerprint: a failing generate fails closed after one retry"
-ws="$(new_workflow_workspace "$WORKFLOW_YML" plan "$FINGERPRINT_STEP")"
-# shellcheck disable=SC2016
-stub "$ws" npx 'echo x >> "$(dirname "$0")/../npx-calls"; exit 3'
-run_step "$ws" FINGERPRINT_VERSION=0.20.6 PUBLISH_ENV='' STORE_BUILD_NUMBER_VALUE='' STORE_MARKETING_VERSION_VALUE='' \
-    TARGETS='[{"name":"ios","platform":"ios","buildProfile":"production","envLines":""}]'
-if assert_equals 1 "$STEP_STATUS" 'status' && assert_equals 2 "$(wc -l < "$ws/npx-calls" | tr -d ' ')" 'attempts'; then
-    pass_case
+else
+    fail_case "$failure"
 fi
 
 # --- baseline ------------------------------------------------------------------------
@@ -476,9 +537,11 @@ decide() {
     workspace="$(new_workflow_workspace "$WORKFLOW_YML" plan "$DECIDE_STEP")"
     if [ -n "${BASELINE:-}" ]; then
         printf '%s\n' "$BASELINE" > "$workspace/baseline.json"
-        run_step "$workspace" TARGETS="$TARGET_PAIR" BASELINE_TAG=v1.0.0 BASELINE_FILE="$workspace/baseline.json" "$@"
+        run_step "$workspace" OTA_BASELINE=github-release EAS_DECISION='' EAS_REASON='' EAS_CHANGED_TARGETS='' \
+            TARGETS="$TARGET_PAIR" BASELINE_TAG=v1.0.0 BASELINE_FILE="$workspace/baseline.json" "$@"
     else
-        run_step "$workspace" TARGETS="$TARGET_PAIR" BASELINE_TAG='' BASELINE_FILE='' "$@"
+        run_step "$workspace" OTA_BASELINE=github-release EAS_DECISION='' EAS_REASON='' EAS_CHANGED_TARGETS='' \
+            TARGETS="$TARGET_PAIR" BASELINE_TAG='' BASELINE_FILE='' "$@"
     fi
     DECIDE_WS="$workspace"
 }
@@ -535,6 +598,36 @@ fi
 case_start "decision: a target without a fingerprint fails closed"
 BASELINE="$(record_json 2026-01-01T00:00:00Z "$BOTH")" decide MODE=auto FINGERPRINTS='{"ios":"i1"}'
 if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(log_of "$DECIDE_WS")" 'No fingerprint was computed for target android' 'message'; then
+    pass_case
+fi
+
+case_start "decision: eas-channel passes the channel comparison's ota through"
+BASELINE='' decide MODE=auto OTA_BASELINE=eas-channel FINGERPRINTS='' EAS_DECISION=ota EAS_REASON='every target matches its channel' EAS_CHANGED_TARGETS=''
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals ota "$(step_output "$DECIDE_WS" decision)" 'decision' \
+    && assert_contains "$(cat "$DECIDE_WS/summary")" 'every target matches its channel' 'summary'; then
+    pass_case
+fi
+
+case_start "decision: eas-channel native names the changed targets"
+BASELINE='' decide MODE=auto OTA_BASELINE=eas-channel FINGERPRINTS='' EAS_DECISION=native EAS_REASON='android differs' EAS_CHANGED_TARGETS=android
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals native "$(step_output "$DECIDE_WS" decision)" 'decision' \
+    && assert_equals android "$(step_output "$DECIDE_WS" changed-targets)" 'changed'; then
+    pass_case
+fi
+
+case_start "decision: eas-channel native in mode ota-only fails closed"
+BASELINE='' decide MODE=ota-only OTA_BASELINE=eas-channel FINGERPRINTS='' EAS_DECISION=native EAS_REASON='channel production could not be read' EAS_CHANGED_TARGETS=ios
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_equals '' "$(step_output "$DECIDE_WS" decision)" 'no decision' \
+    && assert_contains "$(log_of "$DECIDE_WS")" 'channel production could not be read' 'reason'; then
+    pass_case
+fi
+
+case_start "decision: eas-channel without a decision fails closed"
+BASELINE='' decide MODE=auto OTA_BASELINE=eas-channel FINGERPRINTS=''
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_equals '' "$(step_output "$DECIDE_WS" decision)" 'no decision'; then
     pass_case
 fi
 

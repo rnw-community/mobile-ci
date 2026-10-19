@@ -8,6 +8,9 @@ without a consumer repository standing by.
   `fleet-swift-self-test` job to exercise
   [`swift-test`](../actions/swift-test/README.md) end to end (cache key
   computation, `swift test --parallel`, step summary).
+- `eas-cli/` — real `--json` output of the eas-cli commands the EAS Update
+  actions parse, per eas-cli version, replayed by
+  `tests/eas-cli-fixtures_test.sh` (see [its README](eas-cli/README.md)).
 
 There is deliberately **no** `.xcodeproj` fixture: a checked-in `project.pbxproj`
 is a large, Xcode-version-sensitive artefact that drifts silently, so

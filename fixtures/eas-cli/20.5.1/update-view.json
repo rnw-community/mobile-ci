@@ -1,0 +1,14 @@
+[
+  {
+    "id": "01a153fa-10c6-79d5-9890-d08b54909973",
+    "createdAt": "2026-10-19T11:44:19.654Z",
+    "group": "9df55439-c3c8-4044-9b13-1f48e0d508e3",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 20.5.1",
+    "runtimeVersion": "b610ebf53eaa44559a28a9bddbcd2bbe395db69e",
+    "platform": "ios",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fa-10c6-79d5-9890-d08b54909973",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e"
+  }
+]

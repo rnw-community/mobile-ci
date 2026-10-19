@@ -1,0 +1,7 @@
+★ eas-cli@25.2.0 is now available.
+To upgrade, run:
+npm install -g eas-cli
+Proceeding with outdated version.
+
+Could not find branch ci-validate-2ef95bd-fixture-missing on @vitalyiegorov/suuudokuuu
+    Error: branch:delete command failed.

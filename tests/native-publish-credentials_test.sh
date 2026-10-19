@@ -93,13 +93,13 @@ fi
 
 # --- record-scope ----------------------------------------------------------------------
 
-TARGETS_STEP='Resolve publish targets and their eas.json profile env'
+TARGETS_STEP='Resolve publish targets'
 run_targets() {
     workspace="$(new_workflow_workspace "$WORKFLOW_YML" plan "$TARGETS_STEP")"
     mkdir -p "$workspace/work/apps/mobile"
     echo '{"build":{"brand-a":{}},"submit":{"production":{}}}' > "$workspace/work/apps/mobile/eas.json"
     run_step "$workspace" APP_DIR=apps/mobile TARGETS='' ENABLE_IOS=true ENABLE_ANDROID=true \
-        BUILD_PROFILE=brand-a SUBMIT_PROFILE=production MODE=native WRITE_STORE_RECORD=false \
+        BUILD_PROFILE=brand-a SUBMIT_PROFILE=production MODE=native OTA_BASELINE=github-release WRITE_STORE_RECORD=false \
         RELEASE_TAG_INPUT='' REF_TYPE=branch REF_NAME=main RECORD_SCOPE='' "$@"
 }
 
@@ -108,7 +108,7 @@ run_targets
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
     && assert_equals store-record-apps-mobile.json "$(step_output "$workspace" record-asset)" 'record asset' \
     && assert_equals 'store-submitted---' "$(step_output "$workspace" marker-prefix)" 'reserved unscoped marker prefix' \
-    && assert_equals ',' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" targets)")" 'artifact suffixes'; then
+    && assert_equals ',' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" requested)")" 'artifact suffixes'; then
     pass_case
 fi
 
@@ -117,7 +117,7 @@ run_targets RECORD_SCOPE=brand-a
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
     && assert_equals store-record-brand-a.json "$(step_output "$workspace" record-asset)" 'record asset' \
     && assert_equals 'store-submitted-brand-a--' "$(step_output "$workspace" marker-prefix)" 'marker prefix' \
-    && assert_equals '-brand-a--ios,-brand-a--android' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" targets)")" 'artifact suffixes'; then
+    && assert_equals '-brand-a--ios,-brand-a--android' "$(jq -r 'map(.artifactSuffix) | join(",")' <<< "$(step_output "$workspace" requested)")" 'artifact suffixes'; then
     pass_case
 fi
 
