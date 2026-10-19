@@ -62,6 +62,40 @@ else
     pass_case
 fi
 
+case_start 'with require-app-id false, targets that all omit appId (the seed-native-cache target shape) skip the comparison with a notice'
+dir="$(new_workspace "$ACTION" "$STEP")"
+run_step "$dir" PLATFORM=android REQUIRE_APP_ID=false PLANS='[{"name":"a","nativeKey":"k"},{"name":"b","nativeKey":"k"}]' ASSERT_SCRIPT="$SCRIPT"
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_contains "$(cat "$dir/log")" 'No android target declares an appId' 'notice' \
+    && pass_case
+
+case_start 'with require-app-id false, a mix of targets with and without appId still fails closed'
+dir="$(new_workspace "$ACTION" "$STEP")"
+run_step "$dir" PLATFORM=ios REQUIRE_APP_ID=false PLANS='[{"name":"a","appId":"com.a","nativeKey":"k"},{"name":"b","nativeKey":"k"}]' ASSERT_SCRIPT="$SCRIPT"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'a target without appId next to one with an appId passed'
+else
+    pass_case
+fi
+
+case_start 'with require-app-id false, different appIds on one key still fail'
+dir="$(new_workspace "$ACTION" "$STEP")"
+run_step "$dir" PLATFORM=ios REQUIRE_APP_ID=false PLANS="[$A,$B_SAME_KEY]" ASSERT_SCRIPT="$SCRIPT"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case 'a shared key between com.a and com.b passed'
+else
+    pass_case
+fi
+
+case_start 'a require-app-id other than true or false fails closed'
+dir="$(new_workspace "$ACTION" "$STEP")"
+run_step "$dir" PLATFORM=ios REQUIRE_APP_ID=maybe PLANS="[$A]" ASSERT_SCRIPT="$SCRIPT"
+if [ "$STEP_STATUS" -eq 0 ]; then
+    fail_case "require-app-id 'maybe' passed"
+else
+    pass_case
+fi
+
 case_start 'plans that are not a JSON array fail closed'
 dir="$(new_workspace "$ACTION" "$STEP")"
 run_step "$dir" PLATFORM=ios PLANS='not json' ASSERT_SCRIPT="$SCRIPT"
@@ -104,6 +138,8 @@ if not check:
     print('the collect job never calls assert-distinct-fingerprints')
 elif check[0]['with']['plans'] != '${{ steps.collect.outputs.plans }}':
     print(f"the check is fed {check[0]['with']['plans']!r}, not the collected plans")
+elif str(check[0]['with'].get('require-app-id')).lower() != 'false':
+    print('expo-base-plan must pass require-app-id false: seed-native-cache targets carry no appId')
 PYTHON
 )"
 if [ -n "$problem" ]; then
