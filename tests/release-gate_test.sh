@@ -81,7 +81,7 @@ new_self_reference_origin() {
     git -C "$workspace/work" remote add origin "file://$workspace/origin"
 }
 
-for scenario in candidate mismatch ordinary existing pr-existing pr-unreleased pr-missing-action pr-missing-workflow push-missing-action; do
+for scenario in candidate mismatch ordinary existing pr-existing pr-unreleased pr-missing-action pr-missing-workflow push-missing-action pr-slashed-branch-pin; do
     case_start "self-reference resolution handles $scenario"
     workspace=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/self-test.yml" self-reference-resolution 'Every self-reference is tag-form and resolves')
     stub "$workspace" sleep ':'
@@ -102,6 +102,7 @@ for scenario in candidate mismatch ordinary existing pr-existing pr-unreleased p
         pr-missing-action) event=pull_request; origin_tag=v9.8.7; action=brand-new; expected=1 ;;
         pr-missing-workflow) event=pull_request; origin_tag=v9.8.7; released_paths='actions/example/action.yml'; expected=1 ;;
         push-missing-action) origin_tag=v9.8.7; action=brand-new; expected=1 ;;
+        pr-slashed-branch-pin) event=pull_request; origin_tag=v9.8.7; action=brand-new; ref_tag=v9.8.7/feature ;;
     esac
     # shellcheck disable=SC2086
     new_self_reference_origin "$workspace" "$origin_tag" $released_paths

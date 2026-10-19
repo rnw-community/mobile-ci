@@ -276,7 +276,7 @@ jobs:
                   targets="$(
                       { grep -rl 'rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions || true; } \
                       | { grep -v '^\.github/workflows/self-test\.yml$' || true; } \
-                      | { xargs -r grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._-]+' || true; } \
+                      | { xargs -r grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._/-]+' || true; } \
                       | sed -E 's|^rnw-community/mobile-ci/||' | sort -u
                   )"
                   if [ -z "$targets" ]; then
