@@ -1,0 +1,60 @@
+# Private multi-brand Expo app: delete EAS Update channels nobody needs.
+# Copy to .github/workflows/eas-channel-cleanup.yml.
+#
+# On close: the pull request's preview channel (pr-<number>, see
+# ota-preview.yml) and its same-name branch. Weekly: every release-candidate
+# channel idle for 30 days. Never a channel in protected-channels, one an
+# eas.json profile sets (each brand's production channel), or one EAS marks
+# protected. Run it once with dry-run: true and read the log first.
+name: EAS channel cleanup
+
+on:
+    pull_request:
+        types: [closed]
+    schedule:
+        - cron: '0 3 * * 0'
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    cleanup:
+        if: github.event_name == 'pull_request'
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            channel-template: pr-{number}
+            protected-channels: |
+                production
+                production-*
+                main
+                development
+            install-command: corepack enable && pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
+
+    # A separate job, not a sweep-pattern expression: in
+    # `event_name == 'pull_request' && '' || 'rc-*'` the empty string is falsy,
+    # so a pull-request close would sweep too.
+    sweep:
+        if: github.event_name != 'pull_request'
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            channel-template: ''
+            sweep-pattern: rc-*
+            max-age-days: 30
+            # Replacing the list replaces its defaults: production and main
+            # are listed again.
+            protected-channels: |
+                production
+                production-*
+                main
+                development
+            install-command: corepack enable && pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}

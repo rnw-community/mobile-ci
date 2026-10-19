@@ -86,20 +86,40 @@ closed on any other event, because there is no base to compare against.
 
 ## Release note
 
-The workflow's internal `native-fingerprint` self-references pin to `v1.23.0`,
-the release that first exposes that action's `file` output. Nothing earlier
-than `v1.23.0` can run this workflow.
+The workflow first shipped in `v1.23.0`, the release that first exposes
+`native-fingerprint`'s `file` output; nothing earlier can run it. Its internal
+self-references pin to the release that contains them, like every workflow
+here, so pin the caller to a current tag.
 
-## Example
+## Examples
+
+### Minimal
 
 ```yaml
+on: pull_request
+jobs:
+    fingerprint-guard:
+        permissions:
+            contents: read
+            pull-requests: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.2.0 # v4.2.0
+        with:
+            working-directory: apps/mobile
+```
+
+### Full
+
+```yaml
+on:
+    pull_request:
+        types: [opened, synchronize, reopened, labeled, unlabeled]
 jobs:
     fingerprint-guard:
         name: Native runtime fingerprint
         permissions:
             contents: read
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v1.23.0 # v1.23.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.2.0 # v4.2.0
         with:
             working-directory: packages/app
             platforms: ios,android
@@ -108,4 +128,11 @@ jobs:
             install-command: pnpm install --frozen-lockfile
             package-manager: pnpm
             runner-labels: '["self-hosted","linux","x64"]'
+            override-label: native-change-acknowledged
 ```
+
+`labeled` / `unlabeled` re-run the gate when the override label is added or
+removed.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

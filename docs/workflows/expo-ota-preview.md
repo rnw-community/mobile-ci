@@ -270,7 +270,11 @@ permissions:
     pull-requests: write
 ```
 
-## Example
+## Examples
+
+### Minimal
+
+A public repository on the default GitHub Release backend:
 
 ```yaml
 name: OTA preview
@@ -281,7 +285,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v1.13.0 # v1.13.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.2.0 # v4.2.0
         with:
             app-dir: packages/app
             scheme: budgie
@@ -289,25 +293,45 @@ jobs:
             build-command: pnpm exec turbo build --filter=@budgie/contracts --filter=@budgie/ai
 ```
 
-A private repository on EAS Update:
+### Full
+
+A private repository on EAS Update, linking the newest matching EAS
+development build:
 
 ```yaml
+name: OTA preview
+on:
+    pull_request:
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
 jobs:
     preview:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@<full-commit-sha> # <next release>
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             scheme: myapp
             ota-backend: eas
             eas-channel: myapp-pr-{number}
-            eas-profile: preview
+            eas-profile: development
+            dev-build-source: eas
+            dev-build-profile: development
+            platforms: ios,android
+            install-command: pnpm install --frozen-lockfile
         secrets:
-            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
 ```
 
 Add a gate that only calls this workflow for mobile-impacting changes (for
 example `rnw-community/mobile-ci/actions/turbo-affected`, or a path filter) so
-documentation-only pull requests do not export a bundle.
+documentation-only pull requests do not export a bundle. Delete what a closed
+pull request leaves behind with
+[`pr-closed-cleanup-reusable.yml`](pr-closed-cleanup-reusable.md)
+(`ota-preview-release-tag-prefix`) on the GitHub Release backend, or
+[`eas-channel-cleanup-reusable.yml`](eas-channel-cleanup-reusable.md) on EAS.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

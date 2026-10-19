@@ -382,7 +382,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.2.0 # v4.2.0
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -417,8 +417,11 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
-        with: ...
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
 ```
 
 `packages: write` is only needed where a base can be published — the e2e and

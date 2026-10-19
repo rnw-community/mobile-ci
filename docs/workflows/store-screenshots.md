@@ -517,7 +517,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -725,7 +725,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.8.0 # v1.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -742,7 +742,7 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -1003,7 +1003,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
 ```
 
 - `contents: read` — checkout.
@@ -1021,7 +1021,30 @@ artifacts expiring, so a key can go cold and cost a native build again.
 
 This workflow still never writes to the repository.
 
-## Example
+## Examples
+
+### Minimal
+
+iOS only, Maestro flow per scene (`capture-mode: flows`), no upload:
+
+```yaml
+on: workflow_dispatch
+jobs:
+    screenshots:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
+        with:
+            ios-target: >-
+                {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
+            capture-manifest: >-
+                [{"device":"iPhone 17 Pro Max","locales":["en"],"appearances":["light"]}]
+            screenshots-dir: apps/mobile/e2e/flows/screenshots
+```
+
+### Full
 
 `workflow_call` cannot self-schedule, so a nightly capture needs a thin
 caller workflow with both `workflow_dispatch` (for on-demand runs) and
@@ -1041,7 +1064,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@<full-commit-sha>
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.2.0 # v4.2.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}
@@ -1083,6 +1106,9 @@ jobs:
 `fingerprint-env` must pass exactly what the default-branch warm-up passes; a
 single differing byte gives this run a different native key, and every run
 takes a build slot again.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 
 ## Why the native build no longer reads a host cache
 

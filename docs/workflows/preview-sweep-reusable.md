@@ -52,7 +52,25 @@ The sweep job requests `contents: write` (delete releases and tags) and
 `pull-requests: read` (read each pull request's state), so the calling job
 must grant both; GitHub refuses to start the run otherwise.
 
-## Example
+## Examples
+
+### Minimal
+
+A dry run: logs what it would delete.
+
+```yaml
+on:
+    schedule:
+        - cron: '17 4 * * *'
+jobs:
+    sweep:
+        permissions:
+            contents: write
+            pull-requests: read
+        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.2.0 # v4.2.0
+```
+
+### Full
 
 ```yaml
 # .github/workflows/preview-sweep.yml
@@ -68,10 +86,17 @@ jobs:
         permissions:
             contents: write
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@<full-commit-sha> # <next release>
+        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.2.0 # v4.2.0
         with:
+            release-tag-prefix: ota
             dry-run: false
+            max-age-days: 14
+            grace-period-hours: 24
+            max-deletions: 50
 ```
 
 Leave `dry-run` at its default for the first scheduled runs and read the log
 before setting it to `false`.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

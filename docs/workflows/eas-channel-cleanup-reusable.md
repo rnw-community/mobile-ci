@@ -69,7 +69,7 @@ that requires packages needs `install-command`.
 
 | Secret       | Required | Description |
 | ------------ | -------- | ----------- |
-| `EXPO_TOKEN` | **yes**  | Expo access token allowed to delete the project's channels and branches. The job fails before eas-cli runs without it. A token that can delete production channels belongs in a GitHub Environment the calling job names, not in a repository secret every workflow can read. |
+| `EXPO_TOKEN` | **yes**  | Expo access token allowed to delete the project's channels and branches. The job fails before eas-cli runs without it. A job that calls a reusable workflow cannot name a GitHub Environment, so this secret comes from the repository or organisation: keep production channels in `protected-channels` (and in `eas.json` profiles, which are never deleted), and keep the production-capable token for jobs that run in an Environment. |
 
 ## Permissions
 
@@ -85,7 +85,28 @@ consumer of it pass `EXPO_TOKEN` to a job that today holds only
 `GITHUB_TOKEN`. Wire this workflow as a second job of the same
 `pull_request: closed` caller instead (see the example).
 
-## Example
+## Examples
+
+### Minimal
+
+Delete a closed pull request's `pr-<number>` channel and branch:
+
+```yaml
+on:
+    pull_request:
+        types: [closed]
+jobs:
+    cleanup:
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+```
+
+### Full
 
 ```yaml
 # .github/workflows/eas-channel-cleanup.yml
@@ -100,11 +121,25 @@ permissions:
     contents: read
 jobs:
     cleanup:
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@<full-commit-sha> # <next release>
+        if: github.event_name == 'pull_request'
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             channel-template: myapp-pr-{number}
-            sweep-pattern: ${{ github.event_name == 'pull_request' && '' || 'myapp-rc-*' }}
+            protected-channels: |
+                production
+                main
+                *-production
+            install-command: corepack enable && pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    sweep:
+        if: github.event_name != 'pull_request'
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            channel-template: ''
+            sweep-pattern: myapp-rc-*
             protected-channels: |
                 production
                 main
@@ -114,4 +149,11 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 ```
 
+The sweep is its own job rather than a `sweep-pattern` expression: in
+`${{ github.event_name == 'pull_request' && '' || 'rc-*' }}` the empty string
+is falsy, so a pull-request close would sweep too.
+
 Run once with `dry-run: true` and read the log before letting it delete.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

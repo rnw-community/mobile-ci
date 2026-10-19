@@ -1,0 +1,68 @@
+# Monorepo of React Native packages, each with an example app and its own
+# Maestro suite. Copy to .github/workflows/e2e.yml.
+#
+# One reusable-workflow call per package. Each call gates itself: on a pull
+# request it runs only when turbo reports the package affected (target-packages
+# defaults to the name in the target's package.json), and its concurrency group
+# includes flows-dir, so the legs never cancel each other.
+#
+# Quarantine: tolerate-test-failures keeps a known-broken package's iOS job
+# green and reports the failure as a warning instead. It is per package, so
+# every other suite still gates the pull request. Time-box it: link the issue
+# and remove the package from the condition when it is fixed.
+name: E2E
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    schedule:
+        - cron: '17 3 * * *'
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    ios:
+        strategy:
+            fail-fast: false
+            matrix:
+                package: [payments, collapsible-header, screen-chrome]
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        with:
+            targets: >-
+                [{"name":"${{ matrix.package }}","appDir":"packages/react-native-${{ matrix.package }}-example/apps/expo","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.${{ matrix.package }}","prebuildCommand":"npx expo prebuild -p ios"}]
+            flows-dir: packages/react-native-${{ matrix.package }}-example/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+            build-command: pnpm build --filter=@rnw-community/react-native-${{ matrix.package }}...
+            exempt-paths: |
+                **/*.md
+                docs/**
+            # Quarantined: crashes under the iOS 26 simulator (tracked in #601).
+            tolerate-test-failures: ${{ matrix.package == 'screen-chrome' }}
+
+    android:
+        strategy:
+            fail-fast: false
+            matrix:
+                # android-maestro.yml has no tolerate-test-failures input, so a
+                # package that cannot pass is left out of the matrix instead.
+                package: [payments, collapsible-header]
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
+        with:
+            targets: >-
+                [{"name":"${{ matrix.package }}","appDir":"packages/react-native-${{ matrix.package }}-example/apps/expo","appId":"com.example.${{ matrix.package }}","prebuildCommand":"npx expo prebuild -p android"}]
+            flows-dir: packages/react-native-${{ matrix.package }}-example/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+            build-command: pnpm build --filter=@rnw-community/react-native-${{ matrix.package }}...
+            exempt-paths: |
+                **/*.md
+                docs/**

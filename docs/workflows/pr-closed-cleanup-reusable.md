@@ -70,7 +70,9 @@ job's, so an existing caller that grants only `actions: write` keeps working
 until it opts in. Without `contents: write` the cleanup job fails on its first
 delete with an error naming the permission.
 
-## Example
+## Examples
+
+### Minimal
 
 ```yaml
 # .github/workflows/pr-closed-cleanup.yml
@@ -84,19 +86,29 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.7.0 # v1.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.2.0 # v4.2.0
 ```
+
+### Full
 
 With OTA preview cleanup, for a caller of `expo-ota-preview.yml` on the
 default `release-tag-prefix`:
 
 ```yaml
+name: pr-closed-cleanup
+on:
+    pull_request:
+        types: [closed]
 jobs:
     cleanup:
         permissions:
             actions: write
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@<full-commit-sha> # <next release>
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.2.0 # v4.2.0
         with:
             ota-preview-release-tag-prefix: ota
+            wait-for-runs-timeout-minutes: 30
 ```
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

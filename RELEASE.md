@@ -50,6 +50,15 @@ being cut) that consumers pin to in practice. **No
    only because its tagging job names the pattern in a `grep`; neither
    carries a self-reference of its own.
 
+   Bump the documented pins in the same PR, so every copy-pasteable example
+   names the release it was checked against (`tests/docs-examples_test.sh`
+   checks their inputs and pin form, not the tag):
+
+   ```bash
+   grep -rl 'rnw-community/mobile-ci/' README.md AGENTS.md llms.txt docs/examples docs/workflows docs/*.md actions/*/README.md \
+     | xargs perl -pi -e 's{\@v1\.3\.0 # v1\.3\.0}{\@v1.3.1 # v1.3.1}g'
+   ```
+
    Get this merged to `main` via the normal PR/review/CI flow (see
    [Self-references](#self-references) below for why the tag can be named in
    advance). Do not tag a commit whose self-references still point at the

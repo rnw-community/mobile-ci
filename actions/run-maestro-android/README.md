@@ -291,8 +291,7 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-# @main until the release that ships pre-flow-command, then pin to that tag
-- uses: rnw-community/mobile-ci/actions/run-maestro-android@main
+- uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.2.0 # v4.2.0
   with:
       apk-path: ./build/app-release.apk
       app-id: com.example.app
@@ -318,7 +317,7 @@ and run exactly as they did before, with no extra `-e` argument.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-android@v1
+- uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.2.0 # v4.2.0
   with:
       apk-path: .ci-artifacts/android-e2e-app-bare/app-release.apk
       app-id: com.example.app

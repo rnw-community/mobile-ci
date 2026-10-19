@@ -127,6 +127,69 @@ permissions:
 The caller's *native build* job needs `packages: write` on top, because that is
 where a base is published. See [docs/repack.md](../repack.md#permissions).
 
+## Examples
+
+These show the interface the e2e, screenshot and warm-up workflows use. A
+consumer calls one of those instead.
+
+### Minimal
+
+```yaml
+jobs:
+    plan:
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.2.0 # v4.2.0
+        with:
+            platform: android
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
+            app-artifact-prefix: android-e2e-app
+            plan-artifact-prefix: android-e2e-plan
+```
+
+### Full
+
+```yaml
+jobs:
+    plan:
+        permissions:
+            contents: read
+            packages: read
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.2.0 # v4.2.0
+        with:
+            platform: ios
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
+            build-strategy: auto
+            app-artifact-prefix: ios-e2e-app
+            plan-artifact-prefix: ios-e2e-plan
+            toolchain: xcode-26.4.1-17E202
+            fingerprint-config: fingerprint.config.js
+            install-command: pnpm install --frozen-lockfile
+            repack-env: |
+                API_URL=https://staging.example.com
+            expect-config: |
+                extra.apiUrl=https://staging.example.com
+        secrets:
+            build-secrets-env: ${{ secrets.BUILD_SECRETS_ENV }}
+    build:
+        needs: plan
+        if: needs.plan.outputs.native-targets != '[]'
+        runs-on: [self-hosted, macOS, ARM64]
+        strategy:
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
+        steps:
+            - env:
+                  TARGET: ${{ matrix.target.name }}
+                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+              run: echo "compile $TARGET for native key $NATIVE_KEY"
+```
+
 ## Why it is a workflow and not an action
 
 The decision spans runners: it has to happen on a Linux pool before the caller

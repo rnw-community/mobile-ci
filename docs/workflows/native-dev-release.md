@@ -104,7 +104,7 @@ jobs:
         steps:
             - env:
                   INSTALL_URL: ${{ needs.dev-release.outputs.android-install-url }}
-              run: echo "Android dev build: $INSTALL_URL"
+              run: echo "Android dev build - $INSTALL_URL"
 ```
 
 ## Release assets
@@ -362,7 +362,9 @@ Before v4.2.0 the marker carried the pinned `@expo/fingerprint` hash of
 `native-fingerprint`, which can differ from the build's real runtime; builds
 from then on match by construction.
 
-## Example
+## Examples
+
+### Minimal
 
 ```yaml
 # .github/workflows/native-dev-release.yml
@@ -371,16 +373,60 @@ on:
     workflow_dispatch:
     push:
         branches: [main]
-permissions:
-    contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.7.0 # v1.7.0
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             enable-ios: true
-        secrets: inherit
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 ```
+
+### Full
+
+Both platforms on every pull request and on `main`, with the install links in
+the pull request's sticky comment. For a public repository keep the default
+`distribution: github-release`; a private repository's testers need
+`distribution: eas` (see [EAS distribution](#eas-distribution)).
+
+```yaml
+# .github/workflows/native-dev-release.yml
+name: Native dev release
+on:
+    pull_request:
+    push:
+        branches: [main]
+jobs:
+    dev-release:
+        permissions:
+            contents: write
+            pull-requests: write
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+            enable-android: true
+            build-profile: development
+            distribution: eas
+            build-location: local
+            pr-comment: true
+            install-command: pnpm install --frozen-lockfile
+            publish-env: |
+                APP_VARIANT=development
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            EAS_EXTRA_ENV: SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
+```
+
+**One call per run.** The build artifacts (`ios-dev-build`,
+`android-dev-build`) and the concurrency group are not scoped per call, so two
+calls in one workflow run — a brand matrix, say — collide. Build each brand in
+its own run, as
+[docs/examples/private-multi-brand-expo-app/dev-build.yml](../examples/private-multi-brand-expo-app/dev-build.yml)
+does with a `workflow_dispatch` input.
 
 To thread a secret into the eas build environment (e.g. an Apple
 app-specific password), pass it through `EAS_EXTRA_ENV` rather than a plain
@@ -397,7 +443,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v1.7.0 # v1.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -405,6 +451,9 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 
 ### Local build output
 

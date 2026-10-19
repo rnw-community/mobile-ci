@@ -1,0 +1,62 @@
+# Private multi-brand Expo app: development builds on EAS internal distribution.
+# Copy to .github/workflows/dev-build.yml.
+#
+# A GitHub Release asset of a private repository is not installable by a tester
+# without repository access, so distribution: eas uploads the build to EAS
+# internal distribution and outputs its install page. build-location: local
+# (the default) compiles on the self-hosted fleet and only uploads; cloud would
+# build on EAS servers instead.
+#
+# One brand per run: the workflow's artifact names and concurrency group are
+# not brand-scoped, so two calls in one run collide. Dispatch it once per brand
+# (gh workflow run dev-build.yml -f brand=globex); a push to main builds the
+# default brand.
+name: Dev build
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
+    workflow_dispatch:
+        inputs:
+            brand:
+                description: Brand whose development build to publish
+                type: choice
+                options: [acme, globex]
+                default: acme
+
+permissions: {}
+
+jobs:
+    dev-build:
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+            enable-android: true
+            # eas.json: development-<brand> extends development and sets the
+            # brand's APP_VARIANT, distribution: internal, and an apk.
+            build-profile: development-${{ inputs.brand || 'acme' }}
+            distribution: eas
+            install-command: pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
+
+    notify:
+        needs: dev-build
+        runs-on: ubuntu-latest
+        permissions: {}
+        steps:
+            - name: Link the install pages
+              env:
+                  IOS_URL: ${{ needs.dev-build.outputs.ios-install-url }}
+                  ANDROID_URL: ${{ needs.dev-build.outputs.android-install-url }}
+              run: |
+                  {
+                      echo "iOS: ${IOS_URL}"
+                      echo "Android: ${ANDROID_URL}"
+                  } >> "$GITHUB_STEP_SUMMARY"
