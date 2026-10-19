@@ -52,7 +52,7 @@ jobs:
     distinct-keys:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.0.0 # v4.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.1.0 # v4.1.0
         with:
             platform: ios
             targets: >-

@@ -61,26 +61,66 @@ else
     fail_case "release workflow contract violated"
 fi
 
-for scenario in candidate mismatch ordinary existing; do
-    case_start "self-reference resolution handles $scenario without a publication cycle"
+# new_self_reference_origin <workspace> <tag> <path>...
+# Builds <workspace>/origin, a repository whose <tag> contains exactly the given
+# paths, and wires it up as the work tree's `origin`, so the step's ls-remote,
+# fetch and cat-file run against real git instead of a stub.
+new_self_reference_origin() {
+    local workspace="$1" tag="$2" path
+    shift 2
+    git init -q "$workspace/origin"
+    for path in "$@"; do
+        mkdir -p "$workspace/origin/$(dirname "$path")"
+        printf '%s\n' 'name: example' > "$workspace/origin/$path"
+    done
+    git -C "$workspace/origin" add -A
+    git -C "$workspace/origin" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false \
+        commit -q --allow-empty -m "release: $tag"
+    git -C "$workspace/origin" tag "$tag"
+    git init -q "$workspace/work"
+    git -C "$workspace/work" remote add origin "file://$workspace/origin"
+}
+
+for scenario in candidate mismatch ordinary existing pr-existing pr-unreleased pr-missing-action pr-missing-workflow push-missing-action pr-slashed-branch-pin; do
+    case_start "self-reference resolution handles $scenario"
     workspace=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/self-test.yml" self-reference-resolution 'Every self-reference is tag-form and resolves')
-    mkdir -p "$workspace/work/.github/workflows" "$workspace/work/actions/example"
-    printf '%s\n' 'uses: rnw-community/mobile-ci/actions/example@v9.8.7 # v9.8.7' > "$workspace/work/actions/example/action.yml"
-    printf '%s\n' 'uses: rnw-community/mobile-ci/.github/workflows/example.yml@v9.8.7 # v9.8.7' > "$workspace/work/.github/workflows/example.yml"
     stub "$workspace" sleep ':'
-    # shellcheck disable=SC2016
-    stub "$workspace" git '[ "${TAG_EXISTS:-false}" = true ] && printf "%s\n" "deadbeef refs/tags/v9.8.7"'
-    message='release: v9.8.7 (#123)'
-    tag_exists=false
+    event=push
+    message='fix: ordinary commit'
+    ref_tag=v9.8.7
+    action=example
     expected=0
+    released_paths='actions/example/action.yml .github/workflows/example.yml'
+    origin_tag=v9.8.6
     case "$scenario" in
+        candidate) message='release: v9.8.7 (#123)' ;;
         mismatch) message='release: v9.8.8'; expected=1 ;;
-        ordinary) message='fix: ordinary commit'; expected=1 ;;
-        existing) message='fix: ordinary commit'; tag_exists=true ;;
+        ordinary) expected=1 ;;
+        existing) origin_tag=v9.8.7 ;;
+        pr-existing) event=pull_request; origin_tag=v9.8.7 ;;
+        pr-unreleased) event=pull_request; ref_tag=v9.9.0; origin_tag=v9.8.7 ;;
+        pr-missing-action) event=pull_request; origin_tag=v9.8.7; action=brand-new; expected=1 ;;
+        pr-missing-workflow) event=pull_request; origin_tag=v9.8.7; released_paths='actions/example/action.yml'; expected=1 ;;
+        push-missing-action) origin_tag=v9.8.7; action=brand-new; expected=1 ;;
+        pr-slashed-branch-pin) event=pull_request; origin_tag=v9.8.7; action=brand-new; ref_tag=v9.8.7/feature ;;
     esac
-    run_step "$workspace" HEAD_MESSAGE="$message" TAG_EXISTS="$tag_exists"
-    if assert_equals "$expected" "$STEP_STATUS" 'reference resolution status'; then
-        pass_case
+    # shellcheck disable=SC2086
+    new_self_reference_origin "$workspace" "$origin_tag" $released_paths
+    mkdir -p "$workspace/work/.github/workflows" "$workspace/work/actions/example"
+    printf '%s\n' "uses: rnw-community/mobile-ci/actions/$action@$ref_tag # $ref_tag" > "$workspace/work/actions/example/action.yml"
+    printf '%s\n' "uses: rnw-community/mobile-ci/.github/workflows/example.yml@$ref_tag # $ref_tag" > "$workspace/work/.github/workflows/example.yml"
+    run_step "$workspace" EVENT_NAME="$event" HEAD_MESSAGE="$message"
+    log=$(cat "$workspace/log")
+    if assert_equals "$expected" "$STEP_STATUS" "reference resolution status ($log)"; then
+        case "$scenario" in
+            *-missing-action)
+                assert_contains "$log" "actions/brand-new@v9.8.7" 'missing action named' \
+                    && assert_contains "$log" 'upcoming release tag' 'remedy named' && pass_case ;;
+            pr-missing-workflow)
+                assert_contains "$log" ".github/workflows/example.yml@v9.8.7" 'missing workflow named' \
+                    && assert_contains "$log" 'upcoming release tag' 'remedy named' && pass_case ;;
+            *) pass_case ;;
+        esac
     fi
 done
 

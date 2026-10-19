@@ -246,7 +246,7 @@ jobs:
 
     self-reference-resolution:
         name: Self-references resolve to a real tag
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         runs-on: ubuntu-latest
         timeout-minutes: 15
         steps:
@@ -254,80 +254,116 @@ jobs:
               with:
                   persist-credentials: false
 
-            # Only runs on push to main, never on pull_request: RELEASE.md's
-            # "tag known in advance" pattern requires a release PR to bump
-            # self-references to a tag that does not exist yet, so checking
-            # resolution on the PR itself would fail every legitimate release
-            # PR. A release commit must name the exact tag used by every
+            # RELEASE.md's "tag known in advance" pattern requires a release PR
+            # to bump self-references to a tag that does not exist yet, so a
+            # pull request only checks refs whose tag already exists: the
+            # referenced action or workflow must exist at that tag, or GitHub
+            # fails every job using it with "Unable to resolve action". On
+            # main, a release commit must name the exact tag used by every
             # self-reference; release.yml publishes it after self-test passes.
-            # Every other main commit must resolve its tag-form references.
+            # Every other main commit must also resolve its tag-form references.
             - name: Every self-reference is tag-form and resolves
               shell: bash
               env:
+                  EVENT_NAME: ${{ github.event_name }}
                   HEAD_MESSAGE: ${{ github.event.head_commit.message }}
               run: |
                   set -euo pipefail
-                  refs="$(
+                  case "$EVENT_NAME" in
+                      push | pull_request) ;;
+                      *) echo "::error::Unsupported event '${EVENT_NAME}' for self-reference resolution."; exit 1 ;;
+                  esac
+                  targets="$(
                       { grep -rl 'rnw-community/mobile-ci/' --include='*.yml' .github/workflows actions || true; } \
                       | { grep -v '^\.github/workflows/self-test\.yml$' || true; } \
-                      | { xargs -r grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._-]+' || true; } \
-                      | sed -E 's/^.*@//' | sort -u
+                      | { xargs -r grep -hoE 'rnw-community/mobile-ci/[a-zA-Z0-9_./-]+@[A-Za-z0-9._/-]+' || true; } \
+                      | sed -E 's|^rnw-community/mobile-ci/||' | sort -u
                   )"
-                  if [ -z "$refs" ]; then
+                  if [ -z "$targets" ]; then
                       echo "No self-references found."
                       exit 0
                   fi
+                  refs="$(printf '%s\n' "$targets" | sed -E 's/^.*@//' | sort -u)"
 
-                  non_tag_form=0
-                  while IFS= read -r ref; do
-                      if ! printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-                          echo "::error::Self-reference '@${ref}' on main is not in vX.Y.Z tag form (commit-SHA and branch self-references must be restored to a tag before merge; see RELEASE.md's fleet-validation workaround step 3)."
-                          non_tag_form=1
-                      fi
-                  done <<< "$refs"
-                  if [ "$non_tag_form" -ne 0 ]; then
-                      exit 1
-                  fi
-
-                  release_tag="$(printf '%s\n' "$HEAD_MESSAGE" | sed -nE '1s/^release: (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]].*)?$/\1/p')"
-                  if [ -n "$release_tag" ]; then
+                  if [ "$EVENT_NAME" = push ]; then
+                      non_tag_form=0
                       while IFS= read -r ref; do
-                          if [ "$ref" != "$release_tag" ]; then
-                              echo "::error::Release ${release_tag} has a self-reference to ${ref}."
-                              exit 1
+                          if ! printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                              echo "::error::Self-reference '@${ref}' on main is not in vX.Y.Z tag form (commit-SHA and branch self-references must be restored to a tag before merge; see RELEASE.md's fleet-validation workaround step 3)."
+                              non_tag_form=1
                           fi
                       done <<< "$refs"
-                      echo "All self-references match ${release_tag}; publication follows successful self-test."
-                      exit 0
+                      if [ "$non_tag_form" -ne 0 ]; then
+                          exit 1
+                      fi
+
+                      release_tag="$(printf '%s\n' "$HEAD_MESSAGE" | sed -nE '1s/^release: (v[0-9]+\.[0-9]+\.[0-9]+)([[:space:]].*)?$/\1/p')"
+                      if [ -n "$release_tag" ]; then
+                          while IFS= read -r ref; do
+                              if [ "$ref" != "$release_tag" ]; then
+                                  echo "::error::Release ${release_tag} has a self-reference to ${ref}."
+                                  exit 1
+                              fi
+                          done <<< "$refs"
+                          echo "All self-references match ${release_tag}; publication follows successful self-test."
+                      else
+                          attempts=12
+                          delay_seconds=10
+                          unresolved="$refs"
+                          attempt=1
+                          while [ -n "$unresolved" ] && [ "$attempt" -le "$attempts" ]; do
+                              still_unresolved=""
+                              while IFS= read -r ref; do
+                                  [ -n "$ref" ] || continue
+                                  if ! git ls-remote --tags origin "refs/tags/${ref}" | grep -q .; then
+                                      still_unresolved="${still_unresolved}${ref}$(printf '\n')"
+                                  fi
+                              done <<< "$unresolved"
+                              unresolved="$(printf '%s' "$still_unresolved" | sed '/^$/d')"
+                              if [ -n "$unresolved" ]; then
+                                  echo "Attempt ${attempt}/${attempts}: still unresolved: $(printf '%s' "$unresolved" | tr '\n' ' ')"
+                                  attempt=$((attempt + 1))
+                                  [ "$attempt" -le "$attempts" ] && sleep "$delay_seconds"
+                              fi
+                          done
+                          if [ -n "$unresolved" ]; then
+                              while IFS= read -r ref; do
+                                  [ -n "$ref" ] || continue
+                                  echo "::error::Self-reference '@${ref}' does not resolve to any tag in this repository after ${attempts} attempts."
+                              done <<< "$unresolved"
+                              exit 1
+                          fi
+                          echo "All self-references resolve to an existing tag."
+                      fi
                   fi
 
-                  attempts=12
-                  delay_seconds=10
-                  unresolved="$refs"
-                  attempt=1
-                  while [ "$attempt" -le "$attempts" ]; do
-                      still_unresolved=""
-                      while IFS= read -r ref; do
-                          [ -n "$ref" ] || continue
-                          if ! git ls-remote --tags origin "refs/tags/${ref}" | grep -q .; then
-                              still_unresolved="${still_unresolved}${ref}$(printf '\n')"
+                  git fetch --quiet --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+                  missing=0
+                  while IFS= read -r target; do
+                      ref="${target##*@}"
+                      name="${target%@*}"
+                      printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || continue
+                      git rev-parse -q --verify "refs/tags/${ref}^{commit}" > /dev/null || continue
+                      case "$name" in
+                          actions/*) paths="${name}/action.yml ${name}/action.yaml" ;;
+                          *) paths="$name" ;;
+                      esac
+                      found=0
+                      for path in $paths; do
+                          if git cat-file -e "refs/tags/${ref}:${path}" 2> /dev/null; then
+                              found=1
+                              break
                           fi
-                      done <<< "$unresolved"
-                      unresolved="$(printf '%s' "$still_unresolved" | sed '/^$/d')"
-                      if [ -z "$unresolved" ]; then
-                          echo "All self-references resolve to an existing tag."
-                          exit 0
+                      done
+                      if [ "$found" -eq 0 ]; then
+                          echo "::error::Self-reference 'rnw-community/mobile-ci/${name}@${ref}' points at tag ${ref}, which does not contain ${name}, so every job using it fails with 'Unable to resolve action'. Pin it to the upcoming release tag instead (RELEASE.md's tag-known-in-advance rule)."
+                          missing=1
                       fi
-                      echo "Attempt ${attempt}/${attempts}: still unresolved: $(printf '%s' "$unresolved" | tr '\n' ' ')"
-                      attempt=$((attempt + 1))
-                      [ "$attempt" -le "$attempts" ] && sleep "$delay_seconds"
-                  done
-
-                  while IFS= read -r ref; do
-                      [ -n "$ref" ] || continue
-                      echo "::error::Self-reference '@${ref}' does not resolve to any tag in this repository after ${attempts} attempts."
-                  done <<< "$unresolved"
-                  exit 1
+                  done <<< "$targets"
+                  if [ "$missing" -ne 0 ]; then
+                      exit 1
+                  fi
+                  echo "Every self-reference to an existing tag names an action or workflow present at that tag."
 
     fleet-self-test:
         name: Fleet self-test (manual only)
