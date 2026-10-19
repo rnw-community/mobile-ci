@@ -16,9 +16,11 @@ package tokenlessly.
 **Zero secret custody in the test pipelines.** `ios-maestro.yml`,
 `android-maestro.yml`, and `seed-native-cache.yml` need no secrets at all —
 no `EXPO_TOKEN`, no signing credentials, nothing. Secrets only enter the
-picture in the two opt-in publish workflows (`native-publish.yml`,
-`native-dev-release.yml`), scoped to exactly the jobs that submit to a store
-or cut a dev release, and only for the platforms you enable.
+picture in the opt-in distribution workflows — `native-publish.yml`,
+`native-dev-release.yml`, the EAS Update backend of `expo-ota-preview.yml`,
+`eas-channel-cleanup-reusable.yml`, and `store-screenshots.yml`'s upload —
+scoped to exactly the jobs that need them, and only for the platforms you
+enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
 per major (`v4` is current, at `v4.2.0`; `v3` stays frozen at `v3.3.2`,
@@ -30,7 +32,7 @@ commit SHA for reproducibility, or `@v4` to float. See
 
 ## A pull request no longer compiles native code
 
-**New in `v3.0.0`, and the default.** An Expo/React Native e2e or screenshot
+**Since `v3.0.0`, and the default.** An Expo/React Native e2e or screenshot
 run used to build the app on a Mac (iOS) or through Gradle (Android) on every
 pull request. It no longer does. `ios-maestro.yml`, `android-maestro.yml` and
 `store-screenshots.yml` now compute the **native fingerprint key** of the
@@ -106,7 +108,72 @@ jobs:
 
 See [docs/workflows/ios-maestro.md](docs/workflows/ios-maestro.md) for the
 full input reference, and the same doc's siblings under
-[docs/workflows/](docs/workflows/) for `android-maestro.yml` and the rest.
+[docs/workflows/](docs/workflows/) for `android-maestro.yml` and the rest —
+each has a **Minimal** and a **Full** example. Complete caller workflows for
+four app shapes are in [docs/examples/](docs/examples/README.md); CI lints them
+and checks every input, secret and permission against this commit.
+
+## Which workflow do I need?
+
+**What kind of app?**
+
+- **Expo / React Native** — the rest of this guide.
+- **Pure Swift / Xcode** (no Node, Expo or CocoaPods) —
+  [`swift-ios.yml`](docs/workflows/swift-ios.md) builds once, shards simulator
+  tests and optionally signs and uploads to TestFlight; or compose
+  `apple-signing` + `xcode-archive-upload` yourself. Example:
+  [docs/examples/swift-xcode-app/](docs/examples/swift-xcode-app/).
+
+**Expo / React Native, by job to be done:**
+
+| You want | Use | Choose |
+| --- | --- | --- |
+| Maestro e2e on pull requests | [`ios-maestro.yml`](docs/workflows/ios-maestro.md), [`android-maestro.yml`](docs/workflows/android-maestro.md) | iOS `ios-driver`: `local` (default, a simulator on your Mac pool) or `device-cloud` (devicecloud.dev from a Linux runner). Android `android-driver`: `avd` (default, x86_64 Linux with `/dev/kvm`), `redroid` (a `linux-aarch64` pool, privileged Docker + `binder_linux`) or `device-cloud`. Quarantine a broken iOS suite for a while with `tolerate-test-failures`. |
+| Pull requests that do not compile native code | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md), the warm-up | Run it on a default-branch push with a `paths:` filter; it publishes the base binary every pull request repacks. Pass it the same `fingerprint-config` / `fingerprint-env` / `build-secrets-env` as the e2e callers. See [docs/repack.md](docs/repack.md). |
+| Development builds for testers | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | `distribution: github-release` (default; a public repository, or testers with repository access) or `eas` (an EAS install page; private repositories). `build-location: local` (default, your fleet) or `cloud` (EAS servers; needs `distribution: eas`). |
+| Store releases | [`native-publish.yml`](docs/workflows/native-publish.md) | `credentials-source`: `secrets` (default; ASC / Play keys as GitHub secrets) or `eas` (keys stored on EAS; one `EXPO_TOKEN` for every team). `record-scope`: one per brand when you call it once per brand. `mode: auto` + `ota-baseline`: `github-release` (the store build record on the tag's release) or `eas-channel` (what the EAS channel already serves) to skip the build when only JavaScript changed. |
+| OTA previews on pull requests | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `ota-backend: github-release` (default; tokenless, **public repositories and previews only**) or `eas` (EAS Update; private repositories, and the only backend for production). See [Choosing an OTA backend](#choosing-an-ota-backend). |
+| Production OTA updates | the [`eas-update`](actions/eas-update/README.md) action, gated on `native-publish.yml`'s `decision` output | Run the job in a GitHub Environment with required reviewers. [`eas-channel-fingerprint`](actions/eas-channel-fingerprint/README.md) answers "can this commit ship as an OTA on channel X?" on its own. |
+| A gate against orphaning published OTAs | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | Fails a pull request that moves the native runtime fingerprint, unless labelled. |
+| Store screenshots | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `capture-mode: flows` (a Maestro flow per scene, iOS) or `direct` (a deep-link scene manifest, required for Android); optional gated fastlane upload. |
+| Cleanup | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) + [`preview-sweep-reusable.yml`](docs/workflows/preview-sweep-reusable.md) (GitHub Release previews); [`eas-channel-cleanup-reusable.yml`](docs/workflows/eas-channel-cleanup-reusable.md) (EAS channels) | The first cancels a closed pull request's runs on a shared fleet, whatever else you use. |
+
+Every calling job needs a `permissions:` block granting at least what the
+called workflow's jobs request — see the table in
+[docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
+
+## What changed in v4.x
+
+- **v3 → v4.0.0** — the one breaking change: `store-screenshots.yml` captures
+  Android on the `avd` driver and the x86_64 KVM pool by default. A Redroid
+  caller now passes `android-driver: redroid` with its `linux-aarch64`
+  runner labels ([migration](docs/workflows/store-screenshots.md#migrating-from-the-redroid-defaults)).
+  `android-maestro.yml` already defaulted to `avd`.
+- **v4.1.0** — repack guards: two targets with different `appId` sharing one
+  native key fail closed (`assert-distinct-fingerprints.yml` runs the same
+  check before a release); package-manager, Android SDK and Gradle caches are
+  restored everywhere but saved only off pull requests; native compile
+  parallelism is bounded to the runner's cgroup (no more OOM-killed Android
+  builds); a self-reference pinned to a tag that lacks the action fails
+  `self-test`. Also: the `device-cloud` test driver, masked
+  `build-secrets-env` / `maestro-secrets-env`, the sticky preview comment,
+  `force-label`, Maestro tag selection and JUnit reports, `native-publish.yml`
+  `targets` / build number / OTA decision, and `preview-sweep-reusable.yml`.
+- **v4.2.0** — EAS Update: the `eas-update`, `eas-channel-fingerprint`,
+  `eas-profile-env` and `ota-runtime-version` actions, `expo-ota-preview.yml`
+  `ota-backend: eas`, `native-publish.yml` `ota-baseline: eas-channel`, and
+  `eas-channel-cleanup-reusable.yml`. EAS distribution and credentials:
+  `native-dev-release.yml` `distribution: eas` / `build-location: cloud`,
+  `native-publish.yml` `credentials-source: eas` and `record-scope`, and
+  outputs on both. `ios-maestro.yml` `tolerate-test-failures`. The Gradle cache
+  is restored on pull requests but no longer saved there. **Runtime versions
+  now come from the project's own `expo-updates`**, not the pinned
+  `@expo/fingerprint`: the first `mode: auto` run after upgrading may build
+  natively once, and a preview comment may not match a dev build published
+  before v4.2.0 (`native-publish.yml`'s `fingerprint-version` is now ignored).
+
+No input was removed or had its default changed after v4.0.0, so within v4
+bumping the pin is the whole migration.
 
 ## Pick your tier
 
@@ -114,11 +181,11 @@ full input reference, and the same doc's siblings under
   job/workflow structure. Use this if you already have a working pipeline and
   want to adopt one piece at a time (e.g. just the simulator lifecycle, or
   just the native-app cache).
-- **Whole pipeline** — consume `ios-maestro.yml` / `android-maestro.yml` /
-  `seed-native-cache.yml` / `native-publish.yml` / `native-dev-release.yml` /
-  `expo-ota-preview.yml` / `expo-fingerprint-guard.yml` via `workflow_call` and collapse your own workflow to
-  a thin `uses:` wrapper with inputs. Use this for a new pipeline or when
-  migrating a pipeline that already matches this shape closely.
+- **Whole pipeline** — consume the reusable workflows in the
+  [catalog below](#reusable-workflow-catalog) via `workflow_call` and collapse
+  your own workflow to a thin `uses:` wrapper with inputs. Use this for a new
+  pipeline or when migrating a pipeline that already matches this shape
+  closely; start from [docs/examples/](docs/examples/README.md).
 - **Native Swift / Xcode** — an app with no React Native, no Expo, no Node and
   no CocoaPods is a first-class consumer too. Compose `xcode-cache`,
   `swift-test`, `simulator-lease`, `xcodebuild-test`,
@@ -269,13 +336,12 @@ Yarn consumers need no change: a repo with `yarn.lock` (and/or
 hardcoded before.
 
 `install-command` is a separate knob and still defaults to
-`yarn install --immutable` — set it to match your manager. Pin to a release
-that actually contains `package-manager`; `v1.9.0` and earlier predate it:
+`yarn install --immutable` — set it to match your manager:
 
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha>
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -333,7 +399,8 @@ your default branch before expecting to dispatch it.
 `pull_request: types: [closed]` in the consuming repository — it reads
 `github.event.pull_request.head.ref` from that event, so it cannot be
 dispatched standalone. This repo's own `pr-closed-cleanup.yml` is a one-line
-consumer of it:
+consumer of it (add `ota-preview-release-tag-prefix` and `contents: write` to
+also delete the pull request's OTA previews):
 
 ```yaml
 # .github/workflows/pr-closed-cleanup.yml
@@ -347,7 +414,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v1.7.0 # v1.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.2.0 # v4.2.0
 ```
 
 ## Scope
@@ -355,19 +422,25 @@ jobs:
 In scope: the e2e pipelines (`ios-maestro.yml` / `android-maestro.yml` /
 `seed-native-cache.yml`) — ad-hoc-signed (entitlements preserved) iOS
 simulator / unsigned Android emulator builds, tokenless
-fingerprinting, Maestro; and store publishing (`native-publish.yml`:
+fingerprinting, Maestro; store publishing (`native-publish.yml`:
 `eas build --local` for fleet-compute signed builds + `eas submit` for store
-upload) and development-build distribution (`native-dev-release.yml`:
-`eas build --local` + pruned GitHub Releases). `EXPO_TOKEN` and store
-credentials are scoped to exactly those two publish workflows — every other
-pipeline in this catalog runs with no secrets at all. EAS there only manages
-signing-credential custody, not build compute; the actual `.ipa`/`.aab` still
-builds on your own runner.
+upload); development-build distribution (`native-dev-release.yml`:
+`eas build --local`, or an opt-in EAS cloud build, to a pruned GitHub Release
+or EAS internal distribution); OTA updates (`expo-ota-preview.yml`, the
+`eas-update` action, `eas-channel-cleanup-reusable.yml`); store screenshots;
+and the native Swift / Xcode lane. `EXPO_TOKEN` and store credentials are
+scoped to exactly the jobs that publish — every test pipeline in this catalog
+runs with no secrets at all. Store builds run on your own runner; EAS manages
+signing-credential custody (and, with `credentials-source: eas`, the store
+keys), not build compute, unless you opt into `build-location: cloud` for a
+development build.
 
 ## Self-hosted runners
 
-Every action and reusable workflow here assumes a self-hosted fleet with
-Xcode already installed (iOS) and `binder_linux` loaded (Redroid Android).
+Every action and reusable workflow here assumes a self-hosted fleet: macOS
+with Xcode installed (iOS), and x86_64 Linux with `/dev/kvm` (the default
+`avd` Android driver) or `linux-aarch64` with `binder_linux` and privileged
+Docker (the `redroid` driver).
 See [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for host
 provisioning: the x86_64 Linux pool the repack path runs on, macOS Xcode
 pools, Linux `linux-aarch64` Redroid hosts, the Redroid prewarm manifest
@@ -385,17 +458,18 @@ job reads.
   consuming repos.
 - MIT licensed.
 
-**Versioning note:** examples in this README and the per-action/per-workflow
-docs use a floating major tag or `@main` for readability. A major tag such as
-`@v4` floats to the latest release of that major and `@main` can change
-without a deprecation window — pin to an exact `vX.Y.Z` tag or a full commit
-SHA when you need reproducibility.
+**Versioning note:** examples in this README, the per-action/per-workflow docs
+and [docs/examples/](docs/examples/README.md) pin the exact release they were
+checked against (`@v4.2.0 # v4.2.0`). A major tag such as `@v4` floats to the
+latest release of that major and `@main` can change without a deprecation
+window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
+reproducibility.
 
 ## Used in the wild
 
 Real-world adopters — worth reading as usage examples, not as this repo's
 own documentation:
 
-- [vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu) — iOS + Android Redroid Maestro pipelines.
+- [vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu) — the fleet-validation consumer: iOS + Android (`avd`) Maestro e2e, warm-up, dev release, store publish and store screenshots.
 - [budgie-at/budgie](https://github.com/budgie-at/budgie) — iOS Maestro + native cache, à la carte tier.
 - [rnw-community/rnw-community](https://github.com/rnw-community/rnw-community) — monorepo canary pipeline this catalog was extracted from.

@@ -1,0 +1,48 @@
+# Pure Swift / Xcode app (no React Native, Expo, Node or CocoaPods): build,
+# test and TestFlight. Copy to .github/workflows/ios.yml.
+#
+# build compiles the tests once and caches DerivedData on the Mac; each test
+# shard restores it and runs test-without-building on its own leased
+# simulator. Both are secretless. On main, publish signs with apple-signing,
+# archives and uploads with xcode-archive-upload, in the testflight GitHub
+# Environment, and tags the build. release.yml does the same step by step.
+name: iOS
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+
+permissions: {}
+
+jobs:
+    ios:
+        permissions:
+            # publish cuts a tag and a GitHub Release (create-release: true).
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.2.0 # v4.2.0
+        with:
+            xcode-version: '26.4.1'
+            xcode-build: '17E202'
+            project: MyApp.xcodeproj
+            scheme: MyApp
+            enable-swift-test: true
+            swift-package-path: Packages/Core
+            simulator-device-type: 'iPhone 17'
+            shards-json: '[0, 1]'
+            # Narrow a pull request's shards to the tests its changed files map
+            # to; an unmapped file widens back to the whole suite.
+            affected-tests-map: ci/affected-tests.json
+            checkout-fetch-depth: 0
+            enable-publish: ${{ github.event_name == 'push' }}
+            publish-environment: testflight
+            team-id: ABCDE12345
+            bundle-id: com.example.myapp
+            create-release: true
+        secrets:
+            apple-certificate-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+            apple-certificate-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+            apple-profile-base64: ${{ secrets.APP_STORE_PROVISIONING_PROFILE_BASE64 }}
+            asc-key-base64: ${{ secrets.ASC_PRIVATE_KEY_BASE64 }}
+            asc-key-id: ${{ secrets.ASC_KEY_ID }}
+            asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}

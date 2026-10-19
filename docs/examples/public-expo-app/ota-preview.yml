@@ -1,0 +1,32 @@
+# Public Expo app: self-hosted OTA preview for every pull request.
+# Copy to .github/workflows/ota-preview.yml.
+#
+# EAS-free and tokenless: exports the JavaScript, generates Expo Updates v1
+# manifests and publishes them to a GitHub Release, then keeps one sticky PR
+# comment with a deep link and QR code a development build opens. This backend
+# needs a PUBLIC repository (devices download release assets anonymously) and
+# serves previews only, never production. A private repository uses
+# ota-backend: eas (see ../private-multi-brand-expo-app/ota-preview.yml).
+name: OTA preview
+
+on:
+    pull_request:
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
+
+permissions: {}
+
+jobs:
+    preview:
+        permissions:
+            contents: write
+            pull-requests: write
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            scheme: myapp
+            platforms: ios,android
+            install-command: pnpm install --frozen-lockfile
+            # The prefix pr-closed.yml deletes on close, and the default.
+            release-tag-prefix: ota

@@ -58,7 +58,7 @@ what `github-release-publish` uploads.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v1
+- uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.2.0 # v4.2.0
   id: manifest
   with:
       dist-dir: dist

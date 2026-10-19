@@ -19,9 +19,13 @@ the section that matches your task; skip the other.
   `self-test.yml` (CI lint/scan) and `pr-closed-cleanup.yml` (this repo's own
   consumer of `pr-closed-cleanup-reusable.yml`).
 - `docs/workflows/<name>.md` — full input/secret/permission reference per
-  reusable workflow, one file per workflow in `.github/workflows/`.
+  reusable workflow, one file per workflow in `.github/workflows/`, each with a
+  `### Minimal` and a `### Full` example.
+- `docs/examples/` — complete caller workflows for four app shapes (public
+  Expo, private multi-brand Expo, pure Swift/Xcode, RN packages monorepo).
 - `docs/self-hosted-runners.md` — self-hosted host provisioning guide (macOS
-  Xcode pools, Linux `linux-aarch64` Redroid hosts, prewarm manifest format).
+  Xcode pools, x86_64 Linux KVM hosts, `linux-aarch64` Redroid hosts, prewarm
+  manifest format).
 - `docs/repack.md` — why a pull request no longer compiles native code, the
   native key's correctness boundary, the `fingerprint.config.js` contract, and
   the permissions every consumer's calling job needs.
@@ -49,7 +53,7 @@ the section that matches your task; skip the other.
   run them locally or fetch them at a pinned tag.
 - `CONTRIBUTING.md` — versioning, marketplace stance, third-party pinning,
   self-references, local validation, action-change checklist.
-- `RELEASE.md` — the exact tag-and-publish procedure for cutting `v1.x.y`.
+- `RELEASE.md` — the exact tag-and-publish procedure for cutting `vX.Y.Z`.
 - `SECURITY.md` — vulnerability reporting, self-hosted-runner threat model.
 
 ### Hard conventions
@@ -73,11 +77,21 @@ the section that matches your task; skip the other.
   relative `./actions/<name>` path — a relative path only resolves against
   the *caller's* checkout, not this repo. See
   [CONTRIBUTING.md#self-references](CONTRIBUTING.md#self-references).
+- **A new action is pinned to the UPCOMING release tag**, never the current
+  one: the current tag does not contain it, and `self-test.yml`'s
+  `self-reference-resolution` job fails any self-reference whose tag lacks the
+  referenced action or workflow (RELEASE.md's tag-known-in-advance rule).
 - Any PR that adds, removes, renames, or changes the default of an
   `action.yml` input/output must update that action's `README.md`
   input/output table **in the same PR**.
 - Any PR that changes a reusable workflow's inputs must update the matching
   `docs/workflows/<name>.md` **in the same PR**.
+- Documented calls cannot drift: `tests/docs-examples_test.sh` resolves every
+  `rnw-community/mobile-ci/...@<ref>` in `docs/examples/` and in the docs'
+  yaml blocks to the file at this commit and fails on an undeclared input or
+  secret; the examples and each workflow doc's Minimal/Full blocks must also
+  pass every required input, pin `@vX.Y.Z # vX.Y.Z`, and grant every scope the
+  called workflow's jobs request. Renaming an input means fixing its docs.
 - No code comments in `action.yml` beyond what a descriptive step `name:`
   could not already convey — prefer renaming over explaining.
 - Keep `run:` blocks POSIX-shell-compatible and `shellcheck`-clean.
@@ -89,10 +103,14 @@ Run, and confirm clean, before saying a change is finished (see
 
 ```bash
 actionlint -color
+actionlint -color docs/examples/*/*.yml
 tests/run-tests.sh
 shellcheck <changed .sh files / run: blocks extracted as needed>
 zizmor --config .github/zizmor.yml .github/workflows actions
 ```
+
+Locally, `actionlint` can hang on `store-screenshots.yml`; lint the files you
+changed one at a time under `timeout` (CI runs the whole tree).
 
 A change to an action's `run:` logic comes with a case in `tests/`, and the
 case is proven red before the fix: every step script there is extracted from
@@ -107,6 +125,15 @@ schemas too — reproduce that locally with the same `sed` substitution before
 running `actionlint` if you touched a reusable workflow's inputs.
 
 ### Consumer validation on the fleet
+
+The rules, each learned from a release that shipped broken:
+
+- **Fleet-validate before release** — static checks and green unit tests are
+  not evidence that a workflow works.
+- **One fleet run at a time** — the self-hosted pools are shared and
+  serialized; parallel dispatches queue, cancel each other, or starve other
+  repositories.
+- **Read the artifacts**, not the check marks.
 
 Static checks prove a change is well-formed, not that it works. Every change
 that alters runtime behaviour — action `run:` logic, workflow wiring, new or
@@ -170,80 +197,66 @@ procedure.
 
 ## B. USING this repo from a consumer project
 
-**A pull request does not compile native code by default.** From v3.0.0 the
-e2e and screenshot workflows compute a native fingerprint key on Linux, fetch
-the base binary published for it, and repack it with this commit's JavaScript;
-only a key with no published base reaches a Mac or a Gradle build. The calling
-job must grant `permissions: {contents: read, packages: write, actions: read}`,
-or the first default-branch run fails at publish. Read
+**Start from [docs/examples/](docs/examples/README.md)** — complete, CI-checked
+caller workflows for a public Expo app, a private multi-brand Expo app, a pure
+Swift/Xcode app and an RN packages monorepo. Then read
+`docs/workflows/<name>.md` for every workflow you wire: each has the full
+input/secret/permission tables and a Minimal and a Full example. Never guess
+an input name or default.
+
+**A pull request does not compile native code by default.** The e2e and
+screenshot workflows compute a native key on Linux, fetch the base binary the
+warm-up published for it, and repack it with this commit's JavaScript; only a
+key with no published base reaches a Mac or Gradle. Read
 [docs/repack.md](docs/repack.md) before wiring or debugging any Expo pipeline.
 
 Prefer the **reusable workflows** over composing raw actions unless you
 already have a working pipeline and are adopting one piece at a time (à la
-carte tier — see [README.md](README.md#pick-your-tier)):
+carte tier — see [README.md](README.md#pick-your-tier)).
 
-- `ios-maestro.yml` — iOS Maestro e2e.
-- `android-maestro.yml` — Android Maestro e2e (`avd` driver on an x86_64
-  Linux KVM pool by default; `redroid` for a `linux-aarch64` pool).
-- `seed-native-cache.yml` — the warm-up: publishes the base binary every
-  pull request repacks, and warms the native-app cache. Wire it on a
-  default-branch push with a `paths:` filter (see
-  [docs/repack.md](docs/repack.md#the-warm-up)).
-- `expo-base-plan.yml` — the shared "does this commit have to compile native
-  code?" decision the e2e, screenshot and warm-up workflows call. Not normally
-  called directly by a consumer.
-- `native-publish.yml` — signed store publish (`eas build --local` + `eas submit`).
-- `native-dev-release.yml` — dev-profile build published to a GitHub Release,
-  or to EAS internal distribution (`distribution: eas`) for private-repo testers.
-- `expo-ota-preview.yml` — EAS-free, tokenless OTA JS preview for development
-  builds: exports the app, generates Expo Updates v1 manifests
-  (`expo-ota-manifest`), publishes to a GitHub Release
-  (`github-release-publish`, the same channel the native dev `.ipa`/`.apk` uses),
-  and keeps deep links + QR in one sticky PR comment (`pr-preview-comment`). Needs no `EXPO_TOKEN`; only
-  `contents: write` (and `pull-requests: write` for the comment) on the calling
-  job, and a public repository. `ota-backend: eas` publishes the same preview
-  as an EAS Update (`eas-update`) instead, for private repositories; it needs
-  `EXPO_TOKEN`.
-- `expo-fingerprint-guard.yml` — pull-request gate that fails when a change
-  moves the Expo native runtime fingerprint, so a fingerprint-policy app never
-  silently orphans its published OTA updates; overridable with a label.
-- `store-screenshots.yml` — fleet-native store screenshot capture matrix
-  (iOS simulators + Android Redroid containers) driven either by a Maestro
-  flow-per-scene convention (`capture-mode: flows`, iOS-only) or by a
-  deep-link/flow scene manifest with a per-cell seed hook
-  (`capture-mode: direct`, required for Android), with a gated fastlane
-  upload job and optional App Store slot-resolution validation.
-- `pr-closed-cleanup-reusable.yml` — cancels zombie runs on a closed PR's branch,
-  and opt-in deletes its OTA previews once those runs have stopped.
-- `preview-sweep-reusable.yml` — scheduled, dry-run-by-default sweep of OTA
-  preview releases of closed PRs and of stale branch previews.
-- `eas-channel-cleanup-reusable.yml` — deletes a closed PR's EAS Update
-  channel and branch and sweeps channels matching a pattern that went idle;
-  never a protected channel (deny-list, `eas.json` profile channels,
-  EAS-protected).
+### Workflows and the permissions their calling job must grant
 
-For EAS Update outside these workflows, compose the actions directly:
-`eas-update` publishes to a channel, `eas-channel-fingerprint` decides
-`ota|native` against what a channel serves (also `native-publish.yml`'s
-`ota-baseline: eas-channel`), and `eas-profile-env` resolves an `eas.json`
-profile's env, channel and environment. `ota-runtime-version` is the one
-runtime-version source every OTA path uses (the project's own
-`expo-updates`); `native-fingerprint` is a native-build cache key only. Which
-OTA backend to use:
-[README.md#choosing-an-ota-backend](README.md#choosing-an-ota-backend).
+A reusable workflow can only narrow its caller's token, and GitHub refuses to
+start a run whose called job requests more than the calling job granted —
+even a skipped job. Put this `permissions:` block on the job with `uses:`:
 
-Full input/secret/permission tables and a copy-pasteable example live in
-`docs/workflows/<name>.md` for each workflow above — read the doc for the
-workflow you are wiring, do not guess at input names or defaults.
+| Workflow | Purpose | Calling job `permissions:` |
+| --- | --- | --- |
+| `ios-maestro.yml` | iOS Maestro e2e (`ios-driver: local` or `device-cloud`; `tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
+| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`) | `contents: read`, `packages: write`, `actions: read` |
+| `seed-native-cache.yml` | The warm-up: publishes the base binary pull requests repack. Default-branch push with a `paths:` filter | `contents: read`, `packages: write`, `actions: read` |
+| `store-screenshots.yml` | Store screenshot capture matrix + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
+| `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
+| `native-publish.yml` | Signed store publish (`eas build --local` + `eas submit`); `credentials-source: secrets\|eas`, `record-scope` per brand call, `mode: auto` with `ota-baseline: github-release\|eas-channel` | `contents: read` (+ `contents: write` for the store build record, + `actions: read` for `build-number: auto` in a private repo) |
+| `expo-ota-preview.yml` | Pull-request OTA preview + sticky comment; `ota-backend: github-release\|eas` | `contents: write`, `pull-requests: write` |
+| `eas-channel-cleanup-reusable.yml` | Deletes a closed PR's EAS channel and branch; sweeps idle channels | `contents: read` |
+| `pr-closed-cleanup-reusable.yml` | Cancels a closed PR's runs; opt-in deletes its GitHub Release previews | `actions: write` (+ `contents: write` with `ota-preview-release-tag-prefix`) |
+| `preview-sweep-reusable.yml` | Scheduled, dry-run-by-default sweep of stale GitHub Release previews | `contents: write`, `pull-requests: read` |
+| `expo-fingerprint-guard.yml` | Fails a PR that moves the native runtime fingerprint, unless labelled | `contents: read`, `pull-requests: read` |
+| `assert-distinct-fingerprints.yml` | Release pre-flight: two app ids must not share a native key | `contents: read` |
+| `swift-ios.yml` | Pure Swift/Xcode build, sharded tests, opt-in TestFlight publish | `contents: write` (always — its `publish` job requests it) |
+| `expo-base-plan.yml` | Shared repack decision the e2e/screenshot/warm-up workflows call; not called directly | — |
 
-**Pin to an exact `vX.Y.Z` tag or a full commit SHA with a trailing
-`# comment`.** A floating major tag (`v4`) exists for consumers who accept
-moving with the latest release of that major (see [README.md](README.md) and
-[RELEASE.md](RELEASE.md)); `@main` can change without a deprecation window.
+**EAS Update outside these workflows** — compose the actions: `eas-update`
+publishes to a channel; `eas-channel-fingerprint` decides `ota|native` against
+what a channel serves; `eas-profile-env` resolves an `eas.json` profile's env,
+channel and environment; `ota-runtime-version` is the one runtime-version
+source every OTA path uses (the project's own `expo-updates`).
+`native-fingerprint` is a native-build cache key only, never a runtime version.
 
-```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v1.7.0 # v1.7.0
-```
+### Choosing the OTA backend
+
+- **`github-release`** (`expo-ota-preview.yml` default): tokenless, but
+  **public repositories only** (devices download release assets anonymously)
+  and **previews for development builds only** — no code signing, rollout or
+  rollback. Clean up with `pr-closed-cleanup-reusable.yml`
+  (`ota-preview-release-tag-prefix`) + `preview-sweep-reusable.yml`.
+- **`eas`**: needs `EXPO_TOKEN`; any repository; the only choice for
+  production channels. Clean up with `eas-channel-cleanup-reusable.yml`.
+- Production updates: `eas-update` in a job with `environment:` (required
+  reviewers), gated on `native-publish.yml`'s `decision` output. A job that
+  calls a reusable workflow cannot name an `environment:`, so environment
+  secrets never reach one.
 
 ### Maestro flow-file convention
 
@@ -254,37 +267,41 @@ auto-discovered or run standalone by the sharding logic.
 
 ### Secrets
 
-- `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
-  `pr-closed-cleanup-reusable.yml`, `preview-sweep-reusable.yml`,
-  `expo-fingerprint-guard.yml` need **no
-  secrets at all** — no
-  `EXPO_TOKEN`, no signing credentials.
-- `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml` and
-  `store-screenshots.yml` optionally take `build-secrets-env` (masked
-  `KEY=VALUE` env for install, bundle, repack and native build; only a digest
-  enters the native key, so pass the warm-up the same secret) and, except the
-  warm-up, `maestro-secrets-env` (masked entries merged into `maestro-env`,
-  scrubbed from uploaded Maestro artifacts). Pass them explicitly, never
-  `secrets: inherit`; with none passed, behaviour is unchanged.
-- `ios-maestro.yml` (`ios-driver: device-cloud`) and `android-maestro.yml`
-  (`android-driver: device-cloud`) need `device-cloud-api-key` to run the
-  flows on devicecloud.dev from a plain Linux runner instead of a Mac or KVM
-  host; see each doc's "Device Cloud driver" section.
-- `native-publish.yml` (opt-in secrets, only for the platforms you enable):
-  `EXPO_TOKEN`, `ASC_API_KEY` (iOS), `GOOGLE_SERVICE_ACCOUNT_JSON` (Android) —
-  the last two optional with `credentials-source: eas`,
-  `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`/`eas
-  submit`, e.g. `EXPO_APPLE_APP_SPECIFIC_PASSWORD`).
-- `native-dev-release.yml` (opt-in secrets): `EXPO_TOKEN` (required by both
-  enabled dev-release jobs), `ASC_API_KEY` (optional, iOS only),
-  `EAS_EXTRA_ENV` (optional, masked `KEY=VALUE` env for `eas build`).
-- `eas-channel-cleanup-reusable.yml`: `EXPO_TOKEN` (required).
-- `expo-ota-preview.yml` with `ota-backend: eas`: `EXPO_TOKEN` (required),
-  `EAS_EXTRA_ENV` (optional); `native-publish.yml` with `ota-baseline:
-  eas-channel` also needs `EXPO_TOKEN` in its plan job.
+Pass secrets explicitly, never `secrets: inherit` (that hands every repository
+secret to a third-party workflow).
 
-See each workflow's `docs/workflows/<name>.md#secrets` for which job
-requires which secret and how the job fails fast when one is missing.
+- No secrets: `ios-maestro.yml`, `android-maestro.yml`,
+  `seed-native-cache.yml`, `pr-closed-cleanup-reusable.yml`,
+  `preview-sweep-reusable.yml`, `expo-fingerprint-guard.yml`,
+  `assert-distinct-fingerprints.yml`.
+- Optional masked env: `build-secrets-env` (e2e, screenshots, warm-up; only a
+  digest enters the native key, so pass the warm-up the same secret) and
+  `maestro-secrets-env` (e2e, screenshots); `device-cloud-api-key` for the
+  `device-cloud` drivers.
+- `native-publish.yml`: `EXPO_TOKEN`; `ASC_API_KEY` + `ASC_KEY_ID` +
+  `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), optional
+  with `credentials-source: eas`; optional `EAS_EXTRA_ENV`.
+- `native-dev-release.yml`: `EXPO_TOKEN`; optional ASC key set and
+  `EAS_EXTRA_ENV`.
+- `expo-ota-preview.yml` with `ota-backend: eas`: `EXPO_TOKEN` (optional
+  `EAS_EXTRA_ENV`). `eas-channel-cleanup-reusable.yml`: `EXPO_TOKEN`.
+- `store-screenshots.yml` upload: the ASC key set; `swift-ios.yml` publish:
+  `apple-certificate-base64`, `apple-certificate-password`,
+  `apple-profile-base64`, `asc-key-base64`, `asc-key-id`, `asc-issuer-id`.
+
+Each workflow's `docs/workflows/<name>.md#secrets` says which job requires
+which secret and how it fails fast when one is missing.
+
+### Pinning
+
+Pin to an exact `vX.Y.Z` tag or a full commit SHA, with a trailing
+`# comment`. A floating major tag (`v4`) exists for consumers who accept
+moving with the latest release of that major; `@main` can change without a
+deprecation window.
+
+```yaml
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+```
 
 ### Self-hosted runner prerequisites
 
@@ -306,35 +323,36 @@ that avoids paying for a cold `docker pull` + first-boot on every shard.
 ### Minimal consumer snippet
 
 ```yaml
-# .github/workflows/ios-maestro.yml (in your app repo)
-name: iOS Maestro E2E
+# .github/workflows/e2e.yml (in your app repo)
+name: E2E
 on:
     workflow_dispatch:
     pull_request:
     push:
         branches: [main]
 jobs:
-    e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@<full-commit-sha>
+    ios:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
         with:
             targets: >-
-                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
+            flows-dir: apps/mobile/e2e/flows
+    android:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
             flows-dir: apps/mobile/e2e/flows
 ```
 
-```yaml
-# .github/workflows/android-maestro.yml (in your app repo)
-name: Android Maestro E2E
-on:
-    workflow_dispatch:
-    pull_request:
-    push:
-        branches: [main]
-jobs:
-    e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@<full-commit-sha>
-        with:
-            targets: >-
-                [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
-            flows-dir: apps/mobile/e2e/flows
-```
+Add the warm-up ([docs/examples/public-expo-app/warm-up.yml](docs/examples/public-expo-app/warm-up.yml))
+with the same `fingerprint-config` / `fingerprint-env`, or every pull request
+whose native key moved compiles natively.

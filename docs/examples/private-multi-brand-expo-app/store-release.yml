@@ -1,0 +1,106 @@
+# Private multi-brand Expo app: store release, native or OTA per the channel.
+# Copy to .github/workflows/store-release.yml.
+#
+# 1. distinct-keys: two brands with different app ids must not share a native
+#    key, or a native change visible to one brand could slip past the check.
+# 2. publish: one native-publish call per brand. mode: auto with
+#    ota-baseline: eas-channel compares each brand's runtime version with what
+#    its production channel (the channel its eas.json profile sets) already
+#    serves, and builds and submits only when the native runtime moved.
+#    credentials-source: eas signs and submits with the credentials stored on
+#    EAS for each app, so one EXPO_TOKEN serves every Apple team and Play
+#    account; record-scope keeps the per-brand calls from sharing a
+#    concurrency group, artifacts or a store build record.
+# 3. ota: publishes the brand's update to its production channel, on either
+#    decision: with decision=ota it reaches the shipped binaries; with
+#    decision=native it records the new runtime on the channel, which is what
+#    the next run's eas-channel baseline compares against (builds from
+#    eas build --local are not recorded on EAS).
+#
+# Production tokens: the ota job runs in the production GitHub Environment
+# (required reviewers), whose EXPO_TOKEN secret is the one that can reach every
+# production device. A job that calls a reusable workflow cannot name an
+# environment, so native-publish takes the repository's EXPO_TOKEN, and this
+# workflow runs only on a release tag or a manual dispatch.
+name: Store release
+
+on:
+    push:
+        tags: ['v*']
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    distinct-keys:
+        strategy:
+            matrix:
+                platform: [ios, android]
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.2.0 # v4.2.0
+        with:
+            platform: ${{ matrix.platform }}
+            targets: >-
+                [{"name":"acme","appDir":"apps/mobile","appId":"com.acme.tools"},
+                 {"name":"globex","appDir":"apps/mobile","appId":"com.globex.tools"}]
+            install-command: pnpm install --frozen-lockfile
+
+    publish:
+        needs: distinct-keys
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        permissions:
+            contents: read
+            # build-number: auto reads earlier runs in a private repository.
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+            enable-android: true
+            build-profile: ${{ matrix.brand }}
+            submit-profile: ${{ matrix.brand }}
+            record-scope: ${{ matrix.brand }}
+            credentials-source: eas
+            mode: auto
+            ota-baseline: eas-channel
+            build-number: auto
+            install-command: pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+    ota:
+        needs: publish
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        runs-on: ubuntu-latest
+        environment: production
+        permissions:
+            contents: read
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+            - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: 22
+                  package-manager-cache: false
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile
+            - name: Publish the brand's production update
+              uses: rnw-community/mobile-ci/actions/eas-update@v4.2.0 # v4.2.0
+              with:
+                  app-dir: apps/mobile
+                  channel: production-${{ matrix.brand }}
+                  # Evaluated under the brand's build profile env and EAS
+                  # environment, exactly as its store build was.
+                  eas-profile: ${{ matrix.brand }}
+                  auto-create-channel: 'false'
+                  expo-token: ${{ secrets.EXPO_TOKEN }}

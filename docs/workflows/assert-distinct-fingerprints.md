@@ -45,7 +45,9 @@ workflow around the action.
 
 No secrets. The calling job needs `contents: read`.
 
-## Example
+## Examples
+
+### Minimal
 
 ```yaml
 jobs:
@@ -59,5 +61,60 @@ jobs:
                 [{"name":"brand-a","appDir":"apps/mobile","appId":"com.a"},{"name":"brand-b","appDir":"apps/mobile","appId":"com.b"}]
     publish:
         needs: distinct-keys
+        permissions:
+            contents: read
         uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
 ```
+
+### Full
+
+Both platforms, with the same key inputs the e2e workflows pass, before a
+per-brand publish:
+
+```yaml
+jobs:
+    distinct-keys:
+        strategy:
+            matrix:
+                platform: [ios, android]
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.2.0 # v4.2.0
+        with:
+            platform: ${{ matrix.platform }}
+            targets: >-
+                [{"name":"acme","appDir":"apps/mobile","appId":"com.acme.app","prebuildCommand":"APP_VARIANT=acme npx expo prebuild -p ${{ matrix.platform }}"},
+                 {"name":"globex","appDir":"apps/mobile","appId":"com.globex.app","prebuildCommand":"APP_VARIANT=globex npx expo prebuild -p ${{ matrix.platform }}"}]
+            fingerprint-config: fingerprint.config.js
+            install-command: pnpm install --frozen-lockfile
+            build-command: pnpm turbo build --filter=./apps/mobile...
+            runner-labels: '["self-hosted","trf-linux-amd64-2x4"]'
+    publish:
+        needs: distinct-keys
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-android: true
+            build-profile: ${{ matrix.brand }}
+            submit-profile: ${{ matrix.brand }}
+            record-scope: ${{ matrix.brand }}
+            credentials-source: eas
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+```
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

@@ -98,6 +98,7 @@ release tag, never the latest existing one: that tag lacks the new path, and
 brew install actionlint shellcheck
 pip install --user zizmor
 actionlint -color
+actionlint -color docs/examples/*/*.yml
 tests/run-tests.sh
 shellcheck <changed .sh files / run: blocks extracted as needed>
 zizmor --config .github/zizmor.yml .github/workflows actions
@@ -106,7 +107,11 @@ zizmor --config .github/zizmor.yml .github/workflows actions
 `tests/run-tests.sh` runs the action step tests: each suite extracts a step's
 `run:` body from the parsed `action.yml` and executes it against `fixtures/`
 with stubbed binaries. A change to `run:` logic comes with a case there, proven
-red against the unfixed action first.
+red against the unfixed action first. Its `docs-examples_test.sh` checks every
+documented call — [docs/examples/](docs/examples/README.md) and the yaml blocks
+in the Markdown docs — against the inputs, secrets and permissions of the
+workflows and actions at the same commit, so renaming an input fails until its
+docs follow.
 
 `actionlint` walks `.github/workflows/**` and, for any step using a local
 relative path, schema-checks the referenced `actions/*/action.yml` too. The
@@ -147,3 +152,7 @@ procedure.
   `action.yml` input/output must update that action's `README.md` input/
   output table in the same PR — a README that drifts from its `action.yml`
   is a bug, not a follow-up.
+- A new action's self-references, and any reference to it from a workflow,
+  pin to the **upcoming** release tag: the current tag does not contain it, and
+  `self-test.yml`'s `self-reference-resolution` job fails a self-reference
+  whose tag lacks the referenced path.

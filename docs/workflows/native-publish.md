@@ -303,7 +303,7 @@ pull-request previews for development builds, not production):
 ```yaml
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@<sha> # <tag>
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
         permissions:
             contents: write
             actions: read
@@ -312,7 +312,12 @@ jobs:
             enable-android: true
             mode: auto
             build-number: auto
-        secrets: inherit
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+            GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
     ota:
         needs: publish
         if: needs.publish.outputs.decision == 'ota'
@@ -384,12 +389,17 @@ if the next run must find the new runtime there.
 
 ```yaml
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@<sha> # <tag>
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             mode: auto
             ota-baseline: eas-channel
-        secrets: inherit
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+            GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
     ota:
         needs: publish
         if: needs.publish.outputs.decision == 'ota'
@@ -520,7 +530,11 @@ write grant would break every caller that only grants `contents: read`. They
 inherit the caller's grant instead, and every other job pins
 `contents: read`.
 
-## Example
+## Examples
+
+### Minimal
+
+Always builds and submits both platforms with the keys in GitHub secrets.
 
 ```yaml
 # .github/workflows/native-publish.yml
@@ -529,12 +543,70 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.7.0 # v1.7.0
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             enable-ios: true
             enable-android: true
-        secrets: inherit
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+            ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+            ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+            GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+```
+
+### Full
+
+On a release tag: build only when the native runtime moved since the last
+store release (`mode: auto` against the store build record), otherwise hand the
+release to the OTA job; signing and store keys come from EAS
+(`credentials-source: eas`). For one call per brand add `record-scope` (see
+[One call per brand](#one-call-per-brand-record-scope)); to compare against an
+EAS channel instead of the record, `ota-baseline: eas-channel` (see
+[Against the EAS channel](#against-the-eas-channel-ota-baseline-eas-channel)).
+
+```yaml
+# .github/workflows/native-publish.yml
+name: Native publish
+on:
+    push:
+        tags: ['v*']
+jobs:
+    publish:
+        permissions:
+            contents: write   # the store build record on the tag's release
+            actions: read     # build-number: auto in a private repository
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+            enable-android: true
+            mode: auto
+            build-number: auto
+            credentials-source: eas
+            install-command: pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+            EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
+    ota:
+        needs: publish
+        if: needs.publish.outputs.decision == 'ota'
+        runs-on: ubuntu-latest
+        environment: production
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+            - run: corepack enable && pnpm install --frozen-lockfile
+            - uses: rnw-community/mobile-ci/actions/eas-update@v4.2.0 # v4.2.0
+              with:
+                  app-dir: apps/mobile
+                  channel: production
+                  eas-profile: production
+                  expo-token: ${{ secrets.EXPO_TOKEN }}
 ```
 
 To thread a secret into the eas build/submit environment (e.g. an Apple
@@ -548,7 +620,9 @@ on:
     workflow_dispatch:
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v1.7.0 # v1.7.0
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -559,6 +633,13 @@ jobs:
             ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
             EAS_EXTRA_ENV: EXPO_APPLE_APP_SPECIFIC_PASSWORD=${{ secrets.APPLE_PASSWORD }}
 ```
+
+A multi-brand release (`record-scope` per brand, `credentials-source: eas`,
+`ota-baseline: eas-channel`, the OTA job in a GitHub Environment) is in
+[docs/examples/private-multi-brand-expo-app/store-release.yml](../examples/private-multi-brand-expo-app/store-release.yml).
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 
 ### Local build output
 

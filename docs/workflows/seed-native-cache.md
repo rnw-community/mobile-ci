@@ -196,7 +196,28 @@ hit would republish exactly the binary the force is meant to replace. The run
 therefore always compiles, and warns before it overwrites — every build that
 already repacked onto the previous base used different native code.
 
-## Example
+## Examples
+
+### Minimal
+
+```yaml
+on:
+    push:
+        branches: [main]
+    workflow_dispatch:
+jobs:
+    warm:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.2.0 # v4.2.0
+        with:
+            ios-targets: >-
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
+```
+
+### Full
 
 ```yaml
 # .github/workflows/warm-base.yml (in your app repo)
@@ -221,7 +242,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.2.0 # v4.2.0
         with:
             ios-targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -233,6 +254,9 @@ jobs:
 The `paths:` filter is what keeps the warm-up honest: a push that touches
 neither the app nor the lockfile cannot have moved a native key, so there is
 nothing to warm.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 
 ## Migrating from v2
 

@@ -70,7 +70,7 @@ action so `DEVELOPER_DIR` and the ccache toolchain are already in place.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/build-ios-app@v1
+- uses: rnw-community/mobile-ci/actions/build-ios-app@v4.2.0 # v4.2.0
   id: build
   with:
       app-dir: apps/mobile

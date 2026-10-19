@@ -508,7 +508,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -646,7 +646,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
 ```
 
 - `contents: read` — checkout.
@@ -665,7 +665,28 @@ expiring, so a key can go cold and cost a native build again.
 This workflow still never writes to the repository and never needs a release
 signing credential or an Expo/EAS token.
 
-## Example
+## Examples
+
+### Minimal
+
+One target on the default `avd` driver and x86_64 KVM pool; the permissions
+are required (see [Permissions](#permissions)).
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
+            flows-dir: apps/mobile/e2e/flows
+```
+
+### Full
 
 ```yaml
 # .github/workflows/android-maestro.yml
@@ -685,7 +706,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -706,6 +727,9 @@ jobs:
 single differing byte gives the pull request a different native key, and every
 pull request runs Gradle again.
 
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
+
 ## Forcing a run
 
 Set `force-label` (for example `e2e:force`) to let a reviewer run the suite on a
@@ -722,7 +746,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@<full-commit-sha> # <next release>
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
         with:
             force-label: e2e:force
 ```

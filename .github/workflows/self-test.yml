@@ -48,6 +48,10 @@ jobs:
               shell: bash
               run: actionlint -color
 
+            - name: Lint the documented example workflows
+              shell: bash
+              run: actionlint -color docs/examples/*/*.yml
+
     zizmor:
         name: zizmor
         runs-on: ubuntu-latest
