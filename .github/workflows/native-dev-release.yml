@@ -1182,6 +1182,7 @@ jobs:
 
             - name: Fit the native build into the container limits
               id: native-jobs
+              if: inputs.build-location == 'local'
               shell: bash
               run: |
                   set -euo pipefail

@@ -329,6 +329,8 @@ for platform in ('ios', 'android'):
         'Publish GitHub Release': "inputs.distribution == 'github-release'",
         f'Prune old {label} dev releases': "inputs.distribution == 'github-release'",
     }
+    if platform == 'android':
+        gates['Fit the native build into the container limits'] = "inputs.build-location == 'local'"
     for name, condition in gates.items():
         if condition not in str(steps.get(name, {}).get('if', '')):
             problems.append(f'{job_id}: step {name!r} must be gated on {condition}')
