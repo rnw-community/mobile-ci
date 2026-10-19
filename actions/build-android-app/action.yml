@@ -62,8 +62,9 @@ inputs:
       cgroup v1 CFS quota, rounded up), and one per GiB of memory limit
       (memory.max, or memory.limit_in_bytes) above a 5 GiB reserve for the
       Gradle and Kotlin JVMs (and eas-cli), whichever is lower, at least 1. A
-      runner with neither limit is left to ninja's own default. Needs CMake 3.17 or later
-      and flock.
+      runner with neither limit is left to ninja's own default. A bounded
+      runner also gets JVM options that return idle heap to the kernel. Needs
+      CMake 3.17 or later and flock.
     required: false
     default: ''
   android-sdk-cache-save:
@@ -234,7 +235,7 @@ runs:
               ${{ inputs.gradle-cache-key }}-partial-
               ${{ inputs.gradle-cache-restore-keys }}
 
-    - name: Bound native compile parallelism to the container limits
+    - name: Fit the native build into the container limits
       id: native-jobs
       shell: bash
       env:
@@ -351,6 +352,7 @@ runs:
         COMPILE_SLOT
         chmod +x "$launcher"
 
+        jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
         chain_launcher() {
           case "$1" in
             "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -363,8 +365,12 @@ runs:
           echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
           echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
           echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+          case " ${JAVA_TOOL_OPTIONS:-} " in
+            *" $jvm_heap_return "*) ;;
+            *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
+          esac
         } >> "$GITHUB_ENV"
-        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher."
+        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return)."
 
     - name: Build APK (Release)
       id: build

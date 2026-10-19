@@ -1871,7 +1871,7 @@ jobs:
                   ANDROID_PRE_SUBMIT_COMMAND: ${{ inputs.android-pre-submit-command }}
               run: eval "$ANDROID_PRE_SUBMIT_COMMAND"
 
-            - name: Bound native compile parallelism to the container limits
+            - name: Fit the native build into the container limits
               id: native-jobs
               shell: bash
               run: |
@@ -1986,6 +1986,7 @@ jobs:
                   COMPILE_SLOT
                   chmod +x "$launcher"
 
+                  jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
                   chain_launcher() {
                     case "$1" in
                       "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -1998,8 +1999,12 @@ jobs:
                     echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
                     echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
                     echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+                    case " ${JAVA_TOOL_OPTIONS:-} " in
+                      *" $jvm_heap_return "*) ;;
+                      *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
+                    esac
                   } >> "$GITHUB_ENV"
-                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher."
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return)."
 
             - name: EAS build (Android)
               id: build

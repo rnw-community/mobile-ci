@@ -95,7 +95,15 @@ and later on a project's first configure), `MOBILE_CI_COMPILE_SLOTS` and
 `MOBILE_CI_COMPILE_SLOTS_DIR` through `$GITHUB_ENV`, so the bound also covers
 any later CMake build in the same job. A launcher the caller already exports,
 such as `ccache`, is kept behind the slot. The bound only schedules compilers,
-so it never changes what is built or the native key. `native-publish.yml` and
+so it never changes what is built or the native key.
+
+The same step appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
+-XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
+already sets there. The Kotlin compile daemons sit idle through the native phase
+holding up to a 2 GiB heap each, and that phase is when a single Skia
+translation unit can need 3.5 GiB. With these options an idle JVM runs a
+periodic GC and returns its free heap to the kernel; on the runner image a JVM
+idling at 300 MB live drops from 1917 MiB to 572 MiB resident. `native-publish.yml` and
 `native-dev-release.yml` run the same step before `eas build --local` for
 Android.
 
