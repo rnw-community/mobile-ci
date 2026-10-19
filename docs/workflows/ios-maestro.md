@@ -106,6 +106,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `repack-timeout-minutes`      | no       | `30`                                       | `plan`/repack job timeout. |
 | `build-timeout-minutes`       | no       | `60`                                       | Build job timeout. |
 | `test-timeout-minutes`        | no       | `75`                                       | Test job timeout. |
+| `tolerate-test-failures`      | no       | `false`                                    | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite, usually passed per target from the caller (e.g. `${{ matrix.package == 'flaky' }}`). |
 
 ## Secrets
 
