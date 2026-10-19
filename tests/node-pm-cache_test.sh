@@ -105,7 +105,7 @@ else
     pass_case
 fi
 
-case_start 'the save step is bounded, non-fatal, skipped on pull requests and on exact hits, and pinned like every other actions/cache use'
+case_start 'the action only restores, on every event, with restore-keys, and exposes the path and key a workflow-level save needs'
 if ACTION_YML="$ACTION" python3 - <<'PYTHON'
 import os
 import re
@@ -113,35 +113,50 @@ import sys
 
 import yaml
 
-steps = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))['runs']['steps']
-by_name = {s['name']: s for s in steps}
-save = by_name['Save package manager cache']
-restore = by_name['Restore package manager cache']
+doc = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))
+steps = doc['runs']['steps']
 problems = []
-if 'github.event_name != \'pull_request\'' not in save['if']:
-    problems.append('save is not skipped on pull requests')
-if "inputs.cache-hit != 'true'" not in save['if']:
-    problems.append('save is not skipped on an exact hit')
-if not save.get('timeout-minutes'):
-    problems.append('save has no timeout-minutes')
-if save.get('continue-on-error') is not True:
-    problems.append('save is not continue-on-error')
-if 'pull_request' in restore['if']:
-    problems.append('restore must run on every event')
-if not restore['uses'].startswith('actions/cache/restore@') or not save['uses'].startswith('actions/cache/save@'):
-    problems.append('restore/save must use actions/cache/restore and actions/cache/save')
-for step in (restore, save):
-    if not re.fullmatch(r'actions/cache/(restore|save)@[0-9a-f]{40}', step['uses']):
-        problems.append(f"{step['uses']} is not pinned to a full SHA")
-if not restore.get('with', {}).get('restore-keys'):
-    problems.append('restore has no restore-keys')
+saves = [s for s in steps if str(s.get('uses', '')).startswith('actions/cache/save@')]
+if saves:
+    problems.append('the save belongs in the calling workflow, where a step can carry timeout-minutes')
+restore = next((s for s in steps if str(s.get('uses', '')).startswith('actions/cache/restore@')), None)
+if restore is None:
+    problems.append('no actions/cache/restore step')
+else:
+    if 'if' in restore:
+        problems.append('restore must run on every event')
+    if not re.fullmatch(r'actions/cache/restore@[0-9a-f]{40}', restore['uses']):
+        problems.append(f"{restore['uses']} is not pinned to a full SHA")
+    if not restore.get('with', {}).get('restore-keys'):
+        problems.append('restore has no restore-keys')
+for name in ('cache-hit', 'cache-key', 'path'):
+    if name not in doc.get('outputs', {}):
+        problems.append(f'missing output {name}')
 sys.exit('; '.join(problems) if problems else 0)
 PYTHON
 then
     pass_case
 else
-    fail_case 'node-pm-cache save/restore steps are misconfigured (see above)'
+    fail_case 'node-pm-cache action is misconfigured (see above)'
 fi
+
+case_start 'no composite action step carries timeout-minutes (the runner rejects the whole job at set-up)'
+offenders="$(ACTIONS_ROOT="$REPO_ROOT/actions" python3 - <<'PYTHON'
+import glob
+import os
+
+import yaml
+
+bad = []
+for path in sorted(glob.glob(os.path.join(os.environ['ACTIONS_ROOT'], '*', 'action.yml'))):
+    runs = yaml.safe_load(open(path, encoding='utf-8')).get('runs', {})
+    for step in runs.get('steps', []) or []:
+        if 'timeout-minutes' in step:
+            bad.append(f"{os.path.basename(os.path.dirname(path))}: {step.get('name', step.get('uses', '?'))}")
+print('\n'.join(bad))
+PYTHON
+)"
+assert_equals '' "$offenders" 'composite steps with timeout-minutes' && pass_case
 
 case_start 'node-pm-cache pins actions/cache to the same SHA as every other use in the repo'
 shas="$(grep -rhoE 'actions/cache/(restore|save)@[0-9a-f]{40}' "$REPO_ROOT/actions" "$REPO_ROOT/.github/workflows" | sed 's/.*@//' | sort -u)"
@@ -168,7 +183,7 @@ PYTHON
 )"
 assert_equals '' "$offenders" 'files using setup-node cache:' && pass_case
 
-case_start 'every workflow that installs with the resolved package manager restores and saves through node-pm-cache'
+case_start 'every node-pm-cache restore is followed by a bounded, non-fatal save that skips pull requests and exact hits'
 missing="$(WORKFLOW_ROOT="$REPO_ROOT" python3 - <<'PYTHON'
 import glob
 import os
@@ -177,19 +192,42 @@ import yaml
 
 root = os.environ['WORKFLOW_ROOT']
 bad = []
-for path in glob.glob(f'{root}/.github/workflows/*.yml'):
+for path in sorted(glob.glob(f'{root}/.github/workflows/*.yml')):
     doc = yaml.safe_load(open(path, encoding='utf-8'))
     for job_id, job in doc.get('jobs', {}).items():
-        modes = [
-            (s.get('with') or {}).get('mode')
-            for s in job.get('steps', [])
-            if 'actions/node-pm-cache@' in str(s.get('uses', ''))
-        ]
-        if modes and modes != ['restore', 'save']:
-            bad.append(f'{os.path.basename(path)}:{job_id}: {modes}')
+        steps = job.get('steps', [])
+        where = f'{os.path.basename(path)}:{job_id}'
+        restores = [s for s in steps if 'actions/node-pm-cache@' in str(s.get('uses', ''))]
+        saves = [s for s in steps if s.get('name') == 'Save package manager cache']
+        if not restores and not saves:
+            continue
+        if len(restores) != 1 or len(saves) != 1:
+            bad.append(f'{where}: {len(restores)} restore(s), {len(saves)} save(s)')
+            continue
+        restore_id = restores[0].get('id')
+        save = saves[0]
+        cond = str(save.get('if', ''))
+        problems = []
+        if not str(save.get('uses', '')).startswith('actions/cache/save@'):
+            problems.append('save is not actions/cache/save')
+        if "github.event_name != 'pull_request'" not in cond:
+            problems.append('save runs on pull requests')
+        if f"steps.{restore_id}.outputs.cache-hit != 'true'" not in cond:
+            problems.append('save re-saves an exact hit')
+        if not save.get('timeout-minutes'):
+            problems.append('save has no timeout-minutes')
+        if save.get('continue-on-error') is not True:
+            problems.append('save is not continue-on-error')
+        w = save.get('with') or {}
+        if w.get('path') != f'${{{{ steps.{restore_id}.outputs.path }}}}' or w.get('key') != f'${{{{ steps.{restore_id}.outputs.cache-key }}}}':
+            problems.append('save path/key are not the restore outputs')
+        if steps.index(save) < steps.index(restores[0]):
+            problems.append('save runs before restore')
+        if problems:
+            bad.append(f"{where}: {', '.join(problems)}")
 print('\n'.join(bad))
 PYTHON
 )"
-assert_equals '' "$missing" 'jobs with an unbalanced restore/save' && pass_case
+assert_equals '' "$missing" 'jobs with a missing or misconfigured save' && pass_case
 
 finish_suite
