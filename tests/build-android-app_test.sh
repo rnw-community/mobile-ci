@@ -267,4 +267,174 @@ else
     pass_case
 fi
 
+# Native compile parallelism. The Android Gradle plugin runs the SDK's ninja
+# directly, and ninja sizes itself from the CPUs the process may be scheduled
+# on, not from the container's cgroup quota: a 4-CPU / 8 GiB runner on a
+# 24-thread host started 26 clang processes per CMake project, four projects
+# at once, and the kernel killed the build. The bound comes from the cgroup
+# and is enforced by a compiler launcher that holds one of N slot locks.
+JOBS_STEP='Bound native compile parallelism to the container limits'
+BUILD_STEP='Build APK (Release)'
+GIB=1073741824
+SLOT_SCRIPT="$REPO_ROOT/actions/build-android-app/scripts/compile-slot.sh"
+
+jobs_cgroup_v2() {
+    mkdir -p "$1"
+    printf 'cpu memory pids\n' > "$1/cgroup.controllers"
+    printf '%s\n' "$2" > "$1/memory.max"
+    printf '%s\n' "$3" > "$1/cpu.max"
+}
+
+run_jobs() {
+    run_step "$workspace" NATIVE_COMPILE_JOBS='' CGROUP_ROOT="$workspace/cgroup" "$@"
+}
+
+case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 4 native jobs at once'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 4 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'memory, not CPUs, bounds the jobs on a runner with more CPUs than memory'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((6 * GIB)) '800000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a fractional CPU quota rounds up and a tiny memory limit still compiles one job'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((3 * GIB)) '150000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 1 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a cgroup v1 runner is bounded the same way'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+mkdir -p "$workspace/cgroup/memory" "$workspace/cgroup/cpu"
+printf '%s\n' $((8 * GIB)) > "$workspace/cgroup/memory/memory.limit_in_bytes"
+printf '200000\n' > "$workspace/cgroup/cpu/cpu.cfs_quota_us"
+printf '100000\n' > "$workspace/cgroup/cpu/cpu.cfs_period_us"
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a runner without cgroup limits leaves native parallelism to ninja'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals '' "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'native-compile-jobs overrides the derived bound'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs NATIVE_COMPILE_JOBS=3
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a native-compile-jobs that is not a positive integer fails closed'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs NATIVE_COMPILE_JOBS=0
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'native-compile-jobs' 'log'; then
+    pass_case
+fi
+
+case_start 'an unreadable memory limit fails closed instead of compiling unbounded'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" 'lots' '400000 100000'
+run_jobs
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" 'memory.max' 'log'; then
+    pass_case
+fi
+
+case_start 'the compile slot launcher never runs more compilers than it has slots'
+slots_dir="$(mktemp -d)"
+probe="$(mktemp -d)"
+mkdir -p "$probe/running"
+cat > "$probe/compiler" <<'COMPILER'
+#!/bin/sh
+touch "$PROBE/running/$$"
+ls "$PROBE/running" | wc -l >> "$PROBE/concurrency"
+sleep 0.3
+rm "$PROBE/running/$$"
+echo ran >> "$PROBE/ran"
+COMPILER
+chmod +x "$probe/compiler"
+pids=''
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=3 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" \
+        sh "$SLOT_SCRIPT" "$probe/compiler" &
+    pids="$pids $!"
+done
+launcher_failed=0
+for pid in $pids; do
+    wait "$pid" || launcher_failed=1
+done
+peak="$(sort -n "$probe/concurrency" 2>/dev/null | tail -1)"
+if assert_equals 0 "$launcher_failed" 'launcher status' \
+    && assert_equals 10 "$(wc -l < "$probe/ran" | tr -d ' ')" 'compilers run' \
+    && [ "${peak:-99}" -le 3 ]; then
+    pass_case
+else
+    [ "$launcher_failed" = 0 ] && fail_case "peak concurrency ${peak:-unknown} exceeds 3 slots"
+fi
+
+case_start "the compile slot launcher passes the compiler's exit status through"
+slots_dir="$(mktemp -d)"
+status=0
+MOBILE_CI_COMPILE_SLOTS=2 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" sh "$SLOT_SCRIPT" sh -c 'exit 7' || status=$?
+if assert_equals 7 "$status" 'exit status'; then
+    pass_case
+fi
+
+build_with_jobs() {
+    workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
+    printf '#!/bin/sh\nenv > "%s/gradle-env"\n' "$workspace" > "$workspace/work/gradlew"
+    chmod +x "$workspace/work/gradlew"
+    run_step "$workspace" GRADLE_TASK=assembleRelease GRADLE_ARGS='' ANDROID_ABIS='' \
+        COMPILE_SLOT_LAUNCHER="$SLOT_SCRIPT" "$@"
+}
+
+case_start 'a bounded build hands every CMake project the compile slot launcher'
+build_with_jobs NATIVE_COMPILE_JOBS=4
+gradle_env="$(cat "$workspace/gradle-env" 2>/dev/null || true)"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$gradle_env" "CMAKE_C_COMPILER_LAUNCHER=$SLOT_SCRIPT" 'gradle env' \
+    && assert_contains "$gradle_env" "CMAKE_CXX_COMPILER_LAUNCHER=$SLOT_SCRIPT" 'gradle env' \
+    && assert_contains "$gradle_env" 'MOBILE_CI_COMPILE_SLOTS=4' 'gradle env' \
+    && assert_contains "$(cat "$workspace/summary")" 'Native compile jobs: 4' 'summary'; then
+    pass_case
+fi
+
+case_start "a bounded build keeps the caller's own compiler launcher behind the slot"
+build_with_jobs NATIVE_COMPILE_JOBS=4 CMAKE_CXX_COMPILER_LAUNCHER=ccache
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/gradle-env")" "CMAKE_CXX_COMPILER_LAUNCHER=$SLOT_SCRIPT;ccache" 'gradle env'; then
+    pass_case
+fi
+
+case_start 'an unbounded build sets no compiler launcher'
+build_with_jobs NATIVE_COMPILE_JOBS=''
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/gradle-env")" 'COMPILER_LAUNCHER' 'gradle env'; then
+    pass_case
+fi
+
 finish_suite

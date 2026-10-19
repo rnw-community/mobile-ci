@@ -54,6 +54,18 @@ inputs:
       value.
     required: false
     default: ''
+  native-compile-jobs:
+    description: >-
+      Most C/C++ compilers the CMake builds inside Gradle may run at once,
+      across every native module. Empty (the default) derives it from the
+      runner's cgroup limits: one job per CPU of quota (cpu.max, or the
+      cgroup v1 CFS quota, rounded up), and one per GiB of memory limit
+      (memory.max, or memory.limit_in_bytes) above a 4 GiB reserve for the
+      Gradle and Kotlin JVMs, whichever is lower, at least 1. A runner with
+      neither limit is left to ninja's own default. Needs CMake 3.17 or later
+      and flock.
+    required: false
+    default: ''
   android-sdk-cache-save:
     description: >-
       'true' (default) saves the Android SDK cache from inside this action
@@ -222,6 +234,92 @@ runs:
               ${{ inputs.gradle-cache-key }}-partial-
               ${{ inputs.gradle-cache-restore-keys }}
 
+    - name: Bound native compile parallelism to the container limits
+      id: native-jobs
+      shell: bash
+      env:
+        NATIVE_COMPILE_JOBS: ${{ inputs.native-compile-jobs }}
+      run: |
+        set -euo pipefail
+        cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
+        v1_unbounded_bytes=1125899906842624
+        reserve_mib=4096
+        memory_bytes=''
+        cpu_quota=''
+        cpu_period=''
+
+        fail() {
+          echo "::error::$1"
+          exit 1
+        }
+
+        is_uint() {
+          case "$1" in
+            '' | *[!0-9]*) return 1 ;;
+          esac
+          return 0
+        }
+
+        if [ -n "$NATIVE_COMPILE_JOBS" ]; then
+          if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
+            fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
+          fi
+          echo "jobs=$NATIVE_COMPILE_JOBS" >> "$GITHUB_OUTPUT"
+          echo "Native compile jobs: $NATIVE_COMPILE_JOBS (native-compile-jobs input)."
+          exit 0
+        fi
+
+        if [ -f "$cgroup_root/cgroup.controllers" ]; then
+          if [ -f "$cgroup_root/memory.max" ]; then
+            value="$(cat "$cgroup_root/memory.max")"
+            if [ "$value" != max ]; then
+              is_uint "$value" || fail "Unparseable $cgroup_root/memory.max '$value'; expected a byte count or 'max'. Refusing to compile native code with a parallelism this step cannot bound."
+              memory_bytes="$value"
+            fi
+          fi
+          if [ -f "$cgroup_root/cpu.max" ]; then
+            read -r cpu_quota cpu_period < "$cgroup_root/cpu.max" || true
+            [ "$cpu_quota" = max ] && cpu_quota=''
+          fi
+        else
+          if [ -f "$cgroup_root/memory/memory.limit_in_bytes" ]; then
+            value="$(cat "$cgroup_root/memory/memory.limit_in_bytes")"
+            is_uint "$value" || fail "Unparseable $cgroup_root/memory/memory.limit_in_bytes '$value'; expected a byte count."
+            [ "$value" -lt "$v1_unbounded_bytes" ] && memory_bytes="$value"
+          fi
+          if [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+            cpu_quota="$(cat "$cgroup_root/cpu/cpu.cfs_quota_us")"
+            cpu_period="$(cat "$cgroup_root/cpu/cpu.cfs_period_us" 2>/dev/null || true)"
+            [ "$cpu_quota" = -1 ] && cpu_quota=''
+          fi
+        fi
+        if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
+          fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
+        fi
+
+        jobs=''
+        basis=''
+        if [ -n "$cpu_quota" ]; then
+          jobs=$(((cpu_quota + cpu_period - 1) / cpu_period))
+          basis="CPU quota $cpu_quota/$cpu_period"
+        fi
+        if [ -n "$memory_bytes" ]; then
+          memory_mib=$((memory_bytes / 1048576))
+          memory_jobs=$(((memory_mib - reserve_mib) / 1024))
+          [ "$memory_jobs" -lt 1 ] && memory_jobs=1
+          if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
+            jobs="$memory_jobs"
+          fi
+          basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB reserve"
+        fi
+
+        echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
+        if [ -n "$jobs" ]; then
+          echo "Native compile jobs: $jobs (derived from the $basis)."
+        else
+          echo "No cgroup CPU or memory limit found; native compile parallelism is left to ninja."
+        fi
+
     - name: Build APK (Release)
       id: build
       shell: bash
@@ -230,6 +328,8 @@ runs:
         GRADLE_TASK: ${{ inputs.gradle-task }}
         GRADLE_ARGS: ${{ inputs.gradle-args }}
         ANDROID_ABIS: ${{ inputs.android-abis }}
+        NATIVE_COMPILE_JOBS: ${{ steps.native-jobs.outputs.jobs }}
+        COMPILE_SLOT_LAUNCHER: ${{ github.action_path }}/scripts/compile-slot.sh
       run: |
         set -euo pipefail
         gradle_args=()
@@ -275,6 +375,14 @@ runs:
           fi
         fi
 
+        if [ -n "$NATIVE_COMPILE_JOBS" ]; then
+          MOBILE_CI_COMPILE_SLOTS="$NATIVE_COMPILE_JOBS"
+          MOBILE_CI_COMPILE_SLOTS_DIR="$(mktemp -d "$RUNNER_TEMP/compile-slots.XXXXXX")"
+          CMAKE_C_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_C_COMPILER_LAUNCHER:+;$CMAKE_C_COMPILER_LAUNCHER}"
+          CMAKE_CXX_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_CXX_COMPILER_LAUNCHER:+;$CMAKE_CXX_COMPILER_LAUNCHER}"
+          export MOBILE_CI_COMPILE_SLOTS MOBILE_CI_COMPILE_SLOTS_DIR CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER
+        fi
+
         build_start=$(date +%s)
         ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
         build_end=$(date +%s)
@@ -282,6 +390,7 @@ runs:
           echo "### Android build (cold — native build ran)"
           echo "Duration: $((build_end - build_start))s"
           echo "ABIs: ${ANDROID_ABIS:-every ABI the project declares}"
+          echo "Native compile jobs: ${NATIVE_COMPILE_JOBS:-unbounded (ninja default)}"
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save the Android SDK
