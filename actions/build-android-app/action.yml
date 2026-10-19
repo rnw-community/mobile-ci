@@ -260,15 +260,6 @@ runs:
           return 0
         }
 
-        if [ -n "$NATIVE_COMPILE_JOBS" ]; then
-          if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
-            fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
-          fi
-          echo "jobs=$NATIVE_COMPILE_JOBS" >> "$GITHUB_OUTPUT"
-          echo "Native compile jobs: $NATIVE_COMPILE_JOBS (native-compile-jobs input)."
-          exit 0
-        fi
-
         if [ -f "$cgroup_root/cgroup.controllers" ]; then
           if [ -f "$cgroup_root/memory.max" ]; then
             value="$(cat "$cgroup_root/memory.max")"
@@ -312,13 +303,66 @@ runs:
           fi
           basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB reserve"
         fi
+        if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
+          if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
+            fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
+          fi
+          jobs="$NATIVE_COMPILE_JOBS"
+          basis='native-compile-jobs input'
+        fi
 
         echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
-        if [ -n "$jobs" ]; then
-          echo "Native compile jobs: $jobs (derived from the $basis)."
-        else
+        if [ -z "$jobs" ]; then
           echo "No cgroup CPU or memory limit found; native compile parallelism is left to ninja."
+          exit 0
         fi
+
+        slots_dir="$RUNNER_TEMP/mobile-ci-compile-slots"
+        launcher="$slots_dir/compile-slot.sh"
+        mkdir -p "$slots_dir"
+        cat > "$launcher" <<'COMPILE_SLOT'
+        #!/bin/sh
+        set -eu
+        slots="${MOBILE_CI_COMPILE_SLOTS:?MOBILE_CI_COMPILE_SLOTS is not set}"
+        dir="${MOBILE_CI_COMPILE_SLOTS_DIR:?MOBILE_CI_COMPILE_SLOTS_DIR is not set}"
+        try_slots() {
+          slot=0
+          while [ "$slot" -lt "$slots" ]; do
+            exec 9> "$dir/slot.$slot"
+            if flock -n 9; then
+              return 0
+            fi
+            exec 9>&-
+            slot=$((slot + 1))
+          done
+          return 1
+        }
+        if ! try_slots; then
+          exec 8> "$dir/gate"
+          flock 8
+          until try_slots; do
+            sleep 0.2
+          done
+          exec 8>&-
+        fi
+        exec "$@"
+        COMPILE_SLOT
+        chmod +x "$launcher"
+
+        chain_launcher() {
+          case "$1" in
+            "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
+            '') printf '%s' "$launcher" ;;
+            *) printf '%s;%s' "$launcher" "$1" ;;
+          esac
+        }
+        {
+          echo "MOBILE_CI_COMPILE_SLOTS=$jobs"
+          echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
+          echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+        } >> "$GITHUB_ENV"
+        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher."
 
     - name: Build APK (Release)
       id: build
@@ -328,8 +372,6 @@ runs:
         GRADLE_TASK: ${{ inputs.gradle-task }}
         GRADLE_ARGS: ${{ inputs.gradle-args }}
         ANDROID_ABIS: ${{ inputs.android-abis }}
-        NATIVE_COMPILE_JOBS: ${{ steps.native-jobs.outputs.jobs }}
-        COMPILE_SLOT_LAUNCHER: ${{ github.action_path }}/scripts/compile-slot.sh
       run: |
         set -euo pipefail
         gradle_args=()
@@ -375,15 +417,6 @@ runs:
           fi
         fi
 
-        native_compile_jobs="${NATIVE_COMPILE_JOBS:-}"
-        if [ -n "$native_compile_jobs" ]; then
-          MOBILE_CI_COMPILE_SLOTS="$native_compile_jobs"
-          MOBILE_CI_COMPILE_SLOTS_DIR="$(mktemp -d "$RUNNER_TEMP/compile-slots.XXXXXX")"
-          CMAKE_C_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_C_COMPILER_LAUNCHER:+;$CMAKE_C_COMPILER_LAUNCHER}"
-          CMAKE_CXX_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_CXX_COMPILER_LAUNCHER:+;$CMAKE_CXX_COMPILER_LAUNCHER}"
-          export MOBILE_CI_COMPILE_SLOTS MOBILE_CI_COMPILE_SLOTS_DIR CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER
-        fi
-
         build_start=$(date +%s)
         ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
         build_end=$(date +%s)
@@ -391,7 +424,7 @@ runs:
           echo "### Android build (cold — native build ran)"
           echo "Duration: $((build_end - build_start))s"
           echo "ABIs: ${ANDROID_ABIS:-every ABI the project declares}"
-          echo "Native compile jobs: ${native_compile_jobs:-unbounded (ninja default)}"
+          echo "Native compile jobs: ${MOBILE_CI_COMPILE_SLOTS:-unbounded (ninja default)}"
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save the Android SDK

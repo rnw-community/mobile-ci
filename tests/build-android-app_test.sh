@@ -276,7 +276,6 @@ fi
 JOBS_STEP='Bound native compile parallelism to the container limits'
 BUILD_STEP='Build APK (Release)'
 GIB=1073741824
-SLOT_SCRIPT="$REPO_ROOT/actions/build-android-app/scripts/compile-slot.sh"
 
 jobs_cgroup_v2() {
     mkdir -p "$1"
@@ -364,8 +363,16 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+launcher_from_step() {
+    workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+    jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+    run_jobs NATIVE_COMPILE_JOBS="$1"
+    slot_launcher="$workspace/runner-temp/mobile-ci-compile-slots/compile-slot.sh"
+    slots_dir="$workspace/runner-temp/mobile-ci-compile-slots"
+}
+
 case_start 'the compile slot launcher never runs more compilers than it has slots'
-slots_dir="$(mktemp -d)"
+launcher_from_step 3
 probe="$(mktemp -d)"
 mkdir -p "$probe/running"
 cat > "$probe/compiler" <<'COMPILER'
@@ -380,7 +387,7 @@ chmod +x "$probe/compiler"
 pids=''
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=3 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" \
-        sh "$SLOT_SCRIPT" "$probe/compiler" &
+        "$slot_launcher" "$probe/compiler" &
     pids="$pids $!"
 done
 launcher_failed=0
@@ -397,43 +404,66 @@ else
 fi
 
 case_start "the compile slot launcher passes the compiler's exit status through"
-slots_dir="$(mktemp -d)"
+launcher_from_step 2
 status=0
-MOBILE_CI_COMPILE_SLOTS=2 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" sh "$SLOT_SCRIPT" sh -c 'exit 7' || status=$?
+MOBILE_CI_COMPILE_SLOTS=2 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" "$slot_launcher" sh -c 'exit 7' || status=$?
 if assert_equals 7 "$status" 'exit status'; then
     pass_case
 fi
 
-build_with_jobs() {
-    workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
-    printf '#!/bin/sh\nenv > "%s/gradle-env"\n' "$workspace" > "$workspace/work/gradlew"
-    chmod +x "$workspace/work/gradlew"
-    run_step "$workspace" GRADLE_TASK=assembleRelease GRADLE_ARGS='' ANDROID_ABIS='' \
-        COMPILE_SLOT_LAUNCHER="$SLOT_SCRIPT" "$@"
-}
-
-case_start 'a bounded build hands every CMake project the compile slot launcher'
-build_with_jobs NATIVE_COMPILE_JOBS=4
-gradle_env="$(cat "$workspace/gradle-env" 2>/dev/null || true)"
+case_start 'a bounded runner hands every later CMake configure in the job the compile slot launcher'
+launcher_from_step ''
+job_env="$(cat "$workspace/env")"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$gradle_env" "CMAKE_C_COMPILER_LAUNCHER=$SLOT_SCRIPT" 'gradle env' \
-    && assert_contains "$gradle_env" "CMAKE_CXX_COMPILER_LAUNCHER=$SLOT_SCRIPT" 'gradle env' \
-    && assert_contains "$gradle_env" 'MOBILE_CI_COMPILE_SLOTS=4' 'gradle env' \
+    && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
+    && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
+    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=4' 'job env' \
+    && assert_contains "$job_env" "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir" 'job env'; then
+    pass_case
+fi
+
+case_start "the caller's own compiler launcher runs behind the slot, and a second run does not nest the slot"
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+slot_launcher="$workspace/runner-temp/mobile-ci-compile-slots/compile-slot.sh"
+run_jobs CMAKE_CXX_COMPILER_LAUNCHER=ccache CMAKE_C_COMPILER_LAUNCHER="$slot_launcher;ccache"
+job_env="$(cat "$workspace/env")"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
+    && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
+    && assert_not_contains "$job_env" "$slot_launcher;$slot_launcher" 'job env'; then
+    pass_case
+fi
+
+case_start 'an unbounded runner sets no compiler launcher'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'COMPILER_LAUNCHER' 'job env'; then
+    pass_case
+fi
+
+case_start 'the build summary names the native compile bound'
+workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
+printf '#!/bin/sh\n' > "$workspace/work/gradlew"
+chmod +x "$workspace/work/gradlew"
+run_step "$workspace" GRADLE_TASK=assembleRelease GRADLE_ARGS='' ANDROID_ABIS='' MOBILE_CI_COMPILE_SLOTS=4
+if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/summary")" 'Native compile jobs: 4' 'summary'; then
     pass_case
 fi
 
-case_start "a bounded build keeps the caller's own compiler launcher behind the slot"
-build_with_jobs NATIVE_COMPILE_JOBS=4 CMAKE_CXX_COMPILER_LAUNCHER=ccache
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/gradle-env")" "CMAKE_CXX_COMPILER_LAUNCHER=$SLOT_SCRIPT;ccache" 'gradle env'; then
-    pass_case
-fi
-
-case_start 'an unbounded build sets no compiler launcher'
-build_with_jobs NATIVE_COMPILE_JOBS=''
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_not_contains "$(cat "$workspace/gradle-env")" 'COMPILER_LAUNCHER' 'gradle env'; then
+case_start 'the eas build --local Android lanes bound native compiles with the same step'
+differing=''
+for lane in native-publish.yml:android-publish native-dev-release.yml:android-dev-release; do
+    if [ "$(extract_step_script "$ACTION" "$JOBS_STEP")" != "$(extract_workflow_step_script "$REPO_ROOT/.github/workflows/${lane%%:*}" "${lane#*:}" "$JOBS_STEP" 2>&1)" ]; then
+        differing="$differing ${lane%%:*}"
+    fi
+done
+if [ -n "$differing" ]; then
+    fail_case "'$JOBS_STEP' is missing from, or differs from build-android-app's in:$differing"
+else
     pass_case
 fi
 
