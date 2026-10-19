@@ -577,6 +577,14 @@ on:
                 type: number
                 required: false
                 default: 75
+            tolerate-test-failures:
+                description: >-
+                    true keeps the test job green when the Maestro run step fails, for a
+                    time-boxed quarantine of a known-broken suite. The failure is still
+                    reported as a ::warning:: on the job. Defaults to false.
+                type: boolean
+                required: false
+                default: false
 
         secrets:
             build-secrets-env:
@@ -1232,7 +1240,9 @@ jobs:
                   append-to: ${{ inputs.maestro-env }}
 
             - name: run-maestro-ios
+              id: run-maestro-ios
               if: inputs.ios-driver == 'local'
+              continue-on-error: ${{ inputs.tolerate-test-failures }}
               uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.1.0 # v4.1.0
               with:
                   app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
@@ -1270,7 +1280,9 @@ jobs:
                   retention-days: ${{ inputs.artifact-retention-days }}
 
             - name: run-maestro-device-cloud
+              id: run-maestro-device-cloud
               if: inputs.ios-driver == 'device-cloud'
+              continue-on-error: ${{ inputs.tolerate-test-failures }}
               uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.1.0 # v4.1.0
               with:
                   platform: ios
@@ -1296,6 +1308,13 @@ jobs:
                   artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
                   redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
+
+            - name: Report a tolerated Maestro failure
+              if: steps.run-maestro-ios.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
 
             - name: Diagnose the runner's bundled Node after a failure
               if: failure() && runner.os == 'macOS'
