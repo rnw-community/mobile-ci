@@ -60,9 +60,9 @@ inputs:
       across every native module. Empty (the default) derives it from the
       runner's cgroup limits: one job per CPU of quota (cpu.max, or the
       cgroup v1 CFS quota, rounded up), and one per GiB of memory limit
-      (memory.max, or memory.limit_in_bytes) above a 4 GiB reserve for the
-      Gradle and Kotlin JVMs, whichever is lower, at least 1. A runner with
-      neither limit is left to ninja's own default. Needs CMake 3.17 or later
+      (memory.max, or memory.limit_in_bytes) above a 5 GiB reserve for the
+      Gradle and Kotlin JVMs (and eas-cli), whichever is lower, at least 1. A
+      runner with neither limit is left to ninja's own default. Needs CMake 3.17 or later
       and flock.
     required: false
     default: ''
@@ -243,7 +243,7 @@ runs:
         set -euo pipefail
         cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
         v1_unbounded_bytes=1125899906842624
-        reserve_mib=4096
+        reserve_mib=5120
         memory_bytes=''
         cpu_quota=''
         cpu_period=''

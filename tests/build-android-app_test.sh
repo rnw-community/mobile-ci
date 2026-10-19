@@ -288,18 +288,18 @@ run_jobs() {
     run_step "$workspace" NATIVE_COMPILE_JOBS='' CGROUP_ROOT="$workspace/cgroup" "$@"
 }
 
-case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 4 native jobs at once'
+case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 3 native jobs at once, memory bounding it below the CPUs'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
 jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
 run_jobs
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_equals 4 "$(step_output "$workspace" jobs)" 'jobs'; then
+    && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs'; then
     pass_case
 fi
 
 case_start 'memory, not CPUs, bounds the jobs on a runner with more CPUs than memory'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
-jobs_cgroup_v2 "$workspace/cgroup" $((6 * GIB)) '800000 100000'
+jobs_cgroup_v2 "$workspace/cgroup" $((7 * GIB)) '800000 100000'
 run_jobs
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
@@ -434,7 +434,7 @@ job_env="$(cat "$workspace/env")"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
     && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
-    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=4' 'job env' \
+    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=3' 'job env' \
     && assert_contains "$job_env" "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir" 'job env'; then
     pass_case
 fi

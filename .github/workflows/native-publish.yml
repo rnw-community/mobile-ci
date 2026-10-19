@@ -1878,7 +1878,7 @@ jobs:
                   set -euo pipefail
                   cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
                   v1_unbounded_bytes=1125899906842624
-                  reserve_mib=4096
+                  reserve_mib=5120
                   memory_bytes=''
                   cpu_quota=''
                   cpu_period=''
