@@ -52,12 +52,12 @@ jobs:
     distinct-keys:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.1.0 # v4.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.2.0 # v4.2.0
         with:
             platform: ios
             targets: >-
                 [{"name":"brand-a","appDir":"apps/mobile","appId":"com.a"},{"name":"brand-b","appDir":"apps/mobile","appId":"com.b"}]
     publish:
         needs: distinct-keys
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.1.0 # v4.1.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.2.0 # v4.2.0
 ```
