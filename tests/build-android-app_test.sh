@@ -411,6 +411,23 @@ if assert_equals 7 "$status" 'exit status'; then
     pass_case
 fi
 
+case_start 'a long-lived process a chained launcher leaves behind does not keep the slot'
+launcher_from_step 1
+probe="$(mktemp -d)"
+cat > "$probe/daemonizing" <<'DAEMON'
+#!/bin/sh
+sleep 30 &
+echo ran >> "$PROBE/ran"
+DAEMON
+chmod +x "$probe/daemonizing"
+PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=1 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" "$slot_launcher" "$probe/daemonizing" > /dev/null
+status=0
+PROBE="$probe" MOBILE_CI_COMPILE_SLOTS=1 MOBILE_CI_COMPILE_SLOTS_DIR="$slots_dir" timeout 5 "$slot_launcher" "$probe/daemonizing" > /dev/null || status=$?
+if assert_equals 0 "$status" 'second compile status (124 means it waited on a slot the first one leaked)' \
+    && assert_equals 2 "$(wc -l < "$probe/ran" | tr -d ' ')" 'compilers run'; then
+    pass_case
+fi
+
 case_start 'a bounded runner hands every later CMake configure in the job the compile slot launcher'
 launcher_from_step ''
 job_env="$(cat "$workspace/env")"

@@ -1980,7 +1980,9 @@ jobs:
                     done
                     exec 8>&-
                   fi
-                  exec "$@"
+                  status=0
+                  "$@" 9>&- || status=$?
+                  exit "$status"
                   COMPILE_SLOT
                   chmod +x "$launcher"
 
