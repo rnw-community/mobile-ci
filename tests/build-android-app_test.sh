@@ -273,7 +273,7 @@ fi
 # 24-thread host started 26 clang processes per CMake project, four projects
 # at once, and the kernel killed the build. The bound comes from the cgroup
 # and is enforced by a compiler launcher that holds one of N slot locks.
-JOBS_STEP='Bound native compile parallelism to the container limits'
+JOBS_STEP='Fit the native build into the container limits'
 BUILD_STEP='Build APK (Release)'
 GIB=1073741824
 
@@ -449,6 +449,35 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
     && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher;ccache" 'job env' \
     && assert_not_contains "$job_env" "$slot_launcher;$slot_launcher" 'job env'; then
+    pass_case
+fi
+
+G1_RETURN='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+
+case_start 'a bounded runner makes idle JVMs hand their unused heap back, keeping the fleet JAVA_TOOL_OPTIONS'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs JAVA_TOOL_OPTIONS='-XX:MaxRAM=8192m -XX:ActiveProcessorCount=4'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/env")" "JAVA_TOOL_OPTIONS=-XX:MaxRAM=8192m -XX:ActiveProcessorCount=4 $G1_RETURN" 'job env'; then
+    pass_case
+fi
+
+case_start 'a second run does not repeat the JVM heap-return options'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs JAVA_TOOL_OPTIONS="-XX:MaxRAM=8192m $G1_RETURN"
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'JAVA_TOOL_OPTIONS' 'job env'; then
+    pass_case
+fi
+
+case_start 'an unbounded runner leaves JAVA_TOOL_OPTIONS alone'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs JAVA_TOOL_OPTIONS='-XX:MaxRAM=8192m'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'JAVA_TOOL_OPTIONS' 'job env'; then
     pass_case
 fi
 
