@@ -375,8 +375,9 @@ runs:
           fi
         fi
 
-        if [ -n "$NATIVE_COMPILE_JOBS" ]; then
-          MOBILE_CI_COMPILE_SLOTS="$NATIVE_COMPILE_JOBS"
+        native_compile_jobs="${NATIVE_COMPILE_JOBS:-}"
+        if [ -n "$native_compile_jobs" ]; then
+          MOBILE_CI_COMPILE_SLOTS="$native_compile_jobs"
           MOBILE_CI_COMPILE_SLOTS_DIR="$(mktemp -d "$RUNNER_TEMP/compile-slots.XXXXXX")"
           CMAKE_C_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_C_COMPILER_LAUNCHER:+;$CMAKE_C_COMPILER_LAUNCHER}"
           CMAKE_CXX_COMPILER_LAUNCHER="$COMPILE_SLOT_LAUNCHER${CMAKE_CXX_COMPILER_LAUNCHER:+;$CMAKE_CXX_COMPILER_LAUNCHER}"
@@ -390,7 +391,7 @@ runs:
           echo "### Android build (cold — native build ran)"
           echo "Duration: $((build_end - build_start))s"
           echo "ABIs: ${ANDROID_ABIS:-every ABI the project declares}"
-          echo "Native compile jobs: ${NATIVE_COMPILE_JOBS:-unbounded (ninja default)}"
+          echo "Native compile jobs: ${native_compile_jobs:-unbounded (ninja default)}"
         } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Save the Android SDK
