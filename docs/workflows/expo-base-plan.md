@@ -46,7 +46,7 @@ legitimate dedupe): the error names both targets, the key and the fingerprint
 sources they share. See [docs/repack.md](../repack.md#targets-that-differ-only-in-brand-assets-or-per-target-config)
 for the `extraSources` fix and
 [`assert-distinct-fingerprints.yml`](assert-distinct-fingerprints.md) for the same
-check ahead of a build pipeline.
+check ahead of a build pipeline. When no target declares an `appId` (the `seed-native-cache.yml` target shape) there is nothing to prove distinct, so the comparison is skipped with a notice; the e2e and screenshot callers that consume those bases still run it with their `appId`s. A mix of targets with and without `appId` fails.
 
 A collecting job then folds every target's decision into the `native-targets`
 output. One plan per target is required: a plan that never arrived is not an

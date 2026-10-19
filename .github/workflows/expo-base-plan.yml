@@ -726,3 +726,4 @@ jobs:
               with:
                   platform: ${{ inputs.platform }}
                   plans: ${{ steps.collect.outputs.plans }}
+                  require-app-id: false
