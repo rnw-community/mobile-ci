@@ -453,10 +453,13 @@ runs:
         BUILD_OUTCOME: ${{ steps.build.outcome }}
         RUN_ID: ${{ github.run_id }}
         RUN_ATTEMPT: ${{ github.run_attempt }}
+        EVENT_NAME: ${{ github.event_name }}
       run: |
         set -euo pipefail
         key=''
-        if [ "$CACHE_HIT" != 'true' ]; then
+        if [ "$EVENT_NAME" = 'pull_request' ]; then
+          echo 'Pull request: the Gradle cache is restored but not saved; a pull-request save is scoped to its own ref and uploads gigabytes no other run can restore.'
+        elif [ "$CACHE_HIT" != 'true' ]; then
           case "$BUILD_OUTCOME" in
             success)
               key="$CACHE_KEY"

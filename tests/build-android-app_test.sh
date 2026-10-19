@@ -16,7 +16,7 @@ KEY='gradle-bare-Linux-abc123'
 
 choose() {
     workspace="$(new_workspace "$ACTION" "$STEP")"
-    run_step "$workspace" CACHE_KEY="$KEY" RUN_ID='777' RUN_ATTEMPT='2' "$@"
+    run_step "$workspace" CACHE_KEY="$KEY" RUN_ID='777' RUN_ATTEMPT='2' EVENT_NAME='push' "$@"
 }
 
 case_start 'a successful build on a cache miss saves the exact key'
@@ -53,6 +53,13 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_equals '' "$(step_output "$workspace" key)" 'save key'; then
     pass_case
 fi
+
+case_start 'a pull request saves no Gradle cache, even on a miss or a failure'
+for outcome in success failure cancelled; do
+    choose BUILD_OUTCOME="$outcome" CACHE_HIT='false' EVENT_NAME='pull_request'
+    assert_equals 0 "$STEP_STATUS" "step status ($outcome)" \
+        && assert_equals '' "$(step_output "$workspace" key)" "save key ($outcome)" || break
+done && pass_case
 
 case_start 'a build that never ran saves nothing'
 choose BUILD_OUTCOME='skipped' CACHE_HIT=''
