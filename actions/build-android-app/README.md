@@ -130,6 +130,11 @@ again — the cache never warmed. Now the save step runs `if: always()`:
 | success                 | yes                      | nothing (already warm)                     |
 | failure / cancelled     | no                       | `<gradle-cache-key>-partial-<run id>-<attempt>` |
 | failure / cancelled     | yes                      | nothing                                    |
+
+On `pull_request` events nothing is saved, whatever the outcome: a pull-request
+save is scoped to that ref, so no other run can restore it, and the multi-gigabyte
+upload can take most of the job's timeout. Pull requests restore what
+default-branch builds and the warm-up saved.
 | never ran               | —                        | nothing                                    |
 
 The restore tries `<gradle-cache-key>` exactly, then the newest
