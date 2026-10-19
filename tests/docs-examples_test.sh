@@ -93,6 +93,11 @@ MARKDOWN
 expect_rejected 'a Markdown yaml block calling an action that does not exist is rejected' \
     "$scratch/missing-target.md" 'not a workflow_call workflow or action at this commit'
 
+sed '/^        secrets:$/,/^            EXPO_TOKEN: /d' \
+    "$REPO_ROOT/docs/examples/private-multi-brand-expo-app/eas-channel-cleanup.yml" > "$scratch/no-secrets.yml"
+expect_rejected 'an example omitting the secrets: block of a workflow with a required secret is rejected' \
+    "$scratch/no-secrets.yml" "requires secret 'EXPO_TOKEN'"
+
 mkdir -p "$scratch/docs/workflows"
 cat > "$scratch/docs/workflows/pr-closed-cleanup-reusable.md" <<'MARKDOWN'
 ## Examples

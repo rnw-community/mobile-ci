@@ -121,11 +121,25 @@ permissions:
     contents: read
 jobs:
     cleanup:
+        if: github.event_name == 'pull_request'
         uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             channel-template: myapp-pr-{number}
-            sweep-pattern: ${{ github.event_name == 'pull_request' && '' || 'myapp-rc-*' }}
+            protected-channels: |
+                production
+                main
+                *-production
+            install-command: corepack enable && pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    sweep:
+        if: github.event_name != 'pull_request'
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            channel-template: ''
+            sweep-pattern: myapp-rc-*
             protected-channels: |
                 production
                 main
@@ -134,6 +148,10 @@ jobs:
         secrets:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 ```
+
+The sweep is its own job rather than a `sweep-pattern` expression: in
+`${{ github.event_name == 'pull_request' && '' || 'rc-*' }}` the empty string
+is falsy, so a pull-request close would sweep too.
 
 Run once with `dry-run: true` and read the log before letting it delete.
 

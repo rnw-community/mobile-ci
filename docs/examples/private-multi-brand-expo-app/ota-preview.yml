@@ -9,8 +9,10 @@
 # them with distribution: eas).
 #
 # One call per pull request: the comment has one OTA section per platform, so
-# a brand matrix here would overwrite itself. Preview the brand the development
-# profile builds; switch brands in the development build, not in CI.
+# a brand matrix here would overwrite itself. It previews the default brand,
+# under the same eas.json profile (development-acme) dev-build.yml builds that
+# brand's development build with, so the runtime versions match and the
+# comment finds that build.
 name: OTA preview
 
 on:
@@ -35,9 +37,9 @@ jobs:
             # The profile the development build was built with: the update is
             # evaluated under its env and EAS environment, and its runtime
             # version is resolved the same way.
-            eas-profile: development
+            eas-profile: development-acme
             dev-build-source: eas
-            dev-build-profile: development
+            dev-build-profile: development-acme
             install-command: pnpm install --frozen-lockfile
         secrets:
             # A preview-scoped token. The production token lives in the

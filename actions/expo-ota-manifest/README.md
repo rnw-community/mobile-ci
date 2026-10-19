@@ -57,16 +57,30 @@ what `github-release-publish` uploads.
 
 ## Example
 
+The runtime versions must be what the development build's own
+`expo-updates` resolves, so take them from
+[`ota-runtime-version`](../ota-runtime-version/README.md), never from a
+`native-fingerprint` hash:
+
 ```yaml
+- uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.2.0 # v4.2.0
+  id: runtime
+  with:
+      app-dir: apps/mobile
+      eas-profile: development
+
 - uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.2.0 # v4.2.0
   id: manifest
   with:
-      dist-dir: dist
+      dist-dir: apps/mobile/dist
       public-base-url: https://example.github.io/app/previews/pr-42
-      runtime-version-ios: ${{ steps.fingerprint-ios.outputs.hash }}
-      runtime-version-android: ${{ steps.fingerprint-android.outputs.hash }}
+      runtime-version-ios: ${{ steps.runtime.outputs.ios-runtime-version }}
+      runtime-version-android: ${{ steps.runtime.outputs.android-runtime-version }}
 
-- run: |
-      echo "iOS: ${{ steps.manifest.outputs.url-ios }}"
-      echo "Android: ${{ steps.manifest.outputs.url-android }}"
+- env:
+      URL_IOS: ${{ steps.manifest.outputs.url-ios }}
+      URL_ANDROID: ${{ steps.manifest.outputs.url-android }}
+  run: |
+      echo "iOS: $URL_IOS"
+      echo "Android: $URL_ANDROID"
 ```

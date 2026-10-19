@@ -103,7 +103,11 @@ def check_call(where, node, strict):
             if strict:
                 for key in sorted(spec['required-secrets'] - set(secrets)):
                     problems.append(f"{where}: {path} requires secret '{key}'")
-        elif secrets is not None and secrets != 'inherit':
+        elif secrets is None:
+            if strict:
+                for key in sorted(spec['required-secrets']):
+                    problems.append(f"{where}: {path} requires secret '{key}'")
+        elif secrets != 'inherit':
             problems.append(f'{where}: {path} has a secrets: that is neither a mapping nor inherit')
 
 

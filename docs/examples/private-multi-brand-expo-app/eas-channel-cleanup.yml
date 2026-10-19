@@ -19,13 +19,34 @@ permissions: {}
 
 jobs:
     cleanup:
+        if: github.event_name == 'pull_request'
         permissions:
             contents: read
         uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
         with:
             app-dir: apps/mobile
             channel-template: pr-{number}
-            sweep-pattern: ${{ github.event_name == 'pull_request' && '' || 'rc-*' }}
+            protected-channels: |
+                production
+                production-*
+                main
+                development
+            install-command: corepack enable && pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}
+
+    # A separate job, not a sweep-pattern expression: in
+    # `event_name == 'pull_request' && '' || 'rc-*'` the empty string is falsy,
+    # so a pull-request close would sweep too.
+    sweep:
+        if: github.event_name != 'pull_request'
+        permissions:
+            contents: read
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        with:
+            app-dir: apps/mobile
+            channel-template: ''
+            sweep-pattern: rc-*
             max-age-days: 30
             # Replacing the list replaces its defaults: production and main
             # are listed again.
