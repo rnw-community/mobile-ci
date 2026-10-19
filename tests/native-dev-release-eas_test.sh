@@ -154,6 +154,19 @@ if assert_equals 1 "$STEP_STATUS" 'status' \
     pass_case
 fi
 
+for job in ios-dev-release android-dev-release; do
+    case_start "$job: a build page followed by an injected line fails closed, never reaching GITHUB_OUTPUT"
+    workspace="$(new_workflow_workspace "$WORKFLOW" "$job" "$DISTRIBUTE")"
+    stub_upload "jq -nc --arg url '${BUILD_PAGE}'\$'\\n''build-id=injected' '{url: \$url}'"
+    : > "$workspace/runner-temp/app.bin"
+    run_step "$workspace" EAS_CLI_VERSION=20.5.1 PLATFORM="${job%%-*}" BUILD_LOCATION=local \
+        ARTIFACT_PATH="$workspace/runner-temp/app.bin" BUILD_JSON='' FAKE_NPX_ARGS="$workspace/npx-args"
+    if assert_equals 1 "$STEP_STATUS" 'status' \
+        && assert_equals '' "$(cat "$workspace/outputs" 2>/dev/null)" 'no output'; then
+        pass_case
+    fi
+done
+
 case_start 'eas upload printing non-JSON fails closed'
 workspace="$(new_workflow_workspace "$WORKFLOW" ios-dev-release "$DISTRIBUTE")"
 stub_upload "echo 'Shareable link to the build: ${BUILD_PAGE}'"

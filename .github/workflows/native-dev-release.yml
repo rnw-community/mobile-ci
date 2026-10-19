@@ -757,7 +757,8 @@ jobs:
                       exit 1
                     fi
                   fi
-                  if ! printf '%s\n' "$install_url" | grep -Eqx 'https://expo\.dev/accounts/[^/]+/projects/[^/]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'; then
+                  build_page_re='^https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                  if ! [[ "$install_url" =~ $build_page_re ]]; then
                     echo "::error::'$install_url' is not an EAS build page; refusing to hand testers a link nothing proves installs this build."
                     exit 1
                   fi
@@ -1501,7 +1502,8 @@ jobs:
                       exit 1
                     fi
                   fi
-                  if ! printf '%s\n' "$install_url" | grep -Eqx 'https://expo\.dev/accounts/[^/]+/projects/[^/]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'; then
+                  build_page_re='^https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                  if ! [[ "$install_url" =~ $build_page_re ]]; then
                     echo "::error::'$install_url' is not an EAS build page; refusing to hand testers a link nothing proves installs this build."
                     exit 1
                   fi
