@@ -59,7 +59,7 @@ the same in a workflow of your own:
   if: github.event_name != 'pull_request' && steps.build.outputs.android-sdk-cache-hit != 'true'
   continue-on-error: true
   timeout-minutes: 10
-  uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+  uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
   with:
       path: ${{ steps.build.outputs.android-sdk-cache-paths }}
       key: ${{ steps.build.outputs.android-sdk-cache-key }}

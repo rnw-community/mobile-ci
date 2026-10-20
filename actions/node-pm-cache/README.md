@@ -53,7 +53,7 @@ Call it before installing; the calling workflow saves after installing (see
 - run: pnpm install --frozen-lockfile
 - name: Save package manager cache
   if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
-  uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+  uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
   timeout-minutes: 10
   continue-on-error: true
   with:
