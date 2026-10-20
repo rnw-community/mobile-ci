@@ -106,7 +106,17 @@ The same step keeps the JVMs small beside the compilers:
   to `GRADLE_OPTS`, so Kotlin compiles inside the Gradle daemon's own heap
   instead of in one Kotlin daemon per Kotlin compiler version, each sized like
   the Gradle daemon and idling through the native phase. A `GRADLE_OPTS` that
-  already sets `kotlin.compiler.execution.strategy` is kept as is.
+  already sets `kotlin.compiler.execution.strategy` is kept as is, so a project
+  can opt out by exporting
+  `GRADLE_OPTS=-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon`
+  (through a reusable workflow's `build-env`). The compiler's classes now load
+  into the Gradle daemon's metaspace: a React Native app's daemon peaks at the
+  template's `-XX:MaxMetaspaceSize=512m` and Gradle may log *The Daemon will
+  expire after the build after running out of JVM Metaspace*, which is harmless
+  for a single-use CI daemon. A project that fails with
+  `OutOfMemoryError: Metaspace` raises `-XX:MaxMetaspaceSize` in its own
+  `org.gradle.jvmargs`; the step leaves those arguments alone, since any
+  override would replace them whole.
 - It appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
   -XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
   already sets there, so an idle JVM runs a periodic GC and returns its free
