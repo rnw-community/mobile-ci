@@ -177,9 +177,12 @@ called workflow's jobs request — see the table in
   `flowsDir`, `tolerateTestFailures` and `buildStrategy` in `targets[]`, so one
   call can cover a monorepo with bare and Expo apps. Native compile slots are
   sized by memory per heavy translation unit (`native-compile-memory-per-job`,
-  default 3584 MiB) and Kotlin compiles in-process on bounded runners, so a cold
-  react-native-skia build fits 8 GiB without app-level workarounds; such cold
+  default 3584 MiB), so a cold react-native-skia build fits 8 GiB; such cold
   native builds run with fewer parallel compiles and take a few minutes longer.
+  Its in-process Kotlin ran an Expo app's Gradle daemon out of metaspace on the
+  template's 512 MiB, so on v4.3.0 an Expo app still needed a raised
+  `MaxMetaspaceSize` or a `kotlin.compiler.execution.strategy=daemon` opt-out;
+  use v4.3.1.
 
 No input was removed or had its default changed after v4.0.0, so within v4
 bumping the pin is the whole migration.

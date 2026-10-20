@@ -343,12 +343,13 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
-case_start 'native-compile-memory-per-job resizes the memory bound'
+case_start 'native-compile-memory-per-job resizes the memory bound above a 5 GiB reserve for the Gradle daemon and the capped Kotlin daemon'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
 jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
-run_jobs NATIVE_COMPILE_MEMORY_PER_JOB=2048
+run_jobs NATIVE_COMPILE_MEMORY_PER_JOB=1024
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs' \
+    && assert_contains "$(cat "$workspace/log")" 'less a 5120 MiB JVM reserve' 'log'; then
     pass_case
 fi
 
@@ -522,20 +523,31 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
-KOTLIN_IN_PROCESS='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
+KOTLIN_DAEMON_CAP='-Dkotlin.daemon.jvm.options=-Xmx1536m'
 
-case_start 'a bounded runner compiles Kotlin inside the Gradle daemon instead of in separate Kotlin daemons, keeping the caller GRADLE_OPTS'
+case_start 'a bounded runner caps the Kotlin daemon heap through GRADLE_OPTS, keeping the caller GRADLE_OPTS and the Kotlin execution strategy'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
 jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
 run_jobs GRADLE_OPTS='-Dorg.gradle.caching=true'
+job_env="$(cat "$workspace/env")"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_contains "$(cat "$workspace/env")" "GRADLE_OPTS=-Dorg.gradle.caching=true $KOTLIN_IN_PROCESS" 'job env'; then
+    && assert_contains "$job_env" "GRADLE_OPTS=-Dorg.gradle.caching=true $KOTLIN_DAEMON_CAP" 'job env' \
+    && assert_not_contains "$job_env" 'kotlin.compiler.execution.strategy' 'job env'; then
     pass_case
 fi
 
-case_start "a caller's own Kotlin execution strategy in GRADLE_OPTS is kept, and a second run adds nothing"
+case_start "a caller's own Kotlin execution strategy still gets the Kotlin daemon cap"
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs GRADLE_OPTS='-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/env")" "GRADLE_OPTS=-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon $KOTLIN_DAEMON_CAP" 'job env'; then
+    pass_case
+fi
+
+case_start "a caller's own Kotlin daemon JVM options in GRADLE_OPTS are kept, and a second run adds nothing"
 all_kept=true
-for opts in '-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon' "$KOTLIN_IN_PROCESS"; do
+for opts in '-Dkotlin.daemon.jvm.options=-Xmx3g' '-Dorg.gradle.project.kotlin.daemon.jvmargs=-Xmx3g' "$KOTLIN_DAEMON_CAP"; do
     workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
     jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
     run_jobs GRADLE_OPTS="$opts"
