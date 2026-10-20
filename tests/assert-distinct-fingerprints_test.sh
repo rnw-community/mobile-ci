@@ -117,8 +117,8 @@ fi
 case_start 'the collect job hands every plan, with its key sources, to the check'
 dir="$(new_workflow_workspace "$PLAN_WORKFLOW" collect "$COLLECT_STEP")"
 mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-a" "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-b"
-printf '%s' "$A" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-a/plan.json"
-printf '%s' "$B_SAME_KEY" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-b/plan.json"
+jq -c '. + {planArtifact: "ios-e2e-plan-brand-a"}' <<< "$A" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-a/plan.json"
+jq -c '. + {planArtifact: "ios-e2e-plan-brand-b"}' <<< "$B_SAME_KEY" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-brand-b/plan.json"
 run_step "$dir" TARGETS='[{"name":"brand-a"},{"name":"brand-b"}]' PLAN_PREFIX=ios-e2e-plan
 plans="$(step_output "$dir" plans)"
 assert_equals 0 "$STEP_STATUS" 'collect exit status' \

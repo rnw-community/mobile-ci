@@ -149,7 +149,7 @@ fi
 
 record() {
     dir="$(new_workflow_workspace "$PLAN_WORKFLOW" plan "$RECORD_STEP")"
-    run_step "$dir" PLATFORM=ios NATIVE_KEY=k1-aaaaaaaaaaaa FINGERPRINT=k1 CONFIG_HASH=none BASE_SOURCE=ghcr BASE_REFERENCE=ghcr.io/acme/app:k1 BUILD_STRATEGY=auto "$@"
+    run_step "$dir" PLATFORM=ios NATIVE_KEY=k1-aaaaaaaaaaaa FINGERPRINT=k1 CONFIG_HASH=none BASE_SOURCE=ghcr BASE_REFERENCE=ghcr.io/acme/app:k1 BUILD_STRATEGY=auto PLAN_ARTIFACT=seed-plan-bare "$@"
 }
 
 case_start 'a target with a base is not built natively'

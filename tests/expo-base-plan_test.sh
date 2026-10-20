@@ -96,7 +96,7 @@ plan_workspace() {
     for plan in "$@"; do
         artifact="${PLAN_ARTIFACT_PREFIX:-ios-e2e-plan}-$(jq -r '.name' <<< "$plan")"
         mkdir -p "$dir/work/.ci-artifacts/plans/$artifact"
-        printf '%s' "$plan" > "$dir/work/.ci-artifacts/plans/$artifact/plan.json"
+        jq -c --arg artifact "$artifact" '. + {planArtifact: $artifact}' <<< "$plan" > "$dir/work/.ci-artifacts/plans/$artifact/plan.json"
     done
     printf '%s\n' "$dir"
 }
@@ -144,7 +144,7 @@ fi
 case_start "another call's plans in the same run are neither counted nor collected (#252)"
 dir="$(plan_workspace "$BARE_NATIVE" "$AI_REPACKED")"
 mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-pkg-b--bare"
-printf '%s' '{"name":"bare","appDir":"apps/b","nativeKey":"k9-cccccccccccc","needsNative":true}' > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-pkg-b--bare/plan.json"
+printf '%s' '{"name":"bare","appDir":"apps/b","nativeKey":"k9-cccccccccccc","needsNative":true,"planArtifact":"ios-e2e-plan-pkg-b--bare"}' > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-pkg-b--bare/plan.json"
 run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
 targets="$(step_output "$dir" targets)"
 assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
@@ -152,10 +152,21 @@ assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
     && assert_not_contains "$(step_output "$dir" plans)" 'k9-cccccccccccc' "the sibling's plan is not this call's" \
     && pass_case
 
+case_start 'a lone plan, which download-artifact extracts straight into the path, is still collected'
+dir="$(new_workflow_workspace "$PLAN_WORKFLOW" collect "$COLLECT_STEP")"
+mkdir -p "$dir/work/.ci-artifacts/plans"
+jq -c '. + {planArtifact: "ios-e2e-plan-bare"}' <<< "$BARE_NATIVE" > "$dir/work/.ci-artifacts/plans/plan.json"
+run_step "$dir" TARGETS='[{"name":"bare","appDir":"apps/mobile"}]' PLAN_PREFIX=ios-e2e-plan
+targets="$(step_output "$dir" targets)"
+assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
+    && assert_equals 'bare' "$(jq -r '.[0].name' <<< "$targets")" 'target collected' \
+    && assert_not_contains "$targets" 'planArtifact' 'the plan bookkeeping is not forwarded' \
+    && pass_case
+
 case_start 'a scoped call collects exactly its own plans, never the unscoped call of the same run'
 dir="$(PLAN_ARTIFACT_PREFIX=ios-e2e-plan-pkg-b- plan_workspace "$BARE_REPACKED" "$AI_NATIVE")"
 mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-bare"
-printf '%s' "$BARE_NATIVE" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-bare/plan.json"
+jq -c '. + {planArtifact: "ios-e2e-plan-bare"}' <<< "$BARE_NATIVE" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-bare/plan.json"
 run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan-pkg-b-
 assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
     && assert_equals 'ai' "$(jq -r 'map(.name) | join(",")' <<< "$(step_output "$dir" targets)")" "only this call's native target" \
@@ -179,6 +190,10 @@ if steps["Record this target's plan"]['env'].get('BUILD_STRATEGY') != '${{ ' + e
 collect = {step.get('name'): step for step in workflow['jobs']['collect']['steps']}
 if collect['Collect the targets whose native key has no base']['env'].get('PLAN_PREFIX') != '${{ inputs.plan-artifact-prefix }}':
     problems.append('collect does not know which plan names are its own')
+if steps["Record this target's plan"]['env'].get('PLAN_ARTIFACT') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+    problems.append('a plan does not record the artifact name it is uploaded under')
+if steps["Upload this target's plan"]['with'].get('name') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+    problems.append('the plan is uploaded under another name than it records')
 print('; '.join(problems))
 PYTHON
 )"

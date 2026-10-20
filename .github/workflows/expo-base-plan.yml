@@ -636,6 +636,7 @@ jobs:
                   BASE_REFERENCE: ${{ steps.base.outputs.reference }}
                   BUILD_STRATEGY: ${{ (matrix.target.buildStrategy || inputs.build-strategy) }}
                   REPACKED: ${{ inputs.repack }}
+                  PLAN_ARTIFACT: ${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}
               run: |
                   set -euo pipefail
                   mkdir -p .ci-artifacts/plan
@@ -654,7 +655,8 @@ jobs:
                         --arg fingerprint "$FINGERPRINT" \
                         --arg configHash "$CONFIG_HASH" \
                         --argjson needsNative "$needs_native" \
-                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash, needsNative: $needsNative}' \
+                        --arg planArtifact "$PLAN_ARTIFACT" \
+                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash, needsNative: $needsNative, planArtifact: $planArtifact}' \
                      > .ci-artifacts/plan/plan.json
                   {
                     if [ "$needs_native" = 'false' ] && [ "$REPACKED" = 'true' ]; then
@@ -715,19 +717,20 @@ jobs:
               run: |
                   set -euo pipefail
                   expected=$(jq 'length' <<< "$TARGETS")
-                  plans=()
-                  while IFS= read -r name; do
-                    plan=".ci-artifacts/plans/${PLAN_PREFIX}-${name}/plan.json"
-                    if [ -f "$plan" ]; then
-                      plans+=("$plan")
-                    fi
-                  done < <(jq -r '.[].name' <<< "$TARGETS")
-                  if [ "${#plans[@]}" -ne "$expected" ]; then
-                    echo "::error::Expected one plan per target ($expected) named ${PLAN_PREFIX}-<target name>, found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
+                  mapfile -d '' -t downloaded < <(find .ci-artifacts/plans -name plan.json -print0 | LC_ALL=C sort -z)
+                  all='[]'
+                  if [ "${#downloaded[@]}" -gt 0 ]; then
+                    all=$(jq -sc '.' "${downloaded[@]}")
+                  fi
+                  plans=$(jq -c --arg prefix "$PLAN_PREFIX" --argjson all "$all" \
+                    'map("\($prefix)-\(.name)") as $mine | [$mine[] as $artifact | $all[] | select(.planArtifact == $artifact)] | map(del(.planArtifact))' <<< "$TARGETS")
+                  found=$(jq 'length' <<< "$plans")
+                  if [ "$found" -ne "$expected" ]; then
+                    echo "::error::Expected one plan per target ($expected) named ${PLAN_PREFIX}-<target name>, found ${found}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
                     exit 1
                   fi
-                  echo "plans=$(jq -sc '.' "${plans[@]}")" >> "$GITHUB_OUTPUT"
-                  targets=$(jq -sc 'map(select(.needsNative)) | map(del(.needsNative, .fingerprint, .configHash))' "${plans[@]}")
+                  echo "plans=$plans" >> "$GITHUB_OUTPUT"
+                  targets=$(jq -c 'map(select(.needsNative)) | map(del(.needsNative, .fingerprint, .configHash))' <<< "$plans")
                   echo "targets=$targets" >> "$GITHUB_OUTPUT"
                   echo "Targets needing a native build: $(jq -r 'map(.name) | join(", ") | if . == "" then "(none)" else . end' <<< "$targets")"
 
