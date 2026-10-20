@@ -76,7 +76,7 @@ masked value, and it must never be one.
 ```yaml
 - name: Apply build-secrets-env
   id: build-secrets
-  uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.3.0 # v4.3.0
   with:
       env: ${{ secrets.build-secrets-env }}
       label: build-secrets-env
