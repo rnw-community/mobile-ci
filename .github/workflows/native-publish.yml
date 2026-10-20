@@ -1973,7 +1973,7 @@ jobs:
                   set -euo pipefail
                   cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
                   v1_unbounded_bytes=1125899906842624
-                  reserve_mib=4096
+                  reserve_mib=5120
                   per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
                   memory_bytes=''
                   cpu_quota=''
@@ -2086,7 +2086,7 @@ jobs:
                   chmod +x "$launcher"
 
                   jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
-                  kotlin_in_process='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
+                  kotlin_daemon_cap='-Dkotlin.daemon.jvm.options=-Xmx1536m'
                   chain_launcher() {
                     case "$1" in
                       "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -2104,11 +2104,11 @@ jobs:
                       *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
                     esac
                     case "${GRADLE_OPTS:-}" in
-                      *kotlin.compiler.execution.strategy=*) ;;
-                      *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_in_process" ;;
+                      *kotlin.daemon.jvm.options=* | *kotlin.daemon.jvmargs=*) ;;
+                      *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_daemon_cap" ;;
                     esac
                   } >> "$GITHUB_ENV"
-                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin compiles inside the Gradle daemon rather than in separate Kotlin daemons."
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin daemons the project gives no JVM options of its own are capped at $kotlin_daemon_cap."
 
             - name: EAS build (Android)
               id: build

@@ -61,11 +61,12 @@ inputs:
       runner's cgroup limits: one job per CPU of quota (cpu.max, or the
       cgroup v1 CFS quota, rounded up), and one job per
       native-compile-memory-per-job of memory limit (memory.max, or
-      memory.limit_in_bytes) above a 4 GiB reserve for the Gradle JVMs (and
-      eas-cli), whichever is lower, at least 1. A runner with neither limit
-      is left to ninja's own default. A bounded runner also gets JVM options
-      that return idle heap to the kernel, and compiles Kotlin inside the
-      Gradle daemon instead of in separate Kotlin daemons. Needs CMake 3.17
+      memory.limit_in_bytes) above a 5 GiB reserve for the Gradle daemon,
+      the capped Kotlin daemon (and eas-cli), whichever is lower, at least 1.
+      A runner with neither limit is left to ninja's own default. A bounded
+      runner also gets JVM options that return idle heap to the kernel, and
+      caps the Kotlin compile daemon's heap at 1536 MiB unless the project or
+      the caller sets the Kotlin daemon's JVM options itself. Needs CMake 3.17
       or later and flock.
     required: false
     default: ''
@@ -74,7 +75,7 @@ inputs:
       MiB of memory limit each derived native compile job is sized for: the
       peak of the heaviest translation unit the build compiles. The default
       covers a React Native Skia translation unit, which peaks near 3.5 GiB,
-      so a 4 GiB-reserve 8 GiB runner compiles one at a time. Ignored when
+      so a 5 GiB-reserve 8 GiB runner compiles one at a time. Ignored when
       native-compile-jobs is set.
     required: false
     default: '3584'
@@ -256,7 +257,7 @@ runs:
         set -euo pipefail
         cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
         v1_unbounded_bytes=1125899906842624
-        reserve_mib=4096
+        reserve_mib=5120
         per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
         memory_bytes=''
         cpu_quota=''
@@ -369,7 +370,7 @@ runs:
         chmod +x "$launcher"
 
         jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
-        kotlin_in_process='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
+        kotlin_daemon_cap='-Dkotlin.daemon.jvm.options=-Xmx1536m'
         chain_launcher() {
           case "$1" in
             "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -387,11 +388,11 @@ runs:
             *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
           esac
           case "${GRADLE_OPTS:-}" in
-            *kotlin.compiler.execution.strategy=*) ;;
-            *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_in_process" ;;
+            *kotlin.daemon.jvm.options=* | *kotlin.daemon.jvmargs=*) ;;
+            *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_daemon_cap" ;;
           esac
         } >> "$GITHUB_ENV"
-        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin compiles inside the Gradle daemon rather than in separate Kotlin daemons."
+        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin daemons the project gives no JVM options of its own are capped at $kotlin_daemon_cap."
 
     - name: Build APK (Release)
       id: build

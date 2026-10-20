@@ -79,8 +79,9 @@ The action therefore bounds the compilers running at once across the whole
 build. `native-compile-jobs` empty derives the bound from the cgroup: one job
 per CPU of quota (`cpu.max`, or the cgroup v1 CFS quota, rounded up) and one
 job per `native-compile-memory-per-job` (default 3.5 GiB) of memory limit
-(`memory.max`, or `memory.limit_in_bytes`) above a 4 GiB reserve for the
-Gradle JVMs and eas-cli, whichever is lower, at least 1. That is 1 job on a
+(`memory.max`, or `memory.limit_in_bytes`) above a 5 GiB reserve for the
+Gradle daemon, the capped Kotlin daemon and eas-cli, whichever is lower, at
+least 1. That is 1 job on a
 4-CPU / 8 GiB runner, 3 on 16 GiB, and the CPU count once memory is plentiful.
 The per-job budget is sized for the heaviest translation unit, not the
 average: a single React Native Skia translation unit peaks near 3.5 GiB, and a
@@ -102,21 +103,20 @@ so it never changes what is built or the native key.
 
 The same step keeps the JVMs small beside the compilers:
 
-- It appends `-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process`
-  to `GRADLE_OPTS`, so Kotlin compiles inside the Gradle daemon's own heap
-  instead of in one Kotlin daemon per Kotlin compiler version, each sized like
-  the Gradle daemon and idling through the native phase. A `GRADLE_OPTS` that
-  already sets `kotlin.compiler.execution.strategy` is kept as is, so a project
-  can opt out by exporting
-  `GRADLE_OPTS=-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon`
-  (through a reusable workflow's `build-env`). The compiler's classes now load
-  into the Gradle daemon's metaspace: a React Native app's daemon peaks at the
-  template's `-XX:MaxMetaspaceSize=512m` and Gradle may log *The Daemon will
-  expire after the build after running out of JVM Metaspace*, which is harmless
-  for a single-use CI daemon. A project that fails with
-  `OutOfMemoryError: Metaspace` raises `-XX:MaxMetaspaceSize` in its own
-  `org.gradle.jvmargs`; the step leaves those arguments alone, since any
-  override would replace them whole.
+- It appends `-Dkotlin.daemon.jvm.options=-Xmx1536m` to `GRADLE_OPTS`, so
+  each Kotlin compile daemon gets a 1536 MiB heap instead of inheriting the
+  Gradle daemon's (the template's `-Xmx2048m`) and holding it through the
+  native phase: the Kotlin daemon runs the parallel collector, which keeps the
+  heap it grew to. Kotlin still compiles in its own daemon, so the compiler's
+  classes never load into the Gradle daemon's metaspace and the template's
+  `-XX:MaxMetaspaceSize=512m` is enough. The system property is the lowest
+  precedence of the Kotlin Gradle plugin's daemon JVM options, below
+  `kotlin.daemon.jvmargs` in `gradle.properties`, a `-Dkotlin.daemon.jvm.options`
+  in `org.gradle.jvmargs`, the `kotlin { kotlinDaemonJvmArgs }` extension and a
+  task's own arguments, so a project that sizes its Kotlin daemon keeps its
+  size, and a project's `kotlin.compiler.execution.strategy` is left alone. A
+  `GRADLE_OPTS` that already sets `kotlin.daemon.jvm.options` or
+  `kotlin.daemon.jvmargs` is kept as is.
 - It appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
   -XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
   already sets there, so an idle JVM runs a periodic GC and returns its free
@@ -124,9 +124,13 @@ The same step keeps the JVMs small beside the compilers:
   from 1917 MiB to 572 MiB resident.
 
 Together they make an app-level workaround (a serial CMake job pool, an
-in-process Kotlin `gradle.properties` entry) unnecessary. `native-publish.yml`
-and `native-dev-release.yml` run the same step before `eas build --local` for
-Android.
+in-process Kotlin `gradle.properties` entry, a raised `MaxMetaspaceSize`)
+unnecessary. v4.3.0 compiled Kotlin in-process instead; that exhausted the
+template's 512 MiB Gradle metaspace on Expo apps, so the step returned to the
+capped daemon, and a `build-env` `GRADLE_OPTS` that set
+`kotlin.compiler.execution.strategy=daemon` to opt out can be dropped.
+`native-publish.yml` and `native-dev-release.yml` run the same step before
+`eas build --local` for Android.
 
 ## ABIs
 
