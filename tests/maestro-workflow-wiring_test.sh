@@ -60,20 +60,24 @@ for workflow in ios-maestro android-maestro; do
     fi
 done
 
-case_start 'ios-maestro.yml tolerate-test-failures defaults off and only softens the Maestro run steps'
-if output="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/ios-maestro.yml" python3 - <<'PYTHON' 2>&1
+for workflow in ios-maestro android-maestro; do
+case_start "$workflow.yml tolerate-test-failures defaults off and, per target, only softens the Maestro run steps"
+if output="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON' 2>&1
 import os, sys, yaml
 workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
 spec = workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('tolerate-test-failures')
 problems = []
 if not spec or spec.get('type') != 'boolean' or spec.get('default') is not False:
     problems.append(f'tolerate-test-failures must be a boolean defaulting to false, got {spec!r}')
-want = '${{ inputs.tolerate-test-failures }}'
+resolve = {step.get('name'): step for step in workflow['jobs']['detect']['steps']}.get("Resolve each target's flows, quarantine and build strategy", {})
+if resolve.get('env', {}).get('TOLERATE_TEST_FAILURES') != '${{ inputs.tolerate-test-failures }}':
+    problems.append('the input is not the default of each target tolerateTestFailures')
+want = '${{ matrix.target.tolerateTestFailures }}'
 runs, report = 0, False
 for job in workflow['jobs'].values():
     for step in job.get('steps', []):
         uses = str(step.get('uses', ''))
-        if '/actions/run-maestro-ios@' in uses or '/actions/run-maestro-device-cloud@' in uses:
+        if '/actions/run-maestro-' in uses:
             runs += 1
             if step.get('continue-on-error') != want:
                 problems.append(f"{step.get('name')!r} continue-on-error is {step.get('continue-on-error')!r}, expected {want!r}")
@@ -81,10 +85,16 @@ for job in workflow['jobs'].values():
             problems.append(f"{step.get('name')!r} is softened but is not a Maestro run step")
         if "outcome == 'failure'" in str(step.get('if', '')) and '::warning::' in str(step.get('run', '')):
             report = True
-if runs != 2:
-    problems.append(f'expected 2 Maestro run steps, found {runs}')
+            outcomes = str(step.get('if', ''))
+if runs < 2:
+    problems.append(f'expected at least 2 Maestro run steps, found {runs}')
 if not report:
     problems.append('no step reports a tolerated failure as a ::warning::')
+else:
+    for job in workflow['jobs'].values():
+        for step in job.get('steps', []):
+            if '/actions/run-maestro-' in str(step.get('uses', '')) and f"steps.{step.get('id')}.outcome == 'failure'" not in outcomes:
+                problems.append(f"a tolerated failure of {step.get('name')!r} is never reported")
 print('\n'.join(problems))
 sys.exit(1 if problems else 0)
 PYTHON
@@ -93,5 +103,6 @@ PYTHON
 else
     fail_case "$output"
 fi
+done
 
 finish_suite

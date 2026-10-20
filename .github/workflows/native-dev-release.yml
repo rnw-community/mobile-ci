@@ -186,10 +186,24 @@ on:
             tag-prefix:
                 description: >-
                     Release tag prefix. Tags are created as <tag-prefix>-ios-<run_number> and
-                    <tag-prefix>-android-<run_number>.
+                    <tag-prefix>-android-<run_number> (<tag-prefix>-<call-scope>-<platform>-<run_number>
+                    with call-scope).
                 type: string
                 required: false
                 default: dev
+            call-scope:
+                description: >-
+                    Names this call's build artifacts, release tags (and so what it
+                    prunes), pull request comment sections and concurrency group, so a
+                    caller can run this workflow several times in one run, e.g. once per
+                    brand in a matrix, without the calls colliding, pruning or queueing
+                    behind each other. Calls that share a run must each set a distinct,
+                    non-empty value; a second call publishing the same release tag in
+                    the same run attempt fails. Letters, digits, '.', '_' and single '-'
+                    between them. Empty (default) keeps today's names.
+                type: string
+                required: false
+                default: ''
             keep-releases:
                 description: Number of newest published releases (per platform tag) to keep; older ones are pruned.
                 type: string
@@ -285,7 +299,7 @@ on:
                 value: ${{ jobs.android-dev-release.outputs.fingerprint }}
 
 concurrency:
-    group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
+    group: native-dev-release-${{ github.workflow }}-${{ github.ref }}-${{ inputs.call-scope }}
     cancel-in-progress: false
 
 jobs:
@@ -548,7 +562,19 @@ jobs:
               env:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
-              run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifacts or release tags can collide."
+                    exit 1
+                  fi
+                  prefix="${TAG_PREFIX}${CALL_SCOPE:+-$CALL_SCOPE}-ios-"
+                  {
+                    echo "tag=${prefix}${RUN_NUMBER}"
+                    echo "prefix=$prefix"
+                    echo "artifact=ios-dev-build${CALL_SCOPE:+-$CALL_SCOPE}"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
@@ -714,7 +740,7 @@ jobs:
               if: inputs.build-location == 'local'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-dev-build
+                  name: ${{ steps.tag.outputs.artifact }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
@@ -849,7 +875,13 @@ jobs:
                   Runtime fingerprint: \`${FINGERPRINT}\`
                   <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
                   fi
-                  if gh release view "$TAG" >/dev/null 2>&1; then
+                  if existing_notes="$(gh release view "$TAG" --json body --jq .body 2>/dev/null)"; then
+                    case "$existing_notes" in
+                      *"Build number: ${BUILD_NUMBER}."*)
+                        echo "::error::Release $TAG already holds build ${BUILD_NUMBER}, published by another call of native-dev-release in this run attempt. Give each call in one run a distinct call-scope."
+                        exit 1
+                        ;;
+                    esac
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
@@ -880,7 +912,7 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
                   REPOSITORY: ${{ github.repository }}
-                  TAG_PREFIX: ${{ inputs.tag-prefix }}-ios-
+                  TAG_PREFIX: ${{ steps.tag.outputs.prefix }}
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
                   CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
@@ -896,7 +928,7 @@ jobs:
                     exit 1
                   fi
                   release_tags="$(printf '%s\n' "$published" \
-                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && substr($2, length(prefix) + 1) ~ /^[0-9]+$/ && $2 != current' \
                     | sort -r -t "$(printf '\t')" -k1,1 \
                     | cut -f2)"
                   tags=()
@@ -1173,7 +1205,19 @@ jobs:
               env:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
-              run: echo "tag=${TAG_PREFIX}-android-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifacts or release tags can collide."
+                    exit 1
+                  fi
+                  prefix="${TAG_PREFIX}${CALL_SCOPE:+-$CALL_SCOPE}-android-"
+                  {
+                    echo "tag=${prefix}${RUN_NUMBER}"
+                    echo "prefix=$prefix"
+                    echo "artifact=android-dev-build${CALL_SCOPE:+-$CALL_SCOPE}"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Run Android pre-build command
               if: inputs.android-pre-build-command != ''
@@ -1469,7 +1513,7 @@ jobs:
               if: inputs.build-location == 'local'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-dev-build
+                  name: ${{ steps.tag.outputs.artifact }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
@@ -1604,7 +1648,13 @@ jobs:
                   Runtime fingerprint: \`${FINGERPRINT}\`
                   <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
                   fi
-                  if gh release view "$TAG" >/dev/null 2>&1; then
+                  if existing_notes="$(gh release view "$TAG" --json body --jq .body 2>/dev/null)"; then
+                    case "$existing_notes" in
+                      *"Build number: ${BUILD_NUMBER}."*)
+                        echo "::error::Release $TAG already holds build ${BUILD_NUMBER}, published by another call of native-dev-release in this run attempt. Give each call in one run a distinct call-scope."
+                        exit 1
+                        ;;
+                    esac
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
@@ -1635,7 +1685,7 @@ jobs:
               env:
                   GH_TOKEN: ${{ github.token }}
                   REPOSITORY: ${{ github.repository }}
-                  TAG_PREFIX: ${{ inputs.tag-prefix }}-android-
+                  TAG_PREFIX: ${{ steps.tag.outputs.prefix }}
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
                   CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
@@ -1651,7 +1701,7 @@ jobs:
                     exit 1
                   fi
                   release_tags="$(printf '%s\n' "$published" \
-                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && substr($2, length(prefix) + 1) ~ /^[0-9]+$/ && $2 != current' \
                     | sort -r -t "$(printf '\t')" -k1,1 \
                     | cut -f2)"
                   tags=()
@@ -1683,6 +1733,7 @@ jobs:
               shell: bash
               env:
                   SECTIONS_DIR: ${{ runner.temp }}/preview-comment-sections
+                  CALL_SCOPE: ${{ inputs.call-scope }}
                   SERVER_URL: ${{ github.server_url }}
                   REPOSITORY: ${{ github.repository }}
                   HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1707,7 +1758,7 @@ jobs:
                     local platform="$1" label="$2" enabled="$3" result="$4" tag="$5" asset="$6" fingerprint="$7" install_url="$8"
                     [ "$enabled" = 'true' ] || return 0
                     {
-                      echo "### ${label}: development build"
+                      echo "### ${label}${CALL_SCOPE:+ ($CALL_SCOPE)}: development build"
                       echo
                       if [ "$result" = 'success' ] && [ -n "$install_url" ]; then
                         echo "Commit \`${HEAD_SHA:0:7}\`, runtime fingerprint \`${fingerprint:-unknown}\`."
@@ -1720,7 +1771,7 @@ jobs:
                       else
                         echo "The ${label} development build of commit \`${HEAD_SHA:0:7}\` did not publish (result: ${result}); see [the run](${RUN_URL})."
                       fi
-                    } > "$SECTIONS_DIR/${platform}-dev-build.md"
+                    } > "$SECTIONS_DIR/${platform}-dev-build${CALL_SCOPE:+-$CALL_SCOPE}.md"
                   }
                   render ios iOS "$ENABLE_IOS" "$IOS_RESULT" "$IOS_TAG" "$IOS_ASSET" "$IOS_FINGERPRINT" "$IOS_INSTALL_URL"
                   render android Android "$ENABLE_ANDROID" "$ANDROID_RESULT" "$ANDROID_TAG" "$ANDROID_ASSET" "$ANDROID_FINGERPRINT" "$ANDROID_INSTALL_URL"
