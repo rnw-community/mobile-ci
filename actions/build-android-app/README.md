@@ -78,14 +78,17 @@ OOM-killed without it.
 The action therefore bounds the compilers running at once across the whole
 build. `native-compile-jobs` empty derives the bound from the cgroup: one job
 per CPU of quota (`cpu.max`, or the cgroup v1 CFS quota, rounded up) and one
-per GiB of memory limit (`memory.max`, or `memory.limit_in_bytes`) above a
-5 GiB reserve for everything that is not a compiler, whichever is lower, at
-least 1 (3 on a 4-CPU / 8 GiB runner). The reserve is measured, not guessed: on
-that runner the Gradle daemon and two Kotlin daemons held about 4.2 GiB during
-the native phase of a Maestro build, and the Gradle daemon plus eas-cli about
-4.6 GiB in `eas build --local`, while single React Native Skia translation
-units reach 2.7 GiB. An unparseable limit fails the step; a runner
-with no limit is left to `ninja`.
+job per `native-compile-memory-per-job` (default 3.5 GiB) of memory limit
+(`memory.max`, or `memory.limit_in_bytes`) above a 4 GiB reserve for the
+Gradle JVMs and eas-cli, whichever is lower, at least 1. That is 1 job on a
+4-CPU / 8 GiB runner, 3 on 16 GiB, and the CPU count once memory is plentiful.
+The per-job budget is sized for the heaviest translation unit, not the
+average: a single React Native Skia translation unit peaks near 3.5 GiB, and a
+cold build compiles several of them back to back, so a second slot on 8 GiB
+lets two of them meet and the kernel kill the build. Lower it for a build
+without such units; `native-compile-jobs` sets the count outright. An
+unparseable limit or input fails the step; a runner with no limit is left to
+`ninja`.
 
 The bound is enforced by a compiler launcher, written to
 `$RUNNER_TEMP/mobile-ci-compile-slots/compile-slot.sh`, that runs each
@@ -97,14 +100,22 @@ any later CMake build in the same job. A launcher the caller already exports,
 such as `ccache`, is kept behind the slot. The bound only schedules compilers,
 so it never changes what is built or the native key.
 
-The same step appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
--XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
-already sets there. The Kotlin compile daemons sit idle through the native phase
-holding up to a 2 GiB heap each, and that phase is when a single Skia
-translation unit can need 3.5 GiB. With these options an idle JVM runs a
-periodic GC and returns its free heap to the kernel; on the runner image a JVM
-idling at 300 MB live drops from 1917 MiB to 572 MiB resident. `native-publish.yml` and
-`native-dev-release.yml` run the same step before `eas build --local` for
+The same step keeps the JVMs small beside the compilers:
+
+- It appends `-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process`
+  to `GRADLE_OPTS`, so Kotlin compiles inside the Gradle daemon's own heap
+  instead of in one Kotlin daemon per Kotlin compiler version, each sized like
+  the Gradle daemon and idling through the native phase. A `GRADLE_OPTS` that
+  already sets `kotlin.compiler.execution.strategy` is kept as is.
+- It appends `-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10
+  -XX:MaxHeapFreeRatio=30` to `JAVA_TOOL_OPTIONS`, keeping whatever the runner
+  already sets there, so an idle JVM runs a periodic GC and returns its free
+  heap to the kernel; on the runner image a JVM idling at 300 MB live drops
+  from 1917 MiB to 572 MiB resident.
+
+Together they make an app-level workaround (a serial CMake job pool, an
+in-process Kotlin `gradle.properties` entry) unnecessary. `native-publish.yml`
+and `native-dev-release.yml` run the same step before `eas build --local` for
 Android.
 
 ## ABIs
@@ -204,6 +215,7 @@ preinstalled here.
 | `gradle-args`                  | no       | `''`         | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease`. Not shell-quoted. |
 | `android-abis`                 | no       | `''`         | Comma-separated ABIs passed as `-PreactNativeArchitectures=<value>`, e.g. `x86_64`. Empty passes nothing, so the project's own `reactNativeArchitectures` applies. Fails closed on an unknown ABI or a contradicting pin in `gradle-args` / `ORG_GRADLE_PROJECT_reactNativeArchitectures`. See [ABIs](#abis). |
 | `native-compile-jobs`          | no       | `''`         | Most C/C++ compilers the CMake builds inside Gradle run at once, across every native module. Empty derives it from the cgroup limits. See [Native compile parallelism](#native-compile-parallelism). |
+| `native-compile-memory-per-job` | no     | `3584`       | MiB of memory limit each derived native compile job is sized for, the peak of the heaviest translation unit. Ignored when `native-compile-jobs` is set. See [Native compile parallelism](#native-compile-parallelism). |
 | `android-sdk-cache-save`       | no       | `'true'`     | `'true'` saves the [Android SDK cache](#android-sdk-cache) from inside the action after a successful build, off `pull_request`, with `continue-on-error`. `'false'` leaves the save to the caller, which can bound it with `timeout-minutes`. |
 
 ## Outputs

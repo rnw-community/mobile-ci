@@ -59,14 +59,25 @@ inputs:
       Most C/C++ compilers the CMake builds inside Gradle may run at once,
       across every native module. Empty (the default) derives it from the
       runner's cgroup limits: one job per CPU of quota (cpu.max, or the
-      cgroup v1 CFS quota, rounded up), and one per GiB of memory limit
-      (memory.max, or memory.limit_in_bytes) above a 5 GiB reserve for the
-      Gradle and Kotlin JVMs (and eas-cli), whichever is lower, at least 1. A
-      runner with neither limit is left to ninja's own default. A bounded
-      runner also gets JVM options that return idle heap to the kernel. Needs
-      CMake 3.17 or later and flock.
+      cgroup v1 CFS quota, rounded up), and one job per
+      native-compile-memory-per-job of memory limit (memory.max, or
+      memory.limit_in_bytes) above a 4 GiB reserve for the Gradle JVMs (and
+      eas-cli), whichever is lower, at least 1. A runner with neither limit
+      is left to ninja's own default. A bounded runner also gets JVM options
+      that return idle heap to the kernel, and compiles Kotlin inside the
+      Gradle daemon instead of in separate Kotlin daemons. Needs CMake 3.17
+      or later and flock.
     required: false
     default: ''
+  native-compile-memory-per-job:
+    description: >-
+      MiB of memory limit each derived native compile job is sized for: the
+      peak of the heaviest translation unit the build compiles. The default
+      covers a React Native Skia translation unit, which peaks near 3.5 GiB,
+      so a 4 GiB-reserve 8 GiB runner compiles one at a time. Ignored when
+      native-compile-jobs is set.
+    required: false
+    default: '3584'
   android-sdk-cache-save:
     description: >-
       'true' (default) saves the Android SDK cache from inside this action
@@ -240,11 +251,13 @@ runs:
       shell: bash
       env:
         NATIVE_COMPILE_JOBS: ${{ inputs.native-compile-jobs }}
+        NATIVE_COMPILE_MEMORY_PER_JOB: ${{ inputs.native-compile-memory-per-job }}
       run: |
         set -euo pipefail
         cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
         v1_unbounded_bytes=1125899906842624
-        reserve_mib=5120
+        reserve_mib=4096
+        per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
         memory_bytes=''
         cpu_quota=''
         cpu_period=''
@@ -285,6 +298,9 @@ runs:
             [ "$cpu_quota" = -1 ] && cpu_quota=''
           fi
         fi
+        if ! is_uint "$per_job_mib" || [ "$per_job_mib" -lt 1 ]; then
+          fail "native-compile-memory-per-job '$per_job_mib' must be a positive number of MiB."
+        fi
         if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
           fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
         fi
@@ -297,12 +313,12 @@ runs:
         fi
         if [ -n "$memory_bytes" ]; then
           memory_mib=$((memory_bytes / 1048576))
-          memory_jobs=$(((memory_mib - reserve_mib) / 1024))
+          memory_jobs=$(((memory_mib - reserve_mib) / per_job_mib))
           [ "$memory_jobs" -lt 1 ] && memory_jobs=1
           if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
             jobs="$memory_jobs"
           fi
-          basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB reserve"
+          basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB JVM reserve, $per_job_mib MiB per job"
         fi
         if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
           if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
@@ -353,6 +369,7 @@ runs:
         chmod +x "$launcher"
 
         jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+        kotlin_in_process='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
         chain_launcher() {
           case "$1" in
             "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -369,8 +386,12 @@ runs:
             *" $jvm_heap_return "*) ;;
             *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
           esac
+          case "${GRADLE_OPTS:-}" in
+            *kotlin.compiler.execution.strategy=*) ;;
+            *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_in_process" ;;
+          esac
         } >> "$GITHUB_ENV"
-        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return)."
+        echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin compiles inside the Gradle daemon rather than in separate Kotlin daemons."
 
     - name: Build APK (Release)
       id: build

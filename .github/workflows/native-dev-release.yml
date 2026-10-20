@@ -1191,7 +1191,8 @@ jobs:
                   set -euo pipefail
                   cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
                   v1_unbounded_bytes=1125899906842624
-                  reserve_mib=5120
+                  reserve_mib=4096
+                  per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
                   memory_bytes=''
                   cpu_quota=''
                   cpu_period=''
@@ -1232,6 +1233,9 @@ jobs:
                       [ "$cpu_quota" = -1 ] && cpu_quota=''
                     fi
                   fi
+                  if ! is_uint "$per_job_mib" || [ "$per_job_mib" -lt 1 ]; then
+                    fail "native-compile-memory-per-job '$per_job_mib' must be a positive number of MiB."
+                  fi
                   if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
                     fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
                   fi
@@ -1244,12 +1248,12 @@ jobs:
                   fi
                   if [ -n "$memory_bytes" ]; then
                     memory_mib=$((memory_bytes / 1048576))
-                    memory_jobs=$(((memory_mib - reserve_mib) / 1024))
+                    memory_jobs=$(((memory_mib - reserve_mib) / per_job_mib))
                     [ "$memory_jobs" -lt 1 ] && memory_jobs=1
                     if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
                       jobs="$memory_jobs"
                     fi
-                    basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB reserve"
+                    basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB JVM reserve, $per_job_mib MiB per job"
                   fi
                   if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
                     if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
@@ -1300,6 +1304,7 @@ jobs:
                   chmod +x "$launcher"
 
                   jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+                  kotlin_in_process='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
                   chain_launcher() {
                     case "$1" in
                       "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
@@ -1316,8 +1321,12 @@ jobs:
                       *" $jvm_heap_return "*) ;;
                       *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
                     esac
+                    case "${GRADLE_OPTS:-}" in
+                      *kotlin.compiler.execution.strategy=*) ;;
+                      *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_in_process" ;;
+                    esac
                   } >> "$GITHUB_ENV"
-                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return)."
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin compiles inside the Gradle daemon rather than in separate Kotlin daemons."
 
             - name: EAS build (Android, development)
               id: build
