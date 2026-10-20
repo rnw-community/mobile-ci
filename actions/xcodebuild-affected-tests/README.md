@@ -106,7 +106,7 @@ enough history to reach the base) in the job that calls this action.
       fetch-depth: 0
 
 - id: affected
-  uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/xcodebuild-affected-tests@v4.3.0 # v4.3.0
   with:
       map-file: ci/affected-tests.json
       full-suite-paths: |
@@ -114,7 +114,7 @@ enough history to reach the base) in the job that calls this action.
           .github/workflows/**
           PonyUITests/Support/**
 
-- uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.2.0 # v4.2.0
+- uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.0 # v4.3.0
   with:
       project: Pony.xcodeproj
       scheme: Pony

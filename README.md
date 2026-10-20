@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.2.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.3.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -63,7 +63,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.3.0 # v4.3.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -99,7 +99,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.3.0 # v4.3.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -171,6 +171,15 @@ called workflow's jobs request — see the table in
   `@expo/fingerprint`: the first `mode: auto` run after upgrading may build
   natively once, and a preview comment may not match a dev build published
   before v4.2.0 (`native-publish.yml`'s `fingerprint-version` is now ignored).
+- **v4.3.0** — `call-scope` on `native-dev-release.yml`, `ios-maestro.yml` and
+  `android-maestro.yml`, so several calls in one run (a per-brand or
+  per-package matrix) never collide on artifacts, tags or concurrency; per-target
+  `flowsDir`, `tolerateTestFailures` and `buildStrategy` in `targets[]`, so one
+  call can cover a monorepo with bare and Expo apps. Native compile slots are
+  sized by memory per heavy translation unit (`native-compile-memory-per-job`,
+  default 3584 MiB) and Kotlin compiles in-process on bounded runners, so a cold
+  react-native-skia build fits 8 GiB without app-level workarounds; such cold
+  native builds run with fewer parallel compiles and take a few minutes longer.
 
 No input was removed or had its default changed after v4.0.0, so within v4
 bumping the pin is the whole migration.
@@ -341,7 +350,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.3.0 # v4.3.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -414,7 +423,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.3.0 # v4.3.0
 ```
 
 ## Scope
@@ -460,7 +469,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.2.0 # v4.2.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.3.0 # v4.3.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

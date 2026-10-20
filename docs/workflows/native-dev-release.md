@@ -90,7 +90,7 @@ A caller's notification job reads them as `needs.<job>.outputs.<name>`:
 ```yaml
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.3.0 # v4.3.0
         with:
             app-dir: apps/mobile
             enable-ios: false
@@ -378,7 +378,7 @@ jobs:
     dev-release:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.3.0 # v4.3.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -405,7 +405,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.3.0 # v4.3.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -485,7 +485,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.3.0 # v4.3.0
         with:
             app-dir: apps/mobile
             enable-ios: true

@@ -46,7 +46,11 @@ sed '0,/^            packages: write$/{/^            packages: write$/d}' "$EXAM
 expect_rejected 'an example whose calling job lacks a required grant is rejected' \
     "$scratch/missing-permission.yml" 'without packages: write'
 
-sed '0,/@v4\.2\.0 # v4\.2\.0/s//@v4.2.0/' "$EXAMPLE" > "$scratch/unpinned.yml"
+sed -E '0,/@(v[0-9]+\.[0-9]+\.[0-9]+) # \1/s//@\1/' "$EXAMPLE" > "$scratch/unpinned.yml"
+if cmp -s "$EXAMPLE" "$scratch/unpinned.yml"; then
+    echo "FAIL  the unpinned fixture is identical to $EXAMPLE; it has no '@vX.Y.Z # vX.Y.Z' self-reference to strip" >&2
+    exit 1
+fi
 expect_rejected 'an example self-reference without its # vX.Y.Z comment is rejected' \
     "$scratch/unpinned.yml" 'not pinned as @vX.Y.Z # vX.Y.Z'
 

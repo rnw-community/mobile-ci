@@ -150,12 +150,12 @@ platform:
 ```yaml
 - name: Start Redroid
   id: redroid
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/redroid-container@v4.3.0 # v4.3.0
   with:
       mode: start
       container-name: redroid-screenshots-${{ strategy.job-index }}
 
-- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.2.0 # v4.2.0
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.3.0 # v4.3.0
   with:
       android-serial: ${{ steps.redroid.outputs.android-serial }}
       apk-path: .ci-artifacts/store-screenshots-apk-bare/app-release.apk
@@ -173,7 +173,7 @@ platform:
 
 - name: Teardown Redroid
   if: always()
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/redroid-container@v4.3.0 # v4.3.0
   with:
       mode: teardown
       container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -187,20 +187,20 @@ leak into, or come from, another job's AVD on a persistent host:
 ```yaml
 - name: Start emulator
   id: emulator
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/android-emulator@v4.3.0 # v4.3.0
   with:
       mode: start
       avd-name: mobile-ci-screenshots
       wipe-data: 'true'
 
-- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.2.0 # v4.2.0
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.3.0 # v4.3.0
   with:
       android-serial: ${{ steps.emulator.outputs.android-serial }}
       # ...the same inputs as above
 
 - name: Stop emulator
   if: always()
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.2.0 # v4.2.0
+  uses: rnw-community/mobile-ci/actions/android-emulator@v4.3.0 # v4.3.0
   with:
       mode: stop
 ```
