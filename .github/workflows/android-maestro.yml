@@ -925,7 +925,7 @@ jobs:
                   CALL_SCOPE: ${{ inputs.call-scope }}
               run: |
                   set -euo pipefail
-                  if [ -n "$CALL_SCOPE" ] && ! printf '%s\n' "$CALL_SCOPE" | grep -Eqx '[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*'; then
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
                     echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
                   fi

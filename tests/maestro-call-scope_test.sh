@@ -102,7 +102,7 @@ resolve CALL_SCOPE=pkg-a TARGETS='[{"name":"a"}]'
 assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals '-pkg-a-' "$(step_output "$dir" artifact-scope)" 'artifact scope' && pass_case
 
-for scope in 'a--b' '-a' 'a-' 'a b' 'a/b'; do
+for scope in 'a--b' '-a' 'a-' 'a b' 'a/b' $'ok\nbad scope'; do
     case_start "call-scope '$scope' fails closed"
     resolve CALL_SCOPE="$scope" TARGETS='[{"name":"a"}]'
     expect_failure "$dir" 'call-scope'

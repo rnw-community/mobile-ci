@@ -33,7 +33,7 @@ for job in ios-dev-release android-dev-release; do
         && assert_equals "${platform}-dev-build-acme" "$(step_output "$dir" artifact)" 'artifact' \
         && pass_case
 
-    for scope in 'a--b' '-a' 'a-' 'a b' 'a/b'; do
+    for scope in 'a--b' '-a' 'a-' 'a b' 'a/b' $'ok\nbad scope'; do
         case_start "$job: call-scope '$scope' fails closed before anything is built"
         dir="$(new_workflow_workspace "$WORKFLOW" "$job" 'Compute release tag')"
         run_step "$dir" TAG_PREFIX=dev RUN_NUMBER=42 CALL_SCOPE="$scope"
