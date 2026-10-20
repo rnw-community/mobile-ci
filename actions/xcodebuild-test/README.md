@@ -209,19 +209,19 @@ than the number of test identifiers is a configuration error, not a free pass.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.3.0 # v4.3.0
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.3.1 # v4.3.1
   id: simulator
   with:
       device-type: 'iPad Pro 11-inch (M4)'
 
-- uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.0 # v4.3.0
+- uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.1 # v4.3.1
   with:
       project: MyApp.xcodeproj
       scheme: MyApp
       destination-id: ${{ steps.simulator.outputs.udid }}
       xcodebuild-args: ${{ steps.cache.outputs.xcodebuild-args }}
 
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.3.0 # v4.3.0
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.3.1 # v4.3.1
   if: always()
   with:
       mode: release
@@ -236,7 +236,7 @@ jobs:
         runs-on: [self-hosted, trf-macos-arm64-4x7]
         steps:
             # ... setup-xcode-pinned, xcode-cache restore ...
-            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.0 # v4.3.0
+            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.1 # v4.3.1
               with:
                   project: MyApp.xcodeproj
                   scheme: MyApp
@@ -253,7 +253,7 @@ jobs:
                 shard: [0, 1]
         steps:
             # ... setup-xcode-pinned, xcode-cache restore, simulator-lease ...
-            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.0 # v4.3.0
+            - uses: rnw-community/mobile-ci/actions/xcodebuild-test@v4.3.1 # v4.3.1
               with:
                   project: MyApp.xcodeproj
                   scheme: MyApp
