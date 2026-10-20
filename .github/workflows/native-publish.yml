@@ -463,7 +463,7 @@ jobs:
                   RECORD_SCOPE: ${{ inputs.record-scope }}
               run: |
                   set -euo pipefail
-                  if [ -n "$RECORD_SCOPE" ] && ! printf '%s\n' "$RECORD_SCOPE" | grep -Eqx '[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*'; then
+                  if [ -n "$RECORD_SCOPE" ] && ! [[ "$RECORD_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
                     echo "::error::record-scope '$RECORD_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
                   fi

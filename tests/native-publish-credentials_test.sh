@@ -132,7 +132,7 @@ else
     fail_case 'a marker prefix matched another call'\''s marker'
 fi
 
-for scope in 'brand--a' '-brand' 'brand-' 'a/b' 'a b'; do
+for scope in 'brand--a' '-brand' 'brand-' 'a/b' 'a b' "$(printf 'brand-a\nbrand-b')"; do
     case_start "record-scope: '$scope' fails closed, it could collide with another call's artifacts"
     run_targets RECORD_SCOPE="$scope"
     if assert_equals 1 "$STEP_STATUS" 'status' \
