@@ -126,7 +126,7 @@ The same step keeps the JVMs small beside the compilers:
 Together they make an app-level workaround (a serial CMake job pool, an
 in-process Kotlin `gradle.properties` entry, a raised `MaxMetaspaceSize`)
 unnecessary. v4.3.0 compiled Kotlin in-process instead; that exhausted the
-template's 512 MiB Gradle metaspace on Expo apps, so v4.3.1 returned to the
+template's 512 MiB Gradle metaspace on Expo apps, so the step returned to the
 capped daemon, and a `build-env` `GRADLE_OPTS` that set
 `kotlin.compiler.execution.strategy=daemon` to opt out can be dropped.
 `native-publish.yml` and `native-dev-release.yml` run the same step before
