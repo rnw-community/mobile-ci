@@ -42,8 +42,8 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `build-runner-labels`         | no       | `''`                                       | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
 | `test-runner-labels`          | no       | `''`                                       | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. Must be a macOS pool that can run the `ios-simulator-archs` slice; the test job checks this before it boots a simulator. |
 | `ios-simulator-archs`         | no       | `arm64`                                    | Simulator slice the build produces: `arm64` or `x86_64`, anything else fails closed. `x86_64` is for apps whose native SDKs ship no arm64-simulator slice (ML Kit, for one): it builds with `ARCHS=x86_64 EXCLUDED_ARCHS=arm64`, gets its own native key, and the test job accepts an x86_64 macOS host or an arm64 one where `arch -x86_64 /usr/bin/true` succeeds (Rosetta 2 installed). Must match `seed-native-cache.yml`'s value, or the warm-up publishes under a key no pull request looks up. See [x86_64 simulator builds](#x86_64-simulator-builds). |
-| `targets`                     | **yes**  | —                                          | JSON array of build targets: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. |
-| `flows-dir`                   | **yes**  | —                                          | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
+| `targets`                     | **yes**  | —                                          | JSON array of build targets: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. Optional per target: `flowsDir`, `tolerateTestFailures`, `buildStrategy` — see [Several packages](#several-packages-per-target-fields-and-call-scope). |
+| `flows-dir`                   | no       | `''`                                       | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. The default of every target's `flowsDir`; may be empty only when every target names its own. |
 | `flows-max-depth`             | no       | `1`                                        | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
 | `flows-name-pattern`          | no       | `*.flow.yaml`                              | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
 | `flows-exclude-pattern`       | no       | `''`                                       | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
@@ -106,7 +106,8 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `repack-timeout-minutes`      | no       | `30`                                       | `plan`/repack job timeout. |
 | `build-timeout-minutes`       | no       | `60`                                       | Build job timeout. |
 | `test-timeout-minutes`        | no       | `75`                                       | Test job timeout. |
-| `tolerate-test-failures`      | no       | `false`                                    | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite, usually passed per target from the caller (e.g. `${{ matrix.package == 'flaky' }}`). |
+| `tolerate-test-failures`      | no       | `false`                                    | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite. The default of every target's `tolerateTestFailures`, which quarantines one target alone. |
+| `call-scope`                  | no       | `''`                                       | Names this call's artifacts, plans and concurrency groups, so several calls in one run (one per package, say) never share or cancel them. Calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them. Empty keeps today's names. See [Several packages](#several-packages-per-target-fields-and-call-scope). |
 
 ## Outputs
 
@@ -500,10 +501,46 @@ true` — `actions/upload-artifact` skips hidden files by default, which
 previously shipped `final-screen.png` alone and dropped the hierarchy dumps
 the failure message points you at.
 
+## Several packages: per-target fields and `call-scope`
+
+A monorepo of packages, each with its own example apps and Maestro suite, fits
+in **one call per platform**. Each `targets` entry may set, on top of its
+required fields:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `flowsDir` | the `flows-dir` input | Directory of this target's runnable flows. With every target naming its own, `flows-dir` may be left empty; a target with neither fails the `detect` job. |
+| `tolerateTestFailures` | the `tolerate-test-failures` input | `true` quarantines only this target: its Maestro failure becomes a `::warning::` and every other target still gates the run. Anything but a JSON boolean fails `detect`. |
+| `buildStrategy` | the `build-strategy` input | `auto`, `repack` or `native` for this target alone. A bare (non-Expo) React Native app sets `native`: it has no Expo runtime to repack, so it is always compiled on a Mac and never publishes a base. The `native-build-label` still makes every target `native`, and fails closed on a target that asks for `repack`. |
+
+`buildStrategy` is explicit rather than detected: whether an app is an Expo app
+is not reliably readable from its `package.json` in a monorepo whose
+dependencies are hoisted, and a wrong guess would either repack an app that
+cannot be repacked or compile one that could. An unknown value fails `detect`.
+
+One call runs every target when turbo reports any of them affected. To skip
+unaffected packages instead, call the workflow once per package — and then give
+each call a distinct `call-scope`. It is folded into every name a call owns:
+the app and plan artifacts (`ios-e2e-app-<call-scope>--<target>`,
+`ios-e2e-plan-<call-scope>--<target>`), the Maestro artifacts, the
+native build's concurrency group and the workflow's own concurrency group.
+Without it two calls in one run share those names: a duplicate artifact name
+fails the upload, and on a pull request the second call cancels the first. The
+plan job only ever reads the plans named after its own targets, so another
+call's plans in the same run are never counted. `call-scope` takes letters,
+digits, `.` and `_`, with single `-` between them; anything else fails
+`detect`.
+
+[docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml)
+is a complete single-call caller with a bare and an Expo app and one
+quarantined suite.
+
 ## Concurrency
 
 The workflow sets its own `concurrency` group of the caller's workflow name,
-the `flows-dir` input and, for a `pull_request` run, the pull request's ref. Only a
+the `flows-dir` and `call-scope` inputs and, for a `pull_request` run, the pull
+request's ref, so two calls in one run with different `call-scope`s never cancel
+each other. Only a
 `pull_request` run is cancelled when a newer push to the same pull request
 supersedes it. Every other run — a push to the default branch, a schedule, a
 manual dispatch — gets a group unique to its run id, so a newer push never
@@ -644,7 +681,8 @@ jobs:
 single differing byte gives the pull request a different native key, and every
 pull request takes a Mac slot again.
 
-A per-package matrix with a time-boxed `tolerate-test-failures` quarantine is in
+A single call covering a monorepo's packages, with a bare app and a one-target
+quarantine, is in
 [docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml).
 
 Complete caller workflows for whole apps, linted and checked against this

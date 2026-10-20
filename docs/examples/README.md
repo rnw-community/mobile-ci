@@ -30,7 +30,7 @@ Markdown docs.
 | File | Trigger | What it does |
 | --- | --- | --- |
 | [`ota-preview.yml`](private-multi-brand-expo-app/ota-preview.yml) | pull request | `expo-ota-preview.yml` with `ota-backend: eas`: the preview is an EAS Update on channel `pr-<number>`, linked to the newest matching EAS development build. |
-| [`dev-build.yml`](private-multi-brand-expo-app/dev-build.yml) | push to `main`, dispatch per brand | `native-dev-release.yml` with `distribution: eas`: testers install from the EAS build page, no repository access needed. One brand per run. |
+| [`dev-build.yml`](private-multi-brand-expo-app/dev-build.yml) | push to `main`, dispatch | `native-dev-release.yml` once per brand in a matrix (`call-scope`), with `distribution: eas`: testers install from the EAS build page, no repository access needed. |
 | [`store-release.yml`](private-multi-brand-expo-app/store-release.yml) | release tag | `assert-distinct-fingerprints.yml`, then `native-publish.yml` once per brand (`record-scope`, `credentials-source: eas`, `mode: auto`, `ota-baseline: eas-channel`), then `eas-update` to each brand's production channel in the `production` GitHub Environment. |
 | [`eas-channel-cleanup.yml`](private-multi-brand-expo-app/eas-channel-cleanup.yml) | PR closed, weekly | `eas-channel-cleanup-reusable.yml`: deletes the PR's channel, sweeps idle `rc-*` channels, never a protected or `eas.json` channel. |
 
@@ -45,7 +45,7 @@ Markdown docs.
 
 | File | Trigger | What it does |
 | --- | --- | --- |
-| [`e2e.yml`](rn-packages-monorepo/e2e.yml) | pull request, push, nightly | One `ios-maestro.yml` / `android-maestro.yml` call per package; each skips itself when turbo reports its package unaffected; one package quarantined with `tolerate-test-failures`. |
+| [`e2e.yml`](rn-packages-monorepo/e2e.yml) | pull request, push, nightly | One `ios-maestro.yml` / `android-maestro.yml` call per platform for every package: per-target `flowsDir`, `buildStrategy: native` for the bare apps, one suite quarantined with `tolerateTestFailures`. |
 | [`pr-closed.yml`](rn-packages-monorepo/pr-closed.yml) | PR closed | `pr-closed-cleanup-reusable.yml`: frees the shared fleet from a closed PR's runs. |
 
 ## Permissions at a glance

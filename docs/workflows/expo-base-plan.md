@@ -20,8 +20,8 @@ pool by default):
    `prebuildCommand`, so the fingerprint sees what a native build would see;
 2. [`expo-native-key`](../../actions/expo-native-key) computes the native key;
 3. [`expo-base-binary`](../../actions/expo-base-binary) fetches the base
-   published for it — unless `build-strategy` is `native`, which skips the
-   lookup;
+   published for it — unless the target's `buildStrategy`, or else
+   `build-strategy`, is `native`, which skips the lookup;
 4. when a base is found and `repack` is true,
    [`expo-repack`](../../actions/expo-repack) repacks it and uploads it as
    `<app-artifact-prefix>-<target name>` — the artifact the caller's test or
@@ -49,11 +49,13 @@ for the `extraSources` fix and
 check ahead of a build pipeline. When no target declares an `appId` (the `seed-native-cache.yml` target shape) there is nothing to prove distinct, so the comparison is skipped with a notice; the e2e and screenshot callers that consume those bases still run it with their `appId`s. A mix of targets with and without `appId` fails.
 
 A collecting job then folds every target's decision into the `native-targets`
-output. One plan per target is required: a plan that never arrived is not an
+output. It reads only the plans named `<plan-artifact-prefix>-<target name>` for
+this call's targets, never another call's plans in the same run. One plan per
+target is required: a plan that never arrived is not an
 empty set of native builds, it is a target whose strategy nobody decided, and
 the job fails.
 
-Under `build-strategy: repack` a target with no base fails the job, naming the
+Under `build-strategy: repack` (or a target's `buildStrategy: repack`) a target with no base fails the job, naming the
 key and the address that is empty.
 
 ## Inputs
@@ -61,15 +63,15 @@ key and the address that is empty.
 | Name | Type | Required | Default | Description |
 | ---- | ---- | -------- | ------- | ----------- |
 | `platform` | string | yes | — | `ios` or `android`. |
-| `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. A target with `"forceNative": true` is handed to the native build even when its base exists; only a caller with `repack: false` may set it. |
-| `build-strategy` | string | no | `auto` | `auto`, `repack` or `native`. Resolved by the caller, never here. |
+| `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. A target with `"forceNative": true` is handed to the native build even when its base exists; only a caller with `repack: false` may set it. A target's own `buildStrategy` (`auto`, `repack` or `native`, resolved by the caller) wins over `build-strategy` for that target. |
+| `build-strategy` | string | no | `auto` | `auto`, `repack` or `native`. Resolved by the caller, never here. The default of a target without its own `buildStrategy`. |
 | `repack` | boolean | no | `true` | Repack the base when one is found. The warm-up sets it false: it is looking for a key with no base, not producing this commit's binary. |
 | `runner-labels` | string | no | `'["self-hosted","trf-linux-amd64-2x4"]'` | JSON array of runner labels for the plan jobs. The default is the 2 vCPU / 4 GiB x86_64 pool without `/dev/kvm`, so these jobs never queue on the KVM emulator lane ([#169](https://github.com/rnw-community/mobile-ci/issues/169)); keep it x86_64 (Google ships Android build-tools for x86_64 Linux only) and move to the 4x8 pool if bundling the JavaScript needs more than about 3 GiB. |
 | `control-runner-labels` | string | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
 | `runs-on-cache-bypass` | boolean | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `timeout-minutes` | number | no | `30` | Per-target timeout. |
 | `app-artifact-prefix` | string | yes | — | Artifact-name prefix the caller's test/capture job downloads the app under. |
-| `plan-artifact-prefix` | string | yes | — | Artifact-name prefix for the per-target plan files. |
+| `plan-artifact-prefix` | string | yes | — | Artifact-name prefix for the per-target plan files. The collecting job reads exactly `<plan-artifact-prefix>-<target name>` per target, so other plans in the same run are never counted. A caller that runs several times in one run puts its own scope in both prefixes (`ios-maestro.yml` and `android-maestro.yml` do it with `call-scope`); that is why this workflow needs no scope input of its own. |
 | `toolchain` | string | no | `''` | Pinned toolchain identity folded into the key — `xcode-<version>-<build>` on ios, `cmdline-<version>` on android. |
 | `ios-simulator-archs` | string | no | `arm64` | `arm64` or `x86_64`: the Simulator slice an ios base is built for. Folded into the native key by `expo-native-key` (only when `x86_64`, so arm64 keys are unchanged). Ignored on android. |
 | `base-backend` | string | no | `ghcr` | `ghcr` or `artifact`. |

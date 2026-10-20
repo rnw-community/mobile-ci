@@ -84,8 +84,8 @@ major release.
 | `runs-on-cache-bypass` | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `build-runner-labels`           | no       | `''`                                               | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
 | `test-runner-labels`            | no       | `''`                                               | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. |
-| `targets`                       | **yes**  | —                                                  | JSON array of build targets: `{name, appDir, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. |
-| `flows-dir`                     | **yes**  | —                                                  | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
+| `targets`                       | **yes**  | —                                                  | JSON array of build targets: `{name, appDir, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. Optional per target: `flowsDir`, `tolerateTestFailures`, `buildStrategy` — see [Several packages](#several-packages-per-target-fields-and-call-scope). |
+| `flows-dir`                     | no       | `''`                                               | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. The default of every target's `flowsDir`; may be empty only when every target names its own. |
 | `flows-max-depth`               | no       | `1`                                                 | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
 | `flows-name-pattern`            | no       | `*.flow.yaml`                                      | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
 | `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
@@ -160,6 +160,8 @@ major release.
 | `android-keystore-key-password` | no       | `android`                                          | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `build-timeout-minutes`         | no       | `60`                                               | Build job timeout. |
 | `test-timeout-minutes`          | no       | `75`                                               | Test job timeout. |
+| `tolerate-test-failures`        | no       | `false`                                            | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite. The default of every target's `tolerateTestFailures`, which quarantines one target alone. |
+| `call-scope`                    | no       | `''`                                               | Names this call's artifacts, plans, Redroid containers and concurrency groups, so several calls in one run (one per package, say) never share or cancel them. Calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them. Empty keeps today's names. See [Several packages](#several-packages-per-target-fields-and-call-scope). |
 
 ## Outputs
 
@@ -610,10 +612,52 @@ true` — `actions/upload-artifact` skips hidden files by default, which
 previously shipped `final-screen.png` alone and dropped the hierarchy dumps
 the failure message points you at.
 
+## Several packages: per-target fields and `call-scope`
+
+A monorepo of packages, each with its own example apps and Maestro suite, fits
+in **one call per platform**. Each `targets` entry may set, on top of its
+required fields:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `flowsDir` | the `flows-dir` input | Directory of this target's runnable flows. With every target naming its own, `flows-dir` may be left empty; a target with neither fails the `detect` job. |
+| `tolerateTestFailures` | the `tolerate-test-failures` input | `true` quarantines only this target: its Maestro failure becomes a `::warning::` and every other target still gates the run. Anything but a JSON boolean fails `detect`. |
+| `buildStrategy` | the `build-strategy` input | `auto`, `repack` or `native` for this target alone. A bare (non-Expo) React Native app sets `native`: it has no Expo runtime to repack, so it is always built with Gradle and never publishes a base. The `native-build-label` still makes every target `native`, and fails closed on a target that asks for `repack`. |
+
+`buildStrategy` is explicit rather than detected: whether an app is an Expo app
+is not reliably readable from its `package.json` in a monorepo whose
+dependencies are hoisted, and a wrong guess would either repack an app that
+cannot be repacked or compile one that could. An unknown value fails `detect`.
+
+One call runs every target when turbo reports any of them affected. To skip
+unaffected packages instead, call the workflow once per package — and then give
+each call a distinct `call-scope`. It is folded into every name a call owns:
+the app and plan artifacts (`android-e2e-app-<call-scope>--<target>`,
+`android-e2e-plan-<call-scope>--<target>`), the Maestro artifacts, the
+native build's concurrency group and the workflow's own concurrency group, and the Redroid container name.
+Without it two calls in one run share those names: a duplicate artifact name
+fails the upload, and on a pull request the second call cancels the first. The
+plan job only ever reads the plans named after its own targets, so another
+call's plans in the same run are never counted. `call-scope` takes letters,
+digits, `.` and `_`, with single `-` between them; anything else fails
+`detect`.
+
+Every Android target's shards boot their own emulator, whichever call they come
+from. To cap how many run on one host at once — across targets, calls and
+repositories — set `emulator-slots-dir` once the fleet provisions slot files
+(see [Emulator budget and host slots](#emulator-budget-and-host-slots)); a
+workflow `concurrency` group could only serialise whole calls.
+
+[docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml)
+is a complete single-call caller with a bare and an Expo app and one
+quarantined suite.
+
 ## Concurrency
 
 The workflow sets its own `concurrency` group of the caller's workflow name,
-the `flows-dir` input and, for a `pull_request` run, the pull request's ref. Only a
+the `flows-dir` and `call-scope` inputs and, for a `pull_request` run, the pull
+request's ref, so two calls in one run with different `call-scope`s never cancel
+each other. Only a
 `pull_request` run is cancelled when a newer push to the same pull request
 supersedes it. Every other run — a push to the default branch, a schedule, a
 manual dispatch — gets a group unique to its run id, so a newer push never
@@ -726,6 +770,10 @@ jobs:
 `fingerprint-env` must pass exactly what the default-branch warm-up passes; a
 single differing byte gives the pull request a different native key, and every
 pull request runs Gradle again.
+
+A single call covering a monorepo's packages, with a bare app and a one-target
+quarantine, is in
+[docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml).
 
 Complete caller workflows for whole apps, linted and checked against this
 workflow's inputs in CI, live in [docs/examples/](../examples/README.md).

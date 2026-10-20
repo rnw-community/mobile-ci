@@ -1,15 +1,24 @@
-# Monorepo of React Native packages, each with an example app and its own
-# Maestro suite. Copy to .github/workflows/e2e.yml.
+# Monorepo of React Native packages, each with a bare and an Expo example app
+# and its own Maestro suite. Copy to .github/workflows/e2e.yml.
 #
-# One reusable-workflow call per package. Each call gates itself: on a pull
-# request it runs only when turbo reports the package affected (target-packages
-# defaults to the name in the target's package.json), and its concurrency group
-# includes flows-dir, so the legs never cancel each other.
+# One reusable-workflow call per platform covers every package: each targets[]
+# entry names its own flowsDir, and optionally tolerateTestFailures and
+# buildStrategy; whatever an entry leaves out comes from the call's input.
 #
-# Quarantine: tolerate-test-failures keeps a known-broken package's iOS job
-# green and reports the failure as a warning instead. It is per package, so
-# every other suite still gates the pull request. Time-box it: link the issue
-# and remove the package from the condition when it is fixed.
+# - Bare (non-Expo) apps set buildStrategy: native. The repack path needs an
+#   Expo app, so a bare target is always compiled, and never publishes a base.
+# - Quarantine: tolerateTestFailures keeps one target's Maestro failure from
+#   failing the job and reports it as a warning instead; every other target
+#   still gates the pull request. Time-box it: link the issue and drop the
+#   field when it is fixed.
+# - Gating: the call runs when turbo reports any target's package affected
+#   (target-packages defaults to the name in each target's package.json), and
+#   then runs every target. To skip unaffected packages instead, call the
+#   workflow once per package in a matrix with call-scope: <package>, so the
+#   calls' artifacts and concurrency groups stay apart.
+# - Android emulators: every Android target shard boots its own emulator. To
+#   cap how many run on one host at once, across calls and repositories, set
+#   emulator-slots-dir once the fleet provisions slot files.
 name: E2E
 
 on:
@@ -24,45 +33,41 @@ permissions: {}
 
 jobs:
     ios:
-        strategy:
-            fail-fast: false
-            matrix:
-                package: [payments, collapsible-header, screen-chrome]
         permissions:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.3.0 # v4.3.0
         with:
             targets: >-
-                [{"name":"${{ matrix.package }}","appDir":"packages/react-native-${{ matrix.package }}-example/apps/expo","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.${{ matrix.package }}","prebuildCommand":"npx expo prebuild -p ios"}]
-            flows-dir: packages/react-native-${{ matrix.package }}-example/e2e/flows
+                [
+                  {"name":"payments-bare","appDir":"packages/react-native-payments-example/apps/bare","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.payments","prebuildCommand":"","flowsDir":"packages/react-native-payments-example/e2e/flows","buildStrategy":"native"},
+                  {"name":"payments-expo","appDir":"packages/react-native-payments-example/apps/expo","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.payments","prebuildCommand":"npx expo prebuild -p ios","flowsDir":"packages/react-native-payments-example/e2e/flows"},
+                  {"name":"collapsible-header-expo","appDir":"packages/react-native-collapsible-header-example/apps/expo","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.collapsibleheader","prebuildCommand":"npx expo prebuild -p ios","flowsDir":"packages/react-native-collapsible-header-example/e2e/flows"},
+                  {"name":"screen-chrome-expo","appDir":"packages/react-native-screen-chrome-example/apps/expo","workspace":"Example.xcworkspace","scheme":"Example","appId":"com.example.screenchrome","prebuildCommand":"npx expo prebuild -p ios","flowsDir":"packages/react-native-screen-chrome-example/e2e/flows","tolerateTestFailures":true}
+                ]
             install-command: pnpm install --frozen-lockfile
-            build-command: pnpm build --filter=@rnw-community/react-native-${{ matrix.package }}...
+            build-command: pnpm build --filter='./packages/*'
             exempt-paths: |
                 **/*.md
                 docs/**
-            # Quarantined: crashes under the iOS 26 simulator (tracked in #601).
-            tolerate-test-failures: ${{ matrix.package == 'screen-chrome' }}
 
     android:
-        strategy:
-            fail-fast: false
-            matrix:
-                # android-maestro.yml has no tolerate-test-failures input, so a
-                # package that cannot pass is left out of the matrix instead.
-                package: [payments, collapsible-header]
         permissions:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.3.0 # v4.3.0
         with:
             targets: >-
-                [{"name":"${{ matrix.package }}","appDir":"packages/react-native-${{ matrix.package }}-example/apps/expo","appId":"com.example.${{ matrix.package }}","prebuildCommand":"npx expo prebuild -p android"}]
-            flows-dir: packages/react-native-${{ matrix.package }}-example/e2e/flows
+                [
+                  {"name":"payments-bare","appDir":"packages/react-native-payments-example/apps/bare","appId":"com.example.payments","prebuildCommand":"","flowsDir":"packages/react-native-payments-example/e2e/flows","buildStrategy":"native"},
+                  {"name":"payments-expo","appDir":"packages/react-native-payments-example/apps/expo","appId":"com.example.payments","prebuildCommand":"npx expo prebuild -p android","flowsDir":"packages/react-native-payments-example/e2e/flows"},
+                  {"name":"collapsible-header-expo","appDir":"packages/react-native-collapsible-header-example/apps/expo","appId":"com.example.collapsibleheader","prebuildCommand":"npx expo prebuild -p android","flowsDir":"packages/react-native-collapsible-header-example/e2e/flows"},
+                  {"name":"screen-chrome-expo","appDir":"packages/react-native-screen-chrome-example/apps/expo","appId":"com.example.screenchrome","prebuildCommand":"npx expo prebuild -p android","flowsDir":"packages/react-native-screen-chrome-example/e2e/flows","tolerateTestFailures":true}
+                ]
             install-command: pnpm install --frozen-lockfile
-            build-command: pnpm build --filter=@rnw-community/react-native-${{ matrix.package }}...
+            build-command: pnpm build --filter='./packages/*'
             exempt-paths: |
                 **/*.md
                 docs/**

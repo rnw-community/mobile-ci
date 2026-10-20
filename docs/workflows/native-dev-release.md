@@ -279,7 +279,8 @@ android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
 | `ios-post-build-command`     | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the iOS EAS build and the embedded build number read-back, before the build is published (GitHub Release or `eas upload`); a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.ipa`), `EMBEDDED_BUILD_NUMBER` (`CFBundleVersion`) and `EMBEDDED_VERSION` (`CFBundleShortVersionString`). |
 | `android-post-build-command` | no       | `''`                                      | Optional consumer-owned command run in `app-dir` after the Android EAS build and the embedded build number read-back, before the build is published (GitHub Release or `eas upload`); a non-zero exit stops publication. Runs with the job's env plus `ARTIFACT_PATH` (the `.apk`/`.aab`), `EMBEDDED_BUILD_NUMBER` (`versionCode`) and `EMBEDDED_VERSION` (`versionName`), both empty when the host has no tool to read them. |
 | `android-artifact-extension`        | no       | `apk`                                  | Container EAS produces for the Android dev build (`apk` or `aab`), inferred from the `--output` extension. Defaults to `apk`: a dev release is internal distribution that testers sideload, and an `aab` cannot be installed on a device. Fails closed on any other value. |
-| `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`. |
+| `tag-prefix`                 | no       | `dev`                                     | Release tag prefix. Tags are created as `<tag-prefix>-ios-<run_number>` and `<tag-prefix>-android-<run_number>`; with `call-scope`, `<tag-prefix>-<call-scope>-<platform>-<run_number>`. |
+| `call-scope`                 | no       | `''`                                      | Names this call's build artifacts (`<platform>-dev-build-<call-scope>`), release tags and the prefix it prunes (`<tag-prefix>-<call-scope>-<platform>-`), preview comment sections and concurrency group, so one call per brand in a matrix cannot overwrite, prune, queue behind or cancel another. Calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them; anything else fails the job before it builds. Empty keeps today's names. See [Several calls in one run](#several-calls-in-one-run-call-scope). |
 | `keep-releases`              | no       | `5`                                       | Number of newest *other* published releases (per platform tag) to keep in addition to the one the current run just published; older ones are pruned. |
 | `pr-comment`                 | no       | `false`                                   | On a `pull_request` event, write each enabled platform's build (release and install link, runtime fingerprint, or the failure and the run link) into the pull request's sticky preview comment, the one `expo-ota-preview.yml` writes too. The calling job must then also grant `pull-requests: write`. |
 | `asc-key-path`               | no       | `''`                                       | Optional path, relative to `app-dir`, the App Store Connect API key (`.p8`) is written to and removed from. Only used when the `ASC_API_KEY` secret is set. Leave empty (default) to write the key under `$RUNNER_TEMP` instead, keeping it out of the `eas build --local` archive; set it only when `eas.json` requires the key at a specific `app-dir`-relative location. |
@@ -421,12 +422,53 @@ jobs:
             EAS_EXTRA_ENV: SENTRY_AUTH_TOKEN=${{ secrets.SENTRY_AUTH_TOKEN }}
 ```
 
-**One call per run.** The build artifacts (`ios-dev-build`,
-`android-dev-build`) and the concurrency group are not scoped per call, so two
-calls in one workflow run — a brand matrix, say — collide. Build each brand in
-its own run, as
-[docs/examples/private-multi-brand-expo-app/dev-build.yml](../examples/private-multi-brand-expo-app/dev-build.yml)
-does with a `workflow_dispatch` input.
+### Several calls in one run: `call-scope`
+
+Without it, every call in a run uses the same build artifact names
+(`ios-dev-build`, `android-dev-build`), release tags
+(`<tag-prefix>-<platform>-<run_number>`) and concurrency group, so a second call
+— a brand matrix, say — fails its artifact upload, publishes over the first
+call's release, or waits behind it. Give each call its own `call-scope`:
+
+```yaml
+# .github/workflows/dev-build.yml
+name: Dev build
+on:
+    workflow_dispatch:
+permissions: {}
+jobs:
+    dev-build:
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.3.0 # v4.3.0
+        with:
+            app-dir: apps/mobile
+            enable-android: true
+            build-profile: development-${{ matrix.brand }}
+            distribution: eas
+            call-scope: ${{ matrix.brand }}
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+```
+
+Each call then uploads `<platform>-dev-build-<call-scope>`, tags its releases
+`<tag-prefix>-<call-scope>-<platform>-<run_number>` and prunes only those (a
+prune keeps to tags whose remainder after its prefix is a run number, so
+neither an unscoped call nor another scope's releases are ever pruned), writes
+its own `<platform>-dev-build-<call-scope>` section of the preview comment, and
+runs in its own concurrency group. For `expo-ota-preview.yml` to find a brand's
+dev build, pass it `dev-release-tag-prefix: <tag-prefix>-<call-scope>`. Two
+calls that still share a scope fail closed: the artifact upload rejects the
+duplicate name, and a release step that finds its tag already holding this run
+attempt's build number refuses to publish over it. The outputs of a matrix call
+are those of whichever leg finished last, so read each brand's install page from
+its job summary, or call the workflow once per brand without a matrix. A
+complete caller is
+[docs/examples/private-multi-brand-expo-app/dev-build.yml](../examples/private-multi-brand-expo-app/dev-build.yml).
 
 To thread a secret into the eas build environment (e.g. an Apple
 app-specific password), pass it through `EAS_EXTRA_ENV` rather than a plain

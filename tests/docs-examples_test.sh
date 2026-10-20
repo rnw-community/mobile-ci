@@ -38,9 +38,9 @@ sed 's/^            flows-dir: apps\/mobile\/e2e\/flows$/&\n            flows-di
 expect_rejected 'an example passing an input the workflow does not declare is rejected' \
     "$scratch/unknown-input.yml" "has no input 'flows-directory'"
 
-grep -v '^            flows-dir: ' "$EXAMPLE" > "$scratch/missing-required.yml"
+sed '/^            targets: >-$/,+1d' "$EXAMPLE" > "$scratch/missing-required.yml"
 expect_rejected 'an example omitting a required input is rejected' \
-    "$scratch/missing-required.yml" "requires input 'flows-dir'"
+    "$scratch/missing-required.yml" "requires input 'targets'"
 
 sed '0,/^            packages: write$/{/^            packages: write$/d}' "$EXAMPLE" > "$scratch/missing-permission.yml"
 expect_rejected 'an example whose calling job lacks a required grant is rejected' \

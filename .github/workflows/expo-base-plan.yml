@@ -41,7 +41,9 @@ on:
                     `auto` (look up a base and repack it when one exists),
                     `repack` (refuse to hand any target to a native build), or
                     `native` (compute the key, look up nothing, hand every target
-                    to the native build). Resolved by the caller, never here.
+                    to the native build). Resolved by the caller, never here. A
+                    target's own buildStrategy, also resolved by the caller, wins
+                    over it for that target.
                 type: string
                 required: false
                 default: auto
@@ -439,7 +441,7 @@ jobs:
 
             - name: expo-base-binary (fetch)
               id: base
-              if: inputs.build-strategy != 'native'
+              if: (matrix.target.buildStrategy || inputs.build-strategy) != 'native'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.2.0 # v4.2.0
               with:
                   mode: fetch
@@ -450,7 +452,7 @@ jobs:
                   path: .ci-cache/e2e-base/${{ matrix.target.name }}
 
             - name: Refuse to compile native code under build-strategy repack
-              if: inputs.build-strategy == 'repack' && steps.base.outputs.found != 'true'
+              if: (matrix.target.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true'
               shell: bash
               env:
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
@@ -632,7 +634,7 @@ jobs:
                   BASE_FOUND: ${{ steps.base.outputs.found }}
                   BASE_SOURCE: ${{ steps.base.outputs.source }}
                   BASE_REFERENCE: ${{ steps.base.outputs.reference }}
-                  BUILD_STRATEGY: ${{ inputs.build-strategy }}
+                  BUILD_STRATEGY: ${{ (matrix.target.buildStrategy || inputs.build-strategy) }}
                   REPACKED: ${{ inputs.repack }}
               run: |
                   set -euo pipefail
@@ -709,12 +711,19 @@ jobs:
               shell: bash
               env:
                   TARGETS: ${{ inputs.targets }}
+                  PLAN_PREFIX: ${{ inputs.plan-artifact-prefix }}
               run: |
                   set -euo pipefail
                   expected=$(jq 'length' <<< "$TARGETS")
-                  mapfile -d '' -t plans < <(find .ci-artifacts/plans -name plan.json -print0 | LC_ALL=C sort -z)
+                  plans=()
+                  while IFS= read -r name; do
+                    plan=".ci-artifacts/plans/${PLAN_PREFIX}-${name}/plan.json"
+                    if [ -f "$plan" ]; then
+                      plans+=("$plan")
+                    fi
+                  done < <(jq -r '.[].name' <<< "$TARGETS")
                   if [ "${#plans[@]}" -ne "$expected" ]; then
-                    echo "::error::Expected one plan per target ($expected), found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
+                    echo "::error::Expected one plan per target ($expected) named ${PLAN_PREFIX}-<target name>, found ${#plans[@]}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
                     exit 1
                   fi
                   echo "plans=$(jq -sc '.' "${plans[@]}")" >> "$GITHUB_OUTPUT"
