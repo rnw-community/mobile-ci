@@ -295,21 +295,30 @@ run_jobs() {
     run_step "$workspace" NATIVE_COMPILE_JOBS='' CGROUP_ROOT="$workspace/cgroup" "$@"
 }
 
-case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 3 native jobs at once, memory bounding it below the CPUs'
+case_start 'a 4-CPU / 8 GiB cgroup v2 runner compiles 1 native job at a time: one heavy translation unit beside the JVMs is all that fits'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
 jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 1 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'memory, not CPUs, bounds the jobs on a runner with more CPUs than memory per job'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((16 * GIB)) '800000 100000'
 run_jobs
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_equals 3 "$(step_output "$workspace" jobs)" 'jobs'; then
     pass_case
 fi
 
-case_start 'memory, not CPUs, bounds the jobs on a runner with more CPUs than memory'
+case_start 'CPUs, not memory, bound the jobs on a runner with memory to spare'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
-jobs_cgroup_v2 "$workspace/cgroup" $((7 * GIB)) '800000 100000'
+jobs_cgroup_v2 "$workspace/cgroup" $((64 * GIB)) '400000 100000'
 run_jobs
 if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    && assert_equals 4 "$(step_output "$workspace" jobs)" 'jobs'; then
     pass_case
 fi
 
@@ -325,12 +334,37 @@ fi
 case_start 'a cgroup v1 runner is bounded the same way'
 workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
 mkdir -p "$workspace/cgroup/memory" "$workspace/cgroup/cpu"
-printf '%s\n' $((8 * GIB)) > "$workspace/cgroup/memory/memory.limit_in_bytes"
-printf '200000\n' > "$workspace/cgroup/cpu/cpu.cfs_quota_us"
+printf '%s\n' $((12 * GIB)) > "$workspace/cgroup/memory/memory.limit_in_bytes"
+printf '400000\n' > "$workspace/cgroup/cpu/cpu.cfs_quota_us"
 printf '100000\n' > "$workspace/cgroup/cpu/cpu.cfs_period_us"
 run_jobs
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'native-compile-memory-per-job resizes the memory bound'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs NATIVE_COMPILE_MEMORY_PER_JOB=2048
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 2 "$(step_output "$workspace" jobs)" 'jobs'; then
+    pass_case
+fi
+
+case_start 'a native-compile-memory-per-job that is not a positive MiB count fails closed'
+all_failed_closed=true
+for per_job in 0 3.5G -1; do
+    workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+    jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+    run_jobs NATIVE_COMPILE_MEMORY_PER_JOB="$per_job"
+    if ! { assert_equals 1 "$STEP_STATUS" "step status ($per_job)" \
+        && assert_contains "$(cat "$workspace/log")" 'native-compile-memory-per-job' "log ($per_job)"; }; then
+        all_failed_closed=false
+        break
+    fi
+done
+if [ "$all_failed_closed" = true ]; then
     pass_case
 fi
 
@@ -441,7 +475,7 @@ job_env="$(cat "$workspace/env")"
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_contains "$job_env" "CMAKE_C_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
     && assert_contains "$job_env" "CMAKE_CXX_COMPILER_LAUNCHER=$slot_launcher" 'job env' \
-    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=3' 'job env' \
+    && assert_contains "$job_env" 'MOBILE_CI_COMPILE_SLOTS=1' 'job env' \
     && assert_contains "$job_env" "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir" 'job env'; then
     pass_case
 fi
@@ -485,6 +519,42 @@ jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
 run_jobs JAVA_TOOL_OPTIONS='-XX:MaxRAM=8192m'
 if assert_equals 0 "$STEP_STATUS" 'step status' \
     && assert_not_contains "$(cat "$workspace/env")" 'JAVA_TOOL_OPTIONS' 'job env'; then
+    pass_case
+fi
+
+KOTLIN_IN_PROCESS='-Dorg.gradle.project.kotlin.compiler.execution.strategy=in-process'
+
+case_start 'a bounded runner compiles Kotlin inside the Gradle daemon instead of in separate Kotlin daemons, keeping the caller GRADLE_OPTS'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+run_jobs GRADLE_OPTS='-Dorg.gradle.caching=true'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/env")" "GRADLE_OPTS=-Dorg.gradle.caching=true $KOTLIN_IN_PROCESS" 'job env'; then
+    pass_case
+fi
+
+case_start "a caller's own Kotlin execution strategy in GRADLE_OPTS is kept, and a second run adds nothing"
+all_kept=true
+for opts in '-Dorg.gradle.project.kotlin.compiler.execution.strategy=daemon' "$KOTLIN_IN_PROCESS"; do
+    workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+    jobs_cgroup_v2 "$workspace/cgroup" $((8 * GIB)) '400000 100000'
+    run_jobs GRADLE_OPTS="$opts"
+    if ! { assert_equals 0 "$STEP_STATUS" "step status ($opts)" \
+        && assert_not_contains "$(cat "$workspace/env")" 'GRADLE_OPTS' "job env ($opts)"; }; then
+        all_kept=false
+        break
+    fi
+done
+if [ "$all_kept" = true ]; then
+    pass_case
+fi
+
+case_start 'an unbounded runner leaves GRADLE_OPTS alone'
+workspace="$(new_workspace "$ACTION" "$JOBS_STEP")"
+jobs_cgroup_v2 "$workspace/cgroup" max 'max 100000'
+run_jobs
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_not_contains "$(cat "$workspace/env")" 'GRADLE_OPTS' 'job env'; then
     pass_case
 fi
 
