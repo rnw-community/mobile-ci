@@ -292,7 +292,7 @@ pinned tag and source it:
 
 ```bash
 brew install mobai-app/tap/simslim
-curl -fsSL https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.3.0/scripts/slim-simulator.sh \
+curl -fsSL https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.3.1/scripts/slim-simulator.sh \
     -o /usr/local/bin/slim-simulator.sh
 
 xcrun simctl boot "$udid"
