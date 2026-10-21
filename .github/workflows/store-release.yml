@@ -249,7 +249,7 @@ jobs:
             - name: Release on the App Store
               id: ios
               if: steps.plan.outputs.ios == 'true'
-              uses: rnw-community/mobile-ci/actions/app-store-release@e6c4d187e50efde57472cb7f4e7ac1032f4b67f3 # feat/store-release-workflow fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/app-store-release@v4.4.0 # v4.4.0
               with:
                   app-id: ${{ inputs.ios-app-id }}
                   version: ${{ steps.ios-version.outputs.version }}
@@ -265,7 +265,7 @@ jobs:
             - name: Release on Google Play
               id: android
               if: ${{ !cancelled() && steps.keys.outcome == 'success' && steps.plan.outputs.android == 'true' }}
-              uses: rnw-community/mobile-ci/actions/play-store-release@e6c4d187e50efde57472cb7f4e7ac1032f4b67f3 # feat/store-release-workflow fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/play-store-release@v4.4.0 # v4.4.0
               with:
                   package-name: ${{ inputs.android-package }}
                   from-track: ${{ inputs.android-from-track }}
