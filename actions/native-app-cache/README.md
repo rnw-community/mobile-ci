@@ -42,7 +42,7 @@ the weaker guarantee only and should reseed on a schedule (see the
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.4.0 # v4.4.0
+- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.4.1 # v4.4.1
   id: native-app-cache
   with:
       mode: restore
@@ -54,7 +54,7 @@ the weaker guarantee only and should reseed on a schedule (see the
 
 # ... build only when steps.native-app-cache.outputs.cache-hit != 'true' ...
 
-- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.4.0 # v4.4.0
+- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.4.1 # v4.4.1
   if: steps.native-app-cache.outputs.cache-hit != 'true'
   with:
       mode: save

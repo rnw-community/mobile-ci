@@ -27,14 +27,14 @@ jobs:
                   persist-credentials: false
 
             - name: Select the pinned Xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.1 # v4.4.1
               with:
                   version: '26.4.1'
                   build: '17E202'
 
             - name: Install the signing material
               id: signing
-              uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.1 # v4.4.1
               with:
                   certificate-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
                   certificate-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
@@ -44,7 +44,7 @@ jobs:
                   expected-application-identifier: ABCDE12345.com.example.myapp
 
             - name: Archive and upload to App Store Connect
-              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v4.4.1 # v4.4.1
               with:
                   project: MyApp.xcodeproj
                   scheme: MyApp
@@ -58,6 +58,6 @@ jobs:
 
             - name: Remove the signing material
               if: always()
-              uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.1 # v4.4.1
               with:
                   mode: remove

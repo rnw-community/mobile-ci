@@ -299,7 +299,7 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.0 # v4.4.0
+- uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.1 # v4.4.1
   with:
       app-path: ./build/MyApp.app
       app-id: com.example.app
@@ -326,7 +326,7 @@ and run exactly as they did before, with no extra `-e` argument.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.0 # v4.4.0
+- uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.1 # v4.4.1
   with:
       app-path: .ci-artifacts/ios-e2e-app-bare/Base.app
       app-id: com.example.app

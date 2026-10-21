@@ -663,7 +663,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.4.0 # v4.4.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.4.1 # v4.4.1
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -798,7 +798,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.0 # v4.4.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.1 # v4.4.1
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -852,7 +852,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.1 # v4.4.1
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -893,7 +893,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.1 # v4.4.1
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1005,7 +1005,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.4.1 # v4.4.1
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1026,7 +1026,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.1 # v4.4.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1060,7 +1060,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.1 # v4.4.1
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1073,7 +1073,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.4.1 # v4.4.1
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1091,7 +1091,7 @@ jobs:
                   excluded-archs: ${{ inputs.ios-simulator-archs == 'x86_64' && 'arm64' || 'x86_64' }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.1 # v4.4.1
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1116,7 +1116,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.4.1 # v4.4.1
               with:
                   mode: publish
                   platform: ios
@@ -1194,7 +1194,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.1 # v4.4.1
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1288,7 +1288,7 @@ jobs:
 
             - name: setup-xcode-pinned
               if: inputs.ios-driver != 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.1 # v4.4.1
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1306,7 +1306,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.1 # v4.4.1
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1317,7 +1317,7 @@ jobs:
               id: run-maestro-ios
               if: inputs.ios-driver == 'local'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.4.1 # v4.4.1
               with:
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -1357,7 +1357,7 @@ jobs:
               id: run-maestro-device-cloud
               if: inputs.ios-driver == 'device-cloud'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.4.0 # v4.4.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.4.1 # v4.4.1
               with:
                   platform: ios
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
