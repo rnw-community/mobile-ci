@@ -135,13 +135,13 @@ than an empty one under the workspace.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.0 # v4.4.0
   id: xcode
   with:
       version: '26.4.1'
       build: '17E202'
 
-- uses: rnw-community/mobile-ci/actions/xcode-cache@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/xcode-cache@v4.4.0 # v4.4.0
   id: cache
   with:
       mode: restore
@@ -154,7 +154,7 @@ than an empty one under the workspace.
       # shellcheck disable=SC2086
       xcodebuild -project MyApp.xcodeproj -scheme MyApp $XCODEBUILD_ARGS build
 
-- uses: rnw-community/mobile-ci/actions/xcode-cache@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/xcode-cache@v4.4.0 # v4.4.0
   if: always() && steps.cache.outputs.cache-hit != 'true'
   with:
       mode: save

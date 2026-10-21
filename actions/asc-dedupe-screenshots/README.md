@@ -109,7 +109,7 @@ between a release and the next version being created); pass
       chmod 600 "$key_path"
       echo "KEY_PATH=$key_path" >> "$GITHUB_ENV"
 
-- uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v4.4.0 # v4.4.0
   id: dedupe
   with:
       app-id: com.example.app
