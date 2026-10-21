@@ -122,7 +122,7 @@ being cut) that consumers pin to in practice. **No
    (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
    `store-screenshots.yml`, `expo-base-plan.yml`, `swift-ios.yml`,
    `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`,
-   `assert-distinct-fingerprints.yml`, and `native-publish.yml` /
+   `assert-distinct-fingerprints.yml`, `store-release.yml`, and `native-publish.yml` /
    `native-dev-release.yml` through `apply-secret-env`) **and** the
    composite actions that
    call sibling actions (`run-maestro-android-redroid/action.yml` →
@@ -151,6 +151,7 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/assert-distinct-fingerprints.yml \
                .github/workflows/native-publish.yml \
                .github/workflows/native-dev-release.yml \
+               .github/workflows/store-release.yml \
                actions/expo-native-key/action.yml \
                actions/eas-update/action.yml \
                actions/eas-channel-fingerprint/action.yml \

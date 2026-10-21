@@ -1,0 +1,282 @@
+name: store-release
+
+on:
+    workflow_call:
+        inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the release job, which only runs
+                    Node against the App Store Connect and Google Play APIs and needs
+                    no self-hosted hardware. Override when the org has no GitHub-hosted
+                    runners, for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            platforms:
+                description: Comma-separated platforms to release; ios, android, or both.
+                type: string
+                required: true
+            dry-run:
+                description: >-
+                    Resolve and print the plan with read-only calls, changing nothing.
+                    Pass false to submit for review and promote.
+                type: boolean
+                required: false
+                default: true
+            github-environment:
+                description: >-
+                    GitHub Environment the release job runs in, so its protection rules
+                    (required reviewers, wait timer, branch policy) gate the release.
+                    Empty runs without an environment.
+                type: string
+                required: false
+                default: ''
+            timeout-minutes:
+                type: number
+                required: false
+                default: 15
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            version-file:
+                description: >-
+                    Repository-relative JSON file whose top-level "version" is the iOS
+                    marketing version (e.g. apps/mobile/package.json), read when
+                    ios-version is empty.
+                type: string
+                required: false
+                default: ''
+            ios-app-id:
+                description: Numeric App Store Connect app id (App Information > Apple ID).
+                type: string
+                required: false
+                default: ''
+            ios-version:
+                description: Marketing version to submit. Empty reads version-file.
+                type: string
+                required: false
+                default: ''
+            ios-build-number:
+                description: Build number to attach. Empty picks the newest VALID, unexpired build of the version.
+                type: string
+                required: false
+                default: ''
+            ios-release-type:
+                description: MANUAL, AFTER_APPROVAL or SCHEDULED.
+                type: string
+                required: false
+                default: MANUAL
+            ios-scheduled-release-date:
+                description: ISO-8601 earliest release date-time; required with ios-release-type SCHEDULED.
+                type: string
+                required: false
+                default: ''
+            ios-phased-release:
+                description: Release over Apple's 7-day phased rollout once the version goes live.
+                type: boolean
+                required: false
+                default: false
+            android-package:
+                description: Android application id.
+                type: string
+                required: false
+                default: ''
+            android-from-track:
+                type: string
+                required: false
+                default: internal
+            android-to-track:
+                type: string
+                required: false
+                default: production
+            android-version-code:
+                description: Version code to promote. Empty picks the highest on android-from-track.
+                type: string
+                required: false
+                default: ''
+            android-rollout:
+                description: User fraction in (0, 1]; 1 completes the release, lower starts a staged rollout.
+                type: string
+                required: false
+                default: '1'
+            android-release-notes-from-source:
+                description: Copy the source release's release notes to the promoted release.
+                type: boolean
+                required: false
+                default: true
+        secrets:
+            ASC_API_KEY:
+                description: App Store Connect API key contents (.p8). Required for ios.
+                required: false
+            ASC_KEY_ID:
+                description: App Store Connect API key ID. Required for ios.
+                required: false
+            ASC_ISSUER_ID:
+                description: App Store Connect API issuer ID. Required for ios.
+                required: false
+            GOOGLE_SERVICE_ACCOUNT_JSON:
+                description: Google Play service account key JSON contents. Required for android.
+                required: false
+
+concurrency:
+    group: store-release-${{ github.repository }}-${{ inputs.ios-app-id }}-${{ inputs.android-package }}
+    cancel-in-progress: false
+
+jobs:
+    release:
+        name: Store release${{ inputs.dry-run && ' (dry run)' || '' }}
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        environment: ${{ inputs.github-environment }}
+        permissions:
+            contents: read
+        steps:
+            - name: Validate platforms and credentials
+              id: plan
+              shell: bash
+              env:
+                  PLATFORMS: ${{ inputs.platforms }}
+                  IOS_APP_ID: ${{ inputs.ios-app-id }}
+                  IOS_VERSION: ${{ inputs.ios-version }}
+                  VERSION_FILE: ${{ inputs.version-file }}
+                  ANDROID_PACKAGE: ${{ inputs.android-package }}
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+                  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+              run: |
+                  set -euo pipefail
+                  ios=false
+                  android=false
+                  IFS=',' read -r -a requested <<< "$PLATFORMS"
+                  for platform in "${requested[@]}"; do
+                    platform="$(printf '%s' "$platform" | tr -d '[:space:]')"
+                    case "$platform" in
+                      ios) ios=true ;;
+                      android) android=true ;;
+                      *)
+                        echo "::error::platforms '$PLATFORMS' must list ios, android, or both (comma-separated); '$platform' is neither."
+                        exit 1
+                        ;;
+                    esac
+                  done
+                  if [ "$ios" = false ] && [ "$android" = false ]; then
+                    echo "::error::platforms is empty; pass ios, android, or ios,android."
+                    exit 1
+                  fi
+                  problems=()
+                  if [ "$ios" = true ]; then
+                    [ -n "$IOS_APP_ID" ] || problems+=("input ios-app-id")
+                    [ -n "$IOS_VERSION" ] || [ -n "$VERSION_FILE" ] || problems+=("input ios-version or version-file")
+                    [ -n "${ASC_API_KEY:-}" ] || problems+=("secret ASC_API_KEY")
+                    [ -n "${ASC_KEY_ID:-}" ] || problems+=("secret ASC_KEY_ID")
+                    [ -n "${ASC_ISSUER_ID:-}" ] || problems+=("secret ASC_ISSUER_ID")
+                  fi
+                  if [ "$android" = true ]; then
+                    [ -n "$ANDROID_PACKAGE" ] || problems+=("input android-package")
+                    [ -n "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ] || problems+=("secret GOOGLE_SERVICE_ACCOUNT_JSON")
+                  fi
+                  if [ "${#problems[@]}" -gt 0 ]; then
+                    for problem in "${problems[@]}"; do
+                      echo "::error::platforms '$PLATFORMS' requires $problem, which is empty. Pass secrets through an explicit secrets: block in the caller."
+                    done
+                    exit 1
+                  fi
+                  echo "ios=$ios" >> "$GITHUB_OUTPUT"
+                  echo "android=$android" >> "$GITHUB_OUTPUT"
+
+            - name: Check out the version file
+              if: steps.plan.outputs.ios == 'true' && inputs.ios-version == ''
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+                  sparse-checkout: ${{ inputs.version-file }}
+                  sparse-checkout-cone-mode: false
+
+            - name: Resolve the iOS version
+              id: ios-version
+              if: steps.plan.outputs.ios == 'true'
+              shell: bash
+              env:
+                  IOS_VERSION: ${{ inputs.ios-version }}
+                  VERSION_FILE: ${{ inputs.version-file }}
+              run: |
+                  set -euo pipefail
+                  version="$IOS_VERSION"
+                  if [ -z "$version" ]; then
+                    if [ ! -f "$VERSION_FILE" ]; then
+                      echo "::error::version-file '$VERSION_FILE' does not exist in the checkout."
+                      exit 1
+                    fi
+                    if ! version="$(jq -er '.version | strings' "$VERSION_FILE")"; then
+                      echo "::error::version-file '$VERSION_FILE' has no top-level string \"version\"."
+                      exit 1
+                    fi
+                    echo "iOS version $version read from $VERSION_FILE."
+                  fi
+                  echo "version=$version" >> "$GITHUB_OUTPUT"
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Write store credentials
+              id: keys
+              shell: bash
+              env:
+                  IOS: ${{ steps.plan.outputs.ios }}
+                  ANDROID: ${{ steps.plan.outputs.android }}
+                  ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+              run: |
+                  set -euo pipefail
+                  dir="$RUNNER_TEMP/store-release"
+                  mkdir -p "$dir"
+                  chmod 700 "$dir"
+                  if [ "$IOS" = true ]; then
+                    printf '%s' "$ASC_API_KEY" > "$dir/asc-api-key.p8"
+                    chmod 600 "$dir/asc-api-key.p8"
+                    echo "asc-key-path=$dir/asc-api-key.p8" >> "$GITHUB_OUTPUT"
+                  fi
+                  if [ "$ANDROID" = true ]; then
+                    printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > "$dir/google-service-account.json"
+                    chmod 600 "$dir/google-service-account.json"
+                    echo "google-key-path=$dir/google-service-account.json" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - name: Release on the App Store
+              id: ios
+              if: steps.plan.outputs.ios == 'true'
+              uses: rnw-community/mobile-ci/actions/app-store-release@v4.4.0 # v4.4.0
+              with:
+                  app-id: ${{ inputs.ios-app-id }}
+                  version: ${{ steps.ios-version.outputs.version }}
+                  build-number: ${{ inputs.ios-build-number }}
+                  release-type: ${{ inputs.ios-release-type }}
+                  scheduled-release-date: ${{ inputs.ios-scheduled-release-date }}
+                  phased-release: ${{ inputs.ios-phased-release }}
+                  dry-run: ${{ inputs.dry-run }}
+                  asc-key-path: ${{ steps.keys.outputs.asc-key-path }}
+                  asc-key-id: ${{ secrets.ASC_KEY_ID }}
+                  asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+
+            - name: Release on Google Play
+              id: android
+              if: ${{ !cancelled() && steps.keys.outcome == 'success' && steps.plan.outputs.android == 'true' }}
+              uses: rnw-community/mobile-ci/actions/play-store-release@v4.4.0 # v4.4.0
+              with:
+                  package-name: ${{ inputs.android-package }}
+                  from-track: ${{ inputs.android-from-track }}
+                  to-track: ${{ inputs.android-to-track }}
+                  version-code: ${{ inputs.android-version-code }}
+                  rollout: ${{ inputs.android-rollout }}
+                  release-notes-from-source: ${{ inputs.android-release-notes-from-source }}
+                  dry-run: ${{ inputs.dry-run }}
+                  service-account-key-path: ${{ steps.keys.outputs.google-key-path }}
+
+            - name: Remove store credentials
+              if: always()
+              shell: bash
+              run: rm -rf "$RUNNER_TEMP/store-release"

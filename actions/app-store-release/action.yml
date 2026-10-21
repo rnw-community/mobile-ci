@@ -1,0 +1,84 @@
+name: app-store-release
+description: >-
+  Submits an already-uploaded, processed iOS build for App Review through the
+  App Store Connect API - a self-signed ES256 JWT and a dependency-free Node
+  script, no fastlane, no Mac. Finds (or creates, or renames the one editable)
+  App Store version for the marketing version, attaches the build, sets the
+  release type and phased release, then adds the version to a review
+  submission and submits it. Dry run by default. Idempotent: a version already
+  waiting for or in review with the same build reports and succeeds. Fails
+  closed on a build without an export compliance answer and surfaces App Store
+  Connect's own error list (missing screenshots, metadata) on a rejected call.
+inputs:
+  app-id:
+    description: Numeric App Store Connect app id (App Information > Apple ID), e.g. 6449440933.
+    required: true
+  version:
+    description: Marketing version (CFBundleShortVersionString) to submit, e.g. 1.2.3.
+    required: true
+  build-number:
+    description: Build number (CFBundleVersion) to attach. Empty picks the newest VALID, unexpired build of version.
+    required: false
+    default: ''
+  release-type:
+    description: MANUAL, AFTER_APPROVAL or SCHEDULED - what App Store Connect does once the version is approved.
+    required: false
+    default: MANUAL
+  scheduled-release-date:
+    description: ISO-8601 date-time of the earliest release; required with release-type SCHEDULED and rejected otherwise.
+    required: false
+    default: ''
+  phased-release:
+    description: true releases the update over Apple's 7-day phased rollout once it goes live; false removes a phased release from the version.
+    required: false
+    default: 'false'
+  dry-run:
+    description: true resolves and prints the plan with read-only calls; false changes App Store Connect.
+    required: false
+    default: 'true'
+  asc-key-path:
+    description: Path to the App Store Connect API key (.p8) file.
+    required: true
+  asc-key-id:
+    description: App Store Connect API key ID.
+    required: true
+  asc-issuer-id:
+    description: App Store Connect API issuer ID (a UUID).
+    required: true
+outputs:
+  version:
+    description: The marketing version submitted.
+    value: ${{ steps.release.outputs.version }}
+  build-number:
+    description: The build number attached to the version.
+    value: ${{ steps.release.outputs.build-number }}
+  result:
+    description: submitted, already-submitted (the version was already in or past review with this build), or planned (dry run).
+    value: ${{ steps.release.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - name: Validate tooling
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v node >/dev/null 2>&1; then
+          echo "::error::node 18 or newer is required by app-store-release but was not found on PATH."
+          exit 1
+        fi
+
+    - name: Release on the App Store
+      id: release
+      shell: bash
+      env:
+        APP_ID: ${{ inputs.app-id }}
+        VERSION: ${{ inputs.version }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        RELEASE_TYPE: ${{ inputs.release-type }}
+        SCHEDULED_RELEASE_DATE: ${{ inputs.scheduled-release-date }}
+        PHASED_RELEASE: ${{ inputs.phased-release }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        ASC_KEY_PATH: ${{ inputs.asc-key-path }}
+        ASC_KEY_ID: ${{ inputs.asc-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.asc-issuer-id }}
+      run: node "$GITHUB_ACTION_PATH/scripts/app-store-release.mjs"
