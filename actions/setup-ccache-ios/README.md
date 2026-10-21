@@ -31,7 +31,7 @@ cache hit skips both the build and the ccache save.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.0 # v4.4.0
   if: steps.native-app-cache.outputs.cache-hit != 'true'
   with:
       mode: restore
@@ -41,7 +41,7 @@ cache hit skips both the build and the ccache save.
 
 # ... xcodebuild step runs here, transparently using ccache ...
 
-- uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.4.0 # v4.4.0
   if: steps.native-app-cache.outputs.cache-hit != 'true'
   with:
       mode: save

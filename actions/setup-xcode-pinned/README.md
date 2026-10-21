@@ -27,7 +27,7 @@ wrong compiler.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.3.1 # v4.3.1
+- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.0 # v4.4.0
   id: xcode
   with:
       version: '26.4.1'
