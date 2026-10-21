@@ -228,6 +228,7 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | `store-screenshots.yml` | Store screenshot capture matrix + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
 | `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
 | `native-publish.yml` | Signed store publish (`eas build --local` + `eas submit`); `credentials-source: secrets\|eas`, `record-scope` per brand call, `mode: auto` with `ota-baseline: github-release\|eas-channel` | `contents: read` (+ `contents: write` for the store build record, + `actions: read` for `build-number: auto` in a private repo) |
+| `store-release.yml` | Submits an uploaded iOS build for App Review and promotes an Android build between Play tracks; dry run by default, `github-environment` gate | `contents: read` |
 | `expo-ota-preview.yml` | Pull-request OTA preview + sticky comment; `ota-backend: github-release\|eas` | `contents: write`, `pull-requests: write` |
 | `eas-channel-cleanup-reusable.yml` | Deletes a closed PR's EAS channel and branch; sweeps idle channels | `contents: read` |
 | `pr-closed-cleanup-reusable.yml` | Cancels a closed PR's runs; opt-in deletes its GitHub Release previews | `actions: write` (+ `contents: write` with `ota-preview-release-tag-prefix`) |
@@ -281,6 +282,9 @@ secret to a third-party workflow).
 - `native-publish.yml`: `EXPO_TOKEN`; `ASC_API_KEY` + `ASC_KEY_ID` +
   `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), optional
   with `credentials-source: eas`; optional `EAS_EXTRA_ENV`.
+- `store-release.yml`: `ASC_API_KEY` + `ASC_KEY_ID` + `ASC_ISSUER_ID` (iOS)
+  and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), each required only for the
+  platforms it releases.
 - `native-dev-release.yml`: `EXPO_TOKEN`; optional ASC key set and
   `EAS_EXTRA_ENV`.
 - `expo-ota-preview.yml` with `ota-backend: eas`: `EXPO_TOKEN` (optional

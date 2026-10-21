@@ -56,6 +56,7 @@ Markdown docs.
 | `expo-ota-preview.yml` | `contents: write`, `pull-requests: write` |
 | `native-dev-release.yml` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
 | `native-publish.yml` | `contents: read` (+ `contents: write` for a store build record, + `actions: read` for `build-number: auto` in a private repository) |
+| `store-release.yml` | `contents: read` |
 | `pr-closed-cleanup-reusable.yml` | `actions: write` (+ `contents: write` with `ota-preview-release-tag-prefix`) |
 | `preview-sweep-reusable.yml` | `contents: write`, `pull-requests: read` |
 | `eas-channel-cleanup-reusable.yml`, `assert-distinct-fingerprints.yml` | `contents: read` |

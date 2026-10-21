@@ -227,7 +227,7 @@ jobs:
                   rm -rf "$scratch"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard expo-base-plan swift-ios assert-distinct-fingerprints; do
+                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard expo-base-plan swift-ios assert-distinct-fingerprints store-release; do
                     sed -E -e "$self_ref_rewrite" -e "$workflow_ref_rewrite" \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done

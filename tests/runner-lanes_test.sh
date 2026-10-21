@@ -118,7 +118,7 @@ done
 case_start 'every reusable workflow with a control job declares control-runner-labels'
 missing=''
 for workflow in expo-base-plan ios-maestro android-maestro native-dev-release native-publish \
-    store-screenshots pr-closed-cleanup-reusable seed-native-cache; do
+    store-screenshots store-release pr-closed-cleanup-reusable seed-native-cache; do
     default="$(input_default "$WORKFLOWS_DIR/$workflow.yml" control-runner-labels 2>/dev/null || true)"
     [ "$default" = '["ubuntu-latest"]' ] || missing="$missing $workflow"
 done
