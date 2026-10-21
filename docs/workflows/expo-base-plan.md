@@ -143,7 +143,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.0 # v4.4.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.1 # v4.4.1
         with:
             platform: android
             targets: >-
@@ -161,7 +161,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.0 # v4.4.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.1 # v4.4.1
         with:
             platform: ios
             targets: >-

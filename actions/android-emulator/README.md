@@ -156,7 +156,7 @@ slot, and a job-scoped teardown.
 ```yaml
 - name: Start emulator
   id: emulator
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.0 # v4.4.0
+  uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.1 # v4.4.1
   with:
       mode: start
 
@@ -168,7 +168,7 @@ slot, and a job-scoped teardown.
 
 - name: Stop emulator
   if: always()
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.0 # v4.4.0
+  uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.1 # v4.4.1
   with:
       mode: stop
 ```
