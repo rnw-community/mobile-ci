@@ -909,6 +909,46 @@ run). The image does not need the NDK or build-tools preinstalled: the Gradle
 build downloads the versions the app pins into the SDK, so the first run on a
 fresh container pays that download.
 
+## A LAN Actions cache on the fleet (no inputs needed)
+
+A self-hosted node can answer the GitHub Actions cache itself instead of
+sending every save and restore over its WAN uplink. tart-runner-fleet does this
+on its x86_64 podman nodes and its site-A arm64 Tart guests (its ADR 0078,
+issue vitalyiegorov/tart-runner-fleet#401). Each node runs
+[falcondev-oss/github-actions-cache-server](https://github.com/falcondev-oss/github-actions-cache-server)
+behind a small gate. The runner image is patched so its `ACTIONS_RESULTS_URL`
+points at that gate.
+
+**Nothing in this repository needs to change, and no input turns it on.**
+Every cache this repo uses goes through `actions/cache` (`node-pm-cache`,
+`build-android-app`'s Gradle and Android SDK caches, `native-app-cache`,
+`setup-ccache-ios`, `xcode-cache`, `swift-test`), and that is exactly the
+protocol the server speaks. A consumer on such a fleet gets LAN-speed restores
+and saves from the pinned version it already uses.
+
+What a workflow run sees differently:
+
+- **Pull requests restore, and never save.** The gate refuses every save whose
+  runtime token grants write on `refs/pull/N/merge`, so a pull request reads
+  what default-branch and other branch runs seeded, and writes nothing. This
+  repo's actions already skip pull-request saves (the `github.event_name !=
+  'pull_request'` guards). A save that runs anyway, such as
+  `actions/setup-node`'s `cache:` post step, logs `Failed to save: Unable to
+  reserve cache with key ..., another job may be creating this cache.` That
+  line is the refusal, not a race, and the job's result is unaffected.
+- **Each node has its own cache.** The first trusted run of a key on a node is
+  cold, even if another node already holds that key.
+- **A cache outage is a cache miss.** If the server is down, restores and saves
+  log warnings and the job runs cold. Artifact uploads do not depend on it: the
+  gate sends every non-cache results call straight to GitHub.
+- **GitHub's 10 GB per-repository cache limit no longer applies.** Each node
+  has its own byte budget and least-recently-used eviction, and drops entries
+  unused for seven days.
+
+The operator procedure (install, budget, health checks, rollback) is
+tart-runner-fleet's `docs/OPERATIONS.md`, section "The LAN Actions cache". The
+measured before/after is in its issue #401.
+
 ## Maintainer note: fleet self-test repo variables
 
 `self-test.yml`'s `fleet-self-test` job (`workflow_dispatch`-only, since the
