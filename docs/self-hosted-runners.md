@@ -922,26 +922,29 @@ points at that gate.
 **Nothing in this repository needs to change, and no input turns it on.**
 Every cache this repo uses goes through `actions/cache` (`node-pm-cache`,
 `build-android-app`'s Gradle and Android SDK caches, `native-app-cache`,
-`setup-ccache-ios`, `xcode-cache`, `swift-test`), and that is exactly the
-protocol the server speaks. A consumer on such a fleet gets LAN-speed restores
+`setup-ccache-ios`, `xcode-cache`, `swift-test`), and that is the protocol
+the server speaks. A consumer on such a fleet gets LAN-speed restores
 and saves from the pinned version it already uses.
 
 What a workflow run sees differently:
 
 - **Pull requests restore, and never save.** The gate refuses every save whose
   runtime token grants write on `refs/pull/N/merge`, so a pull request reads
-  what default-branch and other branch runs seeded, and writes nothing. This
-  repo's actions already skip pull-request saves (the `github.event_name !=
-  'pull_request'` guards). A save that runs anyway, such as
-  `actions/setup-node`'s `cache:` post step, logs `Failed to save: Unable to
-  reserve cache with key ..., another job may be creating this cache.` That
-  line is the refusal, not a race, and the job's result is unaffected.
+  what default-branch and other branch runs seeded, and writes nothing.
+  `build-android-app` and `node-pm-cache`'s callers already skip
+  pull-request saves; the save modes of `native-app-cache`,
+  `setup-ccache-ios`, `xcode-cache` and `swift-test` do not, and on such a
+  fleet the gate refuses them. A refused save, like `actions/setup-node`'s
+  `cache:` post step, logs `Failed to save: Unable to reserve cache with key
+  ..., another job may be creating this cache.` That line is the refusal, not a
+  race, and the job's result is unaffected.
 - **Each node has its own cache.** The first trusted run of a key on a node is
   cold, even if another node already holds that key.
 - **A cache outage is a cache miss.** If the server is down, restores and saves
   log warnings and the job runs cold. Artifact uploads do not depend on it: the
   gate sends every non-cache results call straight to GitHub.
-- **GitHub's 10 GB per-repository cache limit no longer applies.** Each node
+- **For caches this server stores, GitHub's default 10 GB per-repository
+  limit does not apply.** Each node
   has its own byte budget and least-recently-used eviction, and drops entries
   unused for seven days.
 
