@@ -404,13 +404,13 @@ runs:
         ANDROID_ABIS: ${{ inputs.android-abis }}
       run: |
         set -euo pipefail
-        gradle_args=(-Pandroid.enableShrinkResourcesInReleaseBuilds=false)
+        gradle_args=()
         if [ -n "$GRADLE_ARGS" ]; then
           normalized_gradle_args="${GRADLE_ARGS//$'\n'/ }"
           normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
-          read -r -a caller_gradle_args <<< "$normalized_gradle_args"
-          gradle_args+=("${caller_gradle_args[@]}")
+          read -r -a gradle_args <<< "$normalized_gradle_args"
         fi
+        gradle_args+=(-Pandroid.enableShrinkResourcesInReleaseBuilds=false)
 
         if [ -n "$ANDROID_ABIS" ]; then
           IFS=, read -r -a abi_list <<< "$ANDROID_ABIS"

@@ -198,8 +198,8 @@ that trip the same OOM independently of scoping.
 
 ## Resource shrinking is always off
 
-Every build passes `-Pandroid.enableShrinkResourcesInReleaseBuilds=false` ahead
-of `gradle-args`, overriding `gradle.properties`. The APK is a test or base
+Every build passes `-Pandroid.enableShrinkResourcesInReleaseBuilds=false` after
+`gradle-args`, so it overrides both `gradle.properties` and the caller. The APK is a test or base
 binary that `expo-repack` may rebuild with apktool, and apktool cannot relink a
 resource-shrunk table (`aapt2 link`: `attribute state_dragged ... not found`).
 Store builds go through EAS and keep their own setting.
