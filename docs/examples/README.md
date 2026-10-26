@@ -2,10 +2,10 @@
 
 Complete workflows for four app shapes, each a file you copy into the app
 repository's `.github/workflows/` and edit (paths, app ids, schemes, brands).
-Every file is pinned `@v4.4.1 # v4.4.1` and grants exactly the `permissions:`
+Every file is pinned `@v4.4.2 # v4.4.2` and grants exactly the `permissions:`
 its calls need. A repository whose policy (or `zizmor`'s `unpinned-uses`)
-requires commit-SHA pins swaps each for `@<sha> # v4.4.1`, where `<sha>` is
-what `git ls-remote https://github.com/rnw-community/mobile-ci 'refs/tags/v4.4.1^{}'`
+requires commit-SHA pins swaps each for `@<sha> # v4.4.2`, where `<sha>` is
+what `git ls-remote https://github.com/rnw-community/mobile-ci 'refs/tags/v4.4.2^{}'`
 prints.
 
 CI keeps them honest: `self-test.yml` runs `actionlint` on every file here, and

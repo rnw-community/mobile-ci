@@ -22,7 +22,7 @@ jobs:
         if: github.event_name == 'pull_request'
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.4.2 # v4.4.2
         with:
             app-dir: apps/mobile
             channel-template: pr-{number}
@@ -42,7 +42,7 @@ jobs:
         if: github.event_name != 'pull_request'
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.4.2 # v4.4.2
         with:
             app-dir: apps/mobile
             channel-template: ''

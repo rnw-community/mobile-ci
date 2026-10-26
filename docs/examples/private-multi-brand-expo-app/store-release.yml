@@ -38,7 +38,7 @@ jobs:
                 platform: [ios, android]
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.4.2 # v4.4.2
         with:
             platform: ${{ matrix.platform }}
             targets: >-
@@ -56,7 +56,7 @@ jobs:
             contents: read
             # build-number: auto reads earlier runs in a private repository.
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.4.2 # v4.4.2
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -95,7 +95,7 @@ jobs:
             - name: Install dependencies
               run: pnpm install --frozen-lockfile
             - name: Publish the brand's production update
-              uses: rnw-community/mobile-ci/actions/eas-update@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/eas-update@v4.4.2 # v4.4.2
               with:
                   app-dir: apps/mobile
                   channel: production-${{ matrix.brand }}

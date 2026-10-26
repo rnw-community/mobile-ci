@@ -76,7 +76,7 @@ each is also exported to the job environment under the name in parentheses.
 ```yaml
 - name: Start Redroid
   id: redroid
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.4.1 # v4.4.1
+  uses: rnw-community/mobile-ci/actions/redroid-container@v4.4.2 # v4.4.2
   with:
       mode: start
       container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -89,7 +89,7 @@ each is also exported to the job environment under the name in parentheses.
 
 - name: Teardown Redroid
   if: always()
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.4.1 # v4.4.1
+  uses: rnw-community/mobile-ci/actions/redroid-container@v4.4.2 # v4.4.2
   with:
       mode: teardown
       container-name: redroid-screenshots-${{ strategy.job-index }}

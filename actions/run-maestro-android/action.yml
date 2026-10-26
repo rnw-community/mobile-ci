@@ -439,7 +439,7 @@ runs:
 
     - name: Start emulator
       id: emulator
-      uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.1 # v4.4.1
+      uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.2 # v4.4.2
       with:
           mode: start
           api-level: ${{ inputs.api-level }}
@@ -606,7 +606,7 @@ runs:
 
     - name: Stop emulator
       if: always()
-      uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.1 # v4.4.1
+      uses: rnw-community/mobile-ci/actions/android-emulator@v4.4.2 # v4.4.2
       with:
           mode: stop
 
