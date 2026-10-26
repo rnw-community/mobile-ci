@@ -196,6 +196,14 @@ under `app/build/outputs/apk/release`, same as the unscoped task — and use
 `gradle-args` (e.g. `-x lint -x lintVitalAnalyzeRelease`) to skip lint tasks
 that trip the same OOM independently of scoping.
 
+## Resource shrinking is always off
+
+Every build passes `-Pandroid.enableShrinkResourcesInReleaseBuilds=false` after
+`gradle-args`, so it overrides both `gradle.properties` and the caller. The APK is a test or base
+binary that `expo-repack` may rebuild with apktool, and apktool cannot relink a
+resource-shrunk table (`aapt2 link`: `attribute state_dragged ... not found`).
+Store builds go through EAS and keep their own setting.
+
 **Why `cmdline-tools-version` defaults to `12266719`.** This is the version
 the `android-actions/setup-android@v3` release this action used to pin
 defaulted to — **not** whatever the upstream action currently defaults to
