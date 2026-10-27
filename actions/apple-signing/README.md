@@ -94,7 +94,7 @@ and fails closed when it is missing or decodes to an empty file.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/apple-signing@v4.5.0 # v4.5.0
   id: signing
   with:
       certificate-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
@@ -106,7 +106,7 @@ and fails closed when it is missing or decodes to an empty file.
 
 # ... archive and upload ...
 
-- uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/apple-signing@v4.5.0 # v4.5.0
   if: always()
   with:
       mode: remove

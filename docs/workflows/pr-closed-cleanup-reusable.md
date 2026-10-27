@@ -86,7 +86,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.4.2 # v4.4.2
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.5.0 # v4.5.0
 ```
 
 ### Full
@@ -104,7 +104,7 @@ jobs:
         permissions:
             actions: write
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.4.2 # v4.4.2
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.5.0 # v4.5.0
         with:
             ota-preview-release-tag-prefix: ota
             wait-for-runs-timeout-minutes: 30

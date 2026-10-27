@@ -48,7 +48,7 @@ first fleet validation or a release-candidate check wants.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/apple-signing@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/apple-signing@v4.5.0 # v4.5.0
   id: signing
   with:
       certificate-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
@@ -58,7 +58,7 @@ first fleet validation or a release-candidate check wants.
       asc-key-id: ${{ secrets.ASC_KEY_ID }}
       expected-application-identifier: 3R8589YV24.com.example.app
 
-- uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v4.5.0 # v4.5.0
   with:
       project: MyApp.xcodeproj
       scheme: MyApp
