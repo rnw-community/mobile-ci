@@ -43,13 +43,13 @@ never rewrites the same key.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.5.0 # v4.5.0
   id: xcode
   with:
       version: '26.4.1'
       build: '17E202'
 
-- uses: rnw-community/mobile-ci/actions/swift-test@v4.4.2 # v4.4.2
+- uses: rnw-community/mobile-ci/actions/swift-test@v4.5.0 # v4.5.0
   with:
       toolchain: ${{ steps.xcode.outputs.toolchain-key }}
       package-path: .

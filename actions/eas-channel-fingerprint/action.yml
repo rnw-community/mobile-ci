@@ -75,7 +75,7 @@ runs:
     - name: Resolve the eas.json build profile
       id: profile
       if: inputs.eas-profile != '' && inputs.targets == ''
-      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.4.2 # v4.4.2
+      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.5.0 # v4.5.0
       with:
         app-dir: ${{ inputs.app-dir }}
         profiles: ${{ inputs.eas-profile }}
@@ -133,7 +133,7 @@ runs:
 
     - name: Resolve this commit's runtime versions
       id: runtime
-      uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.4.2 # v4.4.2
+      uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
       with:
         app-dir: ${{ inputs.app-dir }}
         targets: ${{ steps.targets.outputs.targets }}
