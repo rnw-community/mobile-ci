@@ -30,6 +30,16 @@ commit SHA for reproducibility, or `@v4` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
 
+Opt in to **[content-addressed E2E pass records](docs/e2e-result-cache.md)** with
+`e2e-result-cache: true` on either Maestro workflow. The Linux planner hashes the
+production bundle/assets, resolved config, native key, complete test contract
+and device inputs. A validated prior pass skips base fetch/repack, native builds
+and all Maestro shards, with producer links on the successful required check.
+Unrelated docs, store copy, screenshots and CI workflows need no app path
+exemption list. Cache errors run the suite; the default remains off. See the
+[Budgie caller patch](docs/examples/budgie-e2e-result-cache.patch) and rollout
+requirements before enabling it.
+
 ## A pull request no longer compiles native code
 
 **Since `v3.0.0`, and the default.** An Expo/React Native e2e or screenshot

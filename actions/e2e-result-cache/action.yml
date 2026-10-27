@@ -1,0 +1,111 @@
+name: e2e-result-cache
+description: Exact, branch-scoped pass records for a production bundle and its complete test contract. Errors require a real run.
+inputs:
+  mode:
+    description: lookup before building, or publish only after every non-quarantined shard passed.
+    default: lookup
+  app-dir:
+    description: Installed Expo project directory. Dependencies and workspace build must already be ready.
+    default: '.'
+  platform:
+    description: ios or android.
+    required: true
+  native-key:
+    description: Native key produced for this exact variant.
+    default: ''
+  workflow-refs:
+    description: JSON of resolved reusable workflow refs/SHAs from the run-attempt API. Passed by the shared planner.
+    default: '[]'
+  lane-inputs:
+    description: JSON of every resolved workflow input, including the device profile and Maestro version.
+    default: '{}'
+  target:
+    description: JSON of the resolved target.
+    default: '{}'
+  test-paths:
+    description: Newline-separated existing files/directories covering flows, config, hooks and shard manifests, relative to repository root.
+    default: ''
+  state-command:
+    description: Optional app-dir command returning a nonempty version of mutable test state. Stdout is hashed, never printed.
+    default: ''
+  export-command:
+    description: Optional custom exporter run from app-dir. Write a nonempty bundle, config.json and all assets to E2E_CACHE_EXPORT_DIR.
+    default: ''
+  extra-paths:
+    description: Additional fixture/script trees or external-state version files. Literal paths or globs. Every pattern must match.
+    default: ''
+  repack-env:
+    description: The same KEY=VALUE environment used by the production repack.
+    default: ''
+  secrets-digest:
+    description: SHA-256 of the Maestro environment from apply-secret-env with export false. Never pass raw secrets.
+    default: ''
+  key:
+    description: Previously planned SHA-256 key, required in publish mode.
+    default: ''
+outputs:
+  key:
+    description: SHA-256 identity. Empty on computation failure.
+    value: ${{ steps.identity.outcome == 'success' && steps.identity.outputs.key || '' }}
+  hit:
+    description: true only after exact cache restore and record validation.
+    value: ${{ steps.record.outcome == 'success' && steps.record.outputs.hit || 'false' }}
+  run-url:
+    description: Link to the successful producer run attempt on a hit.
+    value: ${{ steps.record.outcome == 'success' && steps.record.outputs.run-url || '' }}
+runs:
+  using: composite
+  steps:
+    - name: Export and hash the app and test contract
+      id: identity
+      if: inputs.mode == 'lookup'
+      continue-on-error: true
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MOBILE_CI_REF: ${{ github.action_ref }}
+        APP_DIR: ${{ inputs.app-dir }}
+        PLATFORM: ${{ inputs.platform }}
+        NATIVE_KEY: ${{ inputs.native-key }}
+        LANE_INPUTS: ${{ inputs.lane-inputs }}
+        WORKFLOW_REFS: ${{ inputs.workflow-refs }}
+        TARGET: ${{ inputs.target }}
+        TEST_PATHS: ${{ inputs.test-paths }}
+        EXTRA_PATHS: ${{ inputs.extra-paths }}
+        EXPORT_COMMAND: ${{ inputs.export-command }}
+        STATE_COMMAND: ${{ inputs.state-command }}
+        REPACK_ENV: ${{ inputs.repack-env }}
+        SECRETS_DIGEST: ${{ inputs.secrets-digest }}
+      run: |
+        set -euo pipefail
+        node "$ACTION_PATH/identity.cjs"
+
+    - name: Restore the exact pass record
+      id: restore
+      if: inputs.mode == 'lookup' && steps.identity.outcome == 'success' && steps.identity.outputs.key != ''
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .ci-cache/e2e-result/${{ steps.identity.outputs.key }}
+        key: mobile-ci-e2e-v1-${{ steps.identity.outputs.key }}
+
+    - name: Validate or create the pass record
+      id: record
+      if: (inputs.mode == 'lookup' && steps.restore.outputs.cache-hit == 'true') || inputs.mode == 'publish'
+      continue-on-error: true
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        MODE: ${{ inputs.mode }}
+        KEY: ${{ steps.identity.outputs.key || inputs.key }}
+      run: |
+        set -euo pipefail
+        node "$ACTION_PATH/record.cjs"
+
+    - name: Publish the pass record
+      if: inputs.mode == 'publish' && steps.record.outputs.ready == 'true'
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .ci-cache/e2e-result/${{ inputs.key }}
+        key: mobile-ci-e2e-v1-${{ inputs.key }}

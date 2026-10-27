@@ -144,8 +144,8 @@ for key in ('app-artifact-prefix', 'plan-artifact-prefix'):
         problems.append(f'plan {key} is {plan.get(key)!r}, not scoped')
 
 test = jobs['test']
-if test['strategy']['matrix']['target'] != '${{ fromJSON(needs.detect.outputs.targets) }}':
-    problems.append('the test matrix does not read the resolved targets')
+if test['strategy']['matrix']['target'] != '${{ fromJSON(needs.plan.outputs.test-targets) }}':
+    problems.append('the test matrix does not read the planner filtered resolved targets')
 
 build = jobs['build']
 group = str(build['concurrency']['group'])
