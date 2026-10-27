@@ -23,6 +23,31 @@ on:
                 required: false
                 type: boolean
                 default: false
+            e2e-result-cache:
+                description: Reuse an exact successful native/bundle/test/device verdict. Opt in only for hermetic suites; errors run the suite.
+                type: boolean
+                required: false
+                default: false
+            e2e-cache-test-paths:
+                description: Optional newline-separated dependency paths/globs replacing the flows-dir tree; config, pre-run/recovery flows and shard manifests are still hashed.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-state-command:
+                description: Optional command whose stdout versions mutable test state, e.g. date -u +%F for date-relative fixtures. Failure disables reuse.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-export-command:
+                description: Optional bare-RN/custom exporter. Write bundle, config.json and assets to E2E_CACHE_EXPORT_DIR; empty uses production Expo export.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-extra-paths:
+                description: Newline-separated fixture and hook dependency paths outside flows-dir (literal paths or globs; every pattern must match).
+                type: string
+                required: false
+                default: ''
             runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the build/test jobs.
@@ -751,7 +776,7 @@ jobs:
                   target-packages: ${{ inputs.target-packages }}
                   targets: ${{ inputs.targets }}
                   base-sha: ${{ github.event.pull_request.base.sha }}
-                  always-affected: ${{ github.event_name != 'pull_request' }}
+                  always-affected: ${{ inputs.e2e-result-cache || github.event_name != 'pull_request' }}
                   exempt-paths: ${{ inputs.exempt-paths }}
                   trigger-paths: ${{ inputs.trigger-paths }}
                   force-label: ${{ inputs.force-label }}
@@ -969,10 +994,16 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.4.2 # v4.4.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.5.0 # v4.5.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
+            e2e-cache: ${{ inputs.e2e-result-cache && needs.detect.outputs.forced != 'true' && github.event_name != 'workflow_dispatch' }}
+            e2e-cache-inputs: ${{ toJSON(inputs) }}
+            e2e-cache-test-paths: ${{ inputs.e2e-cache-test-paths }}
+            e2e-cache-state-command: ${{ inputs.e2e-cache-state-command }}
+            e2e-cache-export-command: ${{ inputs.e2e-cache-export-command }}
+            e2e-cache-extra-paths: ${{ inputs.e2e-cache-extra-paths }}
             platform: android
             targets: ${{ needs.detect.outputs.targets }}
             build-strategy: ${{ needs.detect.outputs.build-strategy }}
@@ -1004,6 +1035,7 @@ jobs:
             build-env: ${{ inputs.build-env }}
         secrets:
             build-secrets-env: ${{ secrets.build-secrets-env }}
+            maestro-secrets-env: ${{ secrets.maestro-secrets-env }}
 
     build:
         name: Build (${{ matrix.target.name }})
@@ -1270,13 +1302,13 @@ jobs:
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
-        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.android-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.detect.outputs.targets) }}
+                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
                 shard-index: ${{ inputs.android-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
 
         steps:
@@ -1492,9 +1524,32 @@ jobs:
                   TARGET_NAME: ${{ matrix.target.name }}
               run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
 
+    cache-pass:
+        name: Record E2E pass (${{ matrix.target.name }})
+        needs: [detect, plan, build, test]
+        if: ${{ !cancelled() && needs.plan.result == 'success' && needs.test.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 5
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.2 # v4.4.2
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Save the successful test contract
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.5.0 # v4.5.0
+              with:
+                  mode: publish
+                  platform: android
+                  key: ${{ matrix.target.e2eCacheKey }}
+
     status:
         name: Android Maestro E2E result
-        needs: [detect, plan, build, test]
+        needs: [detect, plan, build, test, cache-pass]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
@@ -1512,6 +1567,8 @@ jobs:
                   NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
+                  TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
+                  CACHED_TARGETS: ${{ needs.plan.outputs.cached-targets }}
               run: |
                   result=failed
                   trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
@@ -1540,6 +1597,16 @@ jobs:
                     summary "### Android Maestro E2E: failed (plan job result: $PLAN_RESULT)"
                     cancelled_hint "$PLAN_RESULT"
                     exit 1
+                  fi
+                  if [ "${TEST_TARGETS:-}" = '[]' ] && [ "$NATIVE_TARGETS" = '[]' ] && [ "$BUILD_RESULT" = 'skipped' ] && [ "$TEST_RESULT" = 'skipped' ]; then
+                    if ! jq -e 'length > 0 and all(.[]; .e2eCacheHit == true and (.e2eCacheKey | test("^[0-9a-f]{64}$")) and (.e2eCacheRunUrl | type == "string" and length > 0))' <<< "${CACHED_TARGETS:-[]}" > /dev/null; then
+                      echo '::error::Empty test matrix without complete validated pass records.'
+                      exit 1
+                    fi
+                    result=passed
+                    summary "### ANDROID Maestro E2E: passed (content-addressed cache)"
+                    jq -r '.[] | "- \(.name): [successful producer run](\(.e2eCacheRunUrl))"' <<< "$CACHED_TARGETS" >> "$GITHUB_STEP_SUMMARY"
+                    exit 0
                   fi
                   if [ "$BUILD_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS" != '[]' ]; then
                     echo "The native build was skipped while ${NATIVE_TARGETS} still needed one; a skipped build is not a build."

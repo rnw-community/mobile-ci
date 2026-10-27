@@ -181,7 +181,7 @@ workflow = yaml.safe_load(open(os.environ['PLAN_WORKFLOW'], encoding='utf-8'))
 steps = {step.get('name'): step for step in workflow['jobs']['plan']['steps']}
 effective = '(matrix.target.buildStrategy || inputs.build-strategy)'
 problems = []
-if steps['expo-base-binary (fetch)'].get('if') != f"{effective} != 'native'":
+if steps['expo-base-binary (fetch)'].get('if') != f"{effective} != 'native' && steps.e2e-cache.outputs.hit != 'true'":
     problems.append(f"the base lookup runs when {steps['expo-base-binary (fetch)'].get('if')!r}")
 if not str(steps['Refuse to compile native code under build-strategy repack'].get('if', '')).startswith(f"{effective} == 'repack'"):
     problems.append('the repack refusal ignores the target strategy')

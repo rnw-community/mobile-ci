@@ -1,0 +1,155 @@
+--- a/.github/workflows/pr.yml
++++ b/.github/workflows/pr.yml
+@@ -14,58 +14,6 @@
+     contents: read
+
+ jobs:
+-    detect-mobile-impact:
+-        name: Detect mobile impact
+-        runs-on: [self-hosted, linux-portable-2x4]
+-        timeout-minutes: 15
+-        permissions:
+-            contents: read
+-            pull-requests: read
+-        outputs:
+-            mobile: ${{ steps.gate.outputs.mobile }}
+-        steps:
+-            - name: Compute mobile-impact gate
+-              id: gate
+-              uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+-              with:
+-                  script: |
+-                      let mobile = true;
+-
+-                      try {
+-                        const files = await github.paginate(github.rest.pulls.listFiles, {
+-                          owner: context.repo.owner,
+-                          repo: context.repo.repo,
+-                          pull_number: context.issue.number,
+-                          per_page: 100,
+-                        });
+-                        const mobileSuiteExempt = files.length > 0 && files.every(({ filename }) =>
+-                          filename.startsWith('packages/landing/') ||
+-                          filename.startsWith('docs/') ||
+-                          filename.endsWith('.md') ||
+-                          filename === 'LICENSE' ||
+-                          filename === '.gitattributes' ||
+-                          filename === '.gitignore' ||
+-                          filename === '.editorconfig' ||
+-                          filename === '.github/CODEOWNERS' ||
+-                          filename === '.github/dependabot.yml' ||
+-                          filename.startsWith('tests/app-tests/flows/media/') ||
+-                          filename.startsWith('tests/app-tests/fixtures/screenshots/') ||
+-                          filename.startsWith('packages/app/fastlane/') ||
+-                          filename === '.github/landing-media.config.json' ||
+-                          filename === '.github/store-screenshots.config.json' ||
+-                          filename === 'tests/app-tests/scripts/seed-screenshot-scene.sh' ||
+-                          filename === 'tests/app-tests/scripts/capture-store-screenshots.sh' ||
+-                          (filename.startsWith('tests/app-tests/scripts/') &&
+-                            (/^test-|media|compose/.test(filename.slice('tests/app-tests/scripts/'.length))))
+-                        );
+-                        mobile = !mobileSuiteExempt;
+-                        core.info(`Inspected ${files.length} changed files; mobile affected: ${mobile}`);
+-                      } catch (error) {
+-                        core.warning(`Could not inspect PR files; defaulting to mobile=true: ${error.message}`);
+-                      }
+-
+-                      core.setOutput('mobile', mobile ? 'true' : 'false');
+-
+     code-quality:
+         name: Code quality checks
+         # The monorepo typecheck + type-aware oxlint + build need more than the
+@@ -219,8 +167,6 @@
+                   done
+
+     assert-ai-ota:
+-        if: needs.detect-mobile-impact.outputs.mobile == 'true'
+-        needs: [detect-mobile-impact]
+         name: Assert AI is enabled (OTA preview)
+         runs-on: [self-hosted, trf-linux-amd64-2x4]
+         timeout-minutes: 10
+@@ -252,8 +198,7 @@
+               run: bash .github/scripts/assert-ai-enabled.sh
+
+     ota-preview:
+-        if: needs.detect-mobile-impact.outputs.mobile == 'true'
+-        needs: [detect-mobile-impact, assert-ai-ota]
++        needs: [assert-ai-ota]
+         name: OTA preview
+         permissions:
+             contents: write
+@@ -271,8 +216,6 @@
+             prune-keep: '100'
+
+     fingerprint-guard:
+-        if: needs.detect-mobile-impact.outputs.mobile == 'true'
+-        needs: [detect-mobile-impact]
+         name: Native runtime fingerprint
+         permissions:
+             contents: read
+@@ -289,10 +232,8 @@
+             node-version: 22.22.2
+
+     ios-maestro:
+-        if: needs.detect-mobile-impact.outputs.mobile == 'true'
+         # Starts beside code-quality rather than after it: Required CI still
+         # fails the PR when either fails.
+-        needs: [detect-mobile-impact]
+         name: iOS Maestro E2E
+         # A reusable workflow can only narrow the token it is given: the base
+         # binary every pull request repacks is fetched (packages) and published
+@@ -302,21 +243,27 @@
+             contents: read
+             packages: write
+             actions: read
+-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@a9fac576ef1c8a9a565d03851f2624502a868214 # v4.4.1
++        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+         with:
+             control-runner-labels: '["self-hosted","trf-linux-amd64-2x4"]'
+             build-runner-labels: '["self-hosted","macOS","ARM64","macos-maestro"]'
+             test-runner-labels: '["self-hosted","macOS","ARM64","macos-maestro"]'
+-            # Gate on the turbo graph as well as detect-mobile-impact's path
+-            # list: iOS Maestro runs only when the app, its workspace
+-            # dependencies or the Maestro suite changed.
+-            turbo-version: 2.11.5
+-            target-packages: |
+-                @budgie-at/app
+-                @budgie-at/app-tests
+-            # This file wires the e2e job, and turbo never sees it: a change here
+-            # runs the suite rather than skipping it.
+-            trigger-paths: .github/workflows/pr.yml
++            e2e-result-cache: true
++            repack-runner-labels: '["self-hosted","trf-linux-amd64-4x8"]'
++            e2e-cache-state-command: date -u +%F
++            e2e-cache-test-paths: |
++                tests/app-tests/flows/*.flow.yaml
++                tests/app-tests/flows/setup
++                tests/app-tests/flows/subflows
++            e2e-cache-extra-paths: |
++                tests/app-tests/fixtures/*.{db,csv,vcf}
++                tests/app-tests/fixtures/erste
++                tests/app-tests/fixtures/privatbank
++                tests/app-tests/scripts/setup-ios-e2e-fixtures.sh
++                tests/app-tests/scripts/prepare-date-sensitive-fixtures.js
++                tests/app-tests/scripts/seed-flow-fixture.sh
++                tests/app-tests/scripts/flow-fixture-lookup.sh
++                scripts/install-ios-db-fixture.sh
+             targets: >-
+                 [{"name":"e2e","appDir":"packages/app","workspace":"budgieE2E.xcworkspace","scheme":"budgieE2E",
+                 "appId":"com.vitalyiegorov.budgie.e2e","prebuildCommand":"npx expo prebuild -p ios --clean --no-install"}]
+@@ -502,13 +449,12 @@
+     required-ci:
+         name: Required CI
+         # The single check to mark required: it waits for every job above and
+-        # fails if any of them failed or was cancelled. A skipped job (mobile
+-        # impact gate off, fork PR) counts as passing. always(), not
++        # fails if any of them failed or was cancelled. A skipped job (fork PR)
++        # counts as passing. always(), not
+         # !cancelled(): a cancelled run must still run this job and fail it,
+         # because GitHub treats a skipped required check as passing.
+         if: ${{ always() }}
+         needs:
+-            - detect-mobile-impact
+             - lint-workflows
+             - code-quality
+             - unit-tests

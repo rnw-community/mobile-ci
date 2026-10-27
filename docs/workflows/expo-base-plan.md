@@ -58,10 +58,22 @@ the job fails.
 Under `build-strategy: repack` (or a target's `buildStrategy: repack`) a target with no base fails the job, naming the
 key and the address that is empty.
 
+The Maestro workflows optionally ask this planner for a [content-addressed E2E
+verdict](../e2e-result-cache.md). A validated hit is checked before fetching a
+base and excludes that target from both native and test matrices. Cache errors
+leave the normal build/repack decision required. Screenshot/warm-up callers do
+not opt in and retain their existing behavior.
+
 ## Inputs
 
 | Name | Type | Required | Default | Description |
 | ---- | ---- | -------- | ------- | ----------- |
+| `e2e-cache` | boolean | no | `false` | Internal Maestro opt-in: reuse a validated exact pass for the native key, production bundle/config, tests, inputs and device. See [cache contract and rollout](../e2e-result-cache.md). Bypasses Turbo/path detection when on; forced, manual and quarantined runs do not cache. |
+| `e2e-cache-test-paths` | string | no | `''` | Newline-separated literal paths/globs replacing the default flows-dir tree; explicit config, pre-run/recovery flows and shard manifests remain automatic. Every pattern must match. |
+| `e2e-cache-extra-paths` | string | no | `''` | Additional fixture/script dependency paths/globs relative to repository root. Include shared hook/test dependencies. |
+| `e2e-cache-state-command` | string | no | `''` | Optional app-directory command whose nonempty stdout versions mutable test state, e.g. `date -u +%F`. Errors disable reuse. |
+| `e2e-cache-export-command` | string | no | `''` | Optional custom exporter writing nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`; empty uses the installed production Expo export. |
+| `e2e-cache-inputs` | string | no | `'{}'` | Complete Maestro lane inputs as JSON, including test selection, secrets-independent env and device profile. |
 | `platform` | string | yes | — | `ios` or `android`. |
 | `targets` | string | yes | — | JSON array of build targets. Each element is passed through to the caller's native build job unchanged, with `nativeKey` added. A target with `"forceNative": true` is handed to the native build even when its base exists; only a caller with `repack: false` may set it. A target's own `buildStrategy` (`auto`, `repack` or `native`, resolved by the caller) wins over `build-strategy` for that target. |
 | `build-strategy` | string | no | `auto` | `auto`, `repack` or `native`. Resolved by the caller, never here. The default of a target without its own `buildStrategy`. |
@@ -100,12 +112,16 @@ key and the address that is empty.
 
 | Name | Description |
 | ---- | ----------- |
+| `test-targets` | Targets still requiring actual Maestro shards, after validated E2E hits are removed. |
+| `cache-targets` | Eligible misses with keys; only publish records after all active test shards pass. |
+| `cached-targets` | Validated hit plans with keys and producer run URLs. |
 | `native-targets` | JSON array of the targets whose native key has no published base, or that set `forceNative`, each carrying its `nativeKey`. `[]` means no expensive runner has to be claimed at all. |
 
 ## Secrets
 
 | Secret                | Required | Description |
 | --------------------- | -------- | ----------- |
+| `maestro-secrets-env` | no | Optional Maestro environment, parsed/masked with export disabled; only its digest enters the E2E key. |
 | `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in the plan job, before install, `build-command`, the fingerprint and the re-bundle. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and every caller of one native surface must pass the same secret. |
 
 The base store authenticates with the job's own `GITHUB_TOKEN`. The plan

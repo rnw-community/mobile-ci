@@ -23,6 +23,36 @@ on:
                 required: false
                 type: boolean
                 default: false
+            e2e-cache:
+                description: Look for an exact E2E pass before fetching or repacking a base. Internal opt-in from Maestro workflows.
+                type: boolean
+                required: false
+                default: false
+            e2e-cache-inputs:
+                description: Complete Maestro workflow inputs as JSON, including test and device configuration.
+                type: string
+                required: false
+                default: '{}'
+            e2e-cache-test-paths:
+                description: Optional newline-separated dependency paths/globs replacing the flows-dir tree; config, pre-run/recovery flows and shard manifests are still hashed.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-state-command:
+                description: Optional command whose stdout versions mutable test state, e.g. date -u +%F for date-relative fixtures. Failure disables reuse.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-export-command:
+                description: Optional exporter writing bundle, config.json and assets to E2E_CACHE_EXPORT_DIR.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-extra-paths:
+                description: Newline-separated additional fixture/script trees to hash.
+                type: string
+                required: false
+                default: ''
             platform:
                 description: '`ios` or `android`.'
                 type: string
@@ -188,6 +218,9 @@ on:
                 required: false
                 default: ''
         secrets:
+            maestro-secrets-env:
+                description: Test secrets, hashed only for E2E identity, never persisted.
+                required: false
             build-secrets-env:
                 description: >-
                     Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for
@@ -197,6 +230,15 @@ on:
                     same secret or the two never agree on a key.
                 required: false
         outputs:
+            test-targets:
+                description: Targets without a validated E2E pass; empty means every target is covered.
+                value: ${{ jobs.collect.outputs.test-targets }}
+            cache-targets:
+                description: Non-quarantined cacheable targets that must really run before publication.
+                value: ${{ jobs.collect.outputs.cache-targets }}
+            cached-targets:
+                description: Validated hits including their producer run URLs.
+                value: ${{ jobs.collect.outputs.cached-targets }}
             native-targets:
                 description: >-
                     JSON array of the targets whose native key has no published
@@ -439,9 +481,63 @@ jobs:
                   ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
                   secrets-digest: ${{ steps.build-secrets.outputs.digest }}
 
+            - name: Digest the Maestro environment without exporting it
+              id: e2e-secrets
+              if: inputs.e2e-cache
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.2 # v4.4.2
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  export: 'false'
+
+            - name: Resolve executing workflow refs
+              id: e2e-workflows
+              if: inputs.e2e-cache
+              continue-on-error: true
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PLATFORM: ${{ inputs.platform }}
+              run: |
+                  set -euo pipefail
+                  refs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" --jq '.referenced_workflows')
+                  refs=$(jq -ce --arg lane "rnw-community/mobile-ci/.github/workflows/${PLATFORM}-maestro.yml@" \
+                    --arg plan 'rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@' '
+                    map(select((.path | startswith($lane)) or (.path | startswith($plan))))
+                    | sort_by(.path, .sha)
+                    | if length >= 2 and any(.[]; .path | startswith($lane)) and any(.[]; .path | startswith($plan))
+                         and all(.[]; .sha | test("^[0-9a-f]{40}$"))
+                      then . else error("Missing resolved Maestro/planner workflow refs; full E2E remains required") end' <<< "$refs")
+                  echo "refs=$refs" >> "$GITHUB_OUTPUT"
+
+            - name: Look up the content-addressed E2E verdict
+              id: e2e-cache
+              if: inputs.e2e-cache && steps.e2e-secrets.outcome == 'success' && steps.e2e-workflows.outcome == 'success' && !matrix.target.tolerateTestFailures && (matrix.target.buildStrategy || inputs.build-strategy) != 'native'
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.5.0 # v4.5.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  app-dir: ${{ matrix.target.appDir }}
+                  native-key: ${{ steps.native-key.outputs.key }}
+                  workflow-refs: ${{ steps.e2e-workflows.outputs.refs }}
+                  lane-inputs: ${{ inputs.e2e-cache-inputs }}
+                  target: ${{ toJSON(matrix.target) }}
+                  repack-env: ${{ inputs.repack-env }}
+                  secrets-digest: ${{ steps.e2e-secrets.outputs.digest }}
+                  state-command: ${{ inputs.e2e-cache-state-command }}
+                  export-command: ${{ inputs.e2e-cache-export-command }}
+                  extra-paths: ${{ inputs.e2e-cache-extra-paths }}
+                  test-paths: |
+                      ${{ inputs.e2e-cache-test-paths || matrix.target.flowsDir }}
+                      ${{ fromJSON(inputs.e2e-cache-inputs).maestro-config }}
+                      ${{ fromJSON(inputs.e2e-cache-inputs).shard-manifest-dir }}
+                      ${{ fromJSON(inputs.e2e-cache-inputs).pre-run-flow }}
+                      ${{ fromJSON(inputs.e2e-cache-inputs).flow-recovery-flow }}
+
             - name: expo-base-binary (fetch)
               id: base
-              if: (matrix.target.buildStrategy || inputs.build-strategy) != 'native'
+              if: (matrix.target.buildStrategy || inputs.build-strategy) != 'native' && steps.e2e-cache.outputs.hit != 'true'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.4.2 # v4.4.2
               with:
                   mode: fetch
@@ -452,7 +548,7 @@ jobs:
                   path: .ci-cache/e2e-base/${{ matrix.target.name }}
 
             - name: Refuse to compile native code under build-strategy repack
-              if: (matrix.target.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true'
+              if: (matrix.target.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true' && steps.e2e-cache.outputs.hit != 'true'
               shell: bash
               env:
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
@@ -636,6 +732,9 @@ jobs:
                   BASE_REFERENCE: ${{ steps.base.outputs.reference }}
                   BUILD_STRATEGY: ${{ (matrix.target.buildStrategy || inputs.build-strategy) }}
                   REPACKED: ${{ inputs.repack }}
+                  CACHE_HIT: ${{ steps.e2e-cache.outputs.hit }}
+                  CACHE_KEY: ${{ steps.e2e-cache.outputs.key }}
+                  CACHE_RUN_URL: ${{ steps.e2e-cache.outputs.run-url }}
                   PLAN_ARTIFACT: ${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}
               run: |
                   set -euo pipefail
@@ -647,7 +746,7 @@ jobs:
                     exit 1
                   fi
                   needs_native=true
-                  if [ "$BASE_FOUND" = 'true' ] && [ "$force_native" != 'true' ]; then
+                  if { [ "$BASE_FOUND" = 'true' ] || [ "${CACHE_HIT:-}" = 'true' ]; } && [ "$force_native" != 'true' ]; then
                     needs_native=false
                   fi
                   jq -n --argjson target "$TARGET" \
@@ -655,11 +754,16 @@ jobs:
                         --arg fingerprint "$FINGERPRINT" \
                         --arg configHash "$CONFIG_HASH" \
                         --argjson needsNative "$needs_native" \
+                        --arg cacheKey "${CACHE_KEY:-}" \
+                        --arg cacheRunUrl "${CACHE_RUN_URL:-}" \
+                        --argjson cacheHit "${CACHE_HIT:-false}" \
                         --arg planArtifact "$PLAN_ARTIFACT" \
-                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash, needsNative: $needsNative, planArtifact: $planArtifact}' \
+                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash, needsNative: $needsNative, planArtifact: $planArtifact, e2eCacheKey: $cacheKey, e2eCacheHit: $cacheHit, e2eCacheRunUrl: $cacheRunUrl}' \
                      > .ci-artifacts/plan/plan.json
                   {
-                    if [ "$needs_native" = 'false' ] && [ "$REPACKED" = 'true' ]; then
+                    if [ "${CACHE_HIT:-}" = 'true' ]; then
+                      echo "### ${PLATFORM} ${target_name}: cached E2E pass"
+                    elif [ "$needs_native" = 'false' ] && [ "$REPACKED" = 'true' ]; then
                       echo "### ${PLATFORM} ${target_name}: repacked, no native build slot taken"
                       echo "Base ${BASE_REFERENCE} (from ${BASE_SOURCE}) repacked with this commit's JavaScript."
                     elif [ "$needs_native" = 'false' ]; then
@@ -698,6 +802,9 @@ jobs:
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
             targets: ${{ steps.collect.outputs.targets }}
+            test-targets: ${{ steps.collect.outputs.test-targets }}
+            cache-targets: ${{ steps.collect.outputs.cache-targets }}
+            cached-targets: ${{ steps.collect.outputs.cached-targets }}
         steps:
             - name: Apply RunsOn cache bypass
               uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.2 # v4.4.2
@@ -729,7 +836,12 @@ jobs:
                     echo "::error::Expected one plan per target ($expected) named ${PLAN_PREFIX}-<target name>, found ${found}. A missing plan is not an empty set of native builds; it is a target whose strategy nobody decided."
                     exit 1
                   fi
-                  echo "plans=$plans" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "test-targets=$(jq -c 'map(select(.e2eCacheHit != true))' <<< "$plans")"
+                    echo "cache-targets=$(jq -c 'map(select(.e2eCacheHit != true and (.e2eCacheKey // "") != "" and .tolerateTestFailures != true))' <<< "$plans")"
+                    echo "cached-targets=$(jq -c 'map(select(.e2eCacheHit == true))' <<< "$plans")"
+                    echo "plans=$plans"
+                  } >> "$GITHUB_OUTPUT"
                   targets=$(jq -c 'map(select(.needsNative)) | map(del(.needsNative, .fingerprint, .configHash))' <<< "$plans")
                   echo "targets=$targets" >> "$GITHUB_OUTPUT"
                   echo "Targets needing a native build: $(jq -r 'map(.name) | join(", ") | if . == "" then "(none)" else . end' <<< "$targets")"
