@@ -19,7 +19,7 @@ const tree = (root, skip = () => false) => {
         const stat = fs.statSync(filename);
         hash.update(JSON.stringify([relative, stat.mode & 0o777, stat.isDirectory() ? 'directory' : 'file']));
         if (stat.isDirectory()) {
-            for (const name of fs.readdirSync(filename).sort().filter(name => !skip(name))) {
+            for (const name of fs.readdirSync(filename).sort().filter(name => !(skip(name) && fs.statSync(path.join(filename, name)).isFile()))) {
                 visit(path.join(filename, name), `${relative}/${name}`, [...ancestors, resolved]);
             }
         } else if (stat.isFile()) {
