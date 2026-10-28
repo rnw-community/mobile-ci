@@ -922,7 +922,7 @@ points at that gate.
 **Nothing in this repository needs to change, and no input turns it on.**
 Every cache this repo uses goes through `actions/cache` (`node-pm-cache`,
 `build-android-app`'s Gradle and Android SDK caches, `native-app-cache`,
-`setup-ccache-ios`, `xcode-cache`, `swift-test`), and that is the protocol
+`setup-ccache-ios`, `xcode-cache`, `swift-test`, `e2e-result-cache`), and that is the protocol
 the server speaks. A consumer on such a fleet gets LAN-speed restores
 and saves from the pinned version it already uses.
 
@@ -940,6 +940,13 @@ What a workflow run sees differently:
   race, and the job's result is unaffected.
 - **Each node has its own cache.** The first trusted run of a key on a node is
   cold, even if another node already holds that key.
+- **E2E pass records are default-branch evidence, per node.** Because a pull
+  request cannot save, `e2e-result-cache` never stores a pull request's own
+  pass, so a second identical push to that pull request runs again. A
+  default-branch push's record is found only by planners that land on the node
+  that saved it. Pin the planner (`repack-runner-labels` of the e2e workflows) and the
+  control jobs (`control-runner-labels`) to one node's labels if you want every
+  pull request to see the same records.
 - **A cache outage is a cache miss.** If the server is down, restores and saves
   log warnings and the job runs cold. Artifact uploads do not depend on it: the
   gate sends every non-cache results call straight to GitHub.
