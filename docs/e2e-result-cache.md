@@ -197,6 +197,9 @@ emulator/simulator startup and all shards (Budgie's reported 40+ minute lane).
 4. Remove the consumer path exemption classifier. Until a shared default-branch
    record exists, the first PR runs normally and its later identical pushes can
    reuse that PR's own record. Cross-PR savings require the baseline push lane.
+   On a fleet whose LAN Actions cache refuses pull-request saves, a PR never
+   stores its own record and each node holds its own records; see
+   [A LAN Actions cache on the fleet](self-hosted-runners.md#a-lan-actions-cache-on-the-fleet-no-inputs-needed).
 
 ### Budgie
 
