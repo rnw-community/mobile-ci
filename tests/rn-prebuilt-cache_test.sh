@@ -28,10 +28,21 @@ mkdir -p "$workspace/work/apps/mobile"
 install_rn 0.88.0
 run_step "$workspace" APP_DIR=apps/mobile RUNNER_OS_NAME=macOS RUNNER_ARCH_NAME=ARM64 HOME=/Users/admin
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
-    && assert_equals rn-prebuilts-v1-macOS-ARM64-0.88.0 "$(step_output "$workspace" key)" key \
+    && assert_equals rn-prebuilts-v1-macOS-ARM64-0.88.0_ "$(step_output "$workspace" key)" key \
     && assert_equals /Users/admin/Library/Caches/ReactNative "$(step_output "$workspace" path)" path; then
     pass_case
 fi
+
+case_start 'a release key is not a prefix of a prerelease key, so restore cannot pick the wrong tarballs'
+workspace="$(new_workspace "$ACTION" "$STEP")"
+mkdir -p "$workspace/work/apps/mobile"
+install_rn 0.88.0-rc.1
+run_step "$workspace" APP_DIR=apps/mobile RUNNER_OS_NAME=macOS RUNNER_ARCH_NAME=ARM64 HOME=/Users/admin
+prerelease="$(step_output "$workspace" key)"
+case "$prerelease" in
+    rn-prebuilts-v1-macOS-ARM64-0.88.0_*) fail_case "release key is a prefix of '$prerelease'" ;;
+    *) assert_equals rn-prebuilts-v1-macOS-ARM64-0.88.0-rc.1_ "$prerelease" key && pass_case ;;
+esac
 
 case_start 'no installed react-native fails closed'
 resolve
@@ -65,7 +76,7 @@ print('; '.join(problems))
 PYTHON
 )" && assert_equals '' "$problems" problems; then pass_case; fi
 
-case_start 'every build-ios-app job restores the cache before building and saves it after, off pull requests'
+case_start 'every build-ios-app job restores the cache before generating the native project and saves it after the build, off pull requests'
 missing="$(WORKFLOW_ROOT="$REPO_ROOT" python3 - <<'PYTHON'
 import glob
 import os
@@ -88,8 +99,13 @@ for path in sorted(glob.glob(f"{os.environ['WORKFLOW_ROOT']}/.github/workflows/*
         save = steps[saves[0]]
         restore_id = steps[restores[0]].get('id')
         cond = str(save.get('if', ''))
+        generates = [i for i, s in enumerate(steps) if s.get('name') == 'Generate native project']
         if not (restores[0] < builds[0] < saves[0]):
             bad.append(f'{where}: not restore, build, save in that order')
+        if generates and restores[0] > generates[0]:
+            bad.append(f'{where}: restore runs after native project generation, whose pod install may already have downloaded the tarballs')
+        if steps[restores[0]].get('if'):
+            bad.append(f'{where}: restore is conditional')
         if "github.event_name != 'pull_request'" not in cond or f"steps.{restore_id}.outputs.cache-hit != 'true'" not in cond:
             bad.append(f'{where}: save runs on pull requests or re-saves a hit')
         if not save.get('timeout-minutes') or save.get('continue-on-error') is not True:

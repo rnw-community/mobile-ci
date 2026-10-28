@@ -10,7 +10,9 @@ only. React Native verifies each tarball's checksum before using it.
 
 Restore-only, like [`node-pm-cache`](../node-pm-cache/README.md). The calling
 workflow saves with its own bounded, non-fatal `actions/cache/save` step after
-the build, off pull requests and only on a miss. The `ios-maestro`,
+the build, off pull requests and only on a miss. Restore before generating the
+native project: a `prebuildCommand` that runs `pod install` itself downloads the
+tarballs there. The `ios-maestro`,
 `store-screenshots` and `seed-native-cache` iOS build jobs already do this.
 
 | Input | Default | Description |
@@ -20,7 +22,7 @@ the build, off pull requests and only on a miss. The `ios-maestro`,
 | Output | Description |
 | --- | --- |
 | `cache-hit` | `true` when the entry for this `react-native` version was restored. |
-| `cache-key` | `rn-prebuilts-v1-<os>-<arch>-<react-native version>`. |
+| `cache-key` | `rn-prebuilts-v1-<os>-<arch>-<react-native version>_`; the trailing `_` (never part of a version) stops a release key from prefix-matching a prerelease entry. |
 | `path` | The cache directory, for the save step. |
 
 ```yaml

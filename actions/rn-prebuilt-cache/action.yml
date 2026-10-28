@@ -45,7 +45,7 @@ runs:
             ;;
         esac
         echo "path=$HOME/Library/Caches/ReactNative" >> "$GITHUB_OUTPUT"
-        echo "key=rn-prebuilts-v1-${RUNNER_OS_NAME}-${RUNNER_ARCH_NAME}-${version}" >> "$GITHUB_OUTPUT"
+        echo "key=rn-prebuilts-v1-${RUNNER_OS_NAME}-${RUNNER_ARCH_NAME}-${version}_" >> "$GITHUB_OUTPUT"
 
     - name: Restore the React Native prebuilt cache
       id: restore

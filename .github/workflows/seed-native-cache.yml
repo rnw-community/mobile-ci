@@ -729,6 +729,12 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Restore the React Native prebuilt cache
+              id: rn-prebuilts
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.6.0 # v4.6.0
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
@@ -779,13 +785,6 @@ jobs:
                   restore-keys: |
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
-
-            - name: Restore the React Native prebuilt cache
-              id: rn-prebuilts
-              if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.6.0 # v4.6.0
-              with:
-                  app-dir: ${{ matrix.target.appDir }}
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
