@@ -126,7 +126,10 @@ jobs:
                     esac
 
                     deadline=$(( $(date +%s) + WAIT_TIMEOUT_MINUTES * 60 ))
+                    force_cancel_after_polls=8
+                    polls=0
                     while :; do
+                      polls=$((polls + 1))
                       active=''
                       for status in queued in_progress waiting requested pending; do
                         page=1
@@ -168,9 +171,14 @@ jobs:
                       fi
                       printf 'Waiting for %s run(s) of #%s to stop:\n' "$(printf '%s' "$active" | grep -c .)" "$PR_NUMBER"
                       printf '%s' "$active" | sed 's/^/  /'
-                      printf '%s' "$active" | while IFS="$(printf '\t')" read -r run_id _; do
+                      printf '%s' "$active" | while IFS="$(printf '\t')" read -r run_id run_status _; do
                         [ -n "$run_id" ] || continue
-                        gh api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/cancel" >/dev/null 2>&1 || true
+                        cancel=cancel
+                        if [ "$polls" -gt "$force_cancel_after_polls" ] && [ "$run_status" != in_progress ]; then
+                          cancel=force-cancel
+                          echo "Run ${run_id} is still ${run_status} after ${force_cancel_after_polls} cancel requests and has no job running; force-cancelling it."
+                        fi
+                        gh api --method POST "repos/${REPOSITORY}/actions/runs/${run_id}/${cancel}" >/dev/null 2>&1 || true
                       done
                       sleep "$POLL_INTERVAL_SECONDS"
                     done
