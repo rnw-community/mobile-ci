@@ -48,14 +48,14 @@ runs:
     - name: Restore native app cache
       if: inputs.mode == 'restore'
       id: restore
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
           path: ${{ inputs.path }}
           key: ${{ steps.key.outputs.key }}
 
     - name: Save native app cache
       if: inputs.mode == 'save'
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
           path: ${{ inputs.path }}
           key: ${{ steps.key.outputs.key }}

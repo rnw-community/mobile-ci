@@ -1,0 +1,63 @@
+# Pure Swift / Xcode app: the publish lane composed from the actions, for a
+# pipeline that needs its own steps between signing and upload (release notes,
+# metadata). Copy to .github/workflows/release.yml.
+#
+# The job runs in the app-store GitHub Environment, so the signing secrets are
+# environment secrets released only after its required reviewers approve.
+# apple-signing builds a throwaway keychain, asserts the provisioning profile
+# belongs to <team>.<bundle-id>, and is always torn down.
+name: App Store release
+
+on:
+    push:
+        tags: ['v*']
+
+permissions: {}
+
+jobs:
+    release:
+        runs-on: [self-hosted, macOS, ARM64]
+        environment: app-store
+        permissions:
+            contents: read
+        timeout-minutes: 60
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Select the pinned Xcode
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.5.0 # v4.5.0
+              with:
+                  version: '26.4.1'
+                  build: '17E202'
+
+            - name: Install the signing material
+              id: signing
+              uses: rnw-community/mobile-ci/actions/apple-signing@v4.5.0 # v4.5.0
+              with:
+                  certificate-base64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+                  certificate-password: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+                  profile-base64: ${{ secrets.APP_STORE_PROVISIONING_PROFILE_BASE64 }}
+                  asc-key-base64: ${{ secrets.ASC_PRIVATE_KEY_BASE64 }}
+                  asc-key-id: ${{ secrets.ASC_KEY_ID }}
+                  expected-application-identifier: ABCDE12345.com.example.myapp
+
+            - name: Archive and upload to App Store Connect
+              uses: rnw-community/mobile-ci/actions/xcode-archive-upload@v4.5.0 # v4.5.0
+              with:
+                  project: MyApp.xcodeproj
+                  scheme: MyApp
+                  team-id: ABCDE12345
+                  bundle-id: com.example.myapp
+                  build-number: ${{ github.run_number }}
+                  profile-uuid: ${{ steps.signing.outputs.profile-uuid }}
+                  asc-key-id: ${{ secrets.ASC_KEY_ID }}
+                  asc-issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+                  asc-key-path: ${{ steps.signing.outputs.asc-key-path }}
+
+            - name: Remove the signing material
+              if: always()
+              uses: rnw-community/mobile-ci/actions/apple-signing@v4.5.0 # v4.5.0
+              with:
+                  mode: remove

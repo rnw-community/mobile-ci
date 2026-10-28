@@ -57,6 +57,7 @@ detect() {
         ALWAYS_AFFECTED=false \
         EXEMPT_PATHS= \
         TRIGGER_PATHS= \
+        FORCE_LABEL= \
         TURBO_RAN_FILE="$dir/turbo-ran" \
         TURBO_JSON_FILE="$dir/turbo.json" \
         TURBO_ALL_FILE="$dir/turbo-all.json" \
@@ -674,8 +675,86 @@ assert_equals 0 "$STEP_STATUS" 'detect exit status' \
     && assert_contains "$(cat "$dir/log")" '::warning::' 'diff failure warned' \
     && pass_case
 
+# Issue #224: a force label on the pull request runs the pipeline whatever
+# turbo says, and says so, so a reviewer can force an e2e run on a change
+# turbo cannot see without editing trigger-paths.
+label_event() {
+    local dir="$1"
+    shift
+    printf '{"pull_request": {"labels": [%s]}}' "$(printf '{"name": "%s"},' "$@" | sed 's/,$//')" > "$dir/event.json"
+}
+
+case_start 'a force label on the pull request reports affected and forced without running turbo'
+dir="$(prepare)"
+label_event "$dir" bug 'e2e:force'
+detect "$dir" TARGET_PACKAGES=@example/app FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json" EXEMPT_PATHS='**'
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals true "$(step_output "$dir" forced)" 'forced' \
+    && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'without the force label, detection runs as usual and forced is false'
+dir="$(prepare)"
+label_event "$dir" bug
+detect "$dir" TARGET_PACKAGES=@example/app FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json"
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals false "$(step_output "$dir" forced)" 'forced' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'an event with no pull request never forces'
+dir="$(prepare)"
+printf '{"ref": "refs/heads/main"}' > "$dir/event.json"
+detect "$dir" TARGET_PACKAGES=@example/app FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json"
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals false "$(step_output "$dir" forced)" 'forced' \
+    && pass_case
+
+case_start 'an unreadable event payload with a force label set fails closed'
+dir="$(prepare)"
+printf 'not json' > "$dir/event.json"
+detect "$dir" TARGET_PACKAGES=@example/app FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json"
+assert_equals 1 "$STEP_STATUS" 'detect exit status' \
+    && assert_contains "$(cat "$dir/log")" '::error::' 'error' \
+    && pass_case
+
 for workflow in ios-maestro android-maestro; do
-    case_start "$workflow.yml hands its targets to turbo-affected and is always affected only off pull requests"
+    case_start "$workflow.yml passes force-label to turbo-affected and reports a forced run"
+    if failure="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON' 2>&1
+import os
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
+inputs = workflow[True]['workflow_call']['inputs']
+problems = []
+if inputs.get('force-label', {}).get('default', 'MISSING') != '':
+    problems.append('force-label must be an input defaulting to empty')
+step = next(step for step in workflow['jobs']['detect']['steps'] if 'turbo-affected' in step.get('uses', ''))
+if step['with'].get('force-label') != '${{ inputs.force-label }}':
+    problems.append('turbo-affected does not receive force-label')
+if workflow['jobs']['detect'].get('outputs', {}).get('forced') != '${{ steps.affected.outputs.forced }}':
+    problems.append('detect does not output forced')
+report = workflow['jobs']['status']['steps'][0]
+if report.get('env', {}).get('DETECT_FORCED') != '${{ needs.detect.outputs.forced }}':
+    problems.append('status does not read needs.detect.outputs.forced')
+if 'forced' not in report.get('run', ''):
+    problems.append('status never reports forced')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
+        pass_case
+    else
+        fail_case "$failure"
+    fi
+done
+
+for workflow in ios-maestro android-maestro; do
+    case_start "$workflow.yml hands its targets to turbo-affected and is always affected off pull requests or when the content cache owns detection"
     wiring="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON'
 import os
 
@@ -692,7 +771,7 @@ print(workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('tri
 PYTHON
 )"
     # shellcheck disable=SC2016 # the expressions are matched literally.
-    assert_equals "$(printf '%s\n%s\n%s\n\n%s\n' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}' '${{ inputs.trigger-paths }}')" "$wiring" 'turbo-affected with:' \
+    assert_equals "$(printf '%s\n%s\n%s\n\n%s\n' '${{ inputs.targets }}' "\${{ inputs.e2e-result-cache || github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}' '${{ inputs.trigger-paths }}')" "$wiring" 'turbo-affected with:' \
         && pass_case
 done
 

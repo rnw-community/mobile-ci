@@ -72,7 +72,7 @@ provided rather than assumed:
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-repack@v3.3.1 # v3.3.1
+- uses: rnw-community/mobile-ci/actions/expo-repack@v4.5.0 # v4.5.0
   with:
       platform: ios
       base-path: ${{ steps.base.outputs.path }}

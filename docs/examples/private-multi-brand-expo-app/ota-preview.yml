@@ -1,0 +1,47 @@
+# Private multi-brand Expo app: an EAS Update preview for every pull request.
+# Copy to .github/workflows/ota-preview.yml.
+#
+# A private repository cannot use the GitHub Release backend (a device cannot
+# download a private release asset), so the preview is an EAS Update on the
+# pull request's own channel, pr-<number>, which eas-channel-cleanup.yml
+# deletes on close. The sticky comment links the newest finished EAS
+# development build with the same runtime version (dev-build.yml publishes
+# them with distribution: eas).
+#
+# One call per pull request: the comment has one OTA section per platform, so
+# a brand matrix here would overwrite itself. It previews the default brand,
+# under the same eas.json profile (development-acme) dev-build.yml builds that
+# brand's development build with, so the runtime versions match and the
+# comment finds that build.
+name: OTA preview
+
+on:
+    pull_request:
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
+
+permissions: {}
+
+jobs:
+    preview:
+        permissions:
+            contents: write
+            pull-requests: write
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.5.0 # v4.5.0
+        with:
+            app-dir: apps/mobile
+            scheme: toolapp
+            ota-backend: eas
+            eas-channel: pr-{number}
+            # The profile the development build was built with: the update is
+            # evaluated under its env and EAS environment, and its runtime
+            # version is resolved the same way.
+            eas-profile: development-acme
+            dev-build-source: eas
+            dev-build-profile: development-acme
+            install-command: pnpm install --frozen-lockfile
+        secrets:
+            # A preview-scoped token. The production token lives in the
+            # production GitHub Environment (store-release.yml).
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}

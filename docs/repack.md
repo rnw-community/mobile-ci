@@ -40,8 +40,15 @@ label or a strategy means the same thing in every pipeline.
 ## The native key is the correctness boundary
 
 ```
-key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash)>
+key = <@expo/fingerprint hash> - <12 hex of (platform, flavor, toolchain, build-action hash, fingerprint-config hash[, ios-simulator-archs][, build-secrets digest])>
 ```
+
+`ios-simulator-archs` enters the identity only when it is `x86_64`: an x86_64
+Simulator base and an arm64 one never share a key, while the default `arm64`
+hashes exactly what it hashed before the input existed, so no published base
+is orphaned. The repack itself is architecture-blind - it swaps the embedded
+JavaScript bundle and assets and rewrites the Info.plist, never the Mach-O
+executable - so an x86_64 base repacks the same way an arm64 one does.
 
 `toolchain` carries the target's own `workspace` and `scheme` as well, so two
 targets that share an app directory and a fingerprint but build different
@@ -56,15 +63,26 @@ folded in beside it:
 
 - **the mobile-ci build action** that produced the base (`build-ios-app` plus
   `setup-xcode-pinned` on ios, `build-android-app` on android), so changing how
-  a base is built invalidates every base built the old way;
+  a base is built invalidates every base built the old way. `build-android-app`
+  always builds with `-Pandroid.enableShrinkResourcesInReleaseBuilds=false`:
+  apktool cannot relink a resource-shrunk table, so a shrunk base fails to
+  repack at `aapt2 link`;
 - **the pinned toolchain and everything that changes what it produces** — the
   Xcode version and build with `rct-use-prebuilt-rncore`, `rct-use-rn-dep` and
   `expo-use-precompiled-modules` on ios, the cmdline-tools version with
-  `gradle-task` and `gradle-args` on android — so neither a toolchain bump nor
-  a flipped switch nor a changed Gradle task can leave a base reachable that
-  was built the other way;
+  `gradle-task`, `gradle-args` and the resolved `android-abis` on android — so
+  neither a toolchain bump nor a flipped switch nor a changed Gradle task nor
+  another ABI can leave a base reachable that was built the other way. The
+  e2e workflow and the warm-up must therefore resolve the same ABIs:
+  `android-maestro.yml`'s `android-abis: auto` follows the driver (`x86_64` for
+  `avd`, `arm64-v8a` for `redroid`), `seed-native-cache.yml`'s is `x86_64`, so
+  a `redroid` pipeline passes `android-abis: arm64-v8a` to the warm-up;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
-  invalidates every base published while it was in force.
+  invalidates every base published while it was in force;
+- **a SHA-256 digest of `build-secrets-env`**, when the caller passes that
+  secret, so rotating a value compiled into the base moves the key. Only the
+  digest enters the key, never a value, and with no secret passed this
+  component is absent and every existing key is unchanged.
 
 An empty fingerprint is never a key. The step fails rather than publishing or
 fetching under one.
@@ -85,9 +103,14 @@ When that promise breaks, run the warm-up with `force-base: true`.
 **Secrets and values compiled into the binary.** A key baked into the native
 build at compile time (`GOOGLE_MAPS_KEY` in an `AndroidManifest` placeholder,
 say) lives in the base, not in the JavaScript bundle. Rotating it does not move
-the fingerprint, so every pull request keeps repacking onto a base carrying the
-old value. Rotate it and run the warm-up with `force-base: true` in the same
-change.
+the fingerprint. Pass it through the `build-secrets-env` secret — to the warm-up
+and to every e2e and screenshot caller alike — and its digest moves the key, so
+the next default-branch run publishes a base with the new value. A value passed
+any other way (a plain `build-env` line, a runner-level env) is invisible to the
+key: rotate it and run the warm-up with `force-base: true` in the same change.
+Every value in `build-secrets-env` is digested, so rotating one the native build
+never reads (a turbo cache token) also moves the key once; keep such a token in
+`build-secrets-env` only if the install or bundle needs it.
 
 **Env the key sees but the build does not.** `expo-native-key` exports
 `extra-env` while it fingerprints. Anything the app's `app.config` branches on
@@ -140,6 +163,37 @@ binary in a way that matters"; `sourceSkips` claims "this value is rewritten and
 asserted at repack time". Keep the file small enough that each claim can be
 defended, and remember that changing it changes the key — which is exactly what
 you want, and why the file's hash is in there.
+
+### Targets that differ only in brand assets or per-target config
+
+The target name is not part of the key. Two white-label targets whose native
+config differs only in something the fingerprint does not see (brand icons and
+splash images referenced from outside `app.config`, a per-brand
+`google-services.json`, a per-target config file read by a config plugin)
+resolve to the **same key**, so they share one base and the repack ships one
+brand's binary for the other. `expo-base-plan.yml` therefore fails closed when
+two targets with different `appId` get the same key, naming both targets, the
+key and the sources they share; `assert-distinct-fingerprints.yml` runs the same
+check ahead of a release pipeline. Targets with the same `appId` sharing a key
+are a legitimate dedupe and pass.
+
+The fix is to make the fingerprint see the difference with `extraSources` in
+`fingerprint.config.js` - do not add the target name to the key, which would
+double native builds for binaries that really are identical:
+
+```js
+const brand = process.env.APP_BRAND ?? 'default';
+
+module.exports = {
+    extraSources: [
+        { type: 'dir', filePath: `assets/brands/${brand}`, reasons: ['brand-assets'] },
+        { type: 'file', filePath: `config/${brand}/google-services.json`, reasons: ['brand-config'] },
+    ],
+};
+```
+
+`APP_BRAND` must be in the workflow's `fingerprint-env` and `build-env` alike,
+so the key is computed under the env the build sees.
 
 ## The base binary
 
@@ -331,7 +385,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.5.0 # v4.5.0
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -339,9 +393,11 @@ jobs:
 ```
 
 It plans on Linux first: one job per target computes the key and asks whether a
-base already exists for it. Only the targets with no base reach a Mac or a
-Gradle build at all, so a push that changes no native surface costs Linux
-minutes and nothing else.
+base already exists for it, and one job asks the Actions cache API whether each
+iOS target's ccache and CocoaPods caches are still restorable. Only the targets
+with no base, or with evicted iOS compile caches, reach a Mac or a Gradle build
+at all, so a push that changes no native surface costs Linux minutes and
+nothing else.
 
 `force-base: true` rebuilds and re-publishes every target's base. That is the
 answer to the two things the key cannot see — an ignored package that changed
@@ -364,8 +420,11 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v3.3.1 # v3.3.1
-        with: ...
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: >-
+                [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
+            flows-dir: apps/mobile/e2e/flows
 ```
 
 `packages: write` is only needed where a base can be published — the e2e and

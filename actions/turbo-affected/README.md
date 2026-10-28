@@ -63,6 +63,15 @@ matching both runs the pipeline. A diff git cannot compute reports
 `affected=true` with a `::warning::`, since no match cannot be proven.
 `always-affected` and an empty `base-sha` still win.
 
+**A force label overrides detection.** With `force-label` set and that label
+on the triggering pull request (read from the event payload at
+`GITHUB_EVENT_PATH`), the step reports `affected=true` and `forced=true` with a
+`::notice::`, before `always-affected`, `trigger-paths`, `exempt-paths` or
+turbo are considered. Any other event, or a pull request without the label,
+reports `forced=false` and detects as usual. An event payload that cannot be
+read while `force-label` is set fails the step. Add `labeled` to the caller's
+`pull_request` types so adding the label starts a run.
+
 ## Inputs
 
 | Name               | Required | Default   | Description                                                          |
@@ -74,6 +83,7 @@ matching both runs the pipeline. A diff git cannot compute reports
 | `trigger-paths`     | no       | `''`      | Newline- or comma-separated pathspec globs relative to the repository root (e.g. `.github/workflows/e2e.yml`, `**`). When any file changed since `base-sha` matches one, reports `true` without running turbo. Wins over `exempt-paths`. |
 | `base-sha`          | no       | `''`      | Base SHA for the affected computation (`TURBO_SCM_BASE`).                |
 | `always-affected`   | no       | `false`   | Skip detection and report affected unconditionally.                     |
+| `force-label`       | no       | `''`      | Pull request label that forces `affected=true` (and `forced=true`) without detection. Empty never forces. |
 
 ## Outputs
 
@@ -81,11 +91,12 @@ matching both runs the pipeline. A diff git cannot compute reports
 | ---------- | -------------------------------------------------- |
 | `affected` | `true` or `false`.                                  |
 | `turbo-version` | The turbo version detection ran; empty when turbo did not run (`always-affected`, empty `base-sha`). |
+| `forced` | `true` when `force-label` was on the pull request and forced `affected=true`, else `false`. |
 
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/turbo-affected@v1
+- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.5.0 # v4.5.0
   id: affected
   with:
       targets: '[{"name":"app","appDir":"apps/mobile"}]'

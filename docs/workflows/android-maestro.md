@@ -38,6 +38,28 @@ Maestro flows ran (not a pass)" rather than blending into a green check
 silently. A `build` job that was *skipped* while the plan still listed targets
 needing one is reported as a failure too — a skipped build is not a build.
 
+## Android ABIs and the SDK cache
+
+The native build compiles only the ABI the test device runs (`android-abis:
+auto`) instead of every ABI the project declares, which on a stock React
+Native project skips three of the four native compiles. The resolved ABIs are folded
+into the native key, so **upgrading changes every Android native key**: re-run
+the warm-up ([`seed-native-cache.yml`](seed-native-cache.md)) once on the
+default branch right after bumping the pin, or every Android pull request
+compiles natively until a default-branch run has published the new bases. The
+warm-up's `android-abis` must resolve to the same ABIs as this workflow's —
+`x86_64` by default on both; a `redroid` pipeline passes `arm64-v8a` to the
+warm-up.
+
+The `build` job restores the Android SDK (cmdline-tools, platform-tools and
+the build-tools, platforms, NDK and CMake Gradle installs) from the Actions
+cache before the build, and on a hit runs no `sdkmanager` and downloads nothing
+from `dl.google.com`. It saves the SDK in a separate last step, only off
+`pull_request`, with `continue-on-error` and a 10-minute `timeout-minutes`, so
+a stalled upload never fails or holds the job. See
+[`build-android-app`](../../actions/build-android-app#android-sdk-cache) for
+the key.
+
 ## Migrating a Redroid caller (default change)
 
 `runner-labels` and `android-driver` defaults changed together: they name one
@@ -58,10 +80,17 @@ major release.
 | Name                        | Required | Default                                       | Description |
 | ------------------------------ | -------- | ------------------------------------------------ | -------------- |
 | `runner-labels`                 | no       | `["self-hosted","trf-linux-amd64-4x8"]`             | JSON array of self-hosted runner labels for the build/test jobs. The default is the x86_64 Linux KVM pool (4 vCPU / 8 GiB) the default `avd` driver needs; override it together with `android-driver: redroid` to run on a `linux-aarch64` binder/privileged-docker pool. |
+| `e2e-result-cache` | no | `false` | Reuse a validated exact pass for the native key, production bundle/config, tests, inputs and device. See [cache contract and rollout](../e2e-result-cache.md). Bypasses Turbo/path detection when on; forced, manual and quarantined runs do not cache. |
+| `e2e-cache-test-paths` | no | `''` | Newline-separated literal paths/globs replacing the default flows-dir tree; explicit config, pre-run/recovery flows and shard manifests remain automatic. Every pattern must match. |
+| `e2e-cache-extra-paths` | no | `''` | Additional fixture/script dependency paths/globs relative to repository root. Include shared hook/test dependencies. |
+| `e2e-cache-state-command` | no | `''` | Optional app-directory command whose nonempty stdout versions mutable test state, e.g. `date -u +%F`. Errors disable reuse. |
+| `e2e-cache-export-command` | no | `''` | Optional custom exporter writing nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`; empty uses the installed production Expo export. |
+| `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
+| `runs-on-cache-bypass` | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `build-runner-labels`           | no       | `''`                                               | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
 | `test-runner-labels`            | no       | `''`                                               | JSON array of self-hosted runner labels for the test job only. Falls back to `runner-labels` when empty. |
-| `targets`                       | **yes**  | —                                                  | JSON array of build targets: `{name, appDir, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. |
-| `flows-dir`                     | **yes**  | —                                                  | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. |
+| `targets`                       | **yes**  | —                                                  | JSON array of build targets: `{name, appDir, appId, prebuildCommand}`. `prebuildCommand` may be an empty string. Optional per target: `flowsDir`, `tolerateTestFailures`, `buildStrategy` — see [Several packages](#several-packages-per-target-fields-and-call-scope). |
+| `flows-dir`                     | no       | `''`                                               | Directory (relative to repo root) whose top-level files are the runnable Maestro flows by default. Subdirectories are not searched unless `flows-max-depth` is raised. The default of every target's `flowsDir`; may be empty only when every target names its own. |
 | `flows-max-depth`               | no       | `1`                                                 | `find -maxdepth` under `flows-dir`. `0` means unbounded recursion. Default keeps subflows (invoked via `runFlow`, conventionally in subdirectories) out of the shard. |
 | `flows-name-pattern`            | no       | `*.flow.yaml`                                      | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
 | `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
@@ -71,7 +100,11 @@ major release.
 | `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
 | `pre-flow-command`              | no       | `''`                                               | Consumer-owned shell command run **before every flow attempt**, each retry included, after `pre-run-flow` and the warm-up. Never run before `pre-run-flow` or `flow-recovery-flow` themselves. Runs with `FLOW_PATH`, `FLOW_NAME`, `APP_ID`, `ANDROID_SERIAL` and `MAESTRO_FLOW_ENV_FILE` in its environment. Unlike the best-effort `flow-recovery-flow` it is a **precondition**: a non-zero exit fails that attempt without running the flow, consuming one of its `1 + flow-retries` attempts and triggering the recovery flow like any other failed attempt. Every `KEY=VALUE` line it appends to `$MAESTRO_FLOW_ENV_FILE` becomes an extra `-e KEY=VALUE` argument for that one flow's `maestro test` — see [Per-flow preconditions](#per-flow-preconditions). Passed to both `android-driver` options. |
 | `maestro-env`                   | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument to every `maestro test` invocation (`pre-run-flow` and shard flows alike). Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. Passed to both `android-driver` options. |
-| `maestro-config`                | no       | `''`                                               | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both `android-driver` options. |
+| `maestro-config`                | no       | `''`                                               | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Its `includeTags`/`excludeTags` are honoured when the shard is planned — see [Tag selection](#tag-selection). Passed to both `android-driver` options. |
+| `include-tags` | no | `''` | Comma-separated Maestro tags; only flows whose config section's `tags:` holds any of them run. Applied when the shard is planned (exclude wins), added to `maestro-config`'s `includeTags`, and passed to `maestro test`. Fails closed on an unparsable flow config section or an empty selection — see [Tag selection](#tag-selection). |
+| `exclude-tags` | no | `''` | Comma-separated Maestro tags; flows holding any of them never run, even when `include-tags` selects them. Added to `maestro-config`'s `excludeTags` — see [Tag selection](#tag-selection). |
+| `junit-report` | no | `true` | `true` writes each flow's final-attempt JUnit report (`maestro test --format junit`) to `junit/<flow>.xml` inside the shard's existing Maestro artifact; `false` writes none — see [JUnit reports](#junit-reports). |
+| `artifact-retention-days` | no | `7` | Retention in days of each shard's Maestro artifact (debug output, final-state capture, JUnit reports), passed to the `run-maestro-*` action's `retention-days`. |
 | `flow-retries`                  | no       | `0`                                                | Non-negative retry budget per flow; each flow gets up to `1 + flow-retries` attempts. |
 | `infra-retries`                 | no       | `1`                                                | Per-flow retry budget, separate from `flow-retries`, spent only on a failed attempt that hit ActivityManager's `startProcessLocked ... with non-zero startSeq` race (no app process started after a `clearState` relaunch); retried with a `::warning::` even when `flow-retries` is `0`. `avd` driver only — see [run-maestro-android](../../actions/run-maestro-android/README.md#activitymanager-startseq-race). |
 | `settle-before-flow`            | no       | `true`                                             | `true` force-stops the app and waits up to 5 s for its process to be gone before every flow attempt, which removes that race; app data is untouched. `avd` driver only. |
@@ -84,9 +117,15 @@ major release.
 | `target-packages`               | no       | `''`                                               | Newline-separated package names gating this pipeline on `pull_request` events: a pull request that affects none of them (per `turbo ls --affected`) skips the run. Empty derives them from the `name` in each `targets[].appDir`'s `package.json`. Fails closed: an unreadable or nameless `package.json`, a target package `turbo ls` does not list, or a `turbo` failure, fails the detect job, and a missing base SHA reports affected. Every non-`pull_request` event runs. |
 | `exempt-paths`                  | no       | `''`                                               | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `docs/**`, `**/*.md`, `apps/website/**`. A pull request whose every changed file (`base...HEAD`) matches one skips the run without turbo detection. One non-exempt file, an empty diff, or a diff that cannot be computed (logged as a `::warning::`) runs normal detection instead. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `trigger-paths`                 | no       | `''`                                               | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `.github/workflows/e2e.yml`, `e2e/**`. A pull request that changes a matching file (`base...HEAD`, renames counted at both paths) runs without turbo detection, which never attributes a file outside a workspace package to one. `**` runs every pull request, which is what an empty `target-packages` did before v3.3.0. Wins over `exempt-paths`; a diff that cannot be computed runs, with a `::warning::`. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
+| `force-label` | no | `''` | Pull request label that runs the pipeline whatever turbo reports: with it on the pull request, `detect` reports affected without turbo (even for an `exempt-paths`-only diff) and the status summary reads `passed (forced by the <label> label)`. Add `labeled` to the caller's `pull_request` `types` so adding the label starts a run (see [Forcing a run](#forcing-a-run)). Empty never forces. |
 | `expo-fingerprint-version`      | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`               | no       | `2.8.0`                                            | Pinned Maestro CLI version. |
-| `android-driver`                | no       | `avd`                                              | `avd` (default) or `redroid`. `avd` boots Google's own emulator through this repo's `android-emulator` action and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-driver`                | no       | `avd`                                              | `avd` (default), `redroid` or `device-cloud` (no device on the runner at all — see [Device Cloud driver](#device-cloud-driver)). `avd` boots Google's own emulator through this repo's `android-emulator` action and matches the default `runner-labels`: an x86_64 Linux pool with `/dev/kvm`, no privileged containers, no `binder_linux`. Pick `redroid` — together with `runner-labels` pointing at a `linux-aarch64` binder/privileged-docker pool — when the run needs Android on arm64 (e.g. an arm64-only APK); Google publishes no `linux-aarch64` emulator/NDK/cmake, so `avd` cannot boot there, and `redroid` conversely cannot run on the default pool. Both drivers are fully supported self-hosted host shapes — see [self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver](../self-hosted-runners.md#linux-x86_64-kvm-hosts-android-avd-driver) for the `avd` host's requirements. Stock `redroid` images ship no Google Play Services — see [self-hosted-runners.md#google-play-services-gms](../self-hosted-runners.md#google-play-services-gms) for GMS-dependent apps. |
+| `android-abis`                  | no       | `auto`                                             | Comma-separated ABIs the native build compiles, passed to Gradle as `-PreactNativeArchitectures`. `auto` follows the test device: `emulator-arch` (`x86_64`) for `android-driver: avd`, `arm64-v8a` for `redroid`; when `gradle-args` or `build-env` already pins `reactNativeArchitectures`, `auto` leaves it to that pin. An explicit value that contradicts such a pin fails the run. Empty compiles every ABI the project declares. Part of the native key — see [Android ABIs](#android-abis-and-the-sdk-cache). |
+| `device-cloud-runner-labels`    | no       | `''`                                               | JSON array of runner labels for the test job when the driver is `device-cloud`. The job only uploads and waits, so any Linux runner with Node works. Empty falls back to `repack-runner-labels`. |
+| `device-cloud-cli-version`      | no       | `5.7.1`                                            | Exact `@devicecloud.dev/dcd` npm version the `device-cloud` driver runs. |
+| `device-cloud-android-api-level` | no      | `''`                                               | Device Cloud Android API level, e.g. `34` (`--android-api-level`). Empty uses Device Cloud's default. |
+| `device-cloud-android-device`   | no       | `''`                                               | Device Cloud Android model, e.g. `pixel-7` (`--android-device`). Empty uses Device Cloud's default. |
 | `emulator-api-level`            | no       | `34`                                               | Android emulator API level (`avd` driver only). |
 | `emulator-target`               | no       | `google_apis`                                      | Android emulator system image target (`avd` driver only). |
 | `emulator-arch`                 | no       | `x86_64`                                           | Android emulator system image architecture (`avd` driver only). |
@@ -104,7 +143,7 @@ major release.
 | `node-version`                  | no       | `22.x`                                             | Node version for `actions/setup-node`. |
 | `install-command`               | no       | `yarn install --immutable`                         | JS dependency install command. |
 | `enable-corepack`               | no       | `true`                                             | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
-| `package-manager`               | no       | `''` (auto-detect)                                 | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
+| `package-manager`               | no       | `''` (auto-detect)                                 | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, the package-manager dependency cache (`node-pm-cache`: restored on every event, saved only off pull requests) — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`                 | no       | `''`                                               | Optional workspace JS build command run at repo root before the native build. |
 | `build-env`                     | no       | `''`                                               | Newline-separated `KEY=VALUE` pairs appended to `$GITHUB_ENV` at the start of the build job. Rejects (fails closed) any line without `=` or whose name does not match `^[A-Za-z_][A-Za-z0-9_]*$`. |
 | `build-strategy`                | no       | `auto`                                             | How this pull request gets the APK its Maestro shards install. `auto` computes the native key, looks up the base binary published for it, and repacks that base with this commit's JavaScript; only a key with no published base runs Gradle — and when it does on the default branch, the base it builds is published for the next run. `repack` refuses to run Gradle at all: a missing base fails the build. `native` is the escape hatch and a regression — every pull request then rebuilds the APK, and that run publishes no base. See [Build strategy](#build-strategy) and [docs/repack.md](../repack.md). |
@@ -126,12 +165,125 @@ major release.
 | `android-keystore-key-password` | no       | `android`                                          | Key password inside `android-keystore-path`. Ignored when that is empty. |
 | `build-timeout-minutes`         | no       | `60`                                               | Build job timeout. |
 | `test-timeout-minutes`          | no       | `75`                                               | Test job timeout. |
+| `tolerate-test-failures`        | no       | `false`                                            | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite. The default of every target's `tolerateTestFailures`, which quarantines one target alone. |
+| `call-scope`                    | no       | `''`                                               | Names this call's artifacts, plans, Redroid containers and concurrency groups, so several calls in one run (one per package, say) never share or cancel them. Calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them. Empty keeps today's names. See [Several packages](#several-packages-per-target-fields-and-call-scope). |
 
-No `secrets:` block — this workflow never touches a release signing credential
+With `e2e-result-cache: true`, the planner checks exact pass records before base
+fetch/repack and returns only cache misses to the build/test matrices. Complete
+hits report `result=passed` with successful producer links. Default-branch E2E
+pushes seed evidence for other PRs; the native-base warm-up does not. Additional
+planner work is one production export; cache failures require the normal suite.
+See [identity, test dependency and trust contracts](../e2e-result-cache.md).
+
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed`, `failed`, or `skipped` when no target package was affected. A skip is a green check, not a pass, so a notification job should not report it as one. |
+
+Read it from a caller job that `needs:` this one. GitHub skips a dependent
+job when its need fails, so a notification job must opt in with `if:
+always()` (or `!cancelled()`) to see a `failed` result:
+
+```yaml
+    notify:
+        needs: e2e
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - env:
+                  RESULT: ${{ needs.e2e.outputs.result }}
+              run: echo "android-maestro: $RESULT"
+```
+
+## Secrets
+
+| Secret                | Required | Description |
+| --------------------- | -------- | ----------- |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in the `plan`/repack leg (install, `build-command`, fingerprint, re-bundle) and the native `build` job. For what a real build needs but a log must never show: a remote turbo cache token, a Maps API key compiled into the base. Parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest of the entries enters the native key, never a value — so rotating a secret moves the key, and the warm-up ([`seed-native-cache.yml`](seed-native-cache.md)) must be passed the same secret or the two never agree on a key and every pull request takes a native build. |
+| `device-cloud-api-key` | with the `device-cloud` driver | Device Cloud API key. Reaches only `run-maestro-device-cloud`, which hands it to the CLI as `DEVICE_CLOUD_API_KEY`, never on a command line. A `device-cloud` run without it fails before submitting. |
+| `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to `maestro-env` (so each becomes a Maestro `-e` argument) and exported to the test job's environment for `pre-test-command` and `pre-flow-command`. Every value is replaced with `***` in the uploaded Maestro artifacts (`maestro.log`, commands JSON, logcat) before upload; masking only covers the job log. For test-user passwords and the credentials a hook uses to prepare the backend under test. |
+
+Every secret is optional; with none passed, every job behaves exactly as it did
+without the `secrets:` block. Pass them explicitly — `secrets: inherit` would
+hand every repository secret to a third-party workflow.
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: ...
+            flows-dir: apps/mobile/e2e/flows
+            maestro-env: |
+                TEST_USER=e2e@example.com
+        secrets:
+            build-secrets-env: |
+                TURBO_TOKEN=${{ secrets.TURBO_TOKEN }}
+                MAPS_API_KEY=${{ secrets.MAPS_API_KEY }}
+            maestro-secrets-env: |
+                TEST_PASSWORD=${{ secrets.E2E_TEST_PASSWORD }}
+```
+
+This workflow never touches a release signing credential
 or an Expo/EAS token. The `android-keystore-*` inputs default to the published
 React Native **debug** keystore constants, which are not secrets; a release key
 belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
 **token permission** the caller grants; see [Permissions](#permissions).
+
+## Device Cloud driver
+
+`android-driver: device-cloud` keeps the plan, build and repack half of this
+workflow and replaces only the test leg. The test job runs on
+`device-cloud-runner-labels` (default: the `repack-runner-labels` Linux pool).
+It needs no simulator, KVM or binder there, and it skips the KVM/arch host check and every emulator or Redroid step. It then
+runs [`run-maestro-device-cloud`](../../actions/run-maestro-device-cloud/README.md)
+against the same `app-release.apk` the local driver would install. That action:
+
+- selects flows exactly as the local driver does (`flows-dir`,
+  `flows-max-depth`, `flows-name-pattern`, `flows-exclude-pattern`), then
+  submits them once per target with the pinned `@devicecloud.dev/dcd`
+  (`device-cloud-cli-version`);
+- passes `include-tags` / `exclude-tags`, `maestro-config` (minus `flows:`,
+  which it refuses), `maestro-env` merged with `maestro-secrets-env` as `-e`,
+  `maestro-version`, and `flow-retries` as `--retry`;
+- downloads the run's logs, screenshots and videos (and, with `junit-report`,
+  its JUnit report) and uploads them under the same artifact name as a local
+  shard (`maestro-<platform>-<target>-shard-0`), after redacting the Maestro
+  secrets. So `status` and any reporting read the same artifact.
+
+`android-abis: auto` cannot follow a device it never sees, so with
+`device-cloud` it fails the `detect` job: set `android-abis` explicitly to the
+ABIs Device Cloud's devices run, and pass `seed-native-cache.yml` the same
+value so the warm-up publishes under the same native key.
+
+Device Cloud runs the flows in parallel itself, so `shard-count` and
+`shard-manifest-dir` do not fan the job out: there is one submission per
+target, reported as shard 0.
+
+It fails closed:
+
+- A submission Device Cloud rejects (a bad key, an exhausted quota, an
+  unsupported device or Maestro version) is a red check carrying the
+  CLI's reason, never a skip.
+- Anything but an explicit pass of at least one flow fails. This covers a
+  failed flow, a run superseded by another, an empty result, or CLI output
+  that is not JSON.
+- The local-device hooks — `pre-run-flow`, `flow-recovery-flow`, `pre-test-command` and
+  `pre-flow-command` — each act on a device this runner boots, so setting one
+  with `device-cloud` fails the job rather than silently never running it.
+
+```yaml
+jobs:
+    e2e:
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: ...
+            flows-dir: apps/mobile/e2e/flows
+            android-driver: device-cloud
+        secrets:
+            device-cloud-api-key: ${{ secrets.DEVICE_CLOUD_API_KEY }}
+```
 
 ## Emulator budget and host slots
 
@@ -370,7 +522,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -405,6 +557,53 @@ out at its assertion budget. The fix is one workspace-config key —
 `platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
 `--config` actually reaches the CLI.
 
+## Tag selection
+
+`include-tags` / `exclude-tags` select flows by the `tags:` list in each flow's
+config section (the YAML document before the first `---`; block `- smoke` and
+inline `[smoke, checkout]` lists both work), with Maestro's own semantics:
+
+- a flow runs when `include-tags` is empty **or** it carries **any** listed tag;
+- a flow carrying **any** `exclude-tags` tag never runs — exclude wins;
+- both are comma-separated, entries trimmed, empty entries ignored.
+
+Maestro applies tags only when it plans a **directory**; handed a single flow
+file it ignores them, and the `run-maestro-*` actions every shard runs always hand it single files. So the selection
+happens when the shard is planned, before the index-modulo split or
+`shard-manifest-dir` assignment, and every shard computes the same list. The
+inputs are also passed to each flow's `maestro test` as `--include-tags` /
+`--exclude-tags`, which is a no-op for a single file today.
+
+`maestro-config`'s `includeTags` / `excludeTags` are honoured too, with no
+input set: they are added to `include-tags` / `exclude-tags` exactly as `maestro
+test <dir> --include-tags …` adds them, so a workspace config that already
+excludes `android-only` keeps doing so here. Before this, those keys were
+silently ignored.
+
+The tags are read by Maestro's own YAML parser: `scripts/maestro/MaestroTagSelection.java`
+runs on the Java source launcher with the `lib/` jars of the `maestro` CLI the
+job installed, so the runner needs nothing beyond the **JDK** Maestro already
+runs on (a bare JRE cannot launch a source file). Selection fails the step,
+rather than running an unfiltered shard, when the config section of any
+discovered flow does not parse or its `tags:` is not a list, when the YAML
+reader cannot run, or when no flow is left. A `shard-manifest-dir` entry naming
+a flow the tags deselected is skipped with a log line, not rejected. None of
+this runs — no JVM is started — when neither input is set and `maestro-config`
+does not mention `includeTags`/`excludeTags`.
+
+## JUnit reports
+
+With `junit-report: true` (the default) every flow's `maestro test` also gets
+`--format junit --output <artifacts-dir>/junit/<flow>.xml`, so the shard's
+existing artifact (same name as before) carries one JUnit file per flow, for
+test-summary tooling such as `mikepenz/action-junit-report` with
+`report_paths: '**/junit/*.xml'`. A retried flow keeps only its final attempt's
+report. A flow whose final attempt produced no report (its `pre-flow-command`
+failed, or Maestro died before reporting) gets a one-case JUnit failure in its
+place, so no failed flow is missing. `pre-run-flow` and `flow-recovery-flow`
+write none. `--format junit` makes Maestro run the single flow through its
+suite runner; set `junit-report: false` to keep the previous single-flow path.
+
 ## Debug artifacts
 
 When a shard fails, only the **failing** flows' `--debug-output` (UI hierarchy
@@ -425,10 +624,52 @@ true` — `actions/upload-artifact` skips hidden files by default, which
 previously shipped `final-screen.png` alone and dropped the hierarchy dumps
 the failure message points you at.
 
+## Several packages: per-target fields and `call-scope`
+
+A monorepo of packages, each with its own example apps and Maestro suite, fits
+in **one call per platform**. Each `targets` entry may set, on top of its
+required fields:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `flowsDir` | the `flows-dir` input | Directory of this target's runnable flows. With every target naming its own, `flows-dir` may be left empty; a target with neither fails the `detect` job. |
+| `tolerateTestFailures` | the `tolerate-test-failures` input | `true` quarantines only this target: its Maestro failure becomes a `::warning::` and every other target still gates the run. Anything but a JSON boolean fails `detect`. |
+| `buildStrategy` | the `build-strategy` input | `auto`, `repack` or `native` for this target alone. A bare (non-Expo) React Native app sets `native`: it has no Expo runtime to repack, so it is always built with Gradle and never publishes a base. The `native-build-label` still makes every target `native`, and fails closed on a target that asks for `repack`. |
+
+`buildStrategy` is explicit rather than detected: whether an app is an Expo app
+is not reliably readable from its `package.json` in a monorepo whose
+dependencies are hoisted, and a wrong guess would either repack an app that
+cannot be repacked or compile one that could. An unknown value fails `detect`.
+
+One call runs every target when turbo reports any of them affected. To skip
+unaffected packages instead, call the workflow once per package — and then give
+each call a distinct `call-scope`. It is folded into every name a call owns:
+the app and plan artifacts (`android-e2e-app-<call-scope>--<target>`,
+`android-e2e-plan-<call-scope>--<target>`), the Maestro artifacts, the
+native build's concurrency group and the workflow's own concurrency group, and the Redroid container name.
+Without it two calls in one run share those names: a duplicate artifact name
+fails the upload, and on a pull request the second call cancels the first. The
+plan job only ever reads the plans named after its own targets, so another
+call's plans in the same run are never counted. `call-scope` takes letters,
+digits, `.` and `_`, with single `-` between them; anything else fails
+`detect`.
+
+Every Android target's shards boot their own emulator, whichever call they come
+from. To cap how many run on one host at once — across targets, calls and
+repositories — set `emulator-slots-dir` once the fleet provisions slot files
+(see [Emulator budget and host slots](#emulator-budget-and-host-slots)); a
+workflow `concurrency` group could only serialise whole calls.
+
+[docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml)
+is a complete single-call caller with a bare and an Expo app and one
+quarantined suite.
+
 ## Concurrency
 
 The workflow sets its own `concurrency` group of the caller's workflow name,
-the `flows-dir` input and, for a `pull_request` run, the pull request's ref. Only a
+the `flows-dir` and `call-scope` inputs and, for a `pull_request` run, the pull
+request's ref, so two calls in one run with different `call-scope`s never cancel
+each other. Only a
 `pull_request` run is cancelled when a newer push to the same pull request
 supersedes it. Every other run — a push to the default branch, a schedule, a
 manual dispatch — gets a group unique to its run id, so a newer push never
@@ -461,7 +702,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
 ```
 
 - `contents: read` — checkout.
@@ -480,7 +721,28 @@ expiring, so a key can go cold and cost a native build again.
 This workflow still never writes to the repository and never needs a release
 signing credential or an Expo/EAS token.
 
-## Example
+## Examples
+
+### Minimal
+
+One target on the default `avd` driver and x86_64 KVM pool; the permissions
+are required (see [Permissions](#permissions)).
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
+            flows-dir: apps/mobile/e2e/flows
+```
+
+### Full
 
 ```yaml
 # .github/workflows/android-maestro.yml
@@ -500,7 +762,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -520,3 +782,34 @@ jobs:
 `fingerprint-env` must pass exactly what the default-branch warm-up passes; a
 single differing byte gives the pull request a different native key, and every
 pull request runs Gradle again.
+
+A single call covering a monorepo's packages, with a bare app and a one-target
+quarantine, is in
+[docs/examples/rn-packages-monorepo/e2e.yml](../examples/rn-packages-monorepo/e2e.yml).
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
+
+## Forcing a run
+
+Set `force-label` (for example `e2e:force`) to let a reviewer run the suite on a
+pull request turbo reports as unaffected. Add `labeled` to the caller's
+`pull_request` types, or adding the label does nothing until the next push.
+Since every labelling then starts a run, and this workflow's concurrency
+cancels the pull request's run in progress, gate the calling job so other
+labels are ignored:
+
+```yaml
+on:
+    pull_request:
+        types: [opened, synchronize, reopened, labeled]
+jobs:
+    e2e:
+        if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            force-label: e2e:force
+```
+
+The label is read from the triggering event's payload, so it applies to every
+later push to the pull request until it is removed.

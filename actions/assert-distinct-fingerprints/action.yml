@@ -1,0 +1,46 @@
+name: assert-distinct-fingerprints
+description: >-
+  Fails closed when two targets of one platform with different appId resolve to
+  the same native key, naming both targets, the key and the fingerprint sources
+  they share. Targets with the same appId sharing a key are a legitimate dedupe
+  and pass. Takes the per-target keys as `plans`; the
+  assert-distinct-fingerprints.yml reusable workflow computes them per target
+  with expo-native-key before any build starts.
+inputs:
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  plans:
+    description: >-
+      JSON array with one element per target - `name`, `appId`, `nativeKey` and
+      optionally `appDir`, `fingerprint`, `configHash`, which the error quotes
+      as the sources the colliding targets share.
+    required: true
+  require-app-id:
+    description: >-
+      `true` (default) requires an `appId` on every target. `false` lets a set
+      of targets that all omit `appId` skip the comparison with a notice, as
+      seed-native-cache's targets do; a mix of targets with and without `appId`
+      still fails.
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Assert no two appIds share a native key
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        PLANS: ${{ inputs.plans }}
+        REQUIRE_APP_ID: ${{ inputs.require-app-id }}
+        ASSERT_SCRIPT: ${{ github.action_path }}/../../scripts/assert-distinct-native-keys.sh
+      run: |
+        set -euo pipefail
+        case "$PLATFORM" in
+          ios|android) ;;
+          *)
+            echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."
+            exit 1
+            ;;
+        esac
+        bash "$ASSERT_SCRIPT" "$PLATFORM" "$PLANS" "${REQUIRE_APP_ID:-true}"

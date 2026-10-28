@@ -3,6 +3,26 @@ name: native-dev-release
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             enable-ios:
                 description: Run the ios-dev-release job.
                 type: boolean
@@ -86,6 +106,30 @@ on:
                 type: string
                 required: false
                 default: development
+            distribution:
+                description: >-
+                    Where testers get the build. github-release (default) attaches it
+                    to a pruned GitHub Release. eas uploads it to EAS internal
+                    distribution (eas upload) and outputs the build's EAS install
+                    page, which a private repository's testers can open without
+                    GitHub access; it needs an apk on Android. Fails closed on any
+                    other value.
+                type: string
+                required: false
+                default: github-release
+            build-location:
+                description: >-
+                    local (default) runs eas build --local on the runner. cloud runs
+                    the build on EAS servers (eas build --json --wait) and needs
+                    distribution eas, a build profile with distribution internal,
+                    and no post-build command or embedded build number check, since
+                    the binary never reaches the runner. publish-env, EAS_EXTRA_ENV
+                    and DEVELOPMENT_BUILD_NUMBER do not reach the EAS builder; put
+                    build-time values in the profile env or EAS environment
+                    variables. Fails closed on any other value.
+                type: string
+                required: false
+                default: local
             ios-pre-build-command:
                 description: >-
                     Optional consumer-owned command (e.g. patching eas.json or asserting a
@@ -121,8 +165,8 @@ on:
             ios-post-build-command:
                 description: >-
                     Optional consumer-owned command run in app-dir after the iOS EAS build and
-                    its embedded build number read-back, before the GitHub Release is created;
-                    a non-zero exit stops publication. Runs with the job's env plus
+                    its embedded build number read-back, before the build is published (GitHub
+                    Release or eas upload); a non-zero exit stops publication. Runs with the job's env plus
                     ARTIFACT_PATH (the built .ipa), EMBEDDED_BUILD_NUMBER (CFBundleVersion) and
                     EMBEDDED_VERSION (CFBundleShortVersionString).
                 type: string
@@ -131,8 +175,8 @@ on:
             android-post-build-command:
                 description: >-
                     Optional consumer-owned command run in app-dir after the Android EAS build
-                    and its embedded build number read-back, before the GitHub Release is
-                    created; a non-zero exit stops publication. Runs with the job's env plus
+                    and its embedded build number read-back, before the build is published
+                    (GitHub Release or eas upload); a non-zero exit stops publication. Runs with the job's env plus
                     ARTIFACT_PATH (the built .apk/.aab), EMBEDDED_BUILD_NUMBER (versionCode)
                     and EMBEDDED_VERSION (versionName), both empty when the host has no tool
                     to read them.
@@ -142,15 +186,37 @@ on:
             tag-prefix:
                 description: >-
                     Release tag prefix. Tags are created as <tag-prefix>-ios-<run_number> and
-                    <tag-prefix>-android-<run_number>.
+                    <tag-prefix>-android-<run_number> (<tag-prefix>-<call-scope>-<platform>-<run_number>
+                    with call-scope).
                 type: string
                 required: false
                 default: dev
+            call-scope:
+                description: >-
+                    Names this call's build artifacts, release tags (and so what it
+                    prunes), pull request comment sections and concurrency group, so a
+                    caller can run this workflow several times in one run, e.g. once per
+                    brand in a matrix, without the calls colliding, pruning or queueing
+                    behind each other. Calls that share a run must each set a distinct,
+                    non-empty value; a second call publishing the same release tag in
+                    the same run attempt fails. Letters, digits, '.', '_' and single '-'
+                    between them. Empty (default) keeps today's names.
+                type: string
+                required: false
+                default: ''
             keep-releases:
                 description: Number of newest published releases (per platform tag) to keep; older ones are pruned.
                 type: string
                 required: false
                 default: '5'
+            pr-comment:
+                description: >-
+                    On a pull_request event, write each platform's development build (install link,
+                    runtime fingerprint, or the failure) into the pull request's sticky preview comment.
+                    The calling job must then also grant pull-requests: write.
+                type: boolean
+                required: false
+                default: false
             asc-key-path:
                 description: >-
                     Optional path, relative to app-dir, the App Store Connect API key (.p8) is
@@ -206,13 +272,35 @@ on:
                     secrets eas build needs on the environment, e.g.
                     EXPO_APPLE_APP_SPECIFIC_PASSWORD.
                 required: false
+        outputs:
+            ios-install-url:
+                description: EAS install page of the iOS build (distribution eas), empty otherwise.
+                value: ${{ jobs.ios-dev-release.outputs.install-url }}
+            ios-build-id:
+                description: EAS build id of the iOS build (distribution eas), empty otherwise.
+                value: ${{ jobs.ios-dev-release.outputs.build-id }}
+            ios-release-url:
+                description: GitHub Release of the iOS build (distribution github-release), empty otherwise.
+                value: ${{ jobs.ios-dev-release.outputs.release-url }}
+            ios-fingerprint:
+                description: Runtime fingerprint of the iOS build.
+                value: ${{ jobs.ios-dev-release.outputs.fingerprint }}
+            android-install-url:
+                description: EAS install page of the Android build (distribution eas), empty otherwise.
+                value: ${{ jobs.android-dev-release.outputs.install-url }}
+            android-build-id:
+                description: EAS build id of the Android build (distribution eas), empty otherwise.
+                value: ${{ jobs.android-dev-release.outputs.build-id }}
+            android-release-url:
+                description: GitHub Release of the Android build (distribution github-release), empty otherwise.
+                value: ${{ jobs.android-dev-release.outputs.release-url }}
+            android-fingerprint:
+                description: Runtime fingerprint of the Android build.
+                value: ${{ jobs.android-dev-release.outputs.fingerprint }}
 
 concurrency:
-    group: native-dev-release-${{ github.workflow }}-${{ github.ref }}
+    group: native-dev-release-${{ github.workflow }}-${{ github.ref }}-${{ inputs.call-scope }}
     cancel-in-progress: false
-
-permissions:
-    contents: read
 
 jobs:
     ios-dev-release:
@@ -222,12 +310,23 @@ jobs:
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         permissions:
             contents: write
+        outputs:
+            tag: ${{ steps.release.outputs.tag }}
+            fingerprint: ${{ steps.fingerprint.outputs.ios-runtime-version }}
+            asset-name: ${{ steps.meta.outputs.asset-name }}
+            install-url: ${{ steps.eas.outputs.install-url }}
+            build-id: ${{ steps.eas.outputs.build-id }}
+            release-url: ${{ steps.publish.outcome == 'success' && format('{0}/{1}/releases/tag/{2}', github.server_url, github.repository, steps.release.outputs.tag) || '' }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
               shell: bash
               run: |
@@ -235,6 +334,49 @@ jobs:
                   if [ -z "${EXPO_TOKEN:-}" ]; then
                     echo "::error::ios-dev-release requires the EXPO_TOKEN secret. Pass it via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
+                  fi
+
+            - name: Validate distribution and build location
+              shell: bash
+              env:
+                  DISTRIBUTION: ${{ inputs.distribution }}
+                  BUILD_LOCATION: ${{ inputs.build-location }}
+                  POST_BUILD_COMMAND: ${{ inputs.ios-post-build-command }}
+                  VERIFY_EMBEDDED_BUILD_NUMBER: ${{ inputs.ios-verify-embedded-build-number }}
+                  ARTIFACT_EXTENSION: ipa
+              run: |
+                  set -euo pipefail
+                  case "$DISTRIBUTION" in
+                    github-release|eas) ;;
+                    *)
+                      echo "::error::distribution must be github-release or eas; got '$DISTRIBUTION'."
+                      exit 1
+                      ;;
+                  esac
+                  case "$BUILD_LOCATION" in
+                    local|cloud) ;;
+                    *)
+                      echo "::error::build-location must be local or cloud; got '$BUILD_LOCATION'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$BUILD_LOCATION" = local ] && [ "$DISTRIBUTION" = eas ] && [ "$ARTIFACT_EXTENSION" = aab ]; then
+                    echo "::error::distribution eas hands testers an install link, and an .aab cannot be installed on a device; set android-artifact-extension to apk."
+                    exit 1
+                  fi
+                  if [ "$BUILD_LOCATION" = cloud ]; then
+                    if [ "$DISTRIBUTION" != eas ]; then
+                      echo "::error::build-location cloud leaves the binary on EAS servers, so only EAS can distribute it; set distribution: eas."
+                      exit 1
+                    fi
+                    if [ -n "$POST_BUILD_COMMAND" ]; then
+                      echo "::error::A post-build command inspects the local binary, which a cloud build never downloads; remove it or set build-location: local."
+                      exit 1
+                    fi
+                    if [ "$VERIFY_EMBEDDED_BUILD_NUMBER" = true ]; then
+                      echo "::error::ios-verify-embedded-build-number reads the local .ipa, which a cloud build never downloads; turn it off or set build-location: local."
+                      exit 1
+                    fi
                   fi
 
             - name: Checkout repository
@@ -276,39 +418,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -428,6 +541,14 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Compute the runtime version
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  platform: ios
+                  eas-profile: ${{ inputs.build-profile }}
+
             - name: Compute deterministic build number
               shell: bash
               env:
@@ -441,7 +562,19 @@ jobs:
               env:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
-              run: echo "tag=${TAG_PREFIX}-ios-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifacts or release tags can collide."
+                    exit 1
+                  fi
+                  prefix="${TAG_PREFIX}${CALL_SCOPE:+-$CALL_SCOPE}-ios-"
+                  {
+                    echo "tag=${prefix}${RUN_NUMBER}"
+                    echo "prefix=$prefix"
+                    echo "artifact=ios-dev-build${CALL_SCOPE:+-$CALL_SCOPE}"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Write App Store Connect API key
               if: env.HAS_ASC_KEY == 'true'
@@ -475,6 +608,7 @@ jobs:
 
             - name: EAS build (iOS, development)
               id: build
+              if: inputs.build-location == 'local'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -496,6 +630,36 @@ jobs:
                   test -f "$output_path"
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
+            - name: EAS cloud build (iOS, development)
+              id: cloud-build
+              if: inputs.build-location == 'cloud'
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  PLATFORM: ios
+                  EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
+                  EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+                  EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+              run: |
+                  set -euo pipefail
+                  build_json="$RUNNER_TEMP/${PLATFORM}-dev-release/eas-build.json"
+                  mkdir -p "$(dirname "$build_json")"
+                  status=0
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform "$PLATFORM" \
+                    --profile "$BUILD_PROFILE" \
+                    --non-interactive \
+                    --json \
+                    --wait > "$build_json" || status=$?
+                  if [ "$status" -ne 0 ]; then
+                    cat "$build_json" >&2 || true
+                    echo "::error::The EAS cloud build failed (eas build exited $status)."
+                    exit "$status"
+                  fi
+                  echo "build-json=$build_json" >> "$GITHUB_OUTPUT"
+
             - name: Remove App Store Connect API key
               if: always()
               shell: bash
@@ -508,6 +672,7 @@ jobs:
 
             - name: Read embedded build number
               id: embedded
+              if: inputs.build-location == 'local'
               shell: bash
               env:
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
@@ -572,14 +737,69 @@ jobs:
               run: eval "$IOS_POST_BUILD_COMMAND"
 
             - name: Upload iOS dev build artifact
+              if: inputs.build-location == 'local'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-dev-build
+                  name: ${{ steps.tag.outputs.artifact }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
+            - name: Distribute through EAS
+              id: eas
+              if: inputs.distribution == 'eas'
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  PLATFORM: ios
+                  BUILD_LOCATION: ${{ inputs.build-location }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  BUILD_JSON: ${{ steps.cloud-build.outputs.build-json }}
+              run: |
+                  set -euo pipefail
+                  work_dir="$RUNNER_TEMP/${PLATFORM}-dev-release"
+                  mkdir -p "$work_dir"
+                  jq_error="$work_dir/eas-distribution.err"
+                  if [ "$BUILD_LOCATION" = local ]; then
+                    upload_json="$work_dir/eas-upload.json"
+                    npx --yes "eas-cli@${EAS_CLI_VERSION}" upload \
+                      --platform "$PLATFORM" \
+                      --build-path "$ARTIFACT_PATH" \
+                      --non-interactive \
+                      --json > "$upload_json"
+                    if ! install_url="$(jq -er '.url | strings' "$upload_json" 2> "$jq_error")"; then
+                      echo "::error::eas upload exited 0 but printed no build URL: $(head -c 2000 "$upload_json")"
+                      exit 1
+                    fi
+                  else
+                    if ! install_url="$(jq -er --arg platform "$PLATFORM" '
+                      if type != "array" or length != 1 then error("expected exactly one build from eas build --json, got \(tojson)") else .[0] end
+                      | if .status != "FINISHED" then error("EAS build \(.id) ended with status \(.status), not FINISHED") else . end
+                      | if .distribution != "INTERNAL" then error("EAS build \(.id) has distribution \(.distribution); testers can install only a build profile with distribution internal") else . end
+                      | if ((.artifacts.buildUrl // "") | length) == 0 then error("EAS build \(.id) has no artifacts.buildUrl") else . end
+                      | if $platform == "android" and (.artifacts.buildUrl | test("\\.aab($|[?#])")) then error("EAS build \(.id) produced an .aab, which no device can install; set android.buildType apk in the build profile") else . end
+                      | "https://expo.dev/accounts/\(.project.ownerAccount.name // error("EAS build \(.id) names no project owner"))/projects/\(.project.slug)/builds/\(.id)"' \
+                      "$BUILD_JSON" 2> "$jq_error")"; then
+                      echo "::error::$(sed -E 's/^jq: error \(at [^)]*\): //' "$jq_error")"
+                      exit 1
+                    fi
+                  fi
+                  build_page_re='^https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                  if ! [[ "$install_url" =~ $build_page_re ]]; then
+                    echo "::error::'$install_url' is not an EAS build page; refusing to hand testers a link nothing proves installs this build."
+                    exit 1
+                  fi
+                  build_id="${install_url##*/builds/}"
+                  echo "EAS internal distribution build $build_id: $install_url"
+                  {
+                    echo "install-url=$install_url"
+                    echo "build-id=$build_id"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "### iOS development build: [install from EAS]($install_url) (build \`$build_id\`)" >> "$GITHUB_STEP_SUMMARY"
+
             - name: Compute build metadata
               id: meta
+              if: inputs.distribution == 'github-release'
               shell: bash
               working-directory: ${{ inputs.app-dir }}
               env:
@@ -592,6 +812,7 @@ jobs:
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
                   EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
                   EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.ios-runtime-version }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -618,18 +839,24 @@ jobs:
                     --arg sha256 "$sha256" \
                     --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
                     --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
+                    --arg fingerprint "${FINGERPRINT:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
                      + {buildNumber: $buildNumber}
                      + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
                      + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + (if $fingerprint == "" then {} else {fingerprint: $fingerprint} end)
                      + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
-                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
-                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "meta-path=$meta_path"
+                    echo "asset-name=$asset_name"
+                    echo "sums-path=$sums_path"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Create GitHub Release (draft)
               id: release
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
@@ -638,25 +865,41 @@ jobs:
                   META_PATH: ${{ steps.meta.outputs.meta-path }}
                   SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.ios-runtime-version }}
               run: |
                   set -euo pipefail
-                  if gh release view "$TAG" >/dev/null 2>&1; then
+                  notes="Automated development build. Build number: ${BUILD_NUMBER}."
+                  if [ -n "${FINGERPRINT:-}" ]; then
+                    notes="${notes}
+
+                  Runtime fingerprint: \`${FINGERPRINT}\`
+                  <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
+                  fi
+                  if existing_notes="$(gh release view "$TAG" --json body --jq .body 2>/dev/null)"; then
+                    case "$existing_notes" in
+                      *"Build number: ${BUILD_NUMBER}."*)
+                        echo "::error::Release $TAG already holds build ${BUILD_NUMBER}, published by another call of native-dev-release in this run attempt. Give each call in one run a distinct call-scope."
+                        exit 1
+                        ;;
+                    esac
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
                       --title "iOS dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                      --notes "$notes"
                     gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "iOS dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      --notes "$notes" \
                       "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
             - name: Publish GitHub Release
+              id: publish
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
@@ -664,11 +907,12 @@ jobs:
               run: gh release edit "$TAG" --draft=false
 
             - name: Prune old iOS dev releases
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
                   REPOSITORY: ${{ github.repository }}
-                  TAG_PREFIX: ${{ inputs.tag-prefix }}-ios-
+                  TAG_PREFIX: ${{ steps.tag.outputs.prefix }}
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
                   CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
@@ -684,7 +928,7 @@ jobs:
                     exit 1
                   fi
                   release_tags="$(printf '%s\n' "$published" \
-                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && substr($2, length(prefix) + 1) ~ /^[0-9]+$/ && $2 != current' \
                     | sort -r -t "$(printf '\t')" -k1,1 \
                     | cut -f2)"
                   tags=()
@@ -710,11 +954,22 @@ jobs:
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         permissions:
             contents: write
+        outputs:
+            tag: ${{ steps.release.outputs.tag }}
+            fingerprint: ${{ steps.fingerprint.outputs.android-runtime-version }}
+            asset-name: ${{ steps.meta.outputs.asset-name }}
+            install-url: ${{ steps.eas.outputs.install-url }}
+            build-id: ${{ steps.eas.outputs.build-id }}
+            release-url: ${{ steps.publish.outcome == 'success' && format('{0}/{1}/releases/tag/{2}', github.server_url, github.repository, steps.release.outputs.tag) || '' }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
               shell: bash
               run: |
@@ -722,6 +977,49 @@ jobs:
                   if [ -z "${EXPO_TOKEN:-}" ]; then
                     echo "::error::android-dev-release requires the EXPO_TOKEN secret. Pass it via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
+                  fi
+
+            - name: Validate distribution and build location
+              shell: bash
+              env:
+                  DISTRIBUTION: ${{ inputs.distribution }}
+                  BUILD_LOCATION: ${{ inputs.build-location }}
+                  POST_BUILD_COMMAND: ${{ inputs.android-post-build-command }}
+                  VERIFY_EMBEDDED_BUILD_NUMBER: 'false'
+                  ARTIFACT_EXTENSION: ${{ inputs.android-artifact-extension }}
+              run: |
+                  set -euo pipefail
+                  case "$DISTRIBUTION" in
+                    github-release|eas) ;;
+                    *)
+                      echo "::error::distribution must be github-release or eas; got '$DISTRIBUTION'."
+                      exit 1
+                      ;;
+                  esac
+                  case "$BUILD_LOCATION" in
+                    local|cloud) ;;
+                    *)
+                      echo "::error::build-location must be local or cloud; got '$BUILD_LOCATION'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$BUILD_LOCATION" = local ] && [ "$DISTRIBUTION" = eas ] && [ "$ARTIFACT_EXTENSION" = aab ]; then
+                    echo "::error::distribution eas hands testers an install link, and an .aab cannot be installed on a device; set android-artifact-extension to apk."
+                    exit 1
+                  fi
+                  if [ "$BUILD_LOCATION" = cloud ]; then
+                    if [ "$DISTRIBUTION" != eas ]; then
+                      echo "::error::build-location cloud leaves the binary on EAS servers, so only EAS can distribute it; set distribution: eas."
+                      exit 1
+                    fi
+                    if [ -n "$POST_BUILD_COMMAND" ]; then
+                      echo "::error::A post-build command inspects the local binary, which a cloud build never downloads; remove it or set build-location: local."
+                      exit 1
+                    fi
+                    if [ "$VERIFY_EMBEDDED_BUILD_NUMBER" = true ]; then
+                      echo "::error::ios-verify-embedded-build-number reads the local .ipa, which a cloud build never downloads; turn it off or set build-location: local."
+                      exit 1
+                    fi
                   fi
 
             - name: Checkout repository
@@ -763,39 +1061,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -915,6 +1184,14 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Compute the runtime version
+              id: fingerprint
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  platform: android
+                  eas-profile: ${{ inputs.build-profile }}
+
             - name: Compute deterministic build number
               shell: bash
               env:
@@ -928,7 +1205,19 @@ jobs:
               env:
                   TAG_PREFIX: ${{ inputs.tag-prefix }}
                   RUN_NUMBER: ${{ github.run_number }}
-              run: echo "tag=${TAG_PREFIX}-android-${RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifacts or release tags can collide."
+                    exit 1
+                  fi
+                  prefix="${TAG_PREFIX}${CALL_SCOPE:+-$CALL_SCOPE}-android-"
+                  {
+                    echo "tag=${prefix}${RUN_NUMBER}"
+                    echo "prefix=$prefix"
+                    echo "artifact=android-dev-build${CALL_SCOPE:+-$CALL_SCOPE}"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Run Android pre-build command
               if: inputs.android-pre-build-command != ''
@@ -938,8 +1227,154 @@ jobs:
                   ANDROID_PRE_BUILD_COMMAND: ${{ inputs.android-pre-build-command }}
               run: eval "$ANDROID_PRE_BUILD_COMMAND"
 
+            - name: Fit the native build into the container limits
+              id: native-jobs
+              if: inputs.build-location == 'local'
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
+                  v1_unbounded_bytes=1125899906842624
+                  reserve_mib=5120
+                  per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
+                  memory_bytes=''
+                  cpu_quota=''
+                  cpu_period=''
+
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+
+                  is_uint() {
+                    case "$1" in
+                      '' | *[!0-9]*) return 1 ;;
+                    esac
+                    return 0
+                  }
+
+                  if [ -f "$cgroup_root/cgroup.controllers" ]; then
+                    if [ -f "$cgroup_root/memory.max" ]; then
+                      value="$(cat "$cgroup_root/memory.max")"
+                      if [ "$value" != max ]; then
+                        is_uint "$value" || fail "Unparseable $cgroup_root/memory.max '$value'; expected a byte count or 'max'. Refusing to compile native code with a parallelism this step cannot bound."
+                        memory_bytes="$value"
+                      fi
+                    fi
+                    if [ -f "$cgroup_root/cpu.max" ]; then
+                      read -r cpu_quota cpu_period < "$cgroup_root/cpu.max" || true
+                      [ "$cpu_quota" = max ] && cpu_quota=''
+                    fi
+                  else
+                    if [ -f "$cgroup_root/memory/memory.limit_in_bytes" ]; then
+                      value="$(cat "$cgroup_root/memory/memory.limit_in_bytes")"
+                      is_uint "$value" || fail "Unparseable $cgroup_root/memory/memory.limit_in_bytes '$value'; expected a byte count."
+                      [ "$value" -lt "$v1_unbounded_bytes" ] && memory_bytes="$value"
+                    fi
+                    if [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+                      cpu_quota="$(cat "$cgroup_root/cpu/cpu.cfs_quota_us")"
+                      cpu_period="$(cat "$cgroup_root/cpu/cpu.cfs_period_us" 2>/dev/null || true)"
+                      [ "$cpu_quota" = -1 ] && cpu_quota=''
+                    fi
+                  fi
+                  if ! is_uint "$per_job_mib" || [ "$per_job_mib" -lt 1 ]; then
+                    fail "native-compile-memory-per-job '$per_job_mib' must be a positive number of MiB."
+                  fi
+                  if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
+                    fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
+                  fi
+
+                  jobs=''
+                  basis=''
+                  if [ -n "$cpu_quota" ]; then
+                    jobs=$(((cpu_quota + cpu_period - 1) / cpu_period))
+                    basis="CPU quota $cpu_quota/$cpu_period"
+                  fi
+                  if [ -n "$memory_bytes" ]; then
+                    memory_mib=$((memory_bytes / 1048576))
+                    memory_jobs=$(((memory_mib - reserve_mib) / per_job_mib))
+                    [ "$memory_jobs" -lt 1 ] && memory_jobs=1
+                    if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
+                      jobs="$memory_jobs"
+                    fi
+                    basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB JVM reserve, $per_job_mib MiB per job"
+                  fi
+                  if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
+                    if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
+                      fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
+                    fi
+                    jobs="$NATIVE_COMPILE_JOBS"
+                    basis='native-compile-jobs input'
+                  fi
+
+                  echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
+                  if [ -z "$jobs" ]; then
+                    echo "No cgroup CPU or memory limit found; native compile parallelism is left to ninja."
+                    exit 0
+                  fi
+
+                  slots_dir="$RUNNER_TEMP/mobile-ci-compile-slots"
+                  launcher="$slots_dir/compile-slot.sh"
+                  mkdir -p "$slots_dir"
+                  cat > "$launcher" <<'COMPILE_SLOT'
+                  #!/bin/sh
+                  set -eu
+                  slots="${MOBILE_CI_COMPILE_SLOTS:?MOBILE_CI_COMPILE_SLOTS is not set}"
+                  dir="${MOBILE_CI_COMPILE_SLOTS_DIR:?MOBILE_CI_COMPILE_SLOTS_DIR is not set}"
+                  try_slots() {
+                    slot=0
+                    while [ "$slot" -lt "$slots" ]; do
+                      exec 9> "$dir/slot.$slot"
+                      if flock -n 9; then
+                        return 0
+                      fi
+                      exec 9>&-
+                      slot=$((slot + 1))
+                    done
+                    return 1
+                  }
+                  if ! try_slots; then
+                    exec 8> "$dir/gate"
+                    flock 8
+                    until try_slots; do
+                      sleep 0.2
+                    done
+                    exec 8>&-
+                  fi
+                  status=0
+                  "$@" 9>&- || status=$?
+                  exit "$status"
+                  COMPILE_SLOT
+                  chmod +x "$launcher"
+
+                  jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+                  kotlin_daemon_cap='-Dkotlin.daemon.jvm.options=-Xmx1536m'
+                  chain_launcher() {
+                    case "$1" in
+                      "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
+                      '') printf '%s' "$launcher" ;;
+                      *) printf '%s;%s' "$launcher" "$1" ;;
+                    esac
+                  }
+                  {
+                    echo "MOBILE_CI_COMPILE_SLOTS=$jobs"
+                    echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
+                    echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
+                    echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+                    case " ${JAVA_TOOL_OPTIONS:-} " in
+                      *" $jvm_heap_return "*) ;;
+                      *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
+                    esac
+                    case "${GRADLE_OPTS:-}" in
+                      *kotlin.daemon.jvm.options=* | *kotlin.daemon.jvmargs=*) ;;
+                      *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_daemon_cap" ;;
+                    esac
+                  } >> "$GITHUB_ENV"
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin daemons the project gives no JVM options of its own are capped at $kotlin_daemon_cap."
+
             - name: EAS build (Android, development)
               id: build
+              if: inputs.build-location == 'local'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -966,8 +1401,36 @@ jobs:
                   test -f "$output_path"
                   echo "artifact-path=$output_path" >> "$GITHUB_OUTPUT"
 
+            - name: EAS cloud build (Android, development)
+              id: cloud-build
+              if: inputs.build-location == 'cloud'
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  PLATFORM: android
+              run: |
+                  set -euo pipefail
+                  build_json="$RUNNER_TEMP/${PLATFORM}-dev-release/eas-build.json"
+                  mkdir -p "$(dirname "$build_json")"
+                  status=0
+                  npx --yes "eas-cli@${EAS_CLI_VERSION}" build \
+                    --platform "$PLATFORM" \
+                    --profile "$BUILD_PROFILE" \
+                    --non-interactive \
+                    --json \
+                    --wait > "$build_json" || status=$?
+                  if [ "$status" -ne 0 ]; then
+                    cat "$build_json" >&2 || true
+                    echo "::error::The EAS cloud build failed (eas build exited $status)."
+                    exit "$status"
+                  fi
+                  echo "build-json=$build_json" >> "$GITHUB_OUTPUT"
+
             - name: Read embedded build number
               id: embedded
+              if: inputs.build-location == 'local'
               shell: bash
               env:
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
@@ -1047,14 +1510,69 @@ jobs:
               run: eval "$ANDROID_POST_BUILD_COMMAND"
 
             - name: Upload Android dev build artifact
+              if: inputs.build-location == 'local'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-dev-build
+                  name: ${{ steps.tag.outputs.artifact }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 30
 
+            - name: Distribute through EAS
+              id: eas
+              if: inputs.distribution == 'eas'
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  PLATFORM: android
+                  BUILD_LOCATION: ${{ inputs.build-location }}
+                  ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
+                  BUILD_JSON: ${{ steps.cloud-build.outputs.build-json }}
+              run: |
+                  set -euo pipefail
+                  work_dir="$RUNNER_TEMP/${PLATFORM}-dev-release"
+                  mkdir -p "$work_dir"
+                  jq_error="$work_dir/eas-distribution.err"
+                  if [ "$BUILD_LOCATION" = local ]; then
+                    upload_json="$work_dir/eas-upload.json"
+                    npx --yes "eas-cli@${EAS_CLI_VERSION}" upload \
+                      --platform "$PLATFORM" \
+                      --build-path "$ARTIFACT_PATH" \
+                      --non-interactive \
+                      --json > "$upload_json"
+                    if ! install_url="$(jq -er '.url | strings' "$upload_json" 2> "$jq_error")"; then
+                      echo "::error::eas upload exited 0 but printed no build URL: $(head -c 2000 "$upload_json")"
+                      exit 1
+                    fi
+                  else
+                    if ! install_url="$(jq -er --arg platform "$PLATFORM" '
+                      if type != "array" or length != 1 then error("expected exactly one build from eas build --json, got \(tojson)") else .[0] end
+                      | if .status != "FINISHED" then error("EAS build \(.id) ended with status \(.status), not FINISHED") else . end
+                      | if .distribution != "INTERNAL" then error("EAS build \(.id) has distribution \(.distribution); testers can install only a build profile with distribution internal") else . end
+                      | if ((.artifacts.buildUrl // "") | length) == 0 then error("EAS build \(.id) has no artifacts.buildUrl") else . end
+                      | if $platform == "android" and (.artifacts.buildUrl | test("\\.aab($|[?#])")) then error("EAS build \(.id) produced an .aab, which no device can install; set android.buildType apk in the build profile") else . end
+                      | "https://expo.dev/accounts/\(.project.ownerAccount.name // error("EAS build \(.id) names no project owner"))/projects/\(.project.slug)/builds/\(.id)"' \
+                      "$BUILD_JSON" 2> "$jq_error")"; then
+                      echo "::error::$(sed -E 's/^jq: error \(at [^)]*\): //' "$jq_error")"
+                      exit 1
+                    fi
+                  fi
+                  build_page_re='^https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/builds/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                  if ! [[ "$install_url" =~ $build_page_re ]]; then
+                    echo "::error::'$install_url' is not an EAS build page; refusing to hand testers a link nothing proves installs this build."
+                    exit 1
+                  fi
+                  build_id="${install_url##*/builds/}"
+                  echo "EAS internal distribution build $build_id: $install_url"
+                  {
+                    echo "install-url=$install_url"
+                    echo "build-id=$build_id"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "### Android development build: [install from EAS]($install_url) (build \`$build_id\`)" >> "$GITHUB_STEP_SUMMARY"
+
             - name: Compute build metadata
               id: meta
+              if: inputs.distribution == 'github-release'
               shell: bash
               working-directory: ${{ inputs.app-dir }}
               env:
@@ -1067,6 +1585,7 @@ jobs:
                   TAG_NAME: ${{ steps.tag.outputs.tag }}
                   EMBEDDED_BUILD_NUMBER: ${{ steps.embedded.outputs.embedded-build-number }}
                   EMBEDDED_VERSION: ${{ steps.embedded.outputs.embedded-version }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.android-runtime-version }}
               run: |
                   set -euo pipefail
                   asset_name="$(basename "$ARTIFACT_PATH")"
@@ -1093,18 +1612,24 @@ jobs:
                     --arg sha256 "$sha256" \
                     --arg embeddedBuildNumber "${EMBEDDED_BUILD_NUMBER:-}" \
                     --arg embeddedVersion "${EMBEDDED_VERSION:-}" \
+                    --arg fingerprint "${FINGERPRINT:-}" \
                     '{platform: $platform}
                      + (if $version == "" then {} else {version: $version} end)
                      + {buildNumber: $buildNumber}
                      + (if $embeddedBuildNumber == "" then {} else {embeddedBuildNumber: $embeddedBuildNumber} end)
                      + (if $embeddedVersion == "" then {} else {embeddedVersion: $embeddedVersion} end)
+                     + (if $fingerprint == "" then {} else {fingerprint: $fingerprint} end)
                      + {commitSha: $commitSha, branch: $branch, builtAt: $builtAt, workflowUrl: $workflowUrl, tagName: $tagName, assetName: $assetName, sha256: $sha256}' \
                     > "$meta_path"
-                  echo "meta-path=$meta_path" >> "$GITHUB_OUTPUT"
-                  echo "sums-path=$sums_path" >> "$GITHUB_OUTPUT"
+                  {
+                    echo "meta-path=$meta_path"
+                    echo "asset-name=$asset_name"
+                    echo "sums-path=$sums_path"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Create GitHub Release (draft)
               id: release
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
@@ -1113,25 +1638,41 @@ jobs:
                   META_PATH: ${{ steps.meta.outputs.meta-path }}
                   SUMS_PATH: ${{ steps.meta.outputs.sums-path }}
                   BUILD_NUMBER: ${{ env.DEVELOPMENT_BUILD_NUMBER }}
+                  FINGERPRINT: ${{ steps.fingerprint.outputs.android-runtime-version }}
               run: |
                   set -euo pipefail
-                  if gh release view "$TAG" >/dev/null 2>&1; then
+                  notes="Automated development build. Build number: ${BUILD_NUMBER}."
+                  if [ -n "${FINGERPRINT:-}" ]; then
+                    notes="${notes}
+
+                  Runtime fingerprint: \`${FINGERPRINT}\`
+                  <!-- mobile-ci:fingerprint:${FINGERPRINT} -->"
+                  fi
+                  if existing_notes="$(gh release view "$TAG" --json body --jq .body 2>/dev/null)"; then
+                    case "$existing_notes" in
+                      *"Build number: ${BUILD_NUMBER}."*)
+                        echo "::error::Release $TAG already holds build ${BUILD_NUMBER}, published by another call of native-dev-release in this run attempt. Give each call in one run a distinct call-scope."
+                        exit 1
+                        ;;
+                    esac
                     echo "Updating existing release $TAG in place (job re-run)."
                     gh release edit "$TAG" \
                       --draft \
                       --title "Android dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}."
+                      --notes "$notes"
                     gh release upload "$TAG" "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH" --clobber
                   else
                     gh release create "$TAG" \
                       --draft \
                       --title "Android dev build ${TAG}" \
-                      --notes "Automated development build. Build number: ${BUILD_NUMBER}." \
+                      --notes "$notes" \
                       "$ARTIFACT_PATH" "$META_PATH" "$SUMS_PATH"
                   fi
                   echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
             - name: Publish GitHub Release
+              id: publish
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
@@ -1139,11 +1680,12 @@ jobs:
               run: gh release edit "$TAG" --draft=false
 
             - name: Prune old Android dev releases
+              if: inputs.distribution == 'github-release'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
                   REPOSITORY: ${{ github.repository }}
-                  TAG_PREFIX: ${{ inputs.tag-prefix }}-android-
+                  TAG_PREFIX: ${{ steps.tag.outputs.prefix }}
                   KEEP_RELEASES: ${{ inputs.keep-releases }}
                   CURRENT_TAG: ${{ steps.release.outputs.tag }}
               run: |
@@ -1159,7 +1701,7 @@ jobs:
                     exit 1
                   fi
                   release_tags="$(printf '%s\n' "$published" \
-                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && $2 != current' \
+                    | awk -F '\t' -v prefix="$TAG_PREFIX" -v current="$CURRENT_TAG" 'NF == 2 && index($2, prefix) == 1 && substr($2, length(prefix) + 1) ~ /^[0-9]+$/ && $2 != current' \
                     | sort -r -t "$(printf '\t')" -k1,1 \
                     | cut -f2)"
                   tags=()
@@ -1178,11 +1720,75 @@ jobs:
                     gh release delete "$tag" --yes --cleanup-tag
                   done
 
+    pr-comment:
+        name: Update the pull request's preview comment
+        needs: [ios-dev-release, android-dev-release]
+        if: >-
+            !cancelled() && inputs.pr-comment && github.event_name == 'pull_request' &&
+            github.event.pull_request.head.repo.full_name == github.repository
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 10
+        steps:
+            - name: Render development build comment sections
+              shell: bash
+              env:
+                  SECTIONS_DIR: ${{ runner.temp }}/preview-comment-sections
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+                  SERVER_URL: ${{ github.server_url }}
+                  REPOSITORY: ${{ github.repository }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  IOS_RESULT: ${{ needs.ios-dev-release.result }}
+                  IOS_TAG: ${{ needs.ios-dev-release.outputs.tag }}
+                  IOS_ASSET: ${{ needs.ios-dev-release.outputs.asset-name }}
+                  IOS_FINGERPRINT: ${{ needs.ios-dev-release.outputs.fingerprint }}
+                  IOS_INSTALL_URL: ${{ needs.ios-dev-release.outputs.install-url }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  ANDROID_RESULT: ${{ needs.android-dev-release.result }}
+                  ANDROID_TAG: ${{ needs.android-dev-release.outputs.tag }}
+                  ANDROID_ASSET: ${{ needs.android-dev-release.outputs.asset-name }}
+                  ANDROID_FINGERPRINT: ${{ needs.android-dev-release.outputs.fingerprint }}
+                  ANDROID_INSTALL_URL: ${{ needs.android-dev-release.outputs.install-url }}
+              run: |
+                  set -euo pipefail
+                  rm -rf "$SECTIONS_DIR"
+                  mkdir -p "$SECTIONS_DIR"
+                  render() {
+                    local platform="$1" label="$2" enabled="$3" result="$4" tag="$5" asset="$6" fingerprint="$7" install_url="$8"
+                    [ "$enabled" = 'true' ] || return 0
+                    {
+                      echo "### ${label}${CALL_SCOPE:+ ($CALL_SCOPE)}: development build"
+                      echo
+                      if [ "$result" = 'success' ] && [ -n "$install_url" ]; then
+                        echo "Commit \`${HEAD_SHA:0:7}\`, runtime fingerprint \`${fingerprint:-unknown}\`."
+                        echo
+                        echo "[Install from EAS](${install_url})."
+                      elif [ "$result" = 'success' ] && [ -n "$tag" ] && [ -n "$asset" ]; then
+                        echo "Commit \`${HEAD_SHA:0:7}\`, runtime fingerprint \`${fingerprint:-unknown}\`."
+                        echo
+                        echo "[${tag}](${SERVER_URL}/${REPOSITORY}/releases/tag/${tag}): install [\`${asset}\`](${SERVER_URL}/${REPOSITORY}/releases/download/${tag}/${asset})."
+                      else
+                        echo "The ${label} development build of commit \`${HEAD_SHA:0:7}\` did not publish (result: ${result}); see [the run](${RUN_URL})."
+                      fi
+                    } > "$SECTIONS_DIR/${platform}-dev-build${CALL_SCOPE:+-$CALL_SCOPE}.md"
+                  }
+                  render ios iOS "$ENABLE_IOS" "$IOS_RESULT" "$IOS_TAG" "$IOS_ASSET" "$IOS_FINGERPRINT" "$IOS_INSTALL_URL"
+                  render android Android "$ENABLE_ANDROID" "$ANDROID_RESULT" "$ANDROID_TAG" "$ANDROID_ASSET" "$ANDROID_FINGERPRINT" "$ANDROID_INSTALL_URL"
+
+            - name: Update the sticky preview comment
+              if: inputs.enable-ios || inputs.enable-android
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.5.0 # v4.5.0
+              with:
+                  pr-number: ${{ github.event.pull_request.number }}
+                  sections-dir: ${{ runner.temp }}/preview-comment-sections
+
     status:
         name: Native dev release result
         needs: [ios-dev-release, android-dev-release]
         if: always()
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        permissions: {}
         steps:
             - name: Report
               shell: bash

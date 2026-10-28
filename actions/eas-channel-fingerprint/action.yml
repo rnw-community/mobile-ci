@@ -1,0 +1,251 @@
+name: eas-channel-fingerprint
+description: >-
+  Decides whether this commit can ship as an OTA on an EAS Update channel:
+  resolves each target's runtime version with ota-runtime-version (the
+  project's own expo-updates, under its eas.json build profile env) and
+  compares it with the latest finished build on the channel and, unless
+  baseline is build, the latest update on every branch the channel serves.
+  decision=ota only when every target matches; an EAS query that fails, or a
+  channel with nothing on it, decides native. A missing token or a runtime
+  version that cannot be resolved fails the step.
+inputs:
+  app-dir:
+    description: App directory holding the Expo app config, eas.json and installed dependencies.
+    required: false
+    default: '.'
+  channel:
+    description: Channel to compare with. Empty uses eas-profile's channel.
+    required: false
+    default: ''
+  platform:
+    description: all, ios or android.
+    required: false
+    default: all
+  eas-profile:
+    description: eas.json build profile whose env (extends resolved) the runtime version is resolved under, and whose channel is the default.
+    required: false
+    default: ''
+  targets:
+    description: >-
+      JSON array replacing channel / platform / eas-profile: one entry per
+      target, {"name", "platform": "ios"|"android", "channel", "envLines"?,
+      "buildProfile"?}, as native-publish.yml's plan resolves them.
+    required: false
+    default: ''
+  env:
+    description: Newline-separated KEY=VALUE env the runtime versions are resolved under, after the profile env (ota-runtime-version).
+    required: false
+    default: ''
+  unset-env:
+    description: Newline-separated variable names removed before resolving (ota-runtime-version).
+    required: false
+    default: ''
+  baseline:
+    description: >-
+      update-or-build (default) accepts a match with the latest update or the
+      latest finished build on the channel. build accepts only a finished EAS
+      build: proof a binary with this runtime exists, which an update alone is
+      not (and which `eas build --local` never records).
+    required: false
+    default: update-or-build
+  eas-cli-version:
+    description: Pinned eas-cli npm version.
+    required: false
+    default: '20.5.1'
+  expo-token:
+    description: Expo access token. Empty uses EXPO_TOKEN from the job env.
+    required: false
+    default: ''
+outputs:
+  decision:
+    description: '`ota` when every target''s runtime version matches what its channel serves, `native` otherwise.'
+    value: ${{ steps.compare.outputs.decision }}
+  reason:
+    description: Why, in one sentence per target that decided native.
+    value: ${{ steps.compare.outputs.reason }}
+  changed-targets:
+    description: Comma-separated targets that decided native (the platforms, without targets).
+    value: ${{ steps.compare.outputs.changed-targets }}
+  runtime-versions:
+    description: JSON object of target (or platform) to the runtime version this commit resolves to.
+    value: ${{ steps.compare.outputs.runtime-versions }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the eas.json build profile
+      id: profile
+      if: inputs.eas-profile != '' && inputs.targets == ''
+      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.5.0 # v4.5.0
+      with:
+        app-dir: ${{ inputs.app-dir }}
+        profiles: ${{ inputs.eas-profile }}
+
+    - name: Resolve the comparison targets
+      id: targets
+      shell: bash
+      env:
+        EXPO_TOKEN_INPUT: ${{ inputs.expo-token }}
+        TARGETS: ${{ inputs.targets }}
+        CHANNEL: ${{ inputs.channel }}
+        PLATFORM: ${{ inputs.platform }}
+        BASELINE: ${{ inputs.baseline }}
+        EAS_PROFILE: ${{ inputs.eas-profile }}
+        PROFILE_ENV: ${{ steps.profile.outputs.env-lines }}
+        PROFILE_CHANNEL: ${{ steps.profile.outputs.channel }}
+        EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+      run: |
+        set -euo pipefail
+        fail() {
+          echo "::error::$*"
+          exit 1
+        }
+        printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        case "$BASELINE" in
+          update-or-build|build) ;;
+          *) fail "baseline must be update-or-build or build; got '$BASELINE'." ;;
+        esac
+        name_pattern='^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+        if [ -n "$TARGETS" ]; then
+          targets="$(jq -c --arg pattern "$name_pattern" '
+            if type == "array" and length > 0 and all(.[]; type == "object"
+                and (.name | type == "string" and test("^[A-Za-z0-9._-]+$"))
+                and (.platform == "ios" or .platform == "android")
+                and (.channel | type == "string" and test($pattern))
+                and ((.envLines // "") | type == "string")
+                and ((.buildProfile // "") | type == "string"))
+            then map({name, platform, channel, envLines: (.envLines // ""), buildProfile: (.buildProfile // "")})
+            else error("invalid") end' <<< "$TARGETS" 2>/dev/null)" \
+            || fail "targets must be a non-empty JSON array of {name, platform: ios|android, channel, envLines?, buildProfile?}."
+        else
+          case "$PLATFORM" in
+            all) platforms='["ios","android"]' ;;
+            ios|android) platforms="[\"$PLATFORM\"]" ;;
+            *) fail "platform must be all, ios or android; got '$PLATFORM'." ;;
+          esac
+          channel="${CHANNEL:-$PROFILE_CHANNEL}"
+          [ -n "$channel" ] || fail "There is no channel to compare with: set channel, or an eas-profile whose eas.json build profile sets one."
+          printf '%s' "$channel" | grep -Eq "$name_pattern" || fail "channel must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$channel'."
+          targets="$(jq -c --arg channel "$channel" --arg env "$PROFILE_ENV" --arg profile "$EAS_PROFILE" \
+            'map({name: ., platform: ., channel: $channel, envLines: $env, buildProfile: $profile})' <<< "$platforms")"
+        fi
+        [ -n "${EXPO_TOKEN_INPUT:-${EXPO_TOKEN:-}}" ] || fail "eas-channel-fingerprint needs an Expo access token: set expo-token or EXPO_TOKEN."
+        echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve this commit's runtime versions
+      id: runtime
+      uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
+      with:
+        app-dir: ${{ inputs.app-dir }}
+        targets: ${{ steps.targets.outputs.targets }}
+        env: ${{ inputs.env }}
+        unset-env: ${{ inputs.unset-env }}
+
+    - name: Compare the runtime versions with the channel
+      id: compare
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        EXPO_TOKEN_INPUT: ${{ inputs.expo-token }}
+        TARGETS: ${{ steps.targets.outputs.targets }}
+        RUNTIMES: ${{ steps.runtime.outputs.runtime-versions }}
+        BASELINE: ${{ inputs.baseline }}
+        EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+      run: |
+        set -euo pipefail
+        fail() {
+          echo "::error::$*"
+          exit 1
+        }
+        export EXPO_TOKEN="${EXPO_TOKEN_INPUT:-${EXPO_TOKEN:-}}"
+        [ -n "$EXPO_TOKEN" ] || fail "eas-channel-fingerprint needs an Expo access token: set expo-token or EXPO_TOKEN."
+        eas() {
+          npx --yes "eas-cli@${EAS_CLI_VERSION}" "$@" --json --non-interactive
+        }
+
+        changed=()
+        reasons=()
+        rows=''
+        count="$(jq 'length' <<< "$TARGETS")"
+        index=0
+        while [ "$index" -lt "$count" ]; do
+          target="$(jq -c ".[$index]" <<< "$TARGETS")"
+          index=$((index + 1))
+          name="$(jq -r .name <<< "$target")"
+          platform="$(jq -r .platform <<< "$target")"
+          channel="$(jq -r .channel <<< "$target")"
+          runtime="$(jq -r --arg name "$name" '.[$name] // ""' <<< "$RUNTIMES" 2>/dev/null || true)"
+          [ -n "$runtime" ] || fail "No runtime version was resolved for $name; refusing to decide."
+
+          latest_updates=''
+          latest_build=''
+          verdict=native
+          reason=''
+          if ! view="$(eas channel:view "$channel")" \
+            || ! branches="$(jq -r '.currentPage.updateBranches[]?.name' <<< "$view" 2>/dev/null)"; then
+            reason="$name: channel $channel could not be read (it does not exist, or EAS is unreachable)"
+          else
+            if [ "$BASELINE" = update-or-build ]; then
+              while IFS= read -r branch; do
+                [ -n "$branch" ] || continue
+                if ! list="$(eas update:list --branch "$branch" --platform "$platform" --limit 1)" \
+                  || ! update_runtime="$(jq -er '.currentPage | arrays | (.[0].runtimeVersion // "")' <<< "$list" 2>/dev/null)"; then
+                  reason="$name: the updates on branch $branch of channel $channel could not be read"
+                  break
+                fi
+                if [ -n "$update_runtime" ]; then
+                  latest_updates="${latest_updates:+$latest_updates, }$update_runtime"
+                  [ "$update_runtime" != "$runtime" ] || verdict=ota
+                fi
+              done <<< "$branches"
+            fi
+            if [ -z "$reason" ]; then
+              if ! builds="$(eas build:list --channel "$channel" --platform "$platform" --status finished --limit 1)" \
+                || ! latest_build="$(jq -er 'arrays | (.[0] | (.runtime.version // .runtimeVersion)) // ""' <<< "$builds" 2>/dev/null)"; then
+                reason="$name: the builds on channel $channel could not be read"
+              elif [ -n "$latest_build" ] && [ "$latest_build" = "$runtime" ]; then
+                verdict=ota
+              fi
+            fi
+            if [ -n "$reason" ]; then
+              verdict=native
+            elif [ "$verdict" = native ] && [ "$BASELINE" = build ]; then
+              reason="$name: runtime $runtime is not the latest finished build's (${latest_build:-none}) on channel $channel"
+            elif [ "$verdict" = native ]; then
+              reason="$name: runtime $runtime is on neither the latest update (${latest_updates:-none}) nor the latest build (${latest_build:-none}) of channel $channel"
+            fi
+          fi
+          if [ "$verdict" = native ]; then
+            changed+=("$name")
+            reasons+=("$reason")
+          fi
+          rows="${rows}| ${name} | \`${channel}\` | \`${runtime}\` | \`${latest_updates:-none}\` | \`${latest_build:-none}\` | ${verdict} |"$'\n'
+          echo "$name ($platform) on $channel: runtime $runtime, latest update ${latest_updates:-none}, latest build ${latest_build:-none}: $verdict."
+        done
+
+        if [ "${#changed[@]}" -eq 0 ]; then
+          decision=ota
+          if [ "$BASELINE" = build ]; then
+            reason="every target's runtime version matches the latest finished build on its channel"
+          else
+            reason="every target's runtime version matches the latest update or build on its channel"
+          fi
+        else
+          decision=native
+          reason="$(IFS=';'; printf '%s' "${reasons[*]}" | sed 's/;/; /g')"
+        fi
+        {
+          echo "decision=$decision"
+          echo "reason=$reason"
+          echo "changed-targets=$(IFS=,; printf '%s' "${changed[*]:-}")"
+          echo "runtime-versions=$RUNTIMES"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### EAS channel comparison: \`$decision\`"
+          echo
+          echo "$reason."
+          echo
+          echo "| Target | Channel | This commit | Latest update | Latest build | Decision |"
+          echo "| --- | --- | --- | --- | --- | --- |"
+          printf '%s' "$rows"
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "Decision: $decision ($reason)."

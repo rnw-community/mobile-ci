@@ -338,7 +338,7 @@ against the profile and, by default, repairs drift in-job.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v1
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.5.0 # v4.5.0
   with:
       app-path: .ci-artifacts/store-screenshots-app/Base.app
       app-id: com.example.app

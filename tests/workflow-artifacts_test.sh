@@ -34,7 +34,7 @@ def prefix_of(name):
 downloads, uploads, plan_prefixes = set(), set(), set()
 for job_id, job in jobs.items():
     if 'uses' in job and 'expo-base-plan.yml' in job['uses']:
-        prefix = job.get('with', {}).get('app-artifact-prefix')
+        prefix = prefix_of(job.get('with', {}).get('app-artifact-prefix'))
         if prefix:
             plan_prefixes.add(prefix)
         continue

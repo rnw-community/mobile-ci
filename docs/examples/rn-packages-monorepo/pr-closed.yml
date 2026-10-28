@@ -1,0 +1,16 @@
+# Monorepo of React Native packages: cancel the runs a closed pull request
+# leaves queued or running, so the shared self-hosted fleet does not spend
+# slots on them. Copy to .github/workflows/pr-closed.yml.
+name: PR cleanup
+
+on:
+    pull_request:
+        types: [closed]
+
+permissions: {}
+
+jobs:
+    cleanup:
+        permissions:
+            actions: write
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.5.0 # v4.5.0

@@ -13,6 +13,63 @@ on:
                     `scheme://expo-development-client/?url=...` deep links.
                 type: string
                 required: true
+            ota-backend:
+                description: >-
+                    Where the update is hosted. github-release (default) exports the app, generates Expo
+                    Updates v1 manifests and publishes them to a GitHub Release: EAS-free and tokenless, for
+                    public repositories. eas publishes an EAS Update with eas-update instead: needs EXPO_TOKEN
+                    and works for private repositories.
+                type: string
+                required: false
+                default: github-release
+            eas-channel:
+                description: >-
+                    ota-backend eas: channel the update is published for, `{number}` replaced with the pull
+                    request number. A run with no pull request needs a template without `{number}`.
+                type: string
+                required: false
+                default: 'pr-{number}'
+            eas-profile:
+                description: >-
+                    eas.json build profile whose env (extends resolved) the runtime version is resolved under,
+                    on both backends, and, with ota-backend eas, the update evaluated under (and whose
+                    environment eas update loads). Use the profile the development build was built with.
+                type: string
+                required: false
+                default: ''
+            eas-environment:
+                description: ota-backend eas - EAS environment for `eas update --environment`; empty uses eas-profile's.
+                type: string
+                required: false
+                default: ''
+            eas-cli-version:
+                description: Pinned eas-cli npm version (ota-backend eas, dev-build-source eas).
+                type: string
+                required: false
+                default: '20.5.1'
+            eas-rollout-percentage:
+                description: ota-backend eas - publish as a rollout to this percentage of the channel's users.
+                type: string
+                required: false
+                default: ''
+            eas-private-key-path:
+                description: ota-backend eas - code-signing private key path, relative to app-dir, for a signed app.
+                type: string
+                required: false
+                default: ''
+            dev-build-source:
+                description: >-
+                    Where the development builds the comment links are distributed: github-release (default;
+                    native-dev-release.yml releases, looked up when dev-release-tag-prefix is set) or eas (the
+                    newest finished EAS build with the update's runtime version; needs EXPO_TOKEN).
+                type: string
+                required: false
+                default: github-release
+            dev-build-profile:
+                description: dev-build-source eas - only consider EAS builds of this build profile. Empty considers any.
+                type: string
+                required: false
+                default: ''
             platforms:
                 description: Comma-separated platforms to export and manifest; ios, android, or both.
                 type: string
@@ -57,15 +114,26 @@ on:
                 required: false
                 default: '5'
             publish:
-                description: Upload the exported dist to a GitHub Release.
+                description: Upload the exported dist to a GitHub Release (ota-backend github-release).
                 type: boolean
                 required: false
                 default: true
             post-comment:
-                description: Post the deep links and an ASCII QR code as a pull-request comment.
+                description: >-
+                    Write the deep links, an ASCII QR code and the runtime fingerprint into the pull
+                    request's sticky preview comment (one comment, edited in place on every push).
                 type: boolean
                 required: false
                 default: true
+            dev-release-tag-prefix:
+                description: >-
+                    The tag-prefix the repository passes to native-dev-release.yml (its default is dev).
+                    When set, each platform's comment section links the newest published development
+                    build whose runtime fingerprint matches the update, or says a native build is
+                    needed. Empty (default) skips the lookup.
+                type: string
+                required: false
+                default: ''
             include-expo-config:
                 description: Include extra.expoClient from `expo config --json`. Set false to omit app config.
                 type: boolean
@@ -120,16 +188,51 @@ on:
                     to the automatic github.token. Fork pull requests never run this job, so the token is
                     never exposed to fork code.
                 required: false
+            EXPO_TOKEN:
+                description: Expo access token, required by ota-backend eas.
+                required: false
+            EAS_EXTRA_ENV:
+                description: >-
+                    ota-backend eas - newline-separated KEY=VALUE secret env, masked and exported before
+                    eas update.
+                required: false
         outputs:
+            published:
+                description: true when this run published the update; false when it skipped (see skipped-reason).
+                value: ${{ jobs.preview.outputs.published }}
+            skipped-reason:
+                description: Empty when published; stale-head, already-published (ota-backend eas) or publish-disabled.
+                value: ${{ jobs.preview.outputs.skipped-reason }}
+            ios-update-id:
+                description: iOS update id (the manifest id with ota-backend github-release).
+                value: ${{ jobs.preview.outputs.ios-update-id }}
+            android-update-id:
+                description: Android update id.
+                value: ${{ jobs.preview.outputs.android-update-id }}
+            ios-runtime-version:
+                description: iOS runtime version the update targets.
+                value: ${{ jobs.preview.outputs.ios-runtime-version }}
+            android-runtime-version:
+                description: Android runtime version the update targets.
+                value: ${{ jobs.preview.outputs.android-runtime-version }}
+            ios-deep-link:
+                description: expo-dev-client deep link opening the iOS update.
+                value: ${{ jobs.preview.outputs.ios-deep-link }}
+            android-deep-link:
+                description: expo-dev-client deep link opening the Android update.
+                value: ${{ jobs.preview.outputs.android-deep-link }}
             url-ios:
-                description: Public URL of the generated iOS manifest.
+                description: URL of the iOS manifest (the update group's manifest URL with ota-backend eas).
                 value: ${{ jobs.preview.outputs.url-ios }}
             url-android:
-                description: Public URL of the generated Android manifest.
+                description: URL of the Android manifest (the update group's manifest URL with ota-backend eas).
                 value: ${{ jobs.preview.outputs.url-android }}
             release-tag:
-                description: The GitHub Release tag the preview was published to.
+                description: The GitHub Release tag the preview was published to; empty with ota-backend eas.
                 value: ${{ jobs.preview.outputs.release-tag }}
+            eas-channel:
+                description: The EAS channel the update was published for; empty with ota-backend github-release.
+                value: ${{ jobs.preview.outputs.eas-channel }}
 
 concurrency:
     group: expo-ota-preview-${{ inputs.release-tag-prefix }}-${{ inputs.app-dir }}-${{ github.ref }}
@@ -150,9 +253,18 @@ jobs:
             contents: write
             pull-requests: write
         outputs:
-            url-ios: ${{ steps.manifest.outputs.url-ios }}
-            url-android: ${{ steps.manifest.outputs.url-android }}
+            published: ${{ steps.result.outputs.published }}
+            skipped-reason: ${{ steps.result.outputs.skipped-reason }}
+            ios-update-id: ${{ steps.result.outputs.ios-update-id }}
+            android-update-id: ${{ steps.result.outputs.android-update-id }}
+            ios-runtime-version: ${{ steps.result.outputs.ios-runtime-version }}
+            android-runtime-version: ${{ steps.result.outputs.android-runtime-version }}
+            ios-deep-link: ${{ steps.result.outputs.ios-deep-link }}
+            android-deep-link: ${{ steps.result.outputs.android-deep-link }}
+            url-ios: ${{ steps.result.outputs.ios-manifest-url }}
+            url-android: ${{ steps.result.outputs.android-manifest-url }}
             release-tag: ${{ steps.paths.outputs.tag }}
+            eas-channel: ${{ steps.eas.outputs.channel }}
         env:
             PR_NUMBER: ${{ github.event.pull_request.number }}
         steps:
@@ -160,6 +272,69 @@ jobs:
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Resolve the OTA backend
+              id: backend
+              shell: bash
+              env:
+                  OTA_BACKEND: ${{ inputs.ota-backend }}
+                  EAS_CHANNEL_TEMPLATE: ${{ inputs.eas-channel }}
+                  PLATFORMS: ${{ inputs.platforms }}
+                  DEV_BUILD_SOURCE: ${{ inputs.dev-build-source }}
+                  GITHUB_RELEASE_ONLY: >-
+                      ${{ inputs.runtime-version-ios != '' && 'runtime-version-ios ' || '' }}${{ inputs.runtime-version-android != '' && 'runtime-version-android ' || '' }}${{ inputs.public-base-url != '' && 'public-base-url ' || '' }}${{ inputs.url-style != 'release' && 'url-style ' || '' }}${{ inputs.release-tag-prefix != 'ota' && 'release-tag-prefix ' || '' }}${{ inputs.prune-keep != '5' && 'prune-keep ' || '' }}${{ !inputs.publish && 'publish ' || '' }}${{ !inputs.include-expo-config && 'include-expo-config ' || '' }}${{ inputs.project-id != '' && 'project-id ' || '' }}
+                  EAS_ONLY: >-
+                      ${{ inputs.eas-channel != 'pr-{number}' && 'eas-channel ' || '' }}${{ inputs.eas-environment != '' && 'eas-environment ' || '' }}${{ inputs.eas-rollout-percentage != '' && 'eas-rollout-percentage ' || '' }}${{ inputs.eas-private-key-path != '' && 'eas-private-key-path ' || '' }}${{ secrets.EAS_EXTRA_ENV != '' && 'EAS_EXTRA_ENV ' || '' }}
+              run: |
+                  set -euo pipefail
+                  case "$DEV_BUILD_SOURCE" in
+                    github-release|eas) ;;
+                    *)
+                      echo "::error::dev-build-source must be github-release or eas; got '$DEV_BUILD_SOURCE'."
+                      exit 1
+                      ;;
+                  esac
+                  normalized="$(printf '%s' "$PLATFORMS" | tr -d '[:space:]' | tr ',' '\n' | sed '/^$/d' | sort -u | paste -sd, -)"
+                  case "$normalized" in
+                    android,ios) platform=all ;;
+                    ios|android) platform="$normalized" ;;
+                    *)
+                      echo "::error::platforms must name ios, android or both; got '$PLATFORMS'."
+                      exit 1
+                      ;;
+                  esac
+                  case "$OTA_BACKEND" in
+                    github-release)
+                      if [ -n "${EAS_ONLY// /}" ]; then
+                        echo "::error::ota-backend github-release cannot honour ${EAS_ONLY% }: those are EAS Update capabilities. A static GitHub Release host has no channels, rollouts, code signing or server-side environments; set ota-backend eas, or drop them."
+                        exit 1
+                      fi
+                      echo "platform=$platform" >> "$GITHUB_OUTPUT"
+                      exit 0
+                      ;;
+                    eas) ;;
+                    *)
+                      echo "::error::ota-backend must be github-release or eas; got '$OTA_BACKEND'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ -n "${GITHUB_RELEASE_ONLY// /}" ]; then
+                    echo "::error::ota-backend eas ignores ${GITHUB_RELEASE_ONLY% }: those configure the GitHub Release host. EAS resolves the runtime version and hosts the update itself; drop them."
+                    exit 1
+                  fi
+                  case "$EAS_CHANNEL_TEMPLATE" in
+                    *'{number}'*)
+                      if [ -z "${PR_NUMBER:-}" ]; then
+                        echo "::error::eas-channel '$EAS_CHANNEL_TEMPLATE' names {number}, but this run has no pull request; pass a channel without it, e.g. development."
+                        exit 1
+                      fi
+                      ;;
+                  esac
+                  channel="${EAS_CHANNEL_TEMPLATE//\{number\}/${PR_NUMBER:-}}"
+                  {
+                    echo "channel=$channel"
+                    echo "platform=$platform"
+                  } >> "$GITHUB_OUTPUT"
 
             - name: Resolve package manager
               id: package-manager
@@ -258,12 +433,17 @@ jobs:
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-                  cache: ${{ steps.package-manager.outputs.pm }}
 
             - name: Enable corepack
               if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
+
+            - name: Restore package manager cache
+              id: pm-cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.5.0 # v4.5.0
+              with:
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Resolve install command
               id: install
@@ -294,6 +474,15 @@ jobs:
                   INSTALL_COMMAND: ${{ steps.install.outputs.command }}
               run: eval "$INSTALL_COMMAND"
 
+            - name: Save package manager cache
+              if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.pm-cache.outputs.path }}
+                  key: ${{ steps.pm-cache.outputs.cache-key }}
+
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
               shell: bash
@@ -301,23 +490,38 @@ jobs:
                   BUILD_COMMAND: ${{ inputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
-            - name: Compute iOS runtime version
-              if: contains(inputs.platforms, 'ios') && inputs.runtime-version-ios == ''
-              id: fingerprint-ios
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
+            - name: Resolve the runtime versions
+              if: inputs.ota-backend == 'eas' || inputs.runtime-version-ios == '' || inputs.runtime-version-android == ''
+              id: runtime
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
               with:
-                  platform: ios
-                  working-directory: ${{ inputs.app-dir }}
+                  app-dir: ${{ inputs.app-dir }}
+                  platform: ${{ steps.backend.outputs.platform }}
+                  eas-profile: ${{ inputs.eas-profile }}
 
-            - name: Compute Android runtime version
-              if: contains(inputs.platforms, 'android') && inputs.runtime-version-android == ''
-              id: fingerprint-android
-              uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
-              with:
-                  platform: android
-                  working-directory: ${{ inputs.app-dir }}
+            - name: Check the pull request head is current
+              if: inputs.ota-backend != 'eas' && github.event_name == 'pull_request'
+              id: head
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+              run: |
+                  set -euo pipefail
+                  if ! live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')" || [ -z "$live_head" ]; then
+                    echo "::error::Cannot read pull request #${PR_NUMBER}'s current head, so this run cannot prove it is not stale."
+                    exit 1
+                  fi
+                  if [ "$live_head" != "$EVENT_HEAD" ]; then
+                    echo "::warning::Pull request #${PR_NUMBER} moved on to ${live_head}; this run is for ${EVENT_HEAD}, so it publishes nothing and leaves the preview comment alone."
+                    echo "stale=true" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "stale=false" >> "$GITHUB_OUTPUT"
+                  fi
 
             - name: Export JS bundle
+              if: inputs.ota-backend != 'eas'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -336,10 +540,15 @@ jobs:
                     echo "::error::platforms resolved to an empty list."
                     exit 1
                   fi
-                  npx expo export --output-dir dist "${export_args[@]}"
                   npx expo config --json --type public > "$EXPO_CONFIG_FILE"
+                  if jq -e '(.updates.codeSigningCertificate // "") != ""' "$EXPO_CONFIG_FILE" > /dev/null; then
+                    echo "::error::The app config sets updates.codeSigningCertificate, so expo-updates only loads signed updates. A GitHub Release is a static host and cannot send the expo-signature header; use ota-backend eas with eas-private-key-path."
+                    exit 1
+                  fi
+                  npx expo export --output-dir dist "${export_args[@]}"
 
             - name: Compute preview tag and base URL
+              if: inputs.ota-backend != 'eas'
               id: paths
               shell: bash
               env:
@@ -411,40 +620,42 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Generate Expo Updates manifests
+              if: inputs.ota-backend != 'eas'
               id: manifest
-              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.0.0 # v4.0.0
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.5.0 # v4.5.0
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
                   url-style: ${{ inputs.public-base-url == '' && 'release' || inputs.url-style }}
                   platforms: ${{ inputs.platforms }}
-                  runtime-version-ios: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.fingerprint-ios.outputs.hash }}
-                  runtime-version-android: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.fingerprint-android.outputs.hash }}
+                  runtime-version-ios: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.runtime.outputs.ios-runtime-version }}
+                  runtime-version-android: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.runtime.outputs.android-runtime-version }}
                   expo-config-path: ${{ runner.temp }}/expoConfig.json
                   include-expo-config: ${{ inputs.include-expo-config }}
                   project-id: ${{ inputs.project-id }}
 
-            - name: Build deep links
-              id: links
-              shell: bash
-              env:
-                  SCHEME: ${{ inputs.scheme }}
-                  MANIFEST_URL_IOS: ${{ steps.manifest.outputs.url-ios }}
-                  MANIFEST_URL_ANDROID: ${{ steps.manifest.outputs.url-android }}
-              run: |
-                  set -euo pipefail
-                  for entry in "ios:$MANIFEST_URL_IOS" "android:$MANIFEST_URL_ANDROID"; do
-                    platform="${entry%%:*}"
-                    manifest_url="${entry#*:}"
-                    [ -n "$manifest_url" ] || continue
-                    encoded="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$manifest_url")"
-                    link="${SCHEME}://expo-development-client/?url=${encoded}"
-                    printf 'link-%s=%s\n' "$platform" "$link" >> "$GITHUB_OUTPUT"
-                  done
+            - name: Publish the EAS update
+              if: inputs.ota-backend == 'eas'
+              id: eas
+              uses: rnw-community/mobile-ci/actions/eas-update@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  channel: ${{ steps.backend.outputs.channel }}
+                  platform: ${{ steps.backend.outputs.platform }}
+                  eas-profile: ${{ inputs.eas-profile }}
+                  environment: ${{ inputs.eas-environment }}
+                  eas-cli-version: ${{ inputs.eas-cli-version }}
+                  scheme: ${{ inputs.scheme }}
+                  ios-runtime-version: ${{ steps.runtime.outputs.ios-runtime-version }}
+                  android-runtime-version: ${{ steps.runtime.outputs.android-runtime-version }}
+                  rollout-percentage: ${{ inputs.eas-rollout-percentage }}
+                  private-key-path: ${{ inputs.eas-private-key-path }}
+                  extra-env: ${{ secrets.EAS_EXTRA_ENV }}
+                  expo-token: ${{ secrets.EXPO_TOKEN }}
 
             - name: Publish to GitHub Release
-              if: inputs.publish
-              uses: rnw-community/mobile-ci/actions/github-release-publish@v4.0.0 # v4.0.0
+              if: inputs.publish && inputs.ota-backend != 'eas' && steps.head.outputs.stale != 'true'
+              uses: rnw-community/mobile-ci/actions/github-release-publish@v4.5.0 # v4.5.0
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
@@ -453,12 +664,112 @@ jobs:
                   prune-keep: ${{ inputs.prune-keep }}
                   token: ${{ secrets.RELEASE_TOKEN != '' && secrets.RELEASE_TOKEN || github.token }}
 
-            - name: Generate QR codes
-              if: inputs.post-comment && github.event_name == 'pull_request'
+            - name: Collect the published update
+              id: result
               shell: bash
               env:
-                  LINK_IOS: ${{ steps.links.outputs.link-ios }}
-                  LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+                  OTA_BACKEND: ${{ inputs.ota-backend }}
+                  SCHEME: ${{ inputs.scheme }}
+                  PUBLISH: ${{ inputs.publish }}
+                  STALE: ${{ steps.head.outputs.stale }}
+                  MANIFEST_IOS: ${{ steps.manifest.outputs.manifest-ios }}
+                  MANIFEST_ANDROID: ${{ steps.manifest.outputs.manifest-android }}
+                  RELEASE_URL_IOS: ${{ steps.manifest.outputs.url-ios }}
+                  RELEASE_URL_ANDROID: ${{ steps.manifest.outputs.url-android }}
+                  RELEASE_RUNTIME_IOS: ${{ inputs.runtime-version-ios != '' && inputs.runtime-version-ios || steps.runtime.outputs.ios-runtime-version }}
+                  RELEASE_RUNTIME_ANDROID: ${{ inputs.runtime-version-android != '' && inputs.runtime-version-android || steps.runtime.outputs.android-runtime-version }}
+                  EAS_PUBLISHED: ${{ steps.eas.outputs.published }}
+                  EAS_SKIPPED_REASON: ${{ steps.eas.outputs.skipped-reason }}
+                  EAS_ID_IOS: ${{ steps.eas.outputs.ios-update-id }}
+                  EAS_ID_ANDROID: ${{ steps.eas.outputs.android-update-id }}
+                  EAS_URL_IOS: ${{ steps.eas.outputs.ios-manifest-url }}
+                  EAS_URL_ANDROID: ${{ steps.eas.outputs.android-manifest-url }}
+                  EAS_RUNTIME_IOS: ${{ steps.eas.outputs.ios-runtime-version }}
+                  EAS_RUNTIME_ANDROID: ${{ steps.eas.outputs.android-runtime-version }}
+              run: |
+                  set -euo pipefail
+                  if [ "$OTA_BACKEND" = eas ]; then
+                    published="$EAS_PUBLISHED"
+                    reason="$EAS_SKIPPED_REASON"
+                  elif [ "$STALE" = true ]; then
+                    published=false
+                    reason=stale-head
+                  elif [ "$PUBLISH" != true ]; then
+                    published=false
+                    reason=publish-disabled
+                  else
+                    published=true
+                    reason=''
+                  fi
+                  {
+                    echo "published=$published"
+                    echo "skipped-reason=$reason"
+                  } >> "$GITHUB_OUTPUT"
+                  [ "$reason" != stale-head ] || exit 0
+                  for platform in ios android; do
+                    upper="$(printf '%s' "$platform" | tr '[:lower:]' '[:upper:]')"
+                    if [ "$OTA_BACKEND" = eas ]; then
+                      id_var="EAS_ID_${upper}"; url_var="EAS_URL_${upper}"; runtime_var="EAS_RUNTIME_${upper}"
+                      update_id="${!id_var}"
+                    else
+                      manifest_var="MANIFEST_${upper}"; url_var="RELEASE_URL_${upper}"; runtime_var="RELEASE_RUNTIME_${upper}"
+                      update_id=''
+                      [ -z "${!manifest_var}" ] || update_id="$(jq -r '.id // ""' "${!manifest_var}")"
+                    fi
+                    manifest_url="${!url_var}"
+                    [ -n "$manifest_url" ] || continue
+                    link="${SCHEME}://expo-development-client/?url=$(jq -rn --arg url "$manifest_url" '$url | @uri')"
+                    {
+                      echo "${platform}-update-id=${update_id}"
+                      echo "${platform}-runtime-version=${!runtime_var}"
+                      echo "${platform}-manifest-url=${manifest_url}"
+                      echo "${platform}-deep-link=${link}"
+                    } >> "$GITHUB_OUTPUT"
+                  done
+
+            - name: Find matching EAS development builds
+              if: inputs.post-comment && github.event_name == 'pull_request' && inputs.dev-build-source == 'eas' && steps.result.outputs.skipped-reason != 'stale-head'
+              working-directory: ${{ inputs.app-dir }}
+              shell: bash
+              env:
+                  EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+                  EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  DEV_BUILD_PROFILE: ${{ inputs.dev-build-profile }}
+                  RUNTIME_IOS: ${{ steps.result.outputs.ios-runtime-version }}
+                  RUNTIME_ANDROID: ${{ steps.result.outputs.android-runtime-version }}
+                  DEV_BUILDS_DIR: ${{ runner.temp }}/eas-dev-builds
+              run: |
+                  set -euo pipefail
+                  if [ -z "${EXPO_TOKEN:-}" ]; then
+                    echo "::error::dev-build-source eas needs the EXPO_TOKEN secret to look the development builds up."
+                    exit 1
+                  fi
+                  rm -rf "$DEV_BUILDS_DIR"
+                  mkdir -p "$DEV_BUILDS_DIR"
+                  for entry in "ios:$RUNTIME_IOS" "android:$RUNTIME_ANDROID"; do
+                    platform="${entry%%:*}"
+                    runtime="${entry#*:}"
+                    : > "$DEV_BUILDS_DIR/${platform}.md"
+                    [ -n "$runtime" ] || continue
+                    args=(build:list --platform "$platform" --runtime-version "$runtime" --status finished --limit 1)
+                    [ -z "$DEV_BUILD_PROFILE" ] || args+=(--build-profile "$DEV_BUILD_PROFILE")
+                    if ! builds="$(npx --yes "eas-cli@${EAS_CLI_VERSION}" "${args[@]}" --json --non-interactive)" \
+                      || ! jq -e 'type == "array"' <<< "$builds" > /dev/null 2>&1; then
+                      echo "::error::Cannot list the EAS builds with runtime ${runtime}, so the comment cannot say whether a development build can load this update."
+                      exit 1
+                    fi
+                    jq -r '.[0] // empty
+                      | if ((.app.ownerAccount.name // "") != "" and (.app.slug // "") != "")
+                        then "[\(.id | .[0:8])](https://expo.dev/accounts/\(.app.ownerAccount.name)/projects/\(.app.slug)/builds/\(.id))"
+                        else "`\(.id)`" end' <<< "$builds" > "$DEV_BUILDS_DIR/${platform}.md"
+                  done
+
+            - name: Generate QR codes
+              if: inputs.post-comment && github.event_name == 'pull_request' && steps.result.outputs.skipped-reason != 'stale-head'
+              shell: bash
+              env:
+                  LINK_IOS: ${{ steps.result.outputs.ios-deep-link }}
+                  LINK_ANDROID: ${{ steps.result.outputs.android-deep-link }}
               run: |
                   set -euo pipefail
                   qr_dir="$RUNNER_TEMP/ota-qr"
@@ -476,34 +787,82 @@ jobs:
                     fi
                   done
 
-            - name: Post preview comment
-              if: inputs.post-comment && github.event_name == 'pull_request'
+            - name: Render preview comment sections
+              if: inputs.post-comment && github.event_name == 'pull_request' && steps.result.outputs.skipped-reason != 'stale-head'
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
-                  LINK_IOS: ${{ steps.links.outputs.link-ios }}
-                  LINK_ANDROID: ${{ steps.links.outputs.link-android }}
+                  REPOSITORY: ${{ github.repository }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+                  LINK_IOS: ${{ steps.result.outputs.ios-deep-link }}
+                  LINK_ANDROID: ${{ steps.result.outputs.android-deep-link }}
+                  RUNTIME_IOS: ${{ steps.result.outputs.ios-runtime-version }}
+                  RUNTIME_ANDROID: ${{ steps.result.outputs.android-runtime-version }}
+                  EAS_CHANNEL: ${{ steps.eas.outputs.channel }}
+                  DEV_BUILD_SOURCE: ${{ inputs.dev-build-source }}
+                  DEV_BUILDS_DIR: ${{ runner.temp }}/eas-dev-builds
+                  DEV_RELEASE_TAG_PREFIX: ${{ inputs.dev-release-tag-prefix }}
                   QR_DIR: ${{ runner.temp }}/ota-qr
+                  SECTIONS_DIR: ${{ runner.temp }}/preview-comment-sections
               run: |
                   set -euo pipefail
-                  if [ -z "${LINK_IOS:-}" ] && [ -z "${LINK_ANDROID:-}" ]; then
-                    echo "No platform deep links were produced; skipping comment."
-                    exit 0
+                  case "$DEV_RELEASE_TAG_PREFIX" in
+                    *[!A-Za-z0-9._-]*)
+                      echo "::error::dev-release-tag-prefix must be only [A-Za-z0-9._-]; got '${DEV_RELEASE_TAG_PREFIX}'."
+                      exit 1
+                      ;;
+                  esac
+                  rm -rf "$SECTIONS_DIR"
+                  mkdir -p "$SECTIONS_DIR"
+                  releases="$RUNNER_TEMP/dev-releases.json"
+                  if [ -n "$DEV_RELEASE_TAG_PREFIX" ]; then
+                    if ! gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" > "$releases.pages"; then
+                      echo "::error::Cannot list releases to find a development build matching the runtime version."
+                      exit 1
+                    fi
+                    jq -s 'add // []' "$releases.pages" > "$releases"
                   fi
-                  body="$RUNNER_TEMP/ota-preview-comment.md"
-                  {
-                    echo "## OTA preview (no EAS Update)"
-                    echo
-                    echo "Open one of these links on a device with the development build installed."
-                    echo
-                  } > "$body"
-                  for entry in "iOS:$LINK_IOS" "Android:$LINK_ANDROID"; do
+                  for entry in "ios:iOS:$LINK_IOS:$RUNTIME_IOS" "android:Android:$LINK_ANDROID:$RUNTIME_ANDROID"; do
                     platform="${entry%%:*}"
-                    link="${entry#*:}"
+                    rest="${entry#*:}"
+                    label="${rest%%:*}"
+                    rest="${rest#*:}"
+                    runtime="${rest##*:}"
+                    link="${rest%:*}"
+                    section="$SECTIONS_DIR/${platform}-ota.md"
+                    : > "$section"
                     [ -n "$link" ] || continue
-                    qr_code="$(cat "$QR_DIR/$(printf '%s' "$platform" | tr '[:upper:]' '[:lower:]').txt" 2>/dev/null || true)"
+                    qr_code="$(cat "$QR_DIR/${platform}.txt" 2>/dev/null || true)"
                     {
-                      echo "### ${platform}"
+                      echo "### ${label}: OTA update"
+                      echo
+                      echo "Commit \`${HEAD_SHA:0:7}\`, runtime version \`${runtime:-unknown}\`${EAS_CHANNEL:+, EAS Update channel \`${EAS_CHANNEL}\`}."
+                      echo
+                      if [ "${DEV_BUILD_SOURCE:-github-release}" = eas ]; then
+                        match="$(cat "$DEV_BUILDS_DIR/${platform}.md" 2>/dev/null || true)"
+                        if [ -n "$runtime" ] && [ -n "$match" ]; then
+                          echo "EAS development build ${match} has this runtime version: install it, then open the link below."
+                        else
+                          echo "**Native build needed:** no finished EAS ${label} build has this runtime version, so this update will not load on one. Build a development build first."
+                        fi
+                        echo
+                      elif [ -n "$DEV_RELEASE_TAG_PREFIX" ]; then
+                        match="$(jq -r --arg prefix "${DEV_RELEASE_TAG_PREFIX}-${platform}-" --arg marker "<!-- mobile-ci:fingerprint:${runtime} -->" '
+                          [.[]
+                            | select(.draft == false)
+                            | select(.tag_name | startswith($prefix))
+                            | select((.body // "") | contains($marker))]
+                          | sort_by(.created_at) | last // empty
+                          | "[\(.tag_name)](\(.html_url))"
+                        ' "$releases")"
+                        if [ -n "$runtime" ] && [ -n "$match" ]; then
+                          echo "Development build ${match} has this runtime version: install it, then open the link below."
+                        else
+                          echo "**Native build needed:** no published \`${DEV_RELEASE_TAG_PREFIX}-${platform}-*\` development build has this runtime version, so this update will not load on one. Build one with native-dev-release first."
+                        fi
+                        echo
+                      fi
+                      echo "Open on a device with the development build installed:"
                       echo
                       echo '`'"${link}"'`'
                       echo
@@ -518,7 +877,12 @@ jobs:
                       echo '```'
                       echo
                       echo "</details>"
-                      echo
-                    } >> "$body"
+                    } > "$section"
                   done
-                  gh pr comment "$PR_NUMBER" --body-file "$body"
+
+            - name: Update the sticky preview comment
+              if: inputs.post-comment && github.event_name == 'pull_request' && steps.result.outputs.skipped-reason != 'stale-head'
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.5.0 # v4.5.0
+              with:
+                  pr-number: ${{ github.event.pull_request.number }}
+                  sections-dir: ${{ runner.temp }}/preview-comment-sections

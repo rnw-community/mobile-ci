@@ -1,0 +1,26 @@
+[
+  {
+    "id": "01a153fd-a6d9-7808-bf96-f8bc88585bf0",
+    "createdAt": "2026-10-19T11:48:14.681Z",
+    "group": "b4395088-173d-4e72-aff7-644abf0e8b41",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 25.2.0",
+    "runtimeVersion": "b610ebf53eaa44559a28a9bddbcd2bbe395db69e",
+    "platform": "ios",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fd-a6d9-7808-bf96-f8bc88585bf0",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e"
+  },
+  {
+    "id": "01a153fd-a6d9-7ea2-ba79-03b29f1d7566",
+    "createdAt": "2026-10-19T11:48:14.681Z",
+    "group": "86fd6516-85df-4796-8a44-4ece52b0604d",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 25.2.0",
+    "runtimeVersion": "b281169f7195b726578f9f0e9e8aab087dfb849c",
+    "platform": "android",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fd-a6d9-7ea2-ba79-03b29f1d7566",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e"
+  }
+]

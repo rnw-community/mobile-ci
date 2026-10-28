@@ -3,6 +3,51 @@ name: ios-maestro
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
+            e2e-result-cache:
+                description: Reuse an exact successful native/bundle/test/device verdict. Opt in only for hermetic suites; errors run the suite.
+                type: boolean
+                required: false
+                default: false
+            e2e-cache-test-paths:
+                description: Optional newline-separated dependency paths/globs replacing the flows-dir tree; config, pre-run/recovery flows and shard manifests are still hashed.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-state-command:
+                description: Optional command whose stdout versions mutable test state, e.g. date -u +%F for date-relative fixtures. Failure disables reuse.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-export-command:
+                description: Optional bare-RN/custom exporter. Write bundle, config.json and assets to E2E_CACHE_EXPORT_DIR; empty uses production Expo export.
+                type: string
+                required: false
+                default: ''
+            e2e-cache-extra-paths:
+                description: Newline-separated fixture and hook dependency paths outside flows-dir (literal paths or globs; every pattern must match).
+                type: string
+                required: false
+                default: ''
             runner-labels:
                 description: JSON array of self-hosted runner labels for the build/test jobs.
                 type: string
@@ -19,19 +64,33 @@ on:
             test-runner-labels:
                 description: >-
                     JSON array of self-hosted runner labels for the test job only. Falls
-                    back to runner-labels when empty. Must resolve to an arm64 macOS
-                    pool regardless of the build pool's architecture: the packaged
-                    Simulator app build-ios-app produces is arm64-only (see
-                    build-ios-app's archs input, which this workflow does not expose
-                    an override for), so a test pool on any other architecture cannot
-                    launch it.
+                    back to runner-labels when empty. Must resolve to a macOS pool that
+                    can run the ios-simulator-archs slice, regardless of the build
+                    pool's architecture: an arm64 host for `arm64`; an x86_64 host, or
+                    an arm64 host with Rosetta 2 installed, for `x86_64`. The test job
+                    checks this before it boots a simulator.
                 type: string
                 required: false
                 default: ''
+            ios-simulator-archs:
+                description: >-
+                    Architecture of the Simulator `.app` the build produces: `arm64`
+                    (default) or `x86_64`, nothing else. `x86_64` is for apps whose
+                    native SDKs ship no arm64-simulator slice (ML Kit, for one); it
+                    builds with EXCLUDED_ARCHS=arm64, gets its own native key so it
+                    never repacks onto an arm64 base, and runs under Rosetta 2 on an
+                    arm64 test host. Must match the warm-up's value, or the two never
+                    agree on a key.
+                type: string
+                required: false
+                default: arm64
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, workspace, scheme, appId,
-                    prebuildCommand}. prebuildCommand may be an empty string.
+                    prebuildCommand}. prebuildCommand may be an empty string. Optional per
+                    target: flowsDir, tolerateTestFailures and buildStrategy, each
+                    defaulting to the flows-dir, tolerate-test-failures and build-strategy
+                    input.
                 type: string
                 required: true
             flows-dir:
@@ -39,8 +98,11 @@ on:
                     Directory (relative to repo root) whose top-level files are the
                     runnable Maestro flows by default. Subdirectories are not searched
                     unless flows-max-depth is raised; see flows-max-depth/flows-name-pattern.
+                    The default of every target's flowsDir; may be empty when every
+                    target names its own.
                 type: string
-                required: true
+                required: false
+                default: ''
             flows-max-depth:
                 description: >-
                     find -maxdepth under flows-dir. 0 means unbounded recursion. Default
@@ -141,10 +203,46 @@ on:
                     directory, and the actions below always pass individual flow files,
                     so without this input a workspace config is silently ignored.
                     Relative paths resolve against the job's working directory. Fails
-                    closed when set to a path that is not a file.
+                    closed when set to a path that is not a file. Its
+                    includeTags/excludeTags are honoured when shards are planned
+                    (see include-tags).
                 type: string
                 required: false
                 default: ''
+            include-tags:
+                description: >-
+                    Comma-separated Maestro tags: only flows whose config section's
+                    `tags:` list holds any of them are run. Applied when shards are
+                    planned, with Maestro's own semantics (exclude-tags wins), added
+                    to maestro-config's includeTags, and also passed to `maestro
+                    test`. An unparsable flow config section, or a selection left
+                    with no flow, fails the test job.
+                type: string
+                required: false
+                default: ''
+            exclude-tags:
+                description: >-
+                    Comma-separated Maestro tags: flows whose `tags:` list holds any
+                    of them are never run, even when include-tags selects them.
+                    Added to maestro-config's excludeTags.
+                type: string
+                required: false
+                default: ''
+            junit-report:
+                description: >-
+                    When true, every flow's final attempt writes a JUnit report
+                    (`maestro test --format junit`) to junit/ inside the shard's
+                    existing Maestro artifact.
+                type: boolean
+                required: false
+                default: true
+            artifact-retention-days:
+                description: >-
+                    Retention in days of each shard's Maestro artifact (debug
+                    output, final-state capture, JUnit reports).
+                type: number
+                required: false
+                default: 7
             flow-retries:
                 description: >-
                     Non-negative retry budget per flow; each flow gets up to
@@ -206,6 +304,15 @@ on:
                 type: string
                 required: false
                 default: ''
+            force-label:
+                description: >-
+                    Pull request label that runs the pipeline regardless of affected packages;
+                    the status job then reports the run as forced. Add `labeled` to the caller's
+                    pull_request trigger types so adding the label starts a run. Empty (default)
+                    never forces.
+                type: string
+                required: false
+                default: ''
             expo-fingerprint-version:
                 type: string
                 required: false
@@ -214,6 +321,46 @@ on:
                 type: string
                 required: false
                 default: '2.10.0'
+            ios-driver:
+                description: >-
+                    'local' (default) runs the flows on a simulator the test runner
+                    boots itself (run-maestro-ios). 'device-cloud' submits the
+                    repacked or built .app and flows-dir to devicecloud.dev from a
+                    plain Linux runner (device-cloud-runner-labels) and needs the
+                    device-cloud-api-key secret. Device Cloud runs the flows in
+                    parallel itself, so the test job submits once per target.
+                type: string
+                required: false
+                default: local
+            device-cloud-runner-labels:
+                description: >-
+                    JSON array of runner labels for the test job when the ios-driver
+                    is device-cloud. The job only uploads the app and flows to
+                    Device Cloud and waits, so any Linux runner with Node will do -
+                    no simulator, KVM or binder. Empty (default) falls back to
+                    repack-runner-labels, the plain Linux pool the repack already uses.
+                type: string
+                required: false
+                default: ''
+            device-cloud-cli-version:
+                description: Exact @devicecloud.dev/dcd npm version the device-cloud driver runs.
+                type: string
+                required: false
+                default: '5.7.1'
+            device-cloud-ios-device:
+                description: >-
+                    Device Cloud iOS device model, e.g. iphone-16 (dcd --ios-device).
+                    Empty uses Device Cloud's default.
+                type: string
+                required: false
+                default: ''
+            device-cloud-ios-version:
+                description: >-
+                    Device Cloud iOS major version, e.g. 18 (dcd --ios-version).
+                    Empty uses Device Cloud's default.
+                type: string
+                required: false
+                default: ''
             maestro-reuse-driver:
                 description: >-
                     'true' (default) keeps one Maestro XCTest driver running on one fixed
@@ -461,9 +608,62 @@ on:
                 type: number
                 required: false
                 default: 75
+            tolerate-test-failures:
+                description: >-
+                    true keeps the test job green when the Maestro run step fails, for a
+                    time-boxed quarantine of a known-broken suite. The failure is still
+                    reported as a ::warning:: on the job. Defaults to false.
+                type: boolean
+                required: false
+                default: false
+            call-scope:
+                description: >-
+                    Names this call's artifacts, plans and concurrency group, so a caller
+                    can run this workflow several times in one run, e.g. once per package
+                    in a matrix, without the calls overwriting or cancelling each other.
+                    Calls that share a run must each set a distinct, non-empty value.
+                    Letters, digits, '.', '_' and single '-' between them. Empty (default)
+                    keeps today's names.
+                type: string
+                required: false
+                default: ''
+
+        secrets:
+            build-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries (KEY<<DELIMITER for a
+                    multi-line value) exported, after build-env, in every job that
+                    installs, bundles or compiles the app: the plan/repack leg and
+                    the native build. For what a real build needs but a log must
+                    never show - a remote turbo cache token, a Maps API key compiled
+                    into the base. Only a SHA-256 digest of the entries enters the
+                    native key, so rotating one moves the key, and the warm-up must
+                    be passed the same secret or the two never agree on a key.
+                required: false
+            maestro-secrets-env:
+                description: >-
+                    Masked newline-separated KEY=VALUE entries appended to
+                    maestro-env (one line each, no multi-line values) and exported
+                    to the test job's environment for pre-test-command and
+                    pre-flow-command. Every value is scrubbed from the uploaded
+                    Maestro artifacts. For test-user passwords and the credentials a
+                    hook uses to prepare the backend under test.
+                required: false
+            device-cloud-api-key:
+                description: >-
+                    Device Cloud API key, required only when the ios-driver is
+                    device-cloud. Handed to the CLI through its environment, never
+                    as an input or on a command line.
+                required: false
+        outputs:
+            result:
+                description: >-
+                    The status job's verdict: passed, failed, or skipped when no
+                    target package was affected (a skip is a green check, not a pass).
+                value: ${{ jobs.status.outputs.result }}
 
 concurrency:
-    group: ios-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    group: ios-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ inputs.call-scope }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -472,11 +672,14 @@ permissions:
 jobs:
     detect:
         name: Detect affected packages
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
+            forced: ${{ steps.affected.outputs.forced }}
             shard-indices: ${{ steps.shard-indices.outputs.indices }}
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
+            targets: ${{ steps.targets.outputs.targets }}
+            artifact-scope: ${{ steps.targets.outputs.artifact-scope }}
         steps:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -485,16 +688,17 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.0.0 # v4.0.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.5.0 # v4.5.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
                   target-packages: ${{ inputs.target-packages }}
                   targets: ${{ inputs.targets }}
                   base-sha: ${{ github.event.pull_request.base.sha }}
-                  always-affected: ${{ github.event_name != 'pull_request' }}
+                  always-affected: ${{ inputs.e2e-result-cache || github.event_name != 'pull_request' }}
                   exempt-paths: ${{ inputs.exempt-paths }}
                   trigger-paths: ${{ inputs.trigger-paths }}
+                  force-label: ${{ inputs.force-label }}
 
             # The test job's matrix.shard-index must exactly match
             # inputs.shard-count: fewer indices than shard-count silently
@@ -563,6 +767,54 @@ jobs:
                   echo "strategy=$strategy" >> "$GITHUB_OUTPUT"
                   echo "Build strategy: $strategy (requested '$REQUESTED_STRATEGY')."
 
+            - name: Resolve each target's flows, quarantine and build strategy
+              id: targets
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.targets }}
+                  FLOWS_DIR: ${{ inputs.flows-dir }}
+                  TOLERATE_TEST_FAILURES: ${{ inputs.tolerate-test-failures }}
+                  REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
+                  NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
+                  PULL_REQUEST_LABELS: ${{ github.event_name == 'pull_request' && toJSON(github.event.pull_request.labels.*.name) || '[]' }}
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
+                    exit 1
+                  fi
+                  labelled=false
+                  if [ -n "$NATIVE_BUILD_LABEL" ]; then
+                    labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")
+                  fi
+                  jq_error="$RUNNER_TEMP/resolve-targets.err"
+                  if ! targets="$(jq -c --arg flows "$FLOWS_DIR" --argjson tolerate "$TOLERATE_TEST_FAILURES" \
+                    --arg strategy "$REQUESTED_STRATEGY" --argjson labelled "$labelled" --arg label "$NATIVE_BUILD_LABEL" '
+                    if type != "array" or length == 0 then error("targets must be a non-empty JSON array of objects") else . end
+                    | map(
+                        if type != "object" then error("every targets entry must be an object; got \(tojson)") else . end
+                        | (if has("flowsDir") then . else .flowsDir = $flows end)
+                        | if (.flowsDir | type) != "string" or .flowsDir == "" then error("target \(.name | tojson) has no flowsDir and the flows-dir input is empty") else . end
+                        | (if has("tolerateTestFailures") then . else .tolerateTestFailures = $tolerate end)
+                        | if (.tolerateTestFailures | type) != "boolean" then error("target \(.name | tojson) tolerateTestFailures must be true or false; got \(.tolerateTestFailures | tojson)") else . end
+                        | (if has("buildStrategy") then . else .buildStrategy = $strategy end)
+                        | if (.buildStrategy | IN("auto", "repack", "native") | not) then error("target \(.name | tojson) buildStrategy must be \"auto\", \"repack\" or \"native\"; got \(.buildStrategy | tojson)") else . end
+                        | if $labelled and .buildStrategy == "repack" then error("target \(.name | tojson) has buildStrategy repack, which forbids compiling native code, but this pull request carries the \"\($label)\" label, which demands it. Remove one of the two rather than letting the workflow pick a winner.") else . end
+                        | if $labelled then .buildStrategy = "native" else . end)' \
+                    <<< "$TARGETS" 2> "$jq_error")"; then
+                    echo "::error::$(sed -E 's/^jq: error \(at [^)]*\): //' "$jq_error")"
+                    exit 1
+                  fi
+                  native="$(jq -r '[.[] | select(.buildStrategy == "native") | .name] | join(", ")' <<< "$targets")"
+                  if [ -n "$native" ]; then
+                    echo "::notice::Compiled natively, never repacked: ${native}."
+                  fi
+                  {
+                    echo "targets=$targets"
+                    echo "artifact-scope=${CALL_SCOPE:+-$CALL_SCOPE-}"
+                  } >> "$GITHUB_OUTPUT"
+
     plan:
         name: Plan the build strategy
         needs: detect
@@ -571,16 +823,25 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.0.0 # v4.0.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.5.0 # v4.5.0
         with:
+            control-runner-labels: ${{ inputs.control-runner-labels }}
+            runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
+            e2e-cache: ${{ inputs.e2e-result-cache && needs.detect.outputs.forced != 'true' && github.event_name != 'workflow_dispatch' }}
+            e2e-cache-inputs: ${{ toJSON(inputs) }}
+            e2e-cache-test-paths: ${{ inputs.e2e-cache-test-paths }}
+            e2e-cache-state-command: ${{ inputs.e2e-cache-state-command }}
+            e2e-cache-export-command: ${{ inputs.e2e-cache-export-command }}
+            e2e-cache-extra-paths: ${{ inputs.e2e-cache-extra-paths }}
             platform: ios
-            targets: ${{ inputs.targets }}
+            targets: ${{ needs.detect.outputs.targets }}
             build-strategy: ${{ needs.detect.outputs.build-strategy }}
             runner-labels: ${{ inputs.repack-runner-labels }}
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
-            app-artifact-prefix: ios-e2e-app
-            plan-artifact-prefix: ios-e2e-plan
+            app-artifact-prefix: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}
+            plan-artifact-prefix: ios-e2e-plan${{ needs.detect.outputs.artifact-scope }}
             toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ inputs.rct-use-prebuilt-rncore && '-rncore' || '' }}${{ inputs.rct-use-rn-dep && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
+            ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
             fingerprint-config: ${{ inputs.fingerprint-config }}
@@ -595,6 +856,9 @@ jobs:
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
             build-env: ${{ inputs.build-env }}
+        secrets:
+            build-secrets-env: ${{ secrets.build-secrets-env }}
+            maestro-secrets-env: ${{ secrets.maestro-secrets-env }}
 
     build:
         name: Build (${{ matrix.target.name }})
@@ -607,7 +871,7 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.target.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
@@ -619,6 +883,10 @@ jobs:
             CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -655,6 +923,12 @@ jobs:
                     esac
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$BUILD_ENV"
+
+            - name: Apply build-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.build-secrets-env }}
+                  label: build-secrets-env
 
             - name: Resolve package manager
               id: package-manager
@@ -755,12 +1029,17 @@ jobs:
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-                  cache: ${{ steps.package-manager.outputs.pm }}
 
             - name: Enable corepack
               if: inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
               shell: bash
               run: corepack enable
+
+            - name: Restore package manager cache
+              id: pm-cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.5.0 # v4.5.0
+              with:
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Install dependencies
               shell: bash
@@ -768,9 +1047,18 @@ jobs:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
 
+            - name: Save package manager cache
+              if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.pm-cache.outputs.path }}
+                  key: ${{ steps.pm-cache.outputs.cache-key }}
+
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.0.0 # v4.0.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.5.0 # v4.5.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -804,7 +1092,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.0.0 # v4.0.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.5.0 # v4.5.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -817,7 +1105,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.0.0 # v4.0.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.5.0 # v4.5.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -831,9 +1119,11 @@ jobs:
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
+                  archs: ${{ inputs.ios-simulator-archs }}
+                  excluded-archs: ${{ inputs.ios-simulator-archs == 'x86_64' && 'arm64' || 'x86_64' }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.0.0 # v4.0.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.5.0 # v4.5.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -843,31 +1133,32 @@ jobs:
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
                   mkdir -p .ci-artifacts
-                  tar -czf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
+                  tar -czf ".ci-artifacts/${APP_ARTIFACT}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-e2e-app-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
                   retention-days: 1
 
             - name: expo-base-binary (publish)
-              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.0.0 # v4.0.0
+              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.5.0 # v4.5.0
               with:
                   mode: publish
                   platform: ios
                   flavor: ${{ inputs.base-flavor }}
                   key: ${{ matrix.target.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}.tar.gz
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
 
             - name: Report that this key is now warm
-              if: github.ref_name == github.event.repository.default_branch && needs.detect.outputs.build-strategy != 'native'
+              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
@@ -924,60 +1215,145 @@ jobs:
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
-        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
-        runs-on: ${{ fromJSON(inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels) }}
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        runs-on: ${{ fromJSON(inputs.ios-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.targets) }}
-                shard-index: ${{ fromJSON(needs.detect.outputs.shard-indices) }}
+                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+                shard-index: ${{ inputs.ios-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
 
-            # build-ios-app's default archs is arm64-only (excluded-archs
-            # x86_64), and this workflow does not expose an override, so the
-            # packaged Simulator app can only launch on an arm64 host. A
-            # test-runner-labels pool on a different architecture than the
-            # build pool would otherwise fail confusingly inside simctl
-            # install; fail fast with an actionable message instead.
-            - name: Assert test runner architecture matches the packaged app
+            - name: Validate the test driver
               shell: bash
+              env:
+                  DRIVER: ${{ inputs.ios-driver }}
+                  DRIVER_INPUT: ios-driver
+                  LOCAL_DRIVERS: local
+                  HAS_DEVICE_CLOUD_API_KEY: ${{ secrets.device-cloud-api-key != '' }}
+                  PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
+                  FLOW_RECOVERY_FLOW: ${{ inputs.flow-recovery-flow }}
+                  PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
+                  PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
+                  SHARD_COUNT: ${{ inputs.shard-count }}
+                  SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
               run: |
                   set -euo pipefail
-                  arch=$(uname -m)
-                  if [ "$arch" != 'arm64' ]; then
-                    echo "::error::Test runner architecture is '$arch', but the packaged Simulator app is arm64-only. Set test-runner-labels to an arm64 pool."
+                  known=0
+                  for candidate in $LOCAL_DRIVERS device-cloud; do
+                    if [ "$DRIVER" = "$candidate" ]; then
+                      known=1
+                    fi
+                  done
+                  if [ "$known" -ne 1 ]; then
+                    echo "::error::Unsupported $DRIVER_INPUT '$DRIVER'; expected one of: $LOCAL_DRIVERS device-cloud. Every test step is gated on an exact match, so an unknown value would run zero flows and still pass."
                     exit 1
                   fi
+                  [ "$DRIVER" = device-cloud ] || exit 0
+                  if [ "$HAS_DEVICE_CLOUD_API_KEY" != true ]; then
+                    echo "::error::$DRIVER_INPUT is device-cloud but the device-cloud-api-key secret is empty. Pass it in the calling job's secrets: block."
+                    exit 1
+                  fi
+                  unsupported=''
+                  [ -z "$PRE_RUN_FLOW" ] || unsupported="$unsupported pre-run-flow"
+                  [ -z "$FLOW_RECOVERY_FLOW" ] || unsupported="$unsupported flow-recovery-flow"
+                  [ -z "$PRE_TEST_COMMAND" ] || unsupported="$unsupported pre-test-command"
+                  [ -z "$PRE_FLOW_COMMAND" ] || unsupported="$unsupported pre-flow-command"
+                  if [ -n "$unsupported" ]; then
+                    echo "::error::$DRIVER_INPUT device-cloud cannot honour:${unsupported}. Each runs against a device this runner boots, and Device Cloud runs the flows remotely, so it would silently never run. Unset it, or use a local driver."
+                    exit 1
+                  fi
+                  if [ "$SHARD_COUNT" != 1 ] || [ -n "$SHARD_MANIFEST_DIR" ]; then
+                    echo "::notice::Device Cloud runs the flows in parallel itself, so the device-cloud driver submits every selected flow once per target as shard 0; shard-count and shard-manifest-dir do not apply."
+                  fi
+
+            - name: Assert this host can run the packaged simulator architecture
+              if: inputs.ios-driver != 'device-cloud'
+              shell: bash
+              env:
+                  IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
+                  RUNNER_LABELS_INPUT: test-runner-labels
+              run: |
+                  set -euo pipefail
+                  host=$(uname -m)
+                  case "$IOS_SIMULATOR_ARCHS" in
+                    arm64)
+                      if [ "$host" != arm64 ]; then
+                        echo "::error::This runner is '$host', but the packaged Simulator app is arm64-only (ios-simulator-archs: arm64). Point $RUNNER_LABELS_INPUT at an arm64 macOS pool, or build an x86_64 slice with ios-simulator-archs: x86_64."
+                        exit 1
+                      fi
+                      echo "Host $host runs the arm64 Simulator app natively."
+                      ;;
+                    x86_64)
+                      case "$host" in
+                        x86_64)
+                          echo "Host $host runs the x86_64 Simulator app natively."
+                          ;;
+                        arm64)
+                          if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+                            echo "::error::The packaged Simulator app is x86_64 (ios-simulator-archs: x86_64) and this arm64 runner cannot execute x86_64 code: Rosetta 2 is not installed. Install it on the host with 'softwareupdate --install-rosetta --agree-to-license', or point $RUNNER_LABELS_INPUT at a pool that has it."
+                            exit 1
+                          fi
+                          echo "Host $host runs the x86_64 Simulator app under Rosetta 2."
+                          ;;
+                        *)
+                          echo "::error::This runner is '$host'. The x86_64 Simulator app ios-simulator-archs asks for runs only on an x86_64 macOS host, or an arm64 one with Rosetta 2. Point $RUNNER_LABELS_INPUT at such a pool."
+                          exit 1
+                          ;;
+                      esac
+                      ;;
+                    *)
+                      echo "::error::ios-simulator-archs must be 'arm64' or 'x86_64'; got '$IOS_SIMULATOR_ARCHS'."
+                      exit 1
+                      ;;
+                  esac
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.0.0 # v4.0.0
+              if: inputs.ios-driver != 'device-cloud'
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.5.0 # v4.5.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: ios-e2e-app-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
 
             - name: Unpack app
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-              run: tar -xzf ".ci-artifacts/ios-e2e-app-${TARGET_NAME}/ios-e2e-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/ios-e2e-app-${TARGET_NAME}"
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+              run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
+
+            - name: Apply maestro-secrets-env
+              id: maestro-secrets
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+                  append-to: ${{ inputs.maestro-env }}
 
             - name: run-maestro-ios
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.0.0 # v4.0.0
+              id: run-maestro-ios
+              if: inputs.ios-driver == 'local'
+              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.5.0 # v4.5.0
               with:
-                  app-path: .ci-artifacts/ios-e2e-app-${{ matrix.target.name }}/Base.app
+                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ inputs.flows-dir }}
+                  flows-dir: ${{ matrix.target.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -989,8 +1365,12 @@ jobs:
                   pre-test-command: ${{ inputs.pre-test-command }}
                   pre-flow-command: ${{ inputs.pre-flow-command }}
                   app-warm-seconds: ${{ inputs.app-warm-seconds }}
-                  maestro-env: ${{ inputs.maestro-env }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
+                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
                   maestro-config: ${{ inputs.maestro-config }}
+                  include-tags: ${{ inputs.include-tags }}
+                  exclude-tags: ${{ inputs.exclude-tags }}
+                  junit-report: ${{ inputs.junit-report }}
                   flow-retries: ${{ inputs.flow-retries }}
                   maestro-version: ${{ inputs.maestro-version }}
                   maestro-reuse-driver: ${{ inputs.maestro-reuse-driver }}
@@ -1002,7 +1382,45 @@ jobs:
                   simulator-slim-repair: ${{ inputs.simulator-slim-repair }}
                   simulator-requires: ${{ inputs.simulator-requires }}
                   artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-ios-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  retention-days: ${{ inputs.artifact-retention-days }}
+
+            - name: run-maestro-device-cloud
+              id: run-maestro-device-cloud
+              if: inputs.ios-driver == 'device-cloud'
+              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.5.0 # v4.5.0
+              with:
+                  platform: ios
+                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
+                  api-key: ${{ secrets.device-cloud-api-key }}
+                  cli-version: ${{ inputs.device-cloud-cli-version }}
+                  node-version: ${{ inputs.node-version }}
+                  flows-dir: ${{ matrix.target.flowsDir }}
+                  flows-max-depth: ${{ inputs.flows-max-depth }}
+                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
+                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
+                  include-tags: ${{ inputs.include-tags }}
+                  exclude-tags: ${{ inputs.exclude-tags }}
+                  maestro-config: ${{ inputs.maestro-config }}
+                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
+                  maestro-version: ${{ inputs.maestro-version }}
+                  retries: ${{ inputs.flow-retries }}
+                  ios-device: ${{ inputs.device-cloud-ios-device }}
+                  ios-version: ${{ inputs.device-cloud-ios-version }}
+                  junit-report: ${{ inputs.junit-report }}
+                  run-name: ${{ github.repository }}@${{ github.sha }} ios ${{ matrix.target.name }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  retention-days: ${{ inputs.artifact-retention-days }}
+                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
+
+            - name: Report a tolerated Maestro failure
+              if: steps.run-maestro-ios.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+              run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
 
             - name: Diagnose the runner's bundled Node after a failure
               if: failure() && runner.os == 'macOS'
@@ -1049,22 +1467,54 @@ jobs:
                       grep -i -E 'exec|node|mach-?o|code ?sign|amfi|apfs|i/o|error' | tail -200
                   echo "::endgroup::"
 
+    cache-pass:
+        name: Record E2E pass (${{ matrix.target.name }})
+        needs: [detect, plan, build, test]
+        if: ${{ !cancelled() && needs.plan.result == 'success' && needs.test.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 5
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Save the successful test contract
+              continue-on-error: true
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.5.0 # v4.5.0
+              with:
+                  mode: publish
+                  platform: ios
+                  key: ${{ matrix.target.e2eCacheKey }}
+
     status:
         name: iOS Maestro E2E result
-        needs: [detect, plan, build, test]
+        needs: [detect, plan, build, test, cache-pass]
         if: always()
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        outputs:
+            result: ${{ steps.report.outputs.result }}
         steps:
             - name: Report
+              id: report
               shell: bash
               env:
                   DETECT_RESULT: ${{ needs.detect.result }}
                   DETECT_AFFECTED: ${{ needs.detect.outputs.affected }}
+                  DETECT_FORCED: ${{ needs.detect.outputs.forced }}
+                  FORCE_LABEL: ${{ inputs.force-label }}
                   PLAN_RESULT: ${{ needs.plan.result }}
                   NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
                   TEST_RESULT: ${{ needs.test.result }}
+                  TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
+                  CACHED_TARGETS: ${{ needs.plan.outputs.cached-targets }}
               run: |
+                  result=failed
+                  trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
                   summary() {
                     printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
                   }
@@ -1080,6 +1530,7 @@ jobs:
                     exit 1
                   fi
                   if [ "$DETECT_AFFECTED" != "true" ]; then
+                    result=skipped
                     echo "::notice::iOS Maestro E2E skipped: target packages untouched, so every build/test leg was skipped and zero Maestro flows ran. This is not a pass."
                     summary "### iOS Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
                     exit 0
@@ -1089,6 +1540,16 @@ jobs:
                     summary "### iOS Maestro E2E: failed (plan job result: $PLAN_RESULT)"
                     cancelled_hint "$PLAN_RESULT"
                     exit 1
+                  fi
+                  if [ "${TEST_TARGETS:-}" = '[]' ] && [ "$NATIVE_TARGETS" = '[]' ] && [ "$BUILD_RESULT" = 'skipped' ] && [ "$TEST_RESULT" = 'skipped' ]; then
+                    if ! jq -e 'length > 0 and all(.[]; .e2eCacheHit == true and (.e2eCacheKey | test("^[0-9a-f]{64}$")) and (.e2eCacheRunUrl | type == "string" and length > 0))' <<< "${CACHED_TARGETS:-[]}" > /dev/null; then
+                      echo '::error::Empty test matrix without complete validated pass records.'
+                      exit 1
+                    fi
+                    result=passed
+                    summary "### iOS Maestro E2E: passed (content-addressed cache)"
+                    jq -r '.[] | "- \(.name): [successful producer run](\(.e2eCacheRunUrl))"' <<< "$CACHED_TARGETS" >> "$GITHUB_STEP_SUMMARY"
+                    exit 0
                   fi
                   if [ "$BUILD_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS" != '[]' ]; then
                     echo "The native build was skipped while ${NATIVE_TARGETS} still needed one; a skipped build is not a build."
@@ -1107,5 +1568,12 @@ jobs:
                     cancelled_hint "$TEST_RESULT"
                     exit 1
                   fi
+                  if [ "$DETECT_FORCED" = 'true' ]; then
+                    result=passed
+                    echo "Maestro suite passed (forced by the '${FORCE_LABEL}' label)."
+                    summary "### iOS Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
+                    exit 0
+                  fi
+                  result=passed
                   echo "Maestro suite passed."
                   summary "### iOS Maestro E2E: passed"

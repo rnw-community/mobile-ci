@@ -37,7 +37,7 @@ modes="$(query '[s.get("with", {}).get("mode") for s in by_uses("rnw-community/m
 order="$(query '[s["name"] for s in steps]')"
 stop_if="$(query '[s.get("if", "") for s in by_uses("rnw-community/mobile-ci/actions/android-emulator@") if s.get("with", {}).get("mode") == "stop"]')"
 if assert_equals '["start", "stop"]' "$modes" 'android-emulator modes' \
-    && assert_contains "$order" '"Start emulator", "Run Maestro shard", "Capture final device state", "Stop emulator", "Upload Maestro artifacts"' 'step order' \
+    && assert_contains "$order" '"Start emulator", "Run Maestro shard", "Capture final device state", "Stop emulator", "Redact secret values from the artifacts", "Upload Maestro artifacts"' 'step order' \
     && assert_equals '["always()"]' "$stop_if" 'stop condition'; then
     pass_case
 fi

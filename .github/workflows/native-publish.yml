@@ -3,6 +3,27 @@ name: native-publish
 on:
     workflow_call:
         inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (detect, status, collect, validate-manifest, cancel-queued-runs)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware, plus this workflow's plan and record jobs (jq, gh,
+                    and Node when fingerprinting). Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
             enable-ios:
                 description: Run the ios-publish job.
                 type: boolean
@@ -87,12 +108,104 @@ on:
                 type: string
                 required: false
                 default: production
+            targets:
+                description: >-
+                    Optional JSON array of publish targets, replacing enable-ios /
+                    enable-android / build-profile / submit-profile when non-empty. Each
+                    entry is {"platform": "ios"|"android", "name"?, "buildProfile"?,
+                    "submitProfile"?}; name defaults to <buildProfile>-<platform>,
+                    the profiles to build-profile / submit-profile. One publish job runs
+                    per entry, e.g. one per brand x platform. Unknown keys, duplicate
+                    names and an empty array fail the plan job.
+                type: string
+                required: false
+                default: ''
+            mode:
+                description: >-
+                    native (default) always builds and submits. auto compares every
+                    target's native runtime against the ota-baseline and builds only
+                    when one changed (decision=native) or there is no baseline;
+                    otherwise it builds nothing and outputs decision=ota for the
+                    caller's OTA publish. ota-only never builds: it fails when there is
+                    no baseline or a runtime changed. With ota-baseline github-release,
+                    auto and ota-only need a release tag (a tag-triggered run or
+                    release-tag) and write the store build record after a successful
+                    submit.
+                type: string
+                required: false
+                default: native
+            ota-baseline:
+                description: >-
+                    What mode auto / ota-only compare against. github-release (default)
+                    compares every target's @expo/fingerprint with the store build record
+                    of the last release whose record shows every target shipped.
+                    eas-channel compares every target's runtime version with the latest
+                    update and the latest finished build on the channel its eas.json build
+                    profile sets (eas-channel-fingerprint); it needs EXPO_TOKEN and no
+                    release tag, and an unreadable channel decides native.
+                type: string
+                required: false
+                default: github-release
+            eas-channel-baseline:
+                description: >-
+                    ota-baseline eas-channel - update-or-build (default) accepts a runtime matching the
+                    channel's latest update or latest finished EAS build; build accepts only a finished EAS
+                    build (eas-channel-fingerprint's baseline input).
+                type: string
+                required: false
+                default: update-or-build
+            release-tag:
+                description: >-
+                    Tag whose GitHub Release receives the store build record. Empty uses
+                    the triggering tag when the run was triggered by one.
+                type: string
+                required: false
+                default: ''
+            write-store-record:
+                description: >-
+                    Write the store build record in mode native too, so a later auto run
+                    has a baseline. Needs a release tag, like auto.
+                type: boolean
+                required: false
+                default: false
+            build-number:
+                description: >-
+                    Empty (default) exports nothing. auto exports STORE_BUILD_NUMBER as
+                    the whole minutes since the Unix epoch at which the workflow run was
+                    created (stable across re-runs; needs actions: read on private
+                    repositories). A positive integer up to 2100000000 is exported as
+                    is. app.config must read it into ios.buildNumber /
+                    android.versionCode.
+                type: string
+                required: false
+                default: ''
+            marketing-version:
+                description: >-
+                    auto (default) exports STORE_MARKETING_VERSION from a release tag
+                    shaped [<prefix>@][v]X[.Y[.Z]] and nothing otherwise; tag requires
+                    such a tag; none exports nothing; any other value must itself be
+                    X[.Y[.Z]] and is exported as is.
+                type: string
+                required: false
+                default: auto
+            fingerprint-version:
+                description: >-
+                    Deprecated and ignored: the runtime versions mode auto / ota-only and the store build
+                    record compare now come from the project's own expo-updates (ota-runtime-version).
+                type: string
+                required: false
+                default: '0.20.6'
+            plan-timeout-minutes:
+                description: Timeout of the plan and record jobs, which run on control-runner-labels.
+                type: number
+                required: false
+                default: 30
             ios-pre-submit-command:
                 description: >-
                     Optional consumer-owned command (e.g. a fastlane lane) run in app-dir before
-                    the iOS build. Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV and
-                    EXPO_ASC_API_KEY_PATH (the written App Store Connect key) — not eas.json
-                    profile env, which EAS applies only inside eas build.
+                    the iOS build. Its env is EXPO_TOKEN, the resolved eas.json build profile
+                    env, publish-env, STORE_BUILD_NUMBER / STORE_MARKETING_VERSION when set,
+                    EAS_EXTRA_ENV and EXPO_ASC_API_KEY_PATH (the written App Store Connect key).
                 type: string
                 required: false
                 default: ''
@@ -106,17 +219,17 @@ on:
             android-pre-submit-command:
                 description: >-
                     Optional consumer-owned command run in app-dir before the Android build. Its
-                    env is EXPO_TOKEN, publish-env and EAS_EXTRA_ENV — not eas.json profile env,
-                    and not the Google key, which is written only after the build.
+                    env is the iOS hooks' minus the App Store Connect key, and not the Google
+                    key, which is written only after the build.
                 type: string
                 required: false
                 default: ''
             android-post-submit-command:
                 description: >-
                     Optional consumer-owned command run in app-dir after `eas submit` succeeds.
-                    Its env is EXPO_TOKEN, publish-env, EAS_EXTRA_ENV, and the written Google
-                    service account key path as both GOOGLE_APPLICATION_CREDENTIALS and
-                    GOOGLE_SERVICE_ACCOUNT_KEY_PATH — not eas.json profile env.
+                    Its env is the Android pre-submit hook's plus the written Google service
+                    account key path as both GOOGLE_APPLICATION_CREDENTIALS and
+                    GOOGLE_SERVICE_ACCOUNT_KEY_PATH.
                 type: string
                 required: false
                 default: ''
@@ -182,11 +295,38 @@ on:
                 type: string
                 required: false
                 default: ''
+            credentials-source:
+                description: >-
+                    secrets (default) requires ASC_API_KEY, ASC_KEY_ID and
+                    ASC_ISSUER_ID for iOS and GOOGLE_SERVICE_ACCOUNT_JSON for
+                    Android. eas makes them optional: eas build and eas submit then
+                    use the credentials stored on EAS for the project (eas
+                    credentials), so the submit profile must not name an
+                    ascApiKeyPath or serviceAccountKeyPath. A key that is passed is
+                    still written and used. EXPO_TOKEN stays required. Fails closed
+                    on any other value.
+                type: string
+                required: false
+                default: secrets
+            record-scope:
+                description: >-
+                    Names this call's store build record (store-record-<record-scope>.json
+                    instead of store-record-<app-dir>.json), its build and marker
+                    artifacts and its concurrency group, so a caller can run this
+                    workflow once per brand in a matrix without the calls
+                    overwriting or cancelling each other. Calls that share a run
+                    must each set a distinct, non-empty value. Letters, digits, '.', '_' and single '-'
+                    between them. Empty (default) keeps the app-dir names.
+                type: string
+                required: false
+                default: ''
             publish-env:
                 description: >-
                     Newline-separated KEY=VALUE pairs of non-secret env appended to
                     $GITHUB_ENV at the start of ios-publish, android-lint-gate, and
-                    android-publish, before eas build/submit (or, for
+                    android-publish, after the resolved eas.json build profile env
+                    (so it overrides a profile variable outside eas build, with a
+                    warning) and before eas build/submit (or, for
                     android-lint-gate, prebuild) and the pre/post-submit-command
                     hooks. Rejects (fails closed) any line without '=' or whose name
                     does not match ^[A-Za-z_][A-Za-z0-9_]*$. For secret values use
@@ -197,10 +337,12 @@ on:
 
         secrets:
             EXPO_TOKEN:
-                description: Expo access token, required by ios-publish and android-publish.
+                description: Expo access token, required by ios-publish and android-publish, and by plan with ota-baseline eas-channel.
                 required: false
             ASC_API_KEY:
-                description: App Store Connect API key contents (.p8), required by ios-publish.
+                description: >-
+                    App Store Connect API key contents (.p8), required by ios-publish
+                    unless credentials-source is eas.
                 required: false
             ASC_KEY_ID:
                 description: >-
@@ -217,7 +359,9 @@ on:
                     EXPO_ASC_ISSUER_ID.
                 required: false
             GOOGLE_SERVICE_ACCOUNT_JSON:
-                description: Google Play service account key JSON contents, required by android-publish.
+                description: >-
+                    Google Play service account key JSON contents, required by
+                    android-publish unless credentials-source is eas.
                 required: false
             EAS_EXTRA_ENV:
                 description: >-
@@ -228,40 +372,670 @@ on:
                     android-lint-gate prebuild, or a pre/post-submit-command hook
                     need on the environment, e.g. EXPO_APPLE_APP_SPECIFIC_PASSWORD.
                 required: false
+        outputs:
+            decision:
+                description: '`native` when this run builds and submits, `ota` when every target''s native runtime is unchanged since the baseline and nothing was built.'
+                value: ${{ jobs.plan.outputs.decision }}
+            changed-targets:
+                description: Comma-separated targets whose fingerprint differs from the baseline (mode auto / ota-only).
+                value: ${{ jobs.plan.outputs.changed-targets }}
+            baseline-tag:
+                description: Release tag of the store build record compared against, empty when none.
+                value: ${{ jobs.plan.outputs.baseline-tag }}
+            fingerprints:
+                description: JSON object of target name to @expo/fingerprint hash, the runtime version an OTA must target. Empty in mode native without write-store-record.
+                value: ${{ jobs.plan.outputs.fingerprints }}
+            build-number:
+                description: The exported STORE_BUILD_NUMBER, empty when build-number is empty.
+                value: ${{ jobs.plan.outputs.build-number }}
+            marketing-version:
+                description: The exported STORE_MARKETING_VERSION, empty when none.
+                value: ${{ jobs.plan.outputs.marketing-version }}
+            submissions:
+                description: >-
+                    JSON object of target name to {platform, submissionId,
+                    submissionUrl} for every target whose eas submit succeeded; {}
+                    when nothing was submitted. submissionId and submissionUrl are
+                    empty when the EAS log named no submission page.
+                value: ${{ jobs.status.outputs.submissions }}
 
 concurrency:
-    group: native-publish-${{ github.workflow }}-${{ github.ref }}
+    group: native-publish-${{ github.workflow }}-${{ github.ref }}-${{ inputs.record-scope }}
     cancel-in-progress: false
 
-permissions:
-    contents: read
+# No workflow-level permissions: a called workflow's job that declares more than
+# its caller grants is a startup failure even when skipped, so plan and record
+# inherit the caller's grant (actions: read for build-number auto, contents:
+# write for the store build record) and every other job pins contents: read.
 
 jobs:
+    plan:
+        name: Plan native publish
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: ${{ inputs.plan-timeout-minutes }}
+        env:
+            HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+        outputs:
+            ios-targets: ${{ steps.resolved.outputs.ios-targets }}
+            android-targets: ${{ steps.resolved.outputs.android-targets }}
+            has-ios: ${{ steps.targets.outputs.has-ios }}
+            has-android: ${{ steps.targets.outputs.has-android }}
+            record: ${{ steps.targets.outputs.record }}
+            release-tag: ${{ steps.targets.outputs.release-tag }}
+            record-asset: ${{ steps.targets.outputs.record-asset }}
+            marker-prefix: ${{ steps.targets.outputs.marker-prefix }}
+            build-number: ${{ steps.version.outputs.build-number }}
+            marketing-version: ${{ steps.version.outputs.marketing-version }}
+            fingerprints: ${{ steps.fingerprints.outputs.runtime-versions || steps.eas-baseline.outputs.runtime-versions }}
+            baseline-tag: ${{ steps.baseline.outputs.baseline-tag }}
+            decision: ${{ steps.decide.outputs.decision }}
+            changed-targets: ${{ steps.decide.outputs.changed-targets }}
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Apply EAS_EXTRA_ENV
+              id: eas-extra-env
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
+
+            - name: Resolve publish targets
+              id: targets
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.targets }}
+                  ENABLE_IOS: ${{ inputs.enable-ios }}
+                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  SUBMIT_PROFILE: ${{ inputs.submit-profile }}
+                  MODE: ${{ inputs.mode }}
+                  OTA_BASELINE: ${{ inputs.ota-baseline }}
+                  WRITE_STORE_RECORD: ${{ inputs.write-store-record }}
+                  RELEASE_TAG_INPUT: ${{ inputs.release-tag }}
+                  APP_DIR: ${{ inputs.app-dir }}
+                  REF_TYPE: ${{ github.ref_type }}
+                  REF_NAME: ${{ github.ref_name }}
+                  RECORD_SCOPE: ${{ inputs.record-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$RECORD_SCOPE" ] && ! [[ "$RECORD_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::record-scope '$RECORD_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
+                    exit 1
+                  fi
+                  case "$MODE" in
+                    native|auto|ota-only) ;;
+                    *)
+                      echo "::error::mode must be native, auto or ota-only; got '$MODE'."
+                      exit 1
+                      ;;
+                  esac
+                  case "$OTA_BASELINE" in
+                    github-release|eas-channel) ;;
+                    *)
+                      echo "::error::ota-baseline must be github-release or eas-channel; got '$OTA_BASELINE'."
+                      exit 1
+                      ;;
+                  esac
+                  if ! command -v jq >/dev/null 2>&1; then
+                    echo "::error::The plan job needs jq to read eas.json; point control-runner-labels at a runner that has it."
+                    exit 1
+                  fi
+
+                  jq_error="$RUNNER_TEMP/native-publish-plan.err"
+                  report_jq_error() {
+                    echo "::error::$(sed -E 's/^jq: error \(at [^)]*\): //' "$jq_error")"
+                    exit 1
+                  }
+
+                  if [ -n "$TARGETS" ]; then
+                    requested="$(printf '%s' "$TARGETS" | jq -c \
+                      --arg build "$BUILD_PROFILE" --arg submit "$SUBMIT_PROFILE" '
+                      if type != "array" then error("targets must be a JSON array of objects")
+                      elif length == 0 then error("targets is an empty array; leave it empty instead to use enable-ios / enable-android")
+                      else . end
+                      | map(
+                          if type != "object" then error("every targets entry must be an object; got \(tojson)") else . end
+                          | ((keys - ["name", "platform", "buildProfile", "submitProfile"]) as $extra
+                             | if ($extra | length) > 0 then error("targets entry \(tojson) has unknown key(s): \($extra | join(", "))") else . end)
+                          | if (.platform == "ios" or .platform == "android") | not then error("targets entry \(tojson) needs platform ios or android") else . end
+                          | .buildProfile = (.buildProfile // $build)
+                          | .submitProfile = (.submitProfile // $submit)
+                          | if ([.buildProfile, .submitProfile] | all(type == "string" and length > 0)) | not
+                            then error("targets entry \(tojson) has a non-string or empty buildProfile / submitProfile") else . end
+                          | .name = (.name // "\(.buildProfile)-\(.platform)")
+                          | if (.name | type) != "string" or (.name | test("^[A-Za-z0-9._-]+$") | not)
+                            then error("targets name \(.name | tojson) must match ^[A-Za-z0-9._-]+$") else . end
+                          | .artifactSuffix = "-\(.name)")
+                      | ([group_by(.name)[] | select(length > 1) | .[0].name]) as $dups
+                      | if ($dups | length) > 0 then error("duplicate targets name(s): \($dups | join(", "))") else . end' 2> "$jq_error")" || report_jq_error
+                  else
+                    requested="$(jq -nc --arg build "$BUILD_PROFILE" --arg submit "$SUBMIT_PROFILE" \
+                      --arg ios "$ENABLE_IOS" --arg android "$ENABLE_ANDROID" '
+                      [ (if $ios == "true" then "ios" else empty end),
+                        (if $android == "true" then "android" else empty end) ]
+                      | map({name: ., platform: ., buildProfile: $build, submitProfile: $submit, artifactSuffix: ""})')"
+                  fi
+
+                  count="$(jq 'length' <<< "$requested")"
+                  if [ "$count" -eq 0 ]; then
+                    echo "::error::No publish target: enable-ios and enable-android are both false and targets is empty."
+                    exit 1
+                  fi
+
+                  release_tag="$RELEASE_TAG_INPUT"
+                  if [ -z "$release_tag" ] && [ "$REF_TYPE" = tag ]; then
+                    release_tag="$REF_NAME"
+                  fi
+                  record=false
+                  if { [ "$MODE" != native ] && [ "$OTA_BASELINE" = github-release ]; } || [ "$WRITE_STORE_RECORD" = true ]; then
+                    record=true
+                    if [ -z "$release_tag" ]; then
+                      echo "::error::mode '$MODE'$([ "$WRITE_STORE_RECORD" = true ] && echo ' with write-store-record') needs a release tag to read and write the store build record: trigger the run from a tag or set release-tag. Without one a shipped build would go unrecorded and a later run would compare against a stale baseline."
+                      exit 1
+                    fi
+                  fi
+                  scope="$(printf '%s' "$APP_DIR" | sed -E 's#^\./##; s#/+$##; s#[^A-Za-z0-9._-]+#-#g; s#^-+##; s#-+$##')"
+                  case "$scope" in
+                    ''|.) scope=root ;;
+                  esac
+                  artifact_scope=''
+                  if [ -n "$RECORD_SCOPE" ]; then
+                    scope="$RECORD_SCOPE"
+                    artifact_scope="${RECORD_SCOPE}--"
+                    requested="$(jq -c --arg scope "$artifact_scope" 'map(.artifactSuffix = "-\($scope)\(.name)")' <<< "$requested")"
+                  fi
+
+                  eas_baseline=false
+                  if [ "$MODE" != native ] && [ "$OTA_BASELINE" = eas-channel ]; then
+                    eas_baseline=true
+                  fi
+                  install=false
+                  if [ "$record" = true ] || [ "$eas_baseline" = true ]; then
+                    install=true
+                  fi
+
+                  {
+                    echo "requested=$requested"
+                    echo "profiles=$(jq -c '[.[].buildProfile] | unique | join("\n")' <<< "$requested")"
+                    echo "has-ios=$(jq -r 'any(.[]; .platform == "ios")' <<< "$requested")"
+                    echo "has-android=$(jq -r 'any(.[]; .platform == "android")' <<< "$requested")"
+                    echo "record=$record"
+                    echo "eas-baseline=$eas_baseline"
+                    echo "install=$install"
+                    echo "release-tag=$release_tag"
+                    echo "record-asset=store-record-${scope}.json"
+                    echo "marker-prefix=store-submitted-${RECORD_SCOPE}--"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Resolve every target's eas.json build profile
+              id: profile-env
+              uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  profiles: ${{ fromJSON(steps.targets.outputs.profiles) }}
+
+            - name: Attach the eas.json profile env and channel to every target
+              id: resolved
+              shell: bash
+              env:
+                  REQUESTED: ${{ steps.targets.outputs.requested }}
+                  PROFILES: ${{ steps.profile-env.outputs.resolved }}
+                  EAS_BASELINE: ${{ steps.targets.outputs.eas-baseline }}
+              run: |
+                  set -euo pipefail
+                  resolved="$(jq -c --argjson profiles "$PROFILES" \
+                    'map(. + ($profiles[.buildProfile] | {envLines, channel: (.channel // "")}))' <<< "$REQUESTED")"
+                  if [ "$EAS_BASELINE" = true ]; then
+                    missing="$(jq -r '[.[] | select(.channel == "") | .name] | join(", ")' <<< "$resolved")"
+                    if [ -n "$missing" ]; then
+                      echo "::error::ota-baseline eas-channel needs a channel in the eas.json build profile of every target; ${missing} has none, so there is no channel to compare with."
+                      exit 1
+                    fi
+                  fi
+                  {
+                    echo "ios-targets=$(jq -c 'map(select(.platform == "ios"))' <<< "$resolved")"
+                    echo "android-targets=$(jq -c 'map(select(.platform == "android"))' <<< "$resolved")"
+                    echo "targets=$resolved"
+                  } >> "$GITHUB_OUTPUT"
+                  jq -r '.[] | "Target \(.name): \(.platform), build profile \(.buildProfile), submit profile \(.submitProfile), channel \(if .channel == "" then "<none>" else .channel end), \(if .envLines == "" then 0 else (.envLines | split("\n") | length) end) profile env variable(s)"' <<< "$resolved"
+
+            - name: Resolve the store build number and marketing version
+              id: version
+              shell: bash
+              env:
+                  BUILD_NUMBER_INPUT: ${{ inputs.build-number }}
+                  MARKETING_VERSION_INPUT: ${{ inputs.marketing-version }}
+                  RELEASE_TAG: ${{ steps.targets.outputs.release-tag }}
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  RUN_ID: ${{ github.run_id }}
+              run: |
+                  set -euo pipefail
+                  max_build_number=2100000000
+                  build_number=''
+                  case "$BUILD_NUMBER_INPUT" in
+                    '') ;;
+                    auto)
+                      if ! created_at="$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}" --jq '.created_at')" || [ -z "$created_at" ]; then
+                        echo "::error::build-number auto could not read run ${RUN_ID}'s created_at from the Actions API; grant the calling job 'actions: read'."
+                        exit 1
+                      fi
+                      if ! epoch="$(date -u -d "$created_at" +%s 2>/dev/null)" \
+                        && ! epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$created_at" +%s 2>/dev/null)"; then
+                        echo "::error::Cannot parse the run's created_at '$created_at' as a UTC timestamp."
+                        exit 1
+                      fi
+                      build_number=$((epoch / 60))
+                      echo "Build number $build_number: minutes since the epoch at run creation ($created_at), shared by every attempt of run ${RUN_ID}."
+                      ;;
+                    *[!0-9]*|0*)
+                      echo "::error::build-number must be empty, auto, or a positive integer without leading zeros; got '$BUILD_NUMBER_INPUT'."
+                      exit 1
+                      ;;
+                    *)
+                      if [ "${#BUILD_NUMBER_INPUT}" -gt 10 ]; then
+                        echo "::error::build-number '$BUILD_NUMBER_INPUT' exceeds Android's versionCode limit of $max_build_number."
+                        exit 1
+                      fi
+                      build_number="$BUILD_NUMBER_INPUT"
+                      ;;
+                  esac
+                  if [ -n "$build_number" ] && { [ "$build_number" -lt 1 ] || [ "$build_number" -gt "$max_build_number" ]; }; then
+                    echo "::error::Build number $build_number is outside 1..$max_build_number, the range Google Play accepts as versionCode."
+                    exit 1
+                  fi
+
+                  version_pattern='^[0-9]+(\.[0-9]+){0,2}$'
+                  tag_version=''
+                  if [ -n "$RELEASE_TAG" ]; then
+                    candidate="${RELEASE_TAG##*@}"
+                    candidate="${candidate#v}"
+                    if printf '%s' "$candidate" | grep -Eq "$version_pattern"; then
+                      tag_version="$candidate"
+                    fi
+                  fi
+                  marketing_version=''
+                  case "$MARKETING_VERSION_INPUT" in
+                    ''|none) ;;
+                    auto)
+                      marketing_version="$tag_version"
+                      if [ -n "$RELEASE_TAG" ] && [ -z "$tag_version" ]; then
+                        echo "::notice::Release tag '$RELEASE_TAG' is not shaped [<prefix>@][v]X[.Y[.Z]]; STORE_MARKETING_VERSION is not exported."
+                      fi
+                      ;;
+                    tag)
+                      if [ -z "$tag_version" ]; then
+                        echo "::error::marketing-version tag needs a release tag shaped [<prefix>@][v]X[.Y[.Z]]; got '${RELEASE_TAG:-<none>}'."
+                        exit 1
+                      fi
+                      marketing_version="$tag_version"
+                      ;;
+                    *)
+                      if ! printf '%s' "$MARKETING_VERSION_INPUT" | grep -Eq "$version_pattern"; then
+                        echo "::error::marketing-version must be auto, tag, none, or X[.Y[.Z]]; got '$MARKETING_VERSION_INPUT'."
+                        exit 1
+                      fi
+                      marketing_version="$MARKETING_VERSION_INPUT"
+                      ;;
+                  esac
+                  echo "build-number=$build_number" >> "$GITHUB_OUTPUT"
+                  echo "marketing-version=$marketing_version" >> "$GITHUB_OUTPUT"
+                  echo "STORE_BUILD_NUMBER=${build_number:-<not exported>} STORE_MARKETING_VERSION=${marketing_version:-<not exported>}"
+
+            - name: Resolve package manager
+              if: steps.targets.outputs.install == 'true'
+              id: package-manager
+              shell: bash
+              env:
+                  PACKAGE_MANAGER: ${{ inputs.package-manager }}
+                  LOCKFILE_REQUIRED: ''
+              run: |
+                  set -euo pipefail
+                  pm=''
+                  case "$PACKAGE_MANAGER" in
+                    '') ;;
+                    yarn|pnpm|npm) pm="$PACKAGE_MANAGER" ;;
+                    *)
+                      echo "::error::package-manager must be '' (auto-detect), yarn, pnpm or npm; got '$PACKAGE_MANAGER'."
+                      exit 1
+                      ;;
+                  esac
+                  declared=''
+                  declared_version=''
+                  if { [ -z "$pm" ] || [ "$pm" = pnpm ]; } && [ -f package.json ]; then
+                    if command -v jq >/dev/null 2>&1; then
+                      declared_spec="$(jq -r '
+                        (try (.devEngines.packageManager) catch null) as $raw
+                        | (if ($raw | type) == "array" then ($raw[0] // null) else $raw end) as $de
+                        | (if ($de | type) == "object" then [($de.name // ""), ($de.version // "")] else ["", ""] end) as $dev
+                        | (if ((.packageManager // "") | type) == "string" and (.packageManager // "") != ""
+                           then (.packageManager | if test("@") then [split("@")[0], (split("@")[1] | split("+")[0])] else [., ""] end)
+                           else ["", ""] end) as $spec
+                        | (if $dev[0] != "" then $dev[0] else $spec[0] end) as $name
+                        | [$name,
+                           (if $dev[0] != "" and $dev[1] != "" then $dev[1]
+                            elif $spec[0] == $name then $spec[1]
+                            else "" end)]
+                        | @tsv' package.json)"
+                      declared="$(printf '%s\n' "$declared_spec" | cut -f1)"
+                      declared_version="$(printf '%s\n' "$declared_spec" | cut -f2)"
+                    else
+                      echo "::warning::jq is not installed on this runner, so package.json's packageManager / devEngines.packageManager fields cannot be read; falling back to root lockfile detection. Install jq, or set the package-manager input explicitly."
+                    fi
+                  fi
+                  if [ -z "$pm" ] && [ -n "$declared" ]; then
+                    case "$declared" in
+                      yarn|pnpm|npm) pm="$declared" ;;
+                      *)
+                        echo "::error::package.json declares package manager '$declared', which is not yarn, pnpm or npm; set the package-manager input explicitly."
+                        exit 1
+                        ;;
+                    esac
+                  fi
+                  if [ -z "$pm" ]; then
+                    lockfiles=''
+                    lockfile_count=0
+                    if [ -f yarn.lock ]; then pm=yarn; lockfiles="${lockfiles}yarn.lock "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f pnpm-lock.yaml ]; then pm=pnpm; lockfiles="${lockfiles}pnpm-lock.yaml "; lockfile_count=$((lockfile_count + 1)); fi
+                    if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+                      pm=npm
+                      lockfile_count=$((lockfile_count + 1))
+                      if [ -f package-lock.json ]; then lockfiles="${lockfiles}package-lock.json "; fi
+                      if [ -f npm-shrinkwrap.json ]; then lockfiles="${lockfiles}npm-shrinkwrap.json "; fi
+                    fi
+                    if [ "$lockfile_count" -eq 0 ]; then
+                      echo "::error::Cannot resolve the package manager: package.json declares none and there is no yarn.lock, pnpm-lock.yaml, package-lock.json or npm-shrinkwrap.json at the repository root. Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                    if [ "$lockfile_count" -gt 1 ]; then
+                      echo "::error::Cannot resolve the package manager: multiple root lockfiles found (${lockfiles% }). Set the package-manager input explicitly."
+                      exit 1
+                    fi
+                  fi
+                  if [ "$pm" = pnpm ] && { [ "$declared" != pnpm ] || [ -z "$declared_version" ]; }; then
+                    echo "::error::Resolved package manager is pnpm, but no pnpm version is readable from the repository-root package.json. pnpm/action-setup takes the version from 'packageManager: pnpm@<version>' or 'devEngines.packageManager: {name: pnpm, version: <range>}' - add one of those, and make sure jq is installed on this runner so the workflow can read it."
+                    exit 1
+                  fi
+                  if [ -n "$LOCKFILE_REQUIRED" ]; then
+                    case "$pm" in
+                      yarn) wanted='yarn.lock' ;;
+                      pnpm) wanted='pnpm-lock.yaml' ;;
+                      *) wanted='package-lock.json npm-shrinkwrap.json' ;;
+                    esac
+                    found=''
+                    for candidate in $wanted; do
+                      if [ -f "$candidate" ]; then found="$candidate"; break; fi
+                    done
+                    if [ -z "$found" ]; then
+                      echo "::error::Resolved package manager is $pm, but this job caches JS dependencies with actions/setup-node and the repository root has none of: $wanted. Commit the lockfile, or set the package-manager input to the manager whose lockfile this repository actually has."
+                      exit 1
+                    fi
+                  fi
+                  echo "Resolved package manager: $pm"
+                  echo "pm=$pm" >> "$GITHUB_OUTPUT"
+
+            - name: Setup pnpm
+              if: steps.targets.outputs.install == 'true' && steps.package-manager.outputs.pm == 'pnpm'
+              uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+            - name: Setup Node
+              if: steps.targets.outputs.install == 'true'
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: steps.targets.outputs.install == 'true' && inputs.enable-corepack && steps.package-manager.outputs.pm != 'pnpm'
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              if: steps.targets.outputs.install == 'true'
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: steps.targets.outputs.install == 'true' && inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Resolve every target's runtime version under its build env
+              if: steps.targets.outputs.record == 'true'
+              id: fingerprints
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  targets: ${{ steps.resolved.outputs.targets }}
+                  env: |
+                      ${{ inputs.publish-env }}
+                      ${{ steps.version.outputs.build-number != '' && format('STORE_BUILD_NUMBER={0}', steps.version.outputs.build-number) || '' }}
+                      ${{ steps.version.outputs.marketing-version != '' && format('STORE_MARKETING_VERSION={0}', steps.version.outputs.marketing-version) || '' }}
+                  unset-env: ${{ steps.eas-extra-env.outputs.names }}
+
+            - name: Resolve the store baseline
+              if: inputs.mode != 'native' && inputs.ota-baseline == 'github-release'
+              id: baseline
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  RELEASE_TAG: ${{ steps.targets.outputs.release-tag }}
+                  RECORD_ASSET: ${{ steps.targets.outputs.record-asset }}
+                  TARGETS: ${{ steps.resolved.outputs.targets }}
+              run: |
+                  set -euo pipefail
+                  listing="$RUNNER_TEMP/native-publish-releases.tsv"
+                  if ! gh api --paginate --slurp "repos/${REPOSITORY}/releases?per_page=100" > "$listing.json" \
+                    || ! jq -r 'add // [] | .[] | select(.draft | not) | .tag_name as $tag | .assets[] | [$tag, .name, (.id | tostring)] | @tsv' "$listing.json" > "$listing"; then
+                    echo "::error::Cannot list the releases of ${REPOSITORY}, so the store baseline is unknown; refusing to decide between a native build and an OTA."
+                    exit 1
+                  fi
+                  wanted="$(jq -c 'map({name, platform})' <<< "$TARGETS")"
+                  records_dir="$RUNNER_TEMP/native-publish-records"
+                  mkdir -p "$records_dir"
+                  baseline_tag=''
+                  baseline_file=''
+                  baseline_at=''
+                  while IFS="$(printf '\t')" read -r tag asset id; do
+                    [ "$asset" = "$RECORD_ASSET" ] || continue
+                    [ "$tag" != "$RELEASE_TAG" ] || continue
+                    file="$records_dir/${id}.json"
+                    if ! gh api -H 'Accept: application/octet-stream' "repos/${REPOSITORY}/releases/assets/${id}" > "$file"; then
+                      echo "::error::Cannot download ${RECORD_ASSET} from release ${tag}; refusing to decide on a partial view of what shipped."
+                      exit 1
+                    fi
+                    if ! jq -e '.schema == 1 and (.targets | type) == "object" and (.recordedAt | type) == "string"' "$file" >/dev/null 2>&1; then
+                      echo "::error::${RECORD_ASSET} on release ${tag} is not a schema-1 store build record; fix or delete that asset."
+                      exit 1
+                    fi
+                    if ! jq -e --argjson wanted "$wanted" \
+                      '. as $record | all($wanted[]; ($record.targets[.name].platform // "") == .platform and (($record.targets[.name].fingerprint // "") | length) > 0)' \
+                      "$file" >/dev/null; then
+                      echo "Release ${tag}: record does not show every current target shipped; not a baseline."
+                      continue
+                    fi
+                    recorded_at="$(jq -r '.recordedAt' "$file")"
+                    if [ -z "$baseline_at" ] || [[ "$recorded_at" > "$baseline_at" ]]; then
+                      baseline_tag="$tag"
+                      baseline_file="$file"
+                      baseline_at="$recorded_at"
+                    fi
+                  done < "$listing"
+                  if [ -n "$baseline_tag" ]; then
+                    echo "Store baseline: release ${baseline_tag}, recorded ${baseline_at}."
+                  else
+                    echo "No release carries a ${RECORD_ASSET} showing every current target shipped."
+                  fi
+                  echo "baseline-tag=$baseline_tag" >> "$GITHUB_OUTPUT"
+                  echo "baseline-file=$baseline_file" >> "$GITHUB_OUTPUT"
+
+            - name: Compare every target with its EAS channel
+              if: steps.targets.outputs.eas-baseline == 'true'
+              id: eas-baseline
+              uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.5.0 # v4.5.0
+              with:
+                  app-dir: ${{ inputs.app-dir }}
+                  targets: ${{ steps.resolved.outputs.targets }}
+                  baseline: ${{ inputs.eas-channel-baseline }}
+                  env: |
+                      ${{ inputs.publish-env }}
+                      ${{ steps.version.outputs.build-number != '' && format('STORE_BUILD_NUMBER={0}', steps.version.outputs.build-number) || '' }}
+                      ${{ steps.version.outputs.marketing-version != '' && format('STORE_MARKETING_VERSION={0}', steps.version.outputs.marketing-version) || '' }}
+                  unset-env: ${{ steps.eas-extra-env.outputs.names }}
+                  eas-cli-version: ${{ inputs.eas-cli-version }}
+                  expo-token: ${{ secrets.EXPO_TOKEN }}
+
+            - name: Decide between a native build and an OTA
+              id: decide
+              shell: bash
+              env:
+                  MODE: ${{ inputs.mode }}
+                  OTA_BASELINE: ${{ inputs.ota-baseline }}
+                  TARGETS: ${{ steps.resolved.outputs.targets }}
+                  FINGERPRINTS: ${{ steps.fingerprints.outputs.runtime-versions }}
+                  BASELINE_TAG: ${{ steps.baseline.outputs.baseline-tag }}
+                  BASELINE_FILE: ${{ steps.baseline.outputs.baseline-file }}
+                  EAS_DECISION: ${{ steps.eas-baseline.outputs.decision }}
+                  EAS_REASON: ${{ steps.eas-baseline.outputs.reason }}
+                  EAS_CHANGED_TARGETS: ${{ steps.eas-baseline.outputs.changed-targets }}
+              run: |
+                  set -euo pipefail
+                  if [ "$MODE" = native ]; then
+                    echo "decision=native" >> "$GITHUB_OUTPUT"
+                    echo "changed-targets=" >> "$GITHUB_OUTPUT"
+                    echo "Mode native: building and submitting every target."
+                    exit 0
+                  fi
+                  if [ "$OTA_BASELINE" = eas-channel ]; then
+                    case "$EAS_DECISION" in
+                      ota|native) ;;
+                      *)
+                        echo "::error::eas-channel-fingerprint returned no decision; refusing to choose between a native build and an OTA."
+                        exit 1
+                        ;;
+                    esac
+                    if [ "$EAS_DECISION" = native ] && [ "$MODE" = ota-only ]; then
+                      echo "::error::mode ota-only: ${EAS_REASON}. An OTA would target a runtime no build on the channel has; a store build is required."
+                      exit 1
+                    fi
+                    echo "decision=$EAS_DECISION" >> "$GITHUB_OUTPUT"
+                    echo "changed-targets=$EAS_CHANGED_TARGETS" >> "$GITHUB_OUTPUT"
+                    echo "Decision: $EAS_DECISION ($EAS_REASON)."
+                    {
+                      echo "### Native publish decision: \`$EAS_DECISION\`"
+                      echo
+                      echo "$EAS_REASON."
+                    } >> "$GITHUB_STEP_SUMMARY"
+                    exit 0
+                  fi
+                  changed=()
+                  rows=''
+                  fingerprints="${FINGERPRINTS:-}"
+                  [ -n "$fingerprints" ] || fingerprints='{}'
+                  while IFS= read -r name; do
+                    current="$(jq -r --arg name "$name" '.[$name] // ""' <<< "$fingerprints")"
+                    if [ -z "$current" ]; then
+                      echo "::error::No fingerprint was computed for target $name; refusing to decide."
+                      exit 1
+                    fi
+                    shipped=''
+                    if [ -n "$BASELINE_FILE" ]; then
+                      shipped="$(jq -r --arg name "$name" '.targets[$name].fingerprint // ""' "$BASELINE_FILE")"
+                    fi
+                    if [ "$current" != "$shipped" ]; then
+                      changed+=("$name")
+                    fi
+                    rows="${rows}| ${name} | \`${shipped:-none}\` | \`${current}\` |"$'\n'
+                  done < <(jq -r '.[].name' <<< "$TARGETS")
+
+                  changed_list="$(IFS=,; printf '%s' "${changed[*]:-}")"
+                  if [ -z "$BASELINE_FILE" ]; then
+                    if [ "$MODE" = ota-only ]; then
+                      echo "::error::mode ota-only found no release whose store build record shows every target shipped, so there is no runtime an OTA is known to reach. Run once in mode native with write-store-record, or in mode auto, to record one."
+                      exit 1
+                    fi
+                    decision=native
+                    reason="no release records every target as shipped, so there is no baseline"
+                  elif [ "${#changed[@]}" -gt 0 ]; then
+                    if [ "$MODE" = ota-only ]; then
+                      echo "::error::mode ota-only: the native runtime of ${changed_list} changed since release ${BASELINE_TAG}; an OTA would target a runtime no shipped binary has. A store build is required."
+                      exit 1
+                    fi
+                    decision=native
+                    reason="the native runtime of ${changed_list} changed since release ${BASELINE_TAG}"
+                  else
+                    decision=ota
+                    reason="every target's native runtime matches release ${BASELINE_TAG}"
+                  fi
+                  echo "decision=$decision" >> "$GITHUB_OUTPUT"
+                  echo "changed-targets=$changed_list" >> "$GITHUB_OUTPUT"
+                  echo "Decision: $decision ($reason)."
+                  {
+                    echo "### Native publish decision: \`$decision\`"
+                    echo
+                    echo "$reason."
+                    echo
+                    echo "| Target | Shipped runtime | This release |"
+                    echo "| --- | --- | --- |"
+                    printf '%s' "$rows"
+                  } >> "$GITHUB_STEP_SUMMARY"
+
     ios-publish:
-        name: iOS build and publish
-        if: inputs.enable-ios
+        name: iOS build and publish (${{ matrix.target.name }})
+        needs: [plan]
+        if: needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-ios == 'true'
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.ios-targets) }}
+        permissions:
+            contents: read
         runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+            HAS_ASC_KEY: ${{ secrets.ASC_API_KEY != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
               shell: bash
               env:
+                  CREDENTIALS_SOURCE: ${{ inputs.credentials-source }}
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
                   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
+                  case "$CREDENTIALS_SOURCE" in
+                    secrets|eas) ;;
+                    *)
+                      echo "::error::credentials-source must be secrets or eas; got '$CREDENTIALS_SOURCE'."
+                      exit 1
+                      ;;
+                  esac
                   missing=()
                   [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
-                  [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
-                  [ -z "${ASC_KEY_ID:-}" ] && missing+=(ASC_KEY_ID)
-                  [ -z "${ASC_ISSUER_ID:-}" ] && missing+=(ASC_ISSUER_ID)
+                  if [ "$CREDENTIALS_SOURCE" = secrets ] || [ -n "${ASC_API_KEY:-}${ASC_KEY_ID:-}${ASC_ISSUER_ID:-}" ]; then
+                    [ -z "${ASC_API_KEY:-}" ] && missing+=(ASC_API_KEY)
+                    [ -z "${ASC_KEY_ID:-}" ] && missing+=(ASC_KEY_ID)
+                    [ -z "${ASC_ISSUER_ID:-}" ] && missing+=(ASC_ISSUER_ID)
+                  fi
                   if [ "${#missing[@]}" -gt 0 ]; then
-                    echo "::error::ios-publish requires secrets: ${missing[*]}. ASC_KEY_ID and ASC_ISSUER_ID must accompany ASC_API_KEY, otherwise EAS cannot resolve the key non-interactively and falls back to an interactive prompt that cannot be answered in CI. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    echo "::error::ios-publish requires secrets: ${missing[*]}. ASC_KEY_ID and ASC_ISSUER_ID must accompany ASC_API_KEY, otherwise EAS cannot resolve the key non-interactively and falls back to an interactive prompt that cannot be answered in CI; with credentials-source: eas pass none of the three to use the key stored on EAS. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
                   fi
 
@@ -269,6 +1043,45 @@ jobs:
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply eas.json build profile env
+              shell: bash
+              env:
+                  PROFILE_ENV: ${{ matrix.target.envLines }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  applied=0
+                  while IFS= read -r line; do
+                    [ -n "$line" ] || continue
+                    name="${line%%=*}"
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::Resolved profile env line for '$name' is missing '='; the plan job emitted something this step cannot apply."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+                        echo "::error::Resolved profile env name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    while IFS= read -r override; do
+                      case "$override" in
+                        "$name="*)
+                          if [ "$override" != "$line" ]; then
+                            echo "::warning::publish-env sets $name to a different value than eas.json build profile '$BUILD_PROFILE'. Outside eas build (eas submit, hooks, prebuild) publish-env wins; inside eas build EAS applies the profile value, so the two can resolve different app configs."
+                          fi
+                          ;;
+                      esac
+                    done <<< "$PUBLISH_ENV"
+                    echo "$line" >> "$GITHUB_ENV"
+                    applied=$((applied + 1))
+                  done <<< "$PROFILE_ENV"
+                  echo "Applied $applied variable(s) from eas.json build profile '$BUILD_PROFILE' (extends resolved)."
 
             - name: Apply publish-env
               if: inputs.publish-env != ''
@@ -302,41 +1115,27 @@ jobs:
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$PUBLISH_ENV"
 
-            - name: Apply EAS_EXTRA_ENV
-              if: env.HAS_EAS_EXTRA_ENV == 'true'
+            - name: Apply the store build number and marketing version
+              if: needs.plan.outputs.build-number != '' || needs.plan.outputs.marketing-version != ''
               shell: bash
               env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+                  BUILD_NUMBER: ${{ needs.plan.outputs.build-number }}
+                  MARKETING_VERSION: ${{ needs.plan.outputs.marketing-version }}
               run: |
                   set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+                  if [ -n "$BUILD_NUMBER" ]; then
+                    echo "STORE_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+                  fi
+                  if [ -n "$MARKETING_VERSION" ]; then
+                    echo "STORE_MARKETING_VERSION=$MARKETING_VERSION" >> "$GITHUB_ENV"
+                  fi
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -458,6 +1257,7 @@ jobs:
 
             - name: Write App Store Connect API key
               id: asc-key
+              if: env.HAS_ASC_KEY == 'true'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -491,7 +1291,7 @@ jobs:
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
                   EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -510,27 +1310,77 @@ jobs:
             - name: Upload iOS build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-publish-build
+                  name: ios-publish-build${{ matrix.target.artifactSuffix }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 14
 
             - name: EAS submit (iOS)
+              id: submit
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  SUBMIT_PROFILE: ${{ inputs.submit-profile }}
+                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
                   EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
               run: |
                   set -euo pipefail
+                  submit_log="$RUNNER_TEMP/ios-publish/eas-submit.log"
+                  mkdir -p "$(dirname "$submit_log")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
                     --platform ios \
                     --profile "$SUBMIT_PROFILE" \
                     --non-interactive \
-                    --path "$ARTIFACT_PATH"
+                    --path "$ARTIFACT_PATH" 2>&1 | tee "$submit_log"
+                  submission_url="$(grep -Eo 'https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/submissions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$submit_log" | tail -n 1 || true)"
+                  if [ -z "$submission_url" ]; then
+                    echo "::warning::eas submit succeeded but its log names no EAS submission page, so the submissions output carries no id for this target."
+                  fi
+                  echo "submission-url=$submission_url" >> "$GITHUB_OUTPUT"
+
+            - name: Record the submitted target
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_PLATFORM: ${{ matrix.target.platform }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
+                  RECORD: ${{ needs.plan.outputs.record }}
+                  SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
+              run: |
+                  set -euo pipefail
+                  fingerprint=''
+                  if [ -n "$FINGERPRINTS" ]; then
+                    fingerprint="$(jq -r --arg name "$TARGET_NAME" '.[$name] // ""' <<< "$FINGERPRINTS")"
+                  fi
+                  if [ "$RECORD" = true ] && [ -z "$fingerprint" ]; then
+                    echo "::error::The plan job computed no fingerprint for target $TARGET_NAME, so its submitted build cannot be recorded."
+                    exit 1
+                  fi
+                  submission_id=''
+                  if [ -n "$SUBMISSION_URL" ]; then
+                    submission_id="${SUBMISSION_URL##*/}"
+                  fi
+                  marker_dir="$RUNNER_TEMP/store-submitted"
+                  mkdir -p "$marker_dir"
+                  jq -n --arg name "$TARGET_NAME" --arg platform "$TARGET_PLATFORM" \
+                    --arg buildProfile "$BUILD_PROFILE" --arg submitProfile "$SUBMIT_PROFILE" \
+                    --arg fingerprint "$fingerprint" \
+                    --arg submissionUrl "$SUBMISSION_URL" --arg submissionId "$submission_id" \
+                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint, submissionUrl: $submissionUrl, submissionId: $submissionId}' \
+                    > "$marker_dir/${TARGET_NAME}.json"
+
+            - name: Upload the submitted-target marker
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
+                  path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
+                  retention-days: 14
+                  overwrite: true
+                  if-no-files-found: error
 
             - name: Run iOS post-submit command
               if: inputs.ios-post-submit-command != ''
@@ -552,18 +1402,68 @@ jobs:
                   fi
 
     android-lint-gate:
-        name: Android release lint (Play policy gate)
-        if: inputs.enable-android && inputs.android-lint-gate
+        name: Android release lint (Play policy gate, ${{ matrix.target.name }})
+        needs: [plan]
+        if: inputs.android-lint-gate && needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-android == 'true'
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.android-targets) }}
+        permissions:
+            contents: read
         runs-on: ${{ fromJSON(inputs.lint-runner-labels) }}
         timeout-minutes: ${{ inputs.lint-timeout-minutes }}
         env:
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply eas.json build profile env
+              shell: bash
+              env:
+                  PROFILE_ENV: ${{ matrix.target.envLines }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  applied=0
+                  while IFS= read -r line; do
+                    [ -n "$line" ] || continue
+                    name="${line%%=*}"
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::Resolved profile env line for '$name' is missing '='; the plan job emitted something this step cannot apply."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+                        echo "::error::Resolved profile env name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    while IFS= read -r override; do
+                      case "$override" in
+                        "$name="*)
+                          if [ "$override" != "$line" ]; then
+                            echo "::warning::publish-env sets $name to a different value than eas.json build profile '$BUILD_PROFILE'. Outside eas build (eas submit, hooks, prebuild) publish-env wins; inside eas build EAS applies the profile value, so the two can resolve different app configs."
+                          fi
+                          ;;
+                      esac
+                    done <<< "$PUBLISH_ENV"
+                    echo "$line" >> "$GITHUB_ENV"
+                    applied=$((applied + 1))
+                  done <<< "$PROFILE_ENV"
+                  echo "Applied $applied variable(s) from eas.json build profile '$BUILD_PROFILE' (extends resolved)."
 
             - name: Apply publish-env
               if: inputs.publish-env != ''
@@ -599,39 +1499,10 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              shell: bash
-              env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
-              run: |
-                  set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -755,7 +1626,7 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
-                  EAS_BUILD_PROFILE: ${{ inputs.build-profile }}
+                  EAS_BUILD_PROFILE: ${{ matrix.target.buildProfile }}
               run: npx --yes expo prebuild --platform android --no-install --clean
 
             - name: Restore Gradle User Home cache keyed on the generated build files
@@ -818,7 +1689,7 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-lint-gate-reports-attempt-${{ github.run_attempt }}
+                  name: android-lint-gate-reports${{ matrix.target.artifactSuffix }}-attempt-${{ github.run_attempt }}
                   path: |
                       ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.html
                       ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.xml
@@ -826,27 +1697,48 @@ jobs:
                   if-no-files-found: ignore
 
     android-publish:
-        name: Android build and publish
-        needs: [android-lint-gate]
-        if: "!cancelled() && inputs.enable-android && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')"
+        name: Android build and publish (${{ matrix.target.name }})
+        needs: [plan, android-lint-gate]
+        if: "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-android == 'true' && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')"
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.android-targets) }}
+        permissions:
+            contents: read
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         env:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
             HAS_EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV != '' }}
+            HAS_GOOGLE_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' }}
 
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
               shell: bash
               env:
+                  CREDENTIALS_SOURCE: ${{ inputs.credentials-source }}
                   GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
               run: |
                   set -euo pipefail
+                  case "$CREDENTIALS_SOURCE" in
+                    secrets|eas) ;;
+                    *)
+                      echo "::error::credentials-source must be secrets or eas; got '$CREDENTIALS_SOURCE'."
+                      exit 1
+                      ;;
+                  esac
                   missing=()
                   [ -z "${EXPO_TOKEN:-}" ] && missing+=(EXPO_TOKEN)
-                  [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ] && missing+=(GOOGLE_SERVICE_ACCOUNT_JSON)
+                  if [ "$CREDENTIALS_SOURCE" = secrets ] && [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ]; then
+                    missing+=(GOOGLE_SERVICE_ACCOUNT_JSON)
+                  fi
                   if [ "${#missing[@]}" -gt 0 ]; then
-                    echo "::error::android-publish requires secrets: ${missing[*]}. Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
+                    echo "::error::android-publish requires secrets: ${missing[*]} (credentials-source: eas uses the Google service account key stored on EAS instead of GOOGLE_SERVICE_ACCOUNT_JSON). Pass them via 'secrets: inherit' or an explicit secrets: block in the caller workflow."
                     exit 1
                   fi
 
@@ -854,6 +1746,45 @@ jobs:
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+
+            - name: Apply eas.json build profile env
+              shell: bash
+              env:
+                  PROFILE_ENV: ${{ matrix.target.envLines }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PUBLISH_ENV: ${{ inputs.publish-env }}
+              run: |
+                  set -euo pipefail
+                  applied=0
+                  while IFS= read -r line; do
+                    [ -n "$line" ] || continue
+                    name="${line%%=*}"
+                    case "$line" in
+                      *=*) ;;
+                      *)
+                        echo "::error::Resolved profile env line for '$name' is missing '='; the plan job emitted something this step cannot apply."
+                        exit 1
+                        ;;
+                    esac
+                    case "$name" in
+                      ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+                        echo "::error::Resolved profile env name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+                        exit 1
+                        ;;
+                    esac
+                    while IFS= read -r override; do
+                      case "$override" in
+                        "$name="*)
+                          if [ "$override" != "$line" ]; then
+                            echo "::warning::publish-env sets $name to a different value than eas.json build profile '$BUILD_PROFILE'. Outside eas build (eas submit, hooks, prebuild) publish-env wins; inside eas build EAS applies the profile value, so the two can resolve different app configs."
+                          fi
+                          ;;
+                      esac
+                    done <<< "$PUBLISH_ENV"
+                    echo "$line" >> "$GITHUB_ENV"
+                    applied=$((applied + 1))
+                  done <<< "$PROFILE_ENV"
+                  echo "Applied $applied variable(s) from eas.json build profile '$BUILD_PROFILE' (extends resolved)."
 
             - name: Apply publish-env
               if: inputs.publish-env != ''
@@ -887,41 +1818,27 @@ jobs:
                     echo "$line" >> "$GITHUB_ENV"
                   done <<< "$PUBLISH_ENV"
 
-            - name: Apply EAS_EXTRA_ENV
-              if: env.HAS_EAS_EXTRA_ENV == 'true'
+            - name: Apply the store build number and marketing version
+              if: needs.plan.outputs.build-number != '' || needs.plan.outputs.marketing-version != ''
               shell: bash
               env:
-                  EAS_EXTRA_ENV: ${{ secrets.EAS_EXTRA_ENV }}
+                  BUILD_NUMBER: ${{ needs.plan.outputs.build-number }}
+                  MARKETING_VERSION: ${{ needs.plan.outputs.marketing-version }}
               run: |
                   set -euo pipefail
-                  while IFS= read -r line; do
-                    [ -z "$line" ] && continue
-                    case "$line" in
-                      *=*) ;;
-                      *)
-                        echo "::error::EAS_EXTRA_ENV has a line missing '='; expected KEY=VALUE."
-                        exit 1
-                        ;;
-                    esac
-                    name="${line%%=*}"
-                    value="${line#*=}"
-                    case "$name" in
-                      ''|[!A-Za-z_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    case "$name" in
-                      *[!A-Za-z0-9_]*)
-                        echo "::error::EAS_EXTRA_ENV has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$."
-                        exit 1
-                        ;;
-                    esac
-                    if [ -n "$value" ]; then
-                      echo "::add-mask::$value"
-                    fi
-                    echo "$name=$value" >> "$GITHUB_ENV"
-                  done <<< "$EAS_EXTRA_ENV"
+                  if [ -n "$BUILD_NUMBER" ]; then
+                    echo "STORE_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+                  fi
+                  if [ -n "$MARKETING_VERSION" ]; then
+                    echo "STORE_MARKETING_VERSION=$MARKETING_VERSION" >> "$GITHUB_ENV"
+                  fi
+
+            - name: Apply EAS_EXTRA_ENV
+              if: env.HAS_EAS_EXTRA_ENV == 'true'
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+              with:
+                  env: ${{ secrets.EAS_EXTRA_ENV }}
+                  label: EAS_EXTRA_ENV
 
             - name: Resolve package manager
               id: package-manager
@@ -1049,13 +1966,157 @@ jobs:
                   ANDROID_PRE_SUBMIT_COMMAND: ${{ inputs.android-pre-submit-command }}
               run: eval "$ANDROID_PRE_SUBMIT_COMMAND"
 
+            - name: Fit the native build into the container limits
+              id: native-jobs
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cgroup_root="${CGROUP_ROOT:-/sys/fs/cgroup}"
+                  v1_unbounded_bytes=1125899906842624
+                  reserve_mib=5120
+                  per_job_mib="${NATIVE_COMPILE_MEMORY_PER_JOB:-3584}"
+                  memory_bytes=''
+                  cpu_quota=''
+                  cpu_period=''
+
+                  fail() {
+                    echo "::error::$1"
+                    exit 1
+                  }
+
+                  is_uint() {
+                    case "$1" in
+                      '' | *[!0-9]*) return 1 ;;
+                    esac
+                    return 0
+                  }
+
+                  if [ -f "$cgroup_root/cgroup.controllers" ]; then
+                    if [ -f "$cgroup_root/memory.max" ]; then
+                      value="$(cat "$cgroup_root/memory.max")"
+                      if [ "$value" != max ]; then
+                        is_uint "$value" || fail "Unparseable $cgroup_root/memory.max '$value'; expected a byte count or 'max'. Refusing to compile native code with a parallelism this step cannot bound."
+                        memory_bytes="$value"
+                      fi
+                    fi
+                    if [ -f "$cgroup_root/cpu.max" ]; then
+                      read -r cpu_quota cpu_period < "$cgroup_root/cpu.max" || true
+                      [ "$cpu_quota" = max ] && cpu_quota=''
+                    fi
+                  else
+                    if [ -f "$cgroup_root/memory/memory.limit_in_bytes" ]; then
+                      value="$(cat "$cgroup_root/memory/memory.limit_in_bytes")"
+                      is_uint "$value" || fail "Unparseable $cgroup_root/memory/memory.limit_in_bytes '$value'; expected a byte count."
+                      [ "$value" -lt "$v1_unbounded_bytes" ] && memory_bytes="$value"
+                    fi
+                    if [ -f "$cgroup_root/cpu/cpu.cfs_quota_us" ]; then
+                      cpu_quota="$(cat "$cgroup_root/cpu/cpu.cfs_quota_us")"
+                      cpu_period="$(cat "$cgroup_root/cpu/cpu.cfs_period_us" 2>/dev/null || true)"
+                      [ "$cpu_quota" = -1 ] && cpu_quota=''
+                    fi
+                  fi
+                  if ! is_uint "$per_job_mib" || [ "$per_job_mib" -lt 1 ]; then
+                    fail "native-compile-memory-per-job '$per_job_mib' must be a positive number of MiB."
+                  fi
+                  if [ -n "$cpu_quota" ] && { ! is_uint "$cpu_quota" || ! is_uint "$cpu_period" || [ "$cpu_period" -eq 0 ]; }; then
+                    fail "Unparseable CPU quota '$cpu_quota' / period '$cpu_period' under $cgroup_root. Refusing to compile native code with a parallelism this step cannot bound."
+                  fi
+
+                  jobs=''
+                  basis=''
+                  if [ -n "$cpu_quota" ]; then
+                    jobs=$(((cpu_quota + cpu_period - 1) / cpu_period))
+                    basis="CPU quota $cpu_quota/$cpu_period"
+                  fi
+                  if [ -n "$memory_bytes" ]; then
+                    memory_mib=$((memory_bytes / 1048576))
+                    memory_jobs=$(((memory_mib - reserve_mib) / per_job_mib))
+                    [ "$memory_jobs" -lt 1 ] && memory_jobs=1
+                    if [ -z "$jobs" ] || [ "$memory_jobs" -lt "$jobs" ]; then
+                      jobs="$memory_jobs"
+                    fi
+                    basis="${basis:+$basis, }memory limit $memory_mib MiB less a $reserve_mib MiB JVM reserve, $per_job_mib MiB per job"
+                  fi
+                  if [ -n "${NATIVE_COMPILE_JOBS:-}" ]; then
+                    if ! is_uint "$NATIVE_COMPILE_JOBS" || [ "$NATIVE_COMPILE_JOBS" -lt 1 ]; then
+                      fail "native-compile-jobs '$NATIVE_COMPILE_JOBS' must be a positive integer, or empty to derive it from the runner's cgroup limits."
+                    fi
+                    jobs="$NATIVE_COMPILE_JOBS"
+                    basis='native-compile-jobs input'
+                  fi
+
+                  echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
+                  if [ -z "$jobs" ]; then
+                    echo "No cgroup CPU or memory limit found; native compile parallelism is left to ninja."
+                    exit 0
+                  fi
+
+                  slots_dir="$RUNNER_TEMP/mobile-ci-compile-slots"
+                  launcher="$slots_dir/compile-slot.sh"
+                  mkdir -p "$slots_dir"
+                  cat > "$launcher" <<'COMPILE_SLOT'
+                  #!/bin/sh
+                  set -eu
+                  slots="${MOBILE_CI_COMPILE_SLOTS:?MOBILE_CI_COMPILE_SLOTS is not set}"
+                  dir="${MOBILE_CI_COMPILE_SLOTS_DIR:?MOBILE_CI_COMPILE_SLOTS_DIR is not set}"
+                  try_slots() {
+                    slot=0
+                    while [ "$slot" -lt "$slots" ]; do
+                      exec 9> "$dir/slot.$slot"
+                      if flock -n 9; then
+                        return 0
+                      fi
+                      exec 9>&-
+                      slot=$((slot + 1))
+                    done
+                    return 1
+                  }
+                  if ! try_slots; then
+                    exec 8> "$dir/gate"
+                    flock 8
+                    until try_slots; do
+                      sleep 0.2
+                    done
+                    exec 8>&-
+                  fi
+                  status=0
+                  "$@" 9>&- || status=$?
+                  exit "$status"
+                  COMPILE_SLOT
+                  chmod +x "$launcher"
+
+                  jvm_heap_return='-XX:G1PeriodicGCInterval=10000 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30'
+                  kotlin_daemon_cap='-Dkotlin.daemon.jvm.options=-Xmx1536m'
+                  chain_launcher() {
+                    case "$1" in
+                      "$launcher" | "$launcher;"*) printf '%s' "$1" ;;
+                      '') printf '%s' "$launcher" ;;
+                      *) printf '%s;%s' "$launcher" "$1" ;;
+                    esac
+                  }
+                  {
+                    echo "MOBILE_CI_COMPILE_SLOTS=$jobs"
+                    echo "MOBILE_CI_COMPILE_SLOTS_DIR=$slots_dir"
+                    echo "CMAKE_C_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_C_COMPILER_LAUNCHER:-}")"
+                    echo "CMAKE_CXX_COMPILER_LAUNCHER=$(chain_launcher "${CMAKE_CXX_COMPILER_LAUNCHER:-}")"
+                    case " ${JAVA_TOOL_OPTIONS:-} " in
+                      *" $jvm_heap_return "*) ;;
+                      *) echo "JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:+$JAVA_TOOL_OPTIONS }$jvm_heap_return" ;;
+                    esac
+                    case "${GRADLE_OPTS:-}" in
+                      *kotlin.daemon.jvm.options=* | *kotlin.daemon.jvmargs=*) ;;
+                      *) echo "GRADLE_OPTS=${GRADLE_OPTS:+$GRADLE_OPTS }$kotlin_daemon_cap" ;;
+                    esac
+                  } >> "$GITHUB_ENV"
+                  echo "Native compile jobs: $jobs ($basis); every CMake configure in this job runs its compilers through $launcher, and idle JVMs return unused heap ($jvm_heap_return), and Kotlin daemons the project gives no JVM options of its own are capped at $kotlin_daemon_cap."
+
             - name: EAS build (Android)
               id: build
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  BUILD_PROFILE: ${{ inputs.build-profile }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
               run: |
                   set -euo pipefail
                   output_path="$RUNNER_TEMP/android-publish/app.aab"
@@ -1087,12 +2148,13 @@ jobs:
             - name: Upload Android build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-publish-build
+                  name: android-publish-build${{ matrix.target.artifactSuffix }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 14
 
             - name: Write Google service account key
               id: google-key
+              if: env.HAS_GOOGLE_KEY == 'true'
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
@@ -1112,22 +2174,72 @@ jobs:
                   echo "key-path=$absolute_key_path" >> "$GITHUB_OUTPUT"
 
             - name: EAS submit (Android)
+              id: submit
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  SUBMIT_PROFILE: ${{ inputs.submit-profile }}
+                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
                   # Exposed for eas.json submit profiles / fastlane hooks that read a service
                   # account key from disk; the exact eas.json wiring is consumer-owned.
                   GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.google-key.outputs.key-path }}
               run: |
                   set -euo pipefail
+                  submit_log="$RUNNER_TEMP/android-publish/eas-submit.log"
+                  mkdir -p "$(dirname "$submit_log")"
                   npx --yes "eas-cli@${EAS_CLI_VERSION}" submit \
                     --platform android \
                     --profile "$SUBMIT_PROFILE" \
                     --non-interactive \
-                    --path "$ARTIFACT_PATH"
+                    --path "$ARTIFACT_PATH" 2>&1 | tee "$submit_log"
+                  submission_url="$(grep -Eo 'https://expo\.dev/accounts/[^/[:space:]]+/projects/[^/[:space:]]+/submissions/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' "$submit_log" | tail -n 1 || true)"
+                  if [ -z "$submission_url" ]; then
+                    echo "::warning::eas submit succeeded but its log names no EAS submission page, so the submissions output carries no id for this target."
+                  fi
+                  echo "submission-url=$submission_url" >> "$GITHUB_OUTPUT"
+
+            - name: Record the submitted target
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_PLATFORM: ${{ matrix.target.platform }}
+                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
+                  RECORD: ${{ needs.plan.outputs.record }}
+                  SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
+              run: |
+                  set -euo pipefail
+                  fingerprint=''
+                  if [ -n "$FINGERPRINTS" ]; then
+                    fingerprint="$(jq -r --arg name "$TARGET_NAME" '.[$name] // ""' <<< "$FINGERPRINTS")"
+                  fi
+                  if [ "$RECORD" = true ] && [ -z "$fingerprint" ]; then
+                    echo "::error::The plan job computed no fingerprint for target $TARGET_NAME, so its submitted build cannot be recorded."
+                    exit 1
+                  fi
+                  submission_id=''
+                  if [ -n "$SUBMISSION_URL" ]; then
+                    submission_id="${SUBMISSION_URL##*/}"
+                  fi
+                  marker_dir="$RUNNER_TEMP/store-submitted"
+                  mkdir -p "$marker_dir"
+                  jq -n --arg name "$TARGET_NAME" --arg platform "$TARGET_PLATFORM" \
+                    --arg buildProfile "$BUILD_PROFILE" --arg submitProfile "$SUBMIT_PROFILE" \
+                    --arg fingerprint "$fingerprint" \
+                    --arg submissionUrl "$SUBMISSION_URL" --arg submissionId "$submission_id" \
+                    '{name: $name, platform: $platform, buildProfile: $buildProfile, submitProfile: $submitProfile, fingerprint: $fingerprint, submissionUrl: $submissionUrl, submissionId: $submissionId}' \
+                    > "$marker_dir/${TARGET_NAME}.json"
+
+            - name: Upload the submitted-target marker
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
+                  path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
+                  retention-days: 14
+                  overwrite: true
+                  if-no-files-found: error
 
             - name: Run Android post-submit command
               if: inputs.android-post-submit-command != ''
@@ -1150,31 +2262,166 @@ jobs:
                     rm -f "$KEY_PATH"
                   fi
 
+    record:
+        name: Write the store build record
+        needs: [plan, ios-publish, android-publish]
+        if: always() && needs.plan.result == 'success' && needs.plan.outputs.record == 'true' && needs.plan.outputs.decision == 'native'
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: ${{ inputs.plan-timeout-minutes }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Download the submitted-target markers
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
+                  merge-multiple: true
+                  path: ${{ runner.temp }}/store-submitted
+
+            - name: Write the store build record to the release
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  RELEASE_TAG: ${{ needs.plan.outputs.release-tag }}
+                  RECORD_ASSET: ${{ needs.plan.outputs.record-asset }}
+                  MARKER_DIR: ${{ runner.temp }}/store-submitted
+                  COMMIT: ${{ github.sha }}
+                  RUN_ID: ${{ github.run_id }}
+                  RUN_ATTEMPT: ${{ github.run_attempt }}
+                  BUILD_NUMBER: ${{ needs.plan.outputs.build-number }}
+                  MARKETING_VERSION: ${{ needs.plan.outputs.marketing-version }}
+              run: |
+                  set -euo pipefail
+                  markers=()
+                  if [ -d "$MARKER_DIR" ]; then
+                    while IFS= read -r -d '' marker; do
+                      markers+=("$marker")
+                    done < <(find "$MARKER_DIR" -maxdepth 1 -type f -name '*.json' -print0 | LC_ALL=C sort -z)
+                  fi
+                  if [ "${#markers[@]}" -eq 0 ]; then
+                    echo "::warning::No target reported a successful submit, so release ${RELEASE_TAG} gets no store build record."
+                    exit 0
+                  fi
+                  record_dir="$RUNNER_TEMP/native-publish-record"
+                  mkdir -p "$record_dir"
+                  record="$record_dir/$RECORD_ASSET"
+
+                  previous='{}'
+                  if gh release download "$RELEASE_TAG" --repo "$REPOSITORY" --pattern "$RECORD_ASSET" --dir "$record_dir/previous" >/dev/null 2>&1 \
+                    && [ -f "$record_dir/previous/$RECORD_ASSET" ]; then
+                    previous="$(jq -c --arg commit "$COMMIT" 'if .schema == 1 and .commit == $commit and (.targets | type) == "object" then .targets else {} end' "$record_dir/previous/$RECORD_ASSET" 2>/dev/null || echo '{}')"
+                  fi
+
+                  if ! jq -s \
+                    --argjson previous "$previous" \
+                    --arg tag "$RELEASE_TAG" --arg commit "$COMMIT" \
+                    --arg runId "$RUN_ID" --arg runAttempt "$RUN_ATTEMPT" \
+                    --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    --arg buildNumber "$BUILD_NUMBER" --arg marketingVersion "$MARKETING_VERSION" '
+                    if all(.[]; (.name | type) == "string" and (.platform | type) == "string" and ((.fingerprint // "") | length) > 0) | not
+                    then error("a submitted-target marker is missing its name, platform or fingerprint") else . end
+                    | {schema: 1, tag: $tag, commit: $commit, runId: $runId, runAttempt: $runAttempt,
+                       recordedAt: $recordedAt, buildNumber: $buildNumber, marketingVersion: $marketingVersion,
+                       targets: ($previous + (map({(.name): (del(.name))}) | add))}' \
+                    "${markers[@]}" > "$record"; then
+                    echo "::error::Cannot compose the store build record from the submitted-target markers; nothing is recorded."
+                    exit 1
+                  fi
+
+                  if ! gh release view "$RELEASE_TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
+                    if ! gh release create "$RELEASE_TAG" --repo "$REPOSITORY" --verify-tag --title "$RELEASE_TAG" \
+                      --notes "Store build record written by native-publish." >/dev/null; then
+                      echo "::error::Cannot create a release for tag ${RELEASE_TAG}; grant the calling job 'contents: write', and make sure the tag exists."
+                      exit 1
+                    fi
+                  fi
+                  if ! gh release upload "$RELEASE_TAG" "$record" --repo "$REPOSITORY" --clobber; then
+                    echo "::error::Cannot upload ${RECORD_ASSET} to release ${RELEASE_TAG}. Grant the calling job 'contents: write'; an immutable published release accepts no new assets, so run native-publish before publishing that release."
+                    exit 1
+                  fi
+                  echo "Recorded $(jq -r '.targets | keys | join(", ")' "$record") as shipped on release ${RELEASE_TAG}."
+
     status:
         name: Native publish result
-        needs: [ios-publish, android-lint-gate, android-publish]
+        needs: [plan, ios-publish, android-lint-gate, android-publish, record]
         if: always()
-        runs-on: ubuntu-latest
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        permissions:
+            contents: read
+        outputs:
+            submissions: ${{ steps.submissions.outputs.submissions }}
         steps:
+            - name: Apply RunsOn cache bypass
+              if: needs.plan.outputs.decision == 'native'
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Download the submitted-target markers
+              if: needs.plan.outputs.decision == 'native'
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: ${{ needs.plan.outputs.marker-prefix }}*
+                  merge-multiple: true
+                  path: ${{ runner.temp }}/store-submitted
+
+            - name: Collect the submissions
+              id: submissions
+              shell: bash
+              env:
+                  MARKER_DIR: ${{ runner.temp }}/store-submitted
+              run: |
+                  set -euo pipefail
+                  markers=()
+                  if [ -d "$MARKER_DIR" ]; then
+                    while IFS= read -r -d '' marker; do
+                      markers+=("$marker")
+                    done < <(find "$MARKER_DIR" -maxdepth 1 -type f -name '*.json' -print0 | LC_ALL=C sort -z)
+                  fi
+                  submissions='{}'
+                  if [ "${#markers[@]}" -gt 0 ]; then
+                    submissions="$(jq -cs 'map({(.name): {platform, submissionId: (.submissionId // ""), submissionUrl: (.submissionUrl // "")}}) | add' "${markers[@]}")"
+                  fi
+                  echo "Submissions: $submissions"
+                  echo "submissions=$submissions" >> "$GITHUB_OUTPUT"
+
             - name: Report
               shell: bash
               env:
-                  ENABLE_IOS: ${{ inputs.enable-ios }}
-                  ENABLE_ANDROID: ${{ inputs.enable-android }}
+                  PLAN_RESULT: ${{ needs.plan.result }}
+                  DECISION: ${{ needs.plan.outputs.decision }}
+                  HAS_IOS: ${{ needs.plan.outputs.has-ios }}
+                  HAS_ANDROID: ${{ needs.plan.outputs.has-android }}
+                  RECORD: ${{ needs.plan.outputs.record }}
                   LINT_GATE: ${{ inputs.android-lint-gate }}
                   IOS_RESULT: ${{ needs.ios-publish.result }}
                   LINT_RESULT: ${{ needs.android-lint-gate.result }}
                   ANDROID_RESULT: ${{ needs.android-publish.result }}
+                  RECORD_RESULT: ${{ needs.record.result }}
               run: |
                   set -euo pipefail
+                  if [ "$PLAN_RESULT" != success ]; then
+                    echo "Plan failed or did not run."
+                    exit 1
+                  fi
+                  if [ "$DECISION" = ota ]; then
+                    echo "Every target's native runtime is unchanged since the last store build; nothing was built. Publish an OTA update."
+                    exit 0
+                  fi
+                  if [ "$DECISION" != native ]; then
+                    echo "Plan produced no decision ('$DECISION')."
+                    exit 1
+                  fi
                   failed=0
 
-                  if [ "$ENABLE_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
+                  if [ "$HAS_IOS" = "true" ] && [ "$IOS_RESULT" != "success" ]; then
                     echo "iOS publish failed or did not run."
                     failed=1
                   fi
 
-                  if [ "$ENABLE_ANDROID" = "true" ]; then
+                  if [ "$HAS_ANDROID" = "true" ]; then
                     if [ "$LINT_GATE" = "true" ] && [ "$LINT_RESULT" != "success" ]; then
                       echo "Android lint gate failed."
                       failed=1
@@ -1185,7 +2432,12 @@ jobs:
                     fi
                   fi
 
+                  if [ "$RECORD" = "true" ] && [ "$RECORD_RESULT" != "success" ]; then
+                    echo "The store build record was not written."
+                    failed=1
+                  fi
+
                   if [ "$failed" -ne 0 ]; then
                     exit 1
                   fi
-                  echo "Native publish completed successfully for enabled platforms."
+                  echo "Native publish completed successfully for every target."

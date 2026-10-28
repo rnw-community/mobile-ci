@@ -1,0 +1,73 @@
+name: play-store-release
+description: >-
+  Promotes an already-uploaded Android build from one Google Play track to
+  another (default internal -> production) through the Play Developer API
+  edits flow - a self-signed RS256 service-account JWT and a dependency-free
+  Node script, no fastlane. Picks the highest version code on the source track
+  unless one is given, copies the source release's name and release notes, and
+  either completes the release or starts a staged rollout. Dry run by default.
+  Idempotent: a target track that already carries the version code at the
+  requested rollout (or completed) reports and succeeds.
+inputs:
+  package-name:
+    description: Android application id, e.g. com.example.app.
+    required: true
+  from-track:
+    description: Track the build is promoted from.
+    required: false
+    default: internal
+  to-track:
+    description: Track the build is promoted to.
+    required: false
+    default: production
+  version-code:
+    description: Version code to promote; it must be on from-track. Empty picks the highest version code on from-track.
+    required: false
+    default: ''
+  rollout:
+    description: User fraction in (0, 1]. 1 completes the release; anything lower starts (or moves) a staged inProgress rollout.
+    required: false
+    default: '1'
+  release-notes-from-source:
+    description: true copies the source release's release notes to the promoted release.
+    required: false
+    default: 'true'
+  dry-run:
+    description: true resolves and prints the plan without updating a track or committing the edit; false changes Google Play.
+    required: false
+    default: 'true'
+  service-account-key-path:
+    description: Path to the Google Play service account JSON key file.
+    required: true
+outputs:
+  version-code:
+    description: The version code promoted.
+    value: ${{ steps.release.outputs.version-code }}
+  result:
+    description: released, already-released (to-track already carries it at that rollout or completed), or planned (dry run).
+    value: ${{ steps.release.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - name: Validate tooling
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v node >/dev/null 2>&1; then
+          echo "::error::node 18 or newer is required by play-store-release but was not found on PATH."
+          exit 1
+        fi
+
+    - name: Release on Google Play
+      id: release
+      shell: bash
+      env:
+        PACKAGE_NAME: ${{ inputs.package-name }}
+        FROM_TRACK: ${{ inputs.from-track }}
+        TO_TRACK: ${{ inputs.to-track }}
+        VERSION_CODE: ${{ inputs.version-code }}
+        ROLLOUT: ${{ inputs.rollout }}
+        RELEASE_NOTES_FROM_SOURCE: ${{ inputs.release-notes-from-source }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        SERVICE_ACCOUNT_KEY_PATH: ${{ inputs.service-account-key-path }}
+      run: node "$GITHUB_ACTION_PATH/scripts/play-store-release.mjs"

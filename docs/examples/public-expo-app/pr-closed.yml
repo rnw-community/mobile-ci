@@ -1,0 +1,38 @@
+# Public Expo app: clean up after a pull request. Copy to
+# .github/workflows/pr-closed.yml.
+#
+# On close: cancel the runs still queued or running on the pull request's
+# branch (a serialized self-hosted fleet otherwise starves on them), wait for
+# them to stop, then delete the pull request's OTA preview releases. Nightly: a
+# dry-run-by-default sweep of previews whose pull request closed without the
+# cleanup above (set dry-run: false once its log lists only what you expect).
+name: PR cleanup
+
+on:
+    pull_request:
+        types: [closed]
+    schedule:
+        - cron: '17 4 * * *'
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    cleanup:
+        if: github.event_name == 'pull_request'
+        permissions:
+            actions: write
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.5.0 # v4.5.0
+        with:
+            ota-preview-release-tag-prefix: ota
+
+    sweep:
+        if: github.event_name != 'pull_request'
+        permissions:
+            contents: write
+            pull-requests: read
+        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.5.0 # v4.5.0
+        with:
+            release-tag-prefix: ota
+            dry-run: true

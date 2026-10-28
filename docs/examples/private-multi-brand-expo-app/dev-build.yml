@@ -1,0 +1,46 @@
+# Private multi-brand Expo app: development builds on EAS internal distribution.
+# Copy to .github/workflows/dev-build.yml.
+#
+# A GitHub Release asset of a private repository is not installable by a tester
+# without repository access, so distribution: eas uploads the build to EAS
+# internal distribution and outputs its install page. build-location: local
+# (the default) compiles on the self-hosted fleet and only uploads; cloud would
+# build on EAS servers instead.
+#
+# Every brand in one run: one native-dev-release.yml call per brand, and
+# call-scope gives each call its own artifact names, release tags, preview
+# comment section and concurrency group, so the calls neither collide nor
+# cancel each other. Each call's job summary links its brand's install pages.
+name: Dev build
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    dev-build:
+        strategy:
+            fail-fast: false
+            matrix:
+                brand: [acme, globex]
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.5.0 # v4.5.0
+        with:
+            app-dir: apps/mobile
+            enable-ios: true
+            enable-android: true
+            # eas.json: development-<brand> extends development and sets the
+            # brand's APP_VARIANT, distribution: internal, and an apk.
+            build-profile: development-${{ matrix.brand }}
+            distribution: eas
+            call-scope: ${{ matrix.brand }}
+            install-command: pnpm install --frozen-lockfile
+        secrets:
+            EXPO_TOKEN: ${{ secrets.EXPO_PREVIEW_TOKEN }}

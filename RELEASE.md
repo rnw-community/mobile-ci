@@ -50,6 +50,15 @@ being cut) that consumers pin to in practice. **No
    only because its tagging job names the pattern in a `grep`; neither
    carries a self-reference of its own.
 
+   Bump the documented pins in the same PR, so every copy-pasteable example
+   names the release it was checked against (`tests/docs-examples_test.sh`
+   checks their inputs and pin form, not the tag):
+
+   ```bash
+   grep -rl 'rnw-community/mobile-ci/' README.md AGENTS.md llms.txt docs/examples docs/workflows docs/*.md actions/*/README.md \
+     | xargs perl -pi -e 's{\@v1\.3\.0 # v1\.3\.0}{\@v1.3.1 # v1.3.1}g'
+   ```
+
    Get this merged to `main` via the normal PR/review/CI flow (see
    [Self-references](#self-references) below for why the tag can be named in
    advance). Do not tag a commit whose self-references still point at the
@@ -112,11 +121,16 @@ being cut) that consumers pin to in practice. **No
    the tagged commit must point at that same tag — the reusable workflows
    (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
    `store-screenshots.yml`, `expo-base-plan.yml`, `swift-ios.yml`,
-   `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`; `native-publish.yml`
-   and `native-dev-release.yml` have none) **and** the composite actions that
+   `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`,
+   `assert-distinct-fingerprints.yml`, `store-release.yml`, and `native-publish.yml` /
+   `native-dev-release.yml` through `apply-secret-env`) **and** the
+   composite actions that
    call sibling actions (`run-maestro-android-redroid/action.yml` →
    `redroid-container`, `run-maestro-android/action.yml` →
-   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`).
+   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`,
+   `eas-update/action.yml` → `apply-secret-env` / `eas-profile-env`,
+   `eas-channel-fingerprint/action.yml` → `eas-profile-env` /
+   `ota-runtime-version`, `ota-runtime-version/action.yml` → `eas-profile-env`).
    The reusable-workflow self-references (four workflows →
    `expo-base-plan.yml`) are checked by the same loop. Fail
    closed: any reference whose tag or trailing comment does not match the
@@ -134,7 +148,14 @@ being cut) that consumers pin to in practice. **No
                .github/workflows/swift-ios.yml \
                .github/workflows/expo-ota-preview.yml \
                .github/workflows/expo-fingerprint-guard.yml \
+               .github/workflows/assert-distinct-fingerprints.yml \
+               .github/workflows/native-publish.yml \
+               .github/workflows/native-dev-release.yml \
+               .github/workflows/store-release.yml \
                actions/expo-native-key/action.yml \
+               actions/eas-update/action.yml \
+               actions/eas-channel-fingerprint/action.yml \
+               actions/ota-runtime-version/action.yml \
                actions/run-maestro-android-redroid/action.yml \
                actions/run-maestro-android/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
@@ -199,7 +220,10 @@ this procedure, and `git tag` on this repo's own commit is created from that
 same commit immediately after. `self-test`'s `dry-lint-local-refs` job
 rewrites these self-references to relative paths before schema-checking
 them, so a not-yet-existent tag never has to actually resolve during CI on
-the release PR.
+the release PR. `self-test`'s `self-reference-resolution` job does check, on
+every pull request, that a self-reference to a tag that already exists names an
+action or workflow present at that tag: a new action must be pinned to the
+upcoming release tag, never to the last one, which lacks it.
 
 The floating major tag (`v1`, `v2`, ...) is a separate, deliberately mutable
 pointer used only by *consumers* who choose to float — the one matching the

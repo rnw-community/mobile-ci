@@ -1,0 +1,148 @@
+name: ota-runtime-version
+description: >-
+  Resolves the runtime version an OTA must target with the project's own
+  expo-updates (`npx --no-install expo-updates runtimeversion:resolve`), the
+  value `eas update` and the expo-updates client compute, for every runtime
+  policy. Each platform (or target) resolves under its eas.json build profile
+  env and extra env. The one runtime source for expo-ota-preview.yml (both
+  backends), native-publish.yml (both ota-baselines), native-dev-release.yml's
+  build marker and eas-channel-fingerprint. A failed or empty resolution, or a
+  malformed env line, fails the step.
+inputs:
+  app-dir:
+    description: App directory holding the app config and the installed expo-updates.
+    required: false
+    default: '.'
+  platform:
+    description: all, ios or android. Ignored with targets.
+    required: false
+    default: all
+  eas-profile:
+    description: eas.json build profile whose env (extends resolved) applies, exported with EAS_BUILD_PROFILE. Ignored with targets.
+    required: false
+    default: ''
+  targets:
+    description: >-
+      JSON array replacing platform / eas-profile: [{"name", "platform":
+      "ios"|"android", "envLines"?, "buildProfile"?}], one resolution each.
+    required: false
+    default: ''
+  env:
+    description: Newline-separated KEY=VALUE env applied after the profile env (so it wins), for every resolution.
+    required: false
+    default: ''
+  unset-env:
+    description: Newline-separated variable names removed from the env before resolving, e.g. secrets eas build never sees.
+    required: false
+    default: ''
+outputs:
+  runtime-versions:
+    description: JSON object of target name (the platform without targets) to runtime version.
+    value: ${{ steps.resolve.outputs.runtime-versions }}
+  ios-runtime-version:
+    description: iOS runtime version, without targets.
+    value: ${{ steps.resolve.outputs.ios-runtime-version }}
+  android-runtime-version:
+    description: Android runtime version, without targets.
+    value: ${{ steps.resolve.outputs.android-runtime-version }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the eas.json build profile
+      id: profile
+      if: inputs.eas-profile != '' && inputs.targets == ''
+      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.5.0 # v4.5.0
+      with:
+        app-dir: ${{ inputs.app-dir }}
+        profiles: ${{ inputs.eas-profile }}
+
+    - name: Resolve the runtime versions
+      id: resolve
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        TARGETS: ${{ inputs.targets }}
+        PLATFORM: ${{ inputs.platform }}
+        EAS_PROFILE: ${{ inputs.eas-profile }}
+        PROFILE_ENV: ${{ steps.profile.outputs.env-lines }}
+        EXTRA_ENV: ${{ inputs.env }}
+        UNSET_ENV: ${{ inputs.unset-env }}
+      run: |
+        set -euo pipefail
+        fail() {
+          echo "::error::$*"
+          exit 1
+        }
+        valid_name() {
+          case "$1" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) return 1 ;;
+          esac
+        }
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          case "$line" in
+            *=*) valid_name "${line%%=*}" || fail "env line '${line%%=*}=...' needs a name matching ^[A-Za-z_][A-Za-z0-9_]*\$." ;;
+            *) fail "env line '$line' is missing '='; expected KEY=VALUE." ;;
+          esac
+        done <<< "$EXTRA_ENV"
+        while IFS= read -r name; do
+          [ -z "$name" ] || valid_name "$name" || fail "unset-env name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+        done <<< "$UNSET_ENV"
+        if [ -n "$TARGETS" ]; then
+          targets="$(jq -c '
+            if type == "array" and length > 0 and all(.[]; type == "object"
+                and (.name | type == "string" and test("^[A-Za-z0-9._-]+$"))
+                and (.platform == "ios" or .platform == "android")
+                and ((.envLines // "") | type == "string")
+                and ((.buildProfile // "") | type == "string"))
+            then map({name, platform, envLines: (.envLines // ""), buildProfile: (.buildProfile // "")})
+            else error("invalid") end' <<< "$TARGETS" 2>/dev/null)" \
+            || fail "targets must be a non-empty JSON array of {name, platform: ios|android, envLines?, buildProfile?}."
+        else
+          case "$PLATFORM" in
+            all) platforms='["ios","android"]' ;;
+            ios|android) platforms="[\"$PLATFORM\"]" ;;
+            *) fail "platform must be all, ios or android; got '$PLATFORM'." ;;
+          esac
+          targets="$(jq -c --arg env "$PROFILE_ENV" --arg profile "$EAS_PROFILE" \
+            'map({name: ., platform: ., envLines: $env, buildProfile: $profile})' <<< "$platforms")"
+        fi
+
+        resolve() {
+          (
+            while IFS= read -r name; do
+              [ -z "$name" ] || unset "$name"
+            done <<< "$UNSET_ENV"
+            while IFS= read -r line; do
+              [ -n "$line" ] && export "${line?}"
+            done <<< "$1"
+            [ -z "$2" ] || export EAS_BUILD_PROFILE="$2"
+            while IFS= read -r line; do
+              [ -n "$line" ] && export "${line?}"
+            done <<< "$EXTRA_ENV"
+            npx --no-install expo-updates runtimeversion:resolve --platform "$3"
+          )
+        }
+
+        runtimes='{}'
+        count="$(jq 'length' <<< "$targets")"
+        index=0
+        while [ "$index" -lt "$count" ]; do
+          target="$(jq -c ".[$index]" <<< "$targets")"
+          index=$((index + 1))
+          name="$(jq -r .name <<< "$target")"
+          platform="$(jq -r .platform <<< "$target")"
+          resolved="$(resolve "$(jq -r .envLines <<< "$target")" "$(jq -r .buildProfile <<< "$target")" "$platform")" \
+            || fail "expo-updates runtimeversion:resolve failed for $name ($platform); install the app's dependencies, with expo-updates, first."
+          runtime="$(jq -r '.runtimeVersion // ""' <<< "$resolved" 2>/dev/null || true)"
+          [ -n "$runtime" ] || fail "expo-updates resolved no runtime version for $name ($platform)."
+          echo "Runtime version $name ($platform): $runtime"
+          runtimes="$(jq -c --arg name "$name" --arg runtime "$runtime" '. + {($name): $runtime}' <<< "$runtimes")"
+        done
+        {
+          echo "runtime-versions=$runtimes"
+          if [ -z "$TARGETS" ]; then
+            echo "ios-runtime-version=$(jq -r '.ios // ""' <<< "$runtimes")"
+            echo "android-runtime-version=$(jq -r '.android // ""' <<< "$runtimes")"
+          fi
+        } >> "$GITHUB_OUTPUT"

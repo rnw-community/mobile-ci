@@ -1,0 +1,26 @@
+[
+  {
+    "id": "01a153fb-e0f4-70b7-9f3e-8f0af5fe1907",
+    "createdAt": "2026-10-19T11:46:18.484Z",
+    "group": "64cb0217-6125-4c66-9977-2ff75969ab12",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 21.8.0",
+    "runtimeVersion": "b610ebf53eaa44559a28a9bddbcd2bbe395db69e",
+    "platform": "ios",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fb-e0f4-70b7-9f3e-8f0af5fe1907",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e"
+  },
+  {
+    "id": "01a153fb-e0f4-749f-a315-cba2b33c3684",
+    "createdAt": "2026-10-19T11:46:18.484Z",
+    "group": "6df94daa-8d4a-4d81-b8e7-a6dab745c429",
+    "branch": "ci-validate-2ef95bd-fixture",
+    "message": "fixture 21.8.0",
+    "runtimeVersion": "b281169f7195b726578f9f0e9e8aab087dfb849c",
+    "platform": "android",
+    "manifestPermalink": "https://u.expo.dev/update/01a153fb-e0f4-749f-a315-cba2b33c3684",
+    "isRollBackToEmbedded": false,
+    "gitCommitHash": "ff843e8912b5546bec37f46244f7211aa9a7e07e"
+  }
+]

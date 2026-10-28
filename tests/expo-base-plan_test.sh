@@ -91,12 +91,12 @@ fi
 # plan_workspace <plan json>... — one plan artifact directory per argument, laid
 # out the way actions/download-artifact leaves a pattern download.
 plan_workspace() {
-    local dir index=0 plan
+    local dir plan artifact
     dir="$(new_workflow_workspace "$PLAN_WORKFLOW" collect "$COLLECT_STEP")"
     for plan in "$@"; do
-        mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-$index"
-        printf '%s' "$plan" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-$index/plan.json"
-        index=$((index + 1))
+        artifact="${PLAN_ARTIFACT_PREFIX:-ios-e2e-plan}-$(jq -r '.name' <<< "$plan")"
+        mkdir -p "$dir/work/.ci-artifacts/plans/$artifact"
+        jq -c --arg artifact "$artifact" '. + {planArtifact: $artifact}' <<< "$plan" > "$dir/work/.ci-artifacts/plans/$artifact/plan.json"
     done
     printf '%s\n' "$dir"
 }
@@ -109,14 +109,14 @@ AI_NATIVE='{"name":"ai","appDir":"apps/ai","nativeKey":"k2-bbbbbbbbbbbb","needsN
 
 case_start 'every target repacked means no native build job at all'
 dir="$(plan_workspace "$BARE_REPACKED" "$AI_REPACKED")"
-run_step "$dir" TARGETS="$TARGETS"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
 assert_equals 0 "$STEP_STATUS" 'collect exit status' \
     && assert_equals '[]' "$(step_output "$dir" targets)" 'targets' \
     && pass_case
 
 case_start 'a target with no base is handed to the native build, carrying its key'
 dir="$(plan_workspace "$BARE_NATIVE" "$AI_REPACKED")"
-run_step "$dir" TARGETS="$TARGETS"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
 targets="$(step_output "$dir" targets)"
 assert_equals 0 "$STEP_STATUS" 'collect exit status' \
     && assert_equals 'bare' "$(jq -r '.[0].name' <<< "$targets")" 'target name' \
@@ -127,18 +127,80 @@ assert_equals 0 "$STEP_STATUS" 'collect exit status' \
 
 case_start 'every target needing a native build is forwarded'
 dir="$(plan_workspace "$BARE_NATIVE" "$AI_NATIVE")"
-run_step "$dir" TARGETS="$TARGETS"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
 assert_equals 0 "$STEP_STATUS" 'collect exit status' \
     && assert_equals '2' "$(jq 'length' <<< "$(step_output "$dir" targets)")" 'target count' \
     && pass_case
 
 case_start 'a target whose plan never arrived is not an empty set of native builds'
 dir="$(plan_workspace "$BARE_REPACKED")"
-run_step "$dir" TARGETS="$TARGETS"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
 if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case "a missing plan collected to '$(step_output "$dir" targets)' instead of failing"
 else
     assert_contains "$(cat "$dir/log")" 'Expected one plan per target' 'error message' && pass_case
+fi
+
+case_start "another call's plans in the same run are neither counted nor collected (#252)"
+dir="$(plan_workspace "$BARE_NATIVE" "$AI_REPACKED")"
+mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-pkg-b--bare"
+printf '%s' '{"name":"bare","appDir":"apps/b","nativeKey":"k9-cccccccccccc","needsNative":true,"planArtifact":"ios-e2e-plan-pkg-b--bare"}' > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-pkg-b--bare/plan.json"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan
+targets="$(step_output "$dir" targets)"
+assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
+    && assert_equals 'apps/mobile' "$(jq -r 'map(.appDir) | join(",")' <<< "$targets")" "only this call's native target" \
+    && assert_not_contains "$(step_output "$dir" plans)" 'k9-cccccccccccc' "the sibling's plan is not this call's" \
+    && pass_case
+
+case_start 'a lone plan, which download-artifact extracts straight into the path, is still collected'
+dir="$(new_workflow_workspace "$PLAN_WORKFLOW" collect "$COLLECT_STEP")"
+mkdir -p "$dir/work/.ci-artifacts/plans"
+jq -c '. + {planArtifact: "ios-e2e-plan-bare"}' <<< "$BARE_NATIVE" > "$dir/work/.ci-artifacts/plans/plan.json"
+run_step "$dir" TARGETS='[{"name":"bare","appDir":"apps/mobile"}]' PLAN_PREFIX=ios-e2e-plan
+targets="$(step_output "$dir" targets)"
+assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
+    && assert_equals 'bare' "$(jq -r '.[0].name' <<< "$targets")" 'target collected' \
+    && assert_not_contains "$targets" 'planArtifact' 'the plan bookkeeping is not forwarded' \
+    && pass_case
+
+case_start 'a scoped call collects exactly its own plans, never the unscoped call of the same run'
+dir="$(PLAN_ARTIFACT_PREFIX=ios-e2e-plan-pkg-b- plan_workspace "$BARE_REPACKED" "$AI_NATIVE")"
+mkdir -p "$dir/work/.ci-artifacts/plans/ios-e2e-plan-bare"
+jq -c '. + {planArtifact: "ios-e2e-plan-bare"}' <<< "$BARE_NATIVE" > "$dir/work/.ci-artifacts/plans/ios-e2e-plan-bare/plan.json"
+run_step "$dir" TARGETS="$TARGETS" PLAN_PREFIX=ios-e2e-plan-pkg-b-
+assert_equals 0 "$STEP_STATUS" "collect exit status ($(cat "$dir/log"))" \
+    && assert_equals 'ai' "$(jq -r 'map(.name) | join(",")' <<< "$(step_output "$dir" targets)")" "only this call's native target" \
+    && pass_case
+
+case_start "a target's own buildStrategy decides its base lookup and its repack refusal"
+problem="$(PLAN_WORKFLOW="$PLAN_WORKFLOW" python3 - <<'PYTHON'
+import os
+import yaml
+
+workflow = yaml.safe_load(open(os.environ['PLAN_WORKFLOW'], encoding='utf-8'))
+steps = {step.get('name'): step for step in workflow['jobs']['plan']['steps']}
+effective = '(matrix.target.buildStrategy || inputs.build-strategy)'
+problems = []
+if steps['expo-base-binary (fetch)'].get('if') != f"{effective} != 'native' && steps.e2e-cache.outputs.hit != 'true'":
+    problems.append(f"the base lookup runs when {steps['expo-base-binary (fetch)'].get('if')!r}")
+if not str(steps['Refuse to compile native code under build-strategy repack'].get('if', '')).startswith(f"{effective} == 'repack'"):
+    problems.append('the repack refusal ignores the target strategy')
+if steps["Record this target's plan"]['env'].get('BUILD_STRATEGY') != '${{ ' + effective + ' }}':
+    problems.append('the plan summary reports the call strategy')
+collect = {step.get('name'): step for step in workflow['jobs']['collect']['steps']}
+if collect['Collect the targets whose native key has no base']['env'].get('PLAN_PREFIX') != '${{ inputs.plan-artifact-prefix }}':
+    problems.append('collect does not know which plan names are its own')
+if steps["Record this target's plan"]['env'].get('PLAN_ARTIFACT') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+    problems.append('a plan does not record the artifact name it is uploaded under')
+if steps["Upload this target's plan"]['with'].get('name') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+    problems.append('the plan is uploaded under another name than it records')
+print('; '.join(problems))
+PYTHON
+)"
+if [ -n "$problem" ]; then
+    fail_case "$problem"
+else
+    pass_case
 fi
 
 case_start 'the repack resolves the same build-tools version the plan job installs (#163)'
@@ -185,7 +247,9 @@ for name in ('ios-maestro', 'android-maestro', 'store-screenshots', 'seed-native
             problems.append(f'{where}: cancel-in-progress must be false, or a second build cancels the first')
         match = re.fullmatch(
             r"\$\{\{ \((?P<cond>.+)\) && format\('expo-base-publish-\{0\}-(?P<platform>[a-z]+)-\{1\}-\{2\}', github\.repository, inputs\.base-flavor, matrix\.target\.nativeKey\)"
-            r" \|\| format\('expo-base-build-\{0\}-\{1\}-(?P<job>[a-z]+)-\{2\}', github\.run_id, github\.run_attempt, matrix\.target\.name\) \}\}",
+            r" \|\| format\('expo-base-build-\{0\}-\{1\}-(?P<job>[a-z]+)"
+            r"(?:-\{2\}', github\.run_id, github\.run_attempt, matrix\.target\.name"
+            r"|\{2\}-\{3\}', github\.run_id, github\.run_attempt, needs\.detect\.outputs\.artifact-scope, matrix\.target\.name)\) \}\}",
             group,
         )
         if not match:

@@ -1,0 +1,59 @@
+# Public Expo app: Maestro e2e on every pull request, iOS and Android.
+# Copy to .github/workflows/e2e.yml in the app repository.
+#
+# A pull request does not compile native code: each workflow computes the
+# native key on Linux, fetches the base binary the warm-up (warm-up.yml)
+# published for it, and repacks it with this commit's JavaScript. Only a key
+# with no published base reaches a Mac or Gradle. See docs/repack.md.
+name: E2E
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    ios:
+        # Required on the calling job: a reusable workflow can only narrow the
+        # token its caller grants. packages: write publishes the base binary
+        # from a default-branch run; actions: read reads it back.
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p ios"}]
+            flows-dir: apps/mobile/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+            # Must be byte-identical to warm-up.yml, or the two never agree on a key.
+            fingerprint-config: fingerprint.config.js
+            exempt-paths: |
+                docs/**
+                **/*.md
+            force-label: e2e:force
+
+    android:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p android"}]
+            flows-dir: apps/mobile/e2e/flows
+            install-command: pnpm install --frozen-lockfile
+            fingerprint-config: fingerprint.config.js
+            # android-driver defaults to avd on the x86_64 KVM pool. For a
+            # linux-aarch64 pool pass android-driver: redroid with that pool's
+            # runner-labels; for no device host at all, android-driver:
+            # device-cloud with the device-cloud-api-key secret.
+            exempt-paths: |
+                docs/**
+                **/*.md
+            force-label: e2e:force

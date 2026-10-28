@@ -1,0 +1,47 @@
+name: runs-on-cache-bypass
+description: >-
+  Opt-in. On a RunsOn runner started with `extras=s3-cache` the runner points
+  the Actions results URL at the RunsOn cache proxy, so `actions/upload-artifact`
+  and `actions/download-artifact` fail until `runs-on/action` has run in the job.
+  When enabled and the job is on such a runner, this runs a SHA-pinned
+  `runs-on/action` once; on any other runner it is a logged no-op.
+inputs:
+  enabled:
+    description: >-
+      `true` to run `runs-on/action` when the runner is a RunsOn runner;
+      `false` (default) does nothing. Any other value fails the step.
+    required: false
+    default: 'false'
+outputs:
+  applied:
+    description: '`true` when `runs-on/action` ran in this job, otherwise `false`.'
+    value: ${{ steps.detect.outputs.applied }}
+runs:
+  using: composite
+  steps:
+    - name: Decide whether the RunsOn cache proxy is in play
+      id: detect
+      shell: bash
+      env:
+        ENABLED: ${{ inputs.enabled }}
+      run: |
+        set -euo pipefail
+        case "$ENABLED" in
+          true | false) ;;
+          *)
+            echo "::error::runs-on-cache-bypass: enabled must be 'true' or 'false', got '$ENABLED'"
+            exit 1
+            ;;
+        esac
+        applied=false
+        if [ "$ENABLED" = true ]; then
+          if [ -n "${ZCTIONS_RESULTS_URL:-}" ] || [ -n "${ZCTIONS_CACHE_URL:-}" ]; then
+            applied=true
+          else
+            echo "::notice::runs-on-cache-bypass: not a RunsOn s3-cache runner, nothing to bypass"
+          fi
+        fi
+        echo "applied=$applied" >> "$GITHUB_OUTPUT"
+    - name: Restore the Actions results URL for artifact traffic
+      if: steps.detect.outputs.applied == 'true'
+      uses: runs-on/action@17b59092eb37ebfdbb034460892887c09100eaa3 # v2.5.0

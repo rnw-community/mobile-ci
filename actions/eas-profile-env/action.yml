@@ -1,0 +1,110 @@
+name: eas-profile-env
+description: >-
+  Resolves eas.json build profiles the way EAS does, following each `extends`
+  chain: the merged `env` (child wins), the `channel` and the EAS
+  `environment`. The one resolver behind native-publish.yml's plan, eas-update
+  and eas-channel-fingerprint, so an OTA is evaluated under the same app config
+  as the binary it lands on. A missing profile, an `extends` cycle, a non-string
+  or multi-line env value or an invalid env name fails closed.
+inputs:
+  app-dir:
+    description: Directory holding eas.json.
+    required: false
+    default: '.'
+  profiles:
+    description: Newline-separated eas.json build profile names to resolve.
+    required: true
+outputs:
+  resolved:
+    description: >-
+      JSON object of profile name to {env, envLines, channel, environment};
+      envLines is env as KEY=VALUE lines, channel and environment are null when
+      no level of the chain sets them.
+    value: ${{ steps.resolve.outputs.resolved }}
+  env-lines:
+    description: The profile's env as KEY=VALUE lines, when exactly one profile was given.
+    value: ${{ steps.resolve.outputs.env-lines }}
+  channel:
+    description: The profile's channel, when exactly one profile was given and it sets one.
+    value: ${{ steps.resolve.outputs.channel }}
+  environment:
+    description: The profile's EAS environment, when exactly one profile was given and it sets one.
+    value: ${{ steps.resolve.outputs.environment }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the eas.json build profiles
+      id: resolve
+      shell: bash
+      env:
+        APP_DIR: ${{ inputs.app-dir }}
+        PROFILES: ${{ inputs.profiles }}
+      run: |
+        set -euo pipefail
+        if ! command -v jq >/dev/null 2>&1; then
+          echo "::error::eas-profile-env needs jq to read eas.json."
+          exit 1
+        fi
+        eas_json="$APP_DIR/eas.json"
+        if [ ! -f "$eas_json" ]; then
+          echo "::error::No eas.json at '$eas_json'; the build profile env cannot be resolved."
+          exit 1
+        fi
+        if ! jq -e 'type == "object"' "$eas_json" >/dev/null 2>&1; then
+          echo "::error::'$eas_json' is not a JSON object."
+          exit 1
+        fi
+        names="$(printf '%s\n' "$PROFILES" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | awk 'NF && !seen[$0]++' | jq -Rsc 'split("\n") | map(select(length > 0))')"
+        if [ "$(jq 'length' <<< "$names")" -eq 0 ]; then
+          echo "::error::profiles names no build profile to resolve."
+          exit 1
+        fi
+
+        jq_error="$RUNNER_TEMP/eas-profile-env.err"
+        if ! resolved="$(jq -c --argjson names "$names" '
+          def optional_string($profile; $name; $key):
+            if ($profile[$key] == null) or (($profile[$key] | type) == "string") then $profile[$key]
+            else error("eas.json build profile \($name | tojson) \($key) is not a string") end;
+          def resolve($name; $seen):
+            if any($seen[]; . == $name) then
+              error("eas.json build profile \($seen[0] | tojson) extends itself: \(($seen + [$name]) | join(" -> "))")
+            elif ((.build // {}) | type) != "object" or ((.build // {}) | has($name) | not) then
+              error("eas.json has no build profile \($name | tojson)\(if ($seen | length) > 0 then " (extended by \($seen[-1] | tojson))" else "" end)")
+            else
+              .build[$name] as $profile
+              | if ($profile | type) != "object" then error("eas.json build profile \($name | tojson) is not an object") else . end
+              | ($profile.env // {}) as $env
+              | if ($env | type) != "object" then error("eas.json build profile \($name | tojson) env is not an object") else . end
+              | ($env | to_entries | map(select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$") | not) | .key)) as $bad
+              | if ($bad | length) > 0 then error("eas.json build profile \($name | tojson) env name(s) \($bad | join(", ")) must match ^[A-Za-z_][A-Za-z0-9_]*$") else . end
+              | ($env | to_entries | map(select((.value | type) != "string" or (.value | test("[\r\n]"))) | .key)) as $bad_values
+              | if ($bad_values | length) > 0 then error("eas.json build profile \($name | tojson) env value(s) of \($bad_values | join(", ")) must be single-line strings") else . end
+              | optional_string($profile; $name; "channel") as $channel
+              | optional_string($profile; $name; "environment") as $environment
+              | if $profile.extends == null then {env: {}, channel: null, environment: null}
+                elif ($profile.extends | type) != "string" then error("eas.json build profile \($name | tojson) extends is not a string")
+                else resolve($profile.extends; $seen + [$name]) end
+              | {env: (.env + $env), channel: ($channel // .channel), environment: ($environment // .environment)}
+            end;
+          . as $eas
+          | reduce $names[] as $name ({}; . + {($name): ($eas | resolve($name; []) | . + {envLines: (.env | to_entries | map("\(.key)=\(.value)") | join("\n"))})})' "$eas_json" 2> "$jq_error")"; then
+          echo "::error::$(sed -E 's/^jq: error \(at [^)]*\): //' "$jq_error")"
+          exit 1
+        fi
+
+        env_lines=''
+        channel=''
+        environment=''
+        if [ "$(jq 'length' <<< "$names")" -eq 1 ]; then
+          env_lines="$(jq -r '.[].envLines' <<< "$resolved")"
+          channel="$(jq -r '.[].channel // ""' <<< "$resolved")"
+          environment="$(jq -r '.[].environment // ""' <<< "$resolved")"
+        fi
+        delimiter="eas_profile_env_$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+        {
+          echo "resolved=$resolved"
+          printf 'env-lines<<%s\n%s\n%s\n' "$delimiter" "$env_lines" "$delimiter"
+          echo "channel=$channel"
+          echo "environment=$environment"
+        } >> "$GITHUB_OUTPUT"
+        jq -r 'to_entries[] | "Profile \(.key): \(.value.env | length) env variable(s), channel \(.value.channel // "<none>"), environment \(.value.environment // "<none>")"' <<< "$resolved"

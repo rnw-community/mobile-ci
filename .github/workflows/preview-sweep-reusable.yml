@@ -1,0 +1,203 @@
+name: preview-sweep-reusable
+
+on:
+    workflow_call:
+        inputs:
+            release-tag-prefix:
+                description: >-
+                    The release-tag-prefix the caller passes to expo-ota-preview.yml. Only releases tagged
+                    <prefix>-<app-scope>-<slug>-<40-hex sha> are ever considered.
+                type: string
+                required: false
+                default: ota
+            dry-run:
+                description: >-
+                    Log what would be deleted and delete nothing. Set false once a dry run's log lists
+                    only what you expect.
+                type: boolean
+                required: false
+                default: true
+            max-age-days:
+                description: >-
+                    Delete a branch (non-pull-request) preview once it is this many days old. A pull
+                    request's previews are deleted once the pull request is closed, whatever their age.
+                type: number
+                required: false
+                default: 30
+            grace-period-hours:
+                description: Never delete a preview created less than this many hours ago.
+                type: number
+                required: false
+                default: 24
+            max-deletions:
+                description: Most releases deleted in one run, oldest first; the rest wait for the next run.
+                type: number
+                required: false
+                default: 50
+            runner-labels:
+                description: JSON array of runner labels for the sweep job. The job needs curl and jq, not gh.
+                type: string
+                required: false
+                default: '["ubuntu-latest"]'
+
+concurrency:
+    group: preview-sweep-${{ github.repository }}-${{ inputs.release-tag-prefix }}
+    cancel-in-progress: false
+
+jobs:
+    sweep:
+        name: Sweep stale OTA preview releases
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: 15
+        permissions:
+            contents: write
+            pull-requests: read
+        steps:
+            -   name: Delete stale preview releases
+                shell: bash
+                env:
+                    GH_TOKEN: ${{ github.token }}
+                    REPOSITORY: ${{ github.repository }}
+                    TAG_PREFIX: ${{ inputs.release-tag-prefix }}
+                    DRY_RUN: ${{ inputs.dry-run }}
+                    MAX_AGE_DAYS: ${{ inputs.max-age-days }}
+                    GRACE_PERIOD_HOURS: ${{ inputs.grace-period-hours }}
+                    MAX_DELETIONS: ${{ inputs.max-deletions }}
+                run: |
+                    set -euo pipefail
+                    for tool in curl jq; do
+                      if ! command -v "$tool" >/dev/null 2>&1; then
+                        echo "::error::The preview sweep needs '${tool}' on the runner and found none on PATH; point runner-labels at a runner that has curl and jq."
+                        exit 1
+                      fi
+                    done
+                    case "$TAG_PREFIX" in
+                      ''|*[!A-Za-z0-9._-]*)
+                        echo "::error::release-tag-prefix must be only [A-Za-z0-9._-]; got '${TAG_PREFIX}'."
+                        exit 1
+                        ;;
+                    esac
+                    case "$DRY_RUN" in
+                      true|false) ;;
+                      *) echo "::error::dry-run must be true or false; got '${DRY_RUN}'."; exit 1 ;;
+                    esac
+                    for pair in "max-age-days=${MAX_AGE_DAYS}" "grace-period-hours=${GRACE_PERIOD_HOURS}" "max-deletions=${MAX_DELETIONS}"; do
+                      case "${pair#*=}" in
+                        ''|*[!0-9]*)
+                          echo "::error::${pair%%=*} must be a whole number; got '${pair#*=}'."
+                          exit 1
+                          ;;
+                      esac
+                    done
+                    if [ "$MAX_DELETIONS" -eq 0 ]; then
+                      echo "::error::max-deletions must be at least 1; use dry-run to delete nothing."
+                      exit 1
+                    fi
+
+                    api_url="${GITHUB_API_URL:-https://api.github.com}/repos/${REPOSITORY}"
+                    scratch="$(mktemp -d)"
+                    trap 'rm -rf "$scratch"' EXIT
+                    body="$scratch/body"
+                    status=''
+                    api() {
+                      if ! status="$(curl -sS -o "$body" -w '%{http_code}' -X "$1" \
+                          -H "Authorization: Bearer ${GH_TOKEN}" \
+                          -H 'Accept: application/vnd.github+json' \
+                          -H 'X-GitHub-Api-Version: 2022-11-28' \
+                          "${api_url}/$2")"; then
+                        echo "::error::$1 ${api_url}/$2 did not complete."
+                        exit 1
+                      fi
+                    }
+                    refuse() {
+                      echo "::error::$1 returned HTTP ${status}: $(cat "$body"). The calling job needs 'contents: write' and 'pull-requests: read'."
+                      exit 1
+                    }
+
+                    : > "$scratch/releases"
+                    page=1
+                    while :; do
+                      api GET "releases?per_page=100&page=${page}"
+                      [ "$status" = 200 ] || refuse "GET releases"
+                      jq -r --arg prefix "${TAG_PREFIX}-" '
+                        .[]
+                        | select((.tag_name | startswith($prefix)) and (.tag_name | test("-[0-9a-f]{40}$")))
+                        | "\(.created_at | fromdateiso8601)\t\(.id)\t\(.tag_name)"
+                      ' "$body" >> "$scratch/releases"
+                      [ "$(jq 'length' "$body")" -lt 100 ] && break
+                      page=$((page + 1))
+                    done
+                    sort -n -o "$scratch/releases" "$scratch/releases"
+
+                    now="$(date -u +%s)"
+                    grace_seconds=$((GRACE_PERIOD_HOURS * 3600))
+                    max_age_seconds=$((MAX_AGE_DAYS * 86400))
+                    pr_state() {
+                      local number="$1" cache="$scratch/pr-$1"
+                      if [ ! -f "$cache" ]; then
+                        api GET "pulls/${number}"
+                        case "$status" in
+                          200) jq -r '.state' "$body" > "$cache" ;;
+                          404) echo missing > "$cache" ;;
+                          *) refuse "GET pull request #${number}" ;;
+                        esac
+                      fi
+                      cat "$cache"
+                    }
+                    delete_release() {
+                      api DELETE "releases/$1"
+                      case "$status" in 204|404) ;; *) refuse "DELETE release $2" ;; esac
+                      api DELETE "git/refs/tags/$2"
+                      if [ "$status" = 422 ] && jq -e '.message == "Reference does not exist"' "$body" >/dev/null; then
+                        status=404
+                      fi
+                      case "$status" in 204|404) ;; *) refuse "DELETE tag $2" ;; esac
+                    }
+
+                    selected=0
+                    deferred=0
+                    while IFS="$(printf '\t')" read -r created id tag; do
+                      [ -n "$id" ] || continue
+                      age=$((now - created))
+                      if [ "$age" -lt "$grace_seconds" ]; then
+                        echo "Keep ${tag}: newer than the ${GRACE_PERIOD_HOURS}-hour grace period."
+                        continue
+                      fi
+                      number="$(printf '%s\n' "$tag" | sed -n -E 's/.*-pr-([0-9]+)-[0-9a-f]{40}$/\1/p')"
+                      if [ -n "$number" ]; then
+                        state="$(pr_state "$number")"
+                        case "$state" in
+                          closed) reason="pull request #${number} is closed" ;;
+                          open) echo "Keep ${tag}: pull request #${number} is open."; continue ;;
+                          *)
+                            echo "::warning::Keep ${tag}: its tag names pull request #${number}, which this repository does not have; delete it by hand if it is stale."
+                            continue
+                            ;;
+                        esac
+                      elif [ "$age" -ge "$max_age_seconds" ]; then
+                        reason="branch preview older than ${MAX_AGE_DAYS} day(s)"
+                      else
+                        echo "Keep ${tag}: branch preview younger than ${MAX_AGE_DAYS} day(s)."
+                        continue
+                      fi
+                      if [ "$selected" -ge "$MAX_DELETIONS" ]; then
+                        deferred=$((deferred + 1))
+                        continue
+                      fi
+                      selected=$((selected + 1))
+                      if [ "$DRY_RUN" = true ]; then
+                        echo "Would delete ${tag} (${reason})."
+                      else
+                        delete_release "$id" "$tag"
+                        echo "Deleted ${tag} (${reason})."
+                      fi
+                    done < "$scratch/releases"
+
+                    if [ "$deferred" -gt 0 ]; then
+                      echo "::notice::Reached max-deletions (${MAX_DELETIONS}); ${deferred} more stale preview(s) wait for the next run."
+                    fi
+                    if [ "$DRY_RUN" = true ]; then
+                      echo "### OTA preview sweep (dry run): ${selected} release(s) would be deleted, ${deferred} deferred" >> "$GITHUB_STEP_SUMMARY"
+                    else
+                      echo "### OTA preview sweep: ${selected} release(s) and their tags deleted, ${deferred} deferred" >> "$GITHUB_STEP_SUMMARY"
+                    fi

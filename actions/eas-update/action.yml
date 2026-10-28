@@ -1,0 +1,411 @@
+name: eas-update
+description: >-
+  Publishes an EAS Update with `eas update --json --non-interactive` to a
+  channel (creating it, or pointing a new one at the branch, when
+  auto-create-channel allows), evaluating the app config under an eas.json
+  build profile's env and EAS environment. Outputs the update and group ids,
+  runtime versions, manifest URLs and expo-dev-client deep links per platform.
+  Skips a commit already published to the branch and a pull-request run
+  whose head moved on. Fails closed on a missing token, a channel that would
+  not serve the update, unparsable output, a requested platform missing from
+  it, or a runtime version other than the expected one.
+inputs:
+  app-dir:
+    description: App directory holding the Expo app config and eas.json.
+    required: false
+    default: '.'
+  channel:
+    description: EAS Update channel the update must reach.
+    required: true
+  branch:
+    description: >-
+      EAS Update branch to publish to. Empty publishes through the channel
+      (`eas update --channel`), to the branch it serves.
+    required: false
+    default: ''
+  platform:
+    description: all, ios or android.
+    required: false
+    default: all
+  message:
+    description: Update message. Empty uses the commit's short SHA and subject.
+    required: false
+    default: ''
+  environment:
+    description: >-
+      EAS environment whose server-side variables eas update loads
+      (`--environment`). Empty uses eas-profile's `environment`, if any.
+    required: false
+    default: ''
+  eas-profile:
+    description: >-
+      eas.json build profile whose env (extends resolved, via eas-profile-env)
+      and environment the update is evaluated under, so it carries the same
+      app config as the build it lands on. Also exported as EAS_BUILD_PROFILE.
+    required: false
+    default: ''
+  extra-env:
+    description: Newline-separated KEY=VALUE secret env, masked and exported before publishing (apply-secret-env).
+    required: false
+    default: ''
+  eas-cli-version:
+    description: Pinned eas-cli npm version.
+    required: false
+    default: '20.5.1'
+  auto-create-channel:
+    description: >-
+      true creates a missing channel (and, with branch set, points it at the
+      branch). false fails when the channel does not exist.
+    required: false
+    default: 'true'
+  scheme:
+    description: URL scheme of the development build for the deep links. Empty uses `exp+<slug>`, which expo-dev-client registers.
+    required: false
+    default: ''
+  ios-runtime-version:
+    description: >-
+      Expected iOS runtime version (ota-runtime-version's). The step fails
+      when eas-cli publishes another one, so an env drift never ships silently.
+    required: false
+    default: ''
+  android-runtime-version:
+    description: Expected Android runtime version; see ios-runtime-version.
+    required: false
+    default: ''
+  rollout-percentage:
+    description: Publish as a rollout to this percentage (1-100) of the channel's users (`--rollout-percentage`).
+    required: false
+    default: ''
+  private-key-path:
+    description: Code-signing private key path, relative to app-dir (`--private-key-path`), for an app with updates.codeSigningCertificate.
+    required: false
+    default: ''
+  input-dir:
+    description: >-
+      Directory holding an existing `expo export` output, relative to app-dir.
+      Publishes it with `--skip-bundler --input-dir` instead of bundling again.
+    required: false
+    default: ''
+  skip-if-published:
+    description: Skip publishing when the branch's latest update for every platform already carries this commit (gitCommitHash).
+    required: false
+    default: 'true'
+  skip-stale:
+    description: >-
+      On a pull_request event, skip publishing when the pull request's head is
+      no longer the commit this run was triggered for, so a stale re-run never
+      replaces the current preview.
+    required: false
+    default: 'true'
+  github-token:
+    description: Token reading the pull request's current head for skip-stale.
+    required: false
+    default: ${{ github.token }}
+  expo-token:
+    description: Expo access token. Empty uses EXPO_TOKEN from the job env.
+    required: false
+    default: ''
+outputs:
+  published:
+    description: true when this run published the update; false when it skipped (see skipped-reason).
+    value: ${{ steps.publish.outputs.published }}
+  skipped-reason:
+    description: >-
+      Empty when published. already-published (the outputs then describe the
+      existing update) or stale-head (no other output is set).
+    value: ${{ steps.publish.outputs.skipped-reason }}
+  channel:
+    description: The channel the update was published for.
+    value: ${{ steps.publish.outputs.channel }}
+  branch:
+    description: The branch the update was published to.
+    value: ${{ steps.publish.outputs.branch }}
+  update-group-id:
+    description: Update group id, when every platform shares one (empty when runtimes differ per platform).
+    value: ${{ steps.publish.outputs.update-group-id }}
+  runtime-version:
+    description: Runtime version, when every platform shares one.
+    value: ${{ steps.publish.outputs.runtime-version }}
+  manifest-url:
+    description: Manifest URL of the shared update group.
+    value: ${{ steps.publish.outputs.manifest-url }}
+  deep-link:
+    description: expo-dev-client deep link opening the shared update group.
+    value: ${{ steps.publish.outputs.deep-link }}
+  ios-update-id:
+    description: iOS update id.
+    value: ${{ steps.publish.outputs.ios-update-id }}
+  android-update-id:
+    description: Android update id.
+    value: ${{ steps.publish.outputs.android-update-id }}
+  ios-runtime-version:
+    description: iOS runtime version.
+    value: ${{ steps.publish.outputs.ios-runtime-version }}
+  android-runtime-version:
+    description: Android runtime version.
+    value: ${{ steps.publish.outputs.android-runtime-version }}
+  ios-manifest-url:
+    description: Manifest URL of the iOS update group.
+    value: ${{ steps.publish.outputs.ios-manifest-url }}
+  android-manifest-url:
+    description: Manifest URL of the Android update group.
+    value: ${{ steps.publish.outputs.android-manifest-url }}
+  ios-deep-link:
+    description: expo-dev-client deep link opening the iOS update group.
+    value: ${{ steps.publish.outputs.ios-deep-link }}
+  android-deep-link:
+    description: expo-dev-client deep link opening the Android update group.
+    value: ${{ steps.publish.outputs.android-deep-link }}
+  updates:
+    description: The JSON array eas update printed.
+    value: ${{ steps.publish.outputs.updates }}
+runs:
+  using: composite
+  steps:
+    - name: Apply extra-env
+      if: inputs.extra-env != ''
+      uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
+      with:
+        env: ${{ inputs.extra-env }}
+        label: extra-env
+
+    - name: Resolve the eas.json build profile
+      id: profile
+      if: inputs.eas-profile != ''
+      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.5.0 # v4.5.0
+      with:
+        app-dir: ${{ inputs.app-dir }}
+        profiles: ${{ inputs.eas-profile }}
+
+    - name: Publish the EAS update
+      id: publish
+      shell: bash
+      working-directory: ${{ inputs.app-dir }}
+      env:
+        EXPO_TOKEN_INPUT: ${{ inputs.expo-token }}
+        CHANNEL: ${{ inputs.channel }}
+        BRANCH: ${{ inputs.branch }}
+        PLATFORM: ${{ inputs.platform }}
+        MESSAGE: ${{ inputs.message }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        EAS_PROFILE: ${{ inputs.eas-profile }}
+        PROFILE_ENV: ${{ steps.profile.outputs.env-lines }}
+        PROFILE_ENVIRONMENT: ${{ steps.profile.outputs.environment }}
+        EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+        AUTO_CREATE_CHANNEL: ${{ inputs.auto-create-channel }}
+        SCHEME: ${{ inputs.scheme }}
+        EXPECTED_IOS_RUNTIME: ${{ inputs.ios-runtime-version }}
+        EXPECTED_ANDROID_RUNTIME: ${{ inputs.android-runtime-version }}
+        ROLLOUT_PERCENTAGE: ${{ inputs.rollout-percentage }}
+        PRIVATE_KEY_PATH: ${{ inputs.private-key-path }}
+        INPUT_DIR: ${{ inputs.input-dir }}
+        SKIP_IF_PUBLISHED: ${{ inputs.skip-if-published }}
+        SKIP_STALE: ${{ inputs.skip-stale }}
+        STALE_CHECK_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        fail() {
+          echo "::error::$*"
+          exit 1
+        }
+        valid_name() {
+          printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+        }
+        case "$PLATFORM" in
+          all) platforms='ios android' ;;
+          ios|android) platforms="$PLATFORM" ;;
+          *) fail "platform must be all, ios or android; got '$PLATFORM'." ;;
+        esac
+        for flag in "auto-create-channel=$AUTO_CREATE_CHANNEL" "skip-if-published=$SKIP_IF_PUBLISHED" "skip-stale=$SKIP_STALE"; do
+          case "${flag#*=}" in
+            true|false) ;;
+            *) fail "${flag%%=*} must be true or false; got '${flag#*=}'." ;;
+          esac
+        done
+        case "$ROLLOUT_PERCENTAGE" in
+          '') ;;
+          *[!0-9]*|0|0*) fail "rollout-percentage must be a whole number from 1 to 100; got '$ROLLOUT_PERCENTAGE'." ;;
+          *) [ "$ROLLOUT_PERCENTAGE" -le 100 ] || fail "rollout-percentage must be a whole number from 1 to 100; got '$ROLLOUT_PERCENTAGE'." ;;
+        esac
+        [ -z "$PRIVATE_KEY_PATH" ] || [ -f "$PRIVATE_KEY_PATH" ] || fail "private-key-path '$PRIVATE_KEY_PATH' is not a file under the app directory."
+        [ -z "$INPUT_DIR" ] || [ -d "$INPUT_DIR" ] || fail "input-dir '$INPUT_DIR' is not a directory under the app directory."
+        valid_name "$CHANNEL" || fail "channel must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$CHANNEL'."
+        branch="${BRANCH:-$CHANNEL}"
+        valid_name "$branch" || fail "branch must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$branch'."
+        printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        export EXPO_TOKEN="${EXPO_TOKEN_INPUT:-${EXPO_TOKEN:-}}"
+        [ -n "$EXPO_TOKEN" ] || fail "eas-update needs an Expo access token: set expo-token or EXPO_TOKEN."
+
+        skip() {
+          {
+            echo "published=false"
+            echo "skipped-reason=$1"
+          } >> "$GITHUB_OUTPUT"
+        }
+        if [ "$SKIP_STALE" = true ] && [ -f "${GITHUB_EVENT_PATH:-}" ] && jq -e '.pull_request.number' "$GITHUB_EVENT_PATH" > /dev/null 2>&1; then
+          pr_number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+          event_head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+          live_head="$(GH_TOKEN="$STALE_CHECK_TOKEN" gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')" \
+            || fail "Cannot read pull request #${pr_number}'s current head, so this run cannot prove it is not stale; grant pull-requests: read or set skip-stale false."
+          if [ "$live_head" != "$event_head" ]; then
+            echo "::warning::Pull request #${pr_number} moved on to ${live_head}; this run is for ${event_head}, so nothing is published."
+            skip stale-head
+            exit 0
+          fi
+        fi
+
+        message="$MESSAGE"
+        if [ -z "$message" ]; then
+          message="$(git log -1 --format='%h %s' 2>/dev/null || true)"
+          message="${message:-${GITHUB_SHA:0:7}}"
+        fi
+        [ -n "$message" ] || fail "message is empty and no commit is checked out to describe the update."
+        environment="${ENVIRONMENT:-$PROFILE_ENVIRONMENT}"
+        while IFS= read -r line; do
+          [ -n "$line" ] && export "${line?}"
+        done <<< "$PROFILE_ENV"
+        [ -z "$EAS_PROFILE" ] || export EAS_BUILD_PROFILE="$EAS_PROFILE"
+
+        eas() {
+          npx --yes "eas-cli@${EAS_CLI_VERSION}" "$@" --json --non-interactive
+        }
+
+        config="$RUNNER_TEMP/eas-update-config.json"
+        npx expo config --json --type public > "$config" || fail "npx expo config failed, so the update's project id is unknown; install the app's dependencies first."
+        project_id="$(jq -r '.extra.eas.projectId // ""' "$config")"
+        [ -n "$project_id" ] || fail "The app config sets no extra.eas.projectId; run eas init once and commit it."
+        updates_url="$(jq -r --arg id "$project_id" '.updates.url // "https://u.expo.dev/\($id)"' "$config")"
+        scheme="${SCHEME:-exp+$(jq -r '.slug // ""' "$config")}"
+
+        expected_runtime() {
+          case "$1" in
+            ios) printf '%s' "$EXPECTED_IOS_RUNTIME" ;;
+            android) printf '%s' "$EXPECTED_ANDROID_RUNTIME" ;;
+          esac
+        }
+        create_channel=false
+        if [ "$branch" = "$CHANNEL" ]; then
+          target=(--channel "$CHANNEL")
+          if [ "$AUTO_CREATE_CHANNEL" = false ]; then
+            eas channel:view "$CHANNEL" > /dev/null \
+              || fail "Channel '$CHANNEL' could not be read and auto-create-channel is false; create it, or check EXPO_TOKEN."
+          fi
+        else
+          target=(--branch "$branch")
+          if view="$(eas channel:view "$CHANNEL")"; then
+            served="$(jq -r '[.currentPage.updateBranches[]?.name] | join(", ")' <<< "$view" 2>/dev/null || true)"
+            jq -e --arg branch "$branch" 'any(.currentPage.updateBranches[]?; .name == $branch)' <<< "$view" > /dev/null 2>&1 \
+              || fail "Channel '$CHANNEL' serves ${served:-no branch}, not $branch; an update published there would reach no build on the channel."
+          elif [ "$AUTO_CREATE_CHANNEL" = true ]; then
+            create_channel=true
+          else
+            fail "Channel '$CHANNEL' could not be read and auto-create-channel is false; create it, or check EXPO_TOKEN."
+          fi
+        fi
+
+
+        precheck_err="$RUNNER_TEMP/eas-update-runtime.err"
+        for platform in $platforms; do
+          expected="$(expected_runtime "$platform")"
+          [ -n "$expected" ] || continue
+          resolved="$(npx --no-install expo-updates runtimeversion:resolve --platform "$platform" 2> "$precheck_err" | jq -r '.runtimeVersion // ""' 2>> "$precheck_err" || true)"
+          [ -n "$resolved" ] || fail "expo-updates resolved no ${platform} runtime under the env eas update would publish with ($(tr '\n' ' ' < "$precheck_err" | cut -c1-300)); nothing was published."
+          [ "$resolved" = "$expected" ] \
+            || fail "This app config resolves ${platform} runtime ${resolved} under the env eas update would publish with, but ${expected} was expected; nothing was published. Align eas-profile / extra-env with the build the update is meant for."
+        done
+
+        result="$RUNNER_TEMP/eas-update.json"
+        head="$(git rev-parse HEAD 2>/dev/null || true)"
+        published=true
+        if [ "$SKIP_IF_PUBLISHED" = true ] && [ -n "$head" ]; then
+          existing='[]'
+          check_err="$RUNNER_TEMP/eas-update-existing.err"
+          for platform in $platforms; do
+            if ! listed="$(eas update:list --branch "$branch" --platform "$platform" --limit 1 2> "$check_err")" \
+              || ! group="$(jq -er '.currentPage[0].group // ""' <<< "$listed" 2>> "$check_err")"; then
+              echo "::notice::Could not read branch ${branch}'s latest ${platform} update ($(tr '\n' ' ' < "$check_err" | cut -c1-300)); publishing."
+              break
+            fi
+            [ -n "$group" ] || break
+            if ! viewed="$(npx --yes "eas-cli@${EAS_CLI_VERSION}" update:view "$group" --json 2> "$check_err")" \
+              || ! entry="$(jq -c --arg p "$platform" '[.[] | select(.platform == $p)] | first // empty' <<< "$viewed" 2>> "$check_err")"; then
+              echo "::notice::Could not read update group ${group} ($(tr '\n' ' ' < "$check_err" | cut -c1-300)); publishing."
+              break
+            fi
+            [ -n "$entry" ] || break
+            found_commit="$(jq -r '.gitCommitHash // ""' <<< "$entry")"
+            found_runtime="$(jq -r '.runtimeVersion // ""' <<< "$entry")"
+            expected="$(expected_runtime "$platform")"
+            if [ "$found_commit" != "$head" ] || { [ -n "$expected" ] && [ "$found_runtime" != "$expected" ]; }; then
+              echo "Branch ${branch}'s latest ${platform} update is commit ${found_commit:-unknown}, runtime ${found_runtime}; publishing ${head}."
+              break
+            fi
+            existing="$(jq -c --argjson entry "$entry" '. + [$entry]' <<< "$existing")"
+          done
+          if [ "$(jq 'length' <<< "$existing")" -eq "$(wc -w <<< "$platforms")" ]; then
+            echo "Branch $branch already has this commit ($head) for $platforms; not publishing it again."
+            printf '%s\n' "$existing" > "$result"
+            published=false
+          fi
+        fi
+
+        if [ "$published" = true ]; then
+          args=(update --message "$message" --platform "$PLATFORM" "${target[@]}")
+          [ -z "$environment" ] || args+=(--environment "$environment")
+          [ -z "$ROLLOUT_PERCENTAGE" ] || args+=(--rollout-percentage "$ROLLOUT_PERCENTAGE")
+          [ -z "$PRIVATE_KEY_PATH" ] || args+=(--private-key-path "$PRIVATE_KEY_PATH")
+          [ -z "$INPUT_DIR" ] || args+=(--skip-bundler --input-dir "$INPUT_DIR")
+          eas "${args[@]}" > "$result" || fail "eas update failed for channel '$CHANNEL'."
+        fi
+        if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "object" and ([.id, .group, .platform, .runtimeVersion] | all(type == "string" and length > 0)))' "$result" > /dev/null 2>&1; then
+          fail "eas update printed output that is not the JSON array of updates eas-cli documents; refusing to report it published."
+        fi
+        for platform in $platforms; do
+          count="$(jq --arg p "$platform" '[.[] | select(.platform == $p)] | length' "$result")"
+          [ "$count" -eq 1 ] || fail "eas update returned ${count} ${platform} update(s), expected one; no ${platform} update can be reported published."
+          expected="$(expected_runtime "$platform")"
+          actual="$(jq -r --arg p "$platform" '.[] | select(.platform == $p) | .runtimeVersion' "$result")"
+          [ -z "$expected" ] || [ "$expected" = "$actual" ] \
+            || fail "eas update published ${platform} runtime ${actual}, but ${expected} was expected, although the same env resolved ${expected} before publishing (an EAS environment variable from --environment can do this): roll the update back with eas update:roll-back-to-embedded or republish."
+        done
+        if [ "$create_channel" = true ]; then
+          eas channel:create "$CHANNEL" > /dev/null || fail "eas channel:create '$CHANNEL' failed after publishing to branch $branch."
+          eas channel:edit "$CHANNEL" --branch "$branch" > /dev/null || fail "eas channel:edit could not point channel '$CHANNEL' at branch $branch."
+        fi
+
+        jq -c --arg url "$updates_url" --arg scheme "$scheme" --arg platforms "$platforms" '
+          ($platforms | split(" ")) as $wanted
+          | [.[] | select(.platform as $p | $wanted | index($p))]
+          | map(. + {manifestUrl: "\($url)/group/\(.group)"} | . + {deepLink: "\($scheme)://expo-development-client/?url=\(.manifestUrl | @uri)"})
+          | (map(.group) | unique) as $groups
+          | (map(.runtimeVersion) | unique) as $runtimes
+          | {branch: .[0].branch,
+             shared: (if ($groups | length) == 1 then .[0] else {} end),
+             runtime: (if ($runtimes | length) == 1 then $runtimes[0] else "" end),
+             byPlatform: (map({key: .platform, value: .}) | from_entries)}' "$result" > "$RUNNER_TEMP/eas-update-summary.json"
+        summary="$RUNNER_TEMP/eas-update-summary.json"
+        {
+          echo "published=$published"
+          echo "skipped-reason=$([ "$published" = true ] || echo already-published)"
+          echo "channel=$CHANNEL"
+          echo "branch=$(jq -r '.branch // ""' "$summary")"
+          echo "update-group-id=$(jq -r '.shared.group // ""' "$summary")"
+          echo "runtime-version=$(jq -r '.runtime' "$summary")"
+          echo "manifest-url=$(jq -r '.shared.manifestUrl // ""' "$summary")"
+          echo "deep-link=$(jq -r '.shared.deepLink // ""' "$summary")"
+          for platform in ios android; do
+            echo "${platform}-update-id=$(jq -r --arg p "$platform" '.byPlatform[$p].id // ""' "$summary")"
+            echo "${platform}-runtime-version=$(jq -r --arg p "$platform" '.byPlatform[$p].runtimeVersion // ""' "$summary")"
+            echo "${platform}-manifest-url=$(jq -r --arg p "$platform" '.byPlatform[$p].manifestUrl // ""' "$summary")"
+            echo "${platform}-deep-link=$(jq -r --arg p "$platform" '.byPlatform[$p].deepLink // ""' "$summary")"
+          done
+          echo "updates=$(jq -c . "$result")"
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### EAS update on channel \`$CHANNEL\`"
+          echo
+          echo "| Platform | Update | Group | Runtime version |"
+          echo "| --- | --- | --- | --- |"
+          jq -r '.byPlatform[] | "| \(.platform) | `\(.id)` | `\(.group)` | `\(.runtimeVersion)` |"' "$summary"
+        } >> "$GITHUB_STEP_SUMMARY"
+        jq -r '.byPlatform[] | "Published \(.platform) update \(.id) (group \(.group), runtime \(.runtimeVersion)) to branch \(.branch)."' "$summary"

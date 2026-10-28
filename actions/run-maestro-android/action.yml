@@ -127,9 +127,37 @@ inputs:
       directory, and this action always passes individual flow files, so
       without this input a workspace config is silently ignored. Relative
       paths resolve against the job's working directory. Fails closed when
-      set to a path that is not a file. Leave empty to pass no --config.
+      set to a path that is not a file. Its includeTags/excludeTags are
+      honoured when the shard is planned (see include-tags). Leave empty to
+      pass no --config.
     required: false
     default: ''
+  include-tags:
+    description: >-
+      Comma-separated Maestro tags: only flows whose config section's `tags:`
+      list holds any of them are run. Applied when the shard is planned,
+      with Maestro's own semantics (exclude-tags wins), and also passed to
+      every flow's `maestro test` as --include-tags. Added to the
+      includeTags of maestro-config, as `maestro test <dir>` does. An
+      unparsable flow config section, or a selection left with no flow,
+      fails the step. Leave empty to select by maestro-config alone.
+    required: false
+    default: ''
+  exclude-tags:
+    description: >-
+      Comma-separated Maestro tags: flows whose `tags:` list holds any of
+      them are never run, even when include-tags selects them. Added to
+      the excludeTags of maestro-config. See include-tags.
+    required: false
+    default: ''
+  junit-report:
+    description: >-
+      When 'true', every flow's final attempt writes a JUnit report
+      (`maestro test --format junit`) to junit/ in artifacts-dir, one file
+      per flow, so the shard's artifact carries its test results. 'false'
+      writes none.
+    required: false
+    default: 'true'
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -247,6 +275,15 @@ inputs:
     description: Uploaded artifact retention in days.
     required: false
     default: '7'
+  redact-env-names:
+    description: >-
+      Newline- or space-separated names of job environment variables (as
+      apply-secret-env's names output lists them) whose values are replaced
+      with *** in every text file under artifacts-dir before it is uploaded,
+      so a secret a flow typed never survives in maestro.log, a commands
+      JSON or a logcat. Leave empty (default) to upload unchanged.
+    required: false
+    default: ''
 outputs:
   ram-size:
     description: >-
@@ -402,7 +439,7 @@ runs:
 
     - name: Start emulator
       id: emulator
-      uses: rnw-community/mobile-ci/actions/android-emulator@v4.0.0 # v4.0.0
+      uses: rnw-community/mobile-ci/actions/android-emulator@v4.5.0 # v4.5.0
       with:
           mode: start
           api-level: ${{ inputs.api-level }}
@@ -441,6 +478,10 @@ runs:
           SETTLE_BEFORE_FLOW: ${{ inputs.settle-before-flow }}
           ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
           PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
+          INCLUDE_TAGS: ${{ inputs.include-tags }}
+          EXCLUDE_TAGS: ${{ inputs.exclude-tags }}
+          JUNIT_REPORT: ${{ inputs.junit-report }}
+          MAESTRO_SCRIPTS_DIR: ${{ github.action_path }}/../../scripts/maestro
       run: bash "$GITHUB_ACTION_PATH/scripts/run-shard.sh"
 
     - name: Capture final device state
@@ -565,13 +606,54 @@ runs:
 
     - name: Stop emulator
       if: always()
-      uses: rnw-community/mobile-ci/actions/android-emulator@v4.0.0 # v4.0.0
+      uses: rnw-community/mobile-ci/actions/android-emulator@v4.5.0 # v4.5.0
       with:
           mode: stop
 
+    - name: Redact secret values from the artifacts
+      if: always() && inputs.redact-env-names != ''
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        REDACT_ENV_NAMES: ${{ inputs.redact-env-names }}
+      run: |
+        set -euo pipefail
+        if ! command -v perl >/dev/null 2>&1; then
+          echo "::error::perl is not on PATH, so the secret values in $ARTIFACTS_DIR cannot be redacted; refusing to upload them unredacted."
+          rm -rf "$ARTIFACTS_DIR"
+          exit 1
+        fi
+        [ -d "$ARTIFACTS_DIR" ] || exit 0
+        redacted=0
+        for name in $REDACT_ENV_NAMES; do
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::redact-env-names entry '$name' is not a variable name."
+              rm -rf "$ARTIFACTS_DIR"
+              exit 1
+              ;;
+          esac
+          value="$(printenv "$name" || true)"
+          [ -n "$value" ] || continue
+          while IFS= read -r value_line || [ -n "$value_line" ]; do
+            [ -n "$value_line" ] || continue
+            while IFS= read -r -d '' file; do
+              if grep -qIF -- "$value_line" "$file"; then
+                if ! REDACT_VALUE="$value_line" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"; then
+                  echo "::error::Redacting '$name' from an artifact file failed; removing the artifacts rather than upload them unredacted."
+                  rm -rf "$ARTIFACTS_DIR"
+                  exit 1
+                fi
+                redacted=$((redacted + 1))
+              fi
+            done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          done <<< "$value"
+        done
+        echo "Redacted secret values from ${redacted} artifact file(s)."
+
     - name: Upload Maestro artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifacts-dir }}/**

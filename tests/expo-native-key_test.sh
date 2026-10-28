@@ -45,6 +45,8 @@ compose() {
         FINGERPRINT="$fingerprint" \
         BUILD_ACTION_HASH="$build_action_hash" \
         CONFIG_HASH="$config_hash" \
+        IOS_SIMULATOR_ARCHS=arm64 \
+        SECRETS_DIGEST='' \
         "$@"
 }
 
@@ -91,6 +93,61 @@ elif [ "$before" = "$after_toolchain" ]; then
 else
     pass_case
 fi
+
+case_start 'no secrets digest leaves every existing key exactly where it was'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST=''
+expected_identity="$(printf '%s\n' ios e2e 'xcode-26.4.1-17E202' buildhash confighash | sha256sum | cut -c1-12)"
+assert_equals 0 "$STEP_STATUS" 'compose exit status' \
+    && assert_equals "${FINGERPRINT}-${expected_identity}" "$(step_output "$dir" key)" 'key without secrets' \
+    && pass_case
+
+case_start 'with no secrets the key is byte-identical to the keys main published bases under'
+# Golden keys computed with origin/main's (pre-secrets) compose step for these
+# exact inputs. A drift here orphans every base already published.
+golden_ok=1
+for golden in \
+    'ios arm64 0123456789abcdef0123456789abcdef01234567-a731cde412a7' \
+    'ios x86_64 0123456789abcdef0123456789abcdef01234567-f685f9d47926' \
+    'android arm64 0123456789abcdef0123456789abcdef01234567-8608e8919356'; do
+    read -r golden_platform golden_archs golden_key <<< "$golden"
+    dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+    PLATFORM="$golden_platform" TOOLCHAIN='xcode-26.4.1-17E202-MyApp.xcworkspace-MyApp' \
+        compose "$dir" 0123456789abcdef0123456789abcdef01234567 buildhash confighash \
+        IOS_SIMULATOR_ARCHS="$golden_archs" SECRETS_DIGEST=''
+    if ! assert_equals "$golden_key" "$(step_output "$dir" key)" "$golden_platform/$golden_archs key"; then
+        golden_ok=0
+        break
+    fi
+done
+[ "$golden_ok" -eq 1 ] && pass_case
+
+case_start 'a rotated build secret moves the key, through its digest alone'
+digest_a="$(printf 'a' | sha256sum | cut -d' ' -f1)"
+digest_b="$(printf 'b' | sha256sum | cut -d' ' -f1)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST=''
+without="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST="$digest_a"
+with_a="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST="$digest_b"
+with_b="$(step_output "$dir" key)"
+if [ -z "$with_a" ] || [ "$with_a" = "$without" ]; then
+    fail_case "a secrets digest left the key at '$without'"
+elif [ "$with_a" = "$with_b" ]; then
+    fail_case 'two different secrets digests gave the same key, so a rotated Maps key repacks onto a base compiled with the old one'
+else
+    assert_not_contains "$(cat "$dir/log")" "$digest_b" 'the digest is not logged' && pass_case
+fi
+
+case_start 'a secrets digest that is not a SHA-256 is refused, since it may be a secret value'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' SECRETS_DIGEST='AIzaSyPlainTextKey'
+assert_equals 1 "$STEP_STATUS" 'compose exit status' \
+    && assert_not_contains "$(cat "$dir/outputs")" 'key=' 'no key is written' \
+    && pass_case
 
 case_start 'the key carries the fingerprint it was composed from'
 dir="$(new_workspace "$ACTION" "$KEY_STEP")"
@@ -172,6 +229,61 @@ if [ "$STEP_STATUS" -eq 0 ]; then
     fail_case 'an unsupported platform was accepted'
 else
     assert_contains "$(cat "$dir/log")" "Unsupported platform 'windows'" 'error message' && pass_case
+fi
+
+# Captured from the compose step as it stood before ios-simulator-archs
+# existed (v4.0.0). Every base already published is addressed by a key
+# composed this way, so the default must keep reproducing it byte for byte.
+GOLDEN_IOS_KEY='abc123def456-2ff4aed6e7eb'
+GOLDEN_ANDROID_KEY='abc123def456-4a6473419d68'
+
+case_start 'the default arm64 simulator key is byte-identical to the pre-archs key'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=arm64
+ios_key="$(step_output "$dir" key)"
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+PLATFORM=android TOOLCHAIN=cmdline-12266719-assembleRelease \
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=arm64
+android_key="$(step_output "$dir" key)"
+if assert_equals "$GOLDEN_IOS_KEY" "$ios_key" "arm64 iOS key ($(cat "$dir/log"))" \
+    && assert_equals "$GOLDEN_ANDROID_KEY" "$android_key" 'Android key'; then
+    pass_case
+fi
+
+case_start 'an x86_64 simulator base never shares a key with the arm64 one'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=x86_64
+x86_key="$(step_output "$dir" key)"
+if [ "$STEP_STATUS" -ne 0 ]; then
+    fail_case "x86_64 was rejected: $(cat "$dir/log")"
+elif [ "$x86_key" = "$GOLDEN_IOS_KEY" ]; then
+    fail_case "x86_64 and arm64 bases both resolve to '$x86_key', so a pull request can repack onto a binary its test host cannot run"
+else
+    case "$x86_key" in
+        "${FINGERPRINT}-"????????????) pass_case ;;
+        *) fail_case "key '$x86_key' is not <fingerprint>-<12 hex>" ;;
+    esac
+fi
+
+case_start 'ios-simulator-archs does not move an Android key'
+dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+PLATFORM=android TOOLCHAIN=cmdline-12266719-assembleRelease \
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS=x86_64
+if assert_equals "$GOLDEN_ANDROID_KEY" "$(step_output "$dir" key)" "Android key ($(cat "$dir/log"))"; then
+    pass_case
+fi
+
+case_start 'an ios-simulator-archs other than arm64 or x86_64 fails closed'
+rejected=''
+for archs in '' 'i386' 'arm64 x86_64' 'ARM64' 'x86_64,arm64'; do
+    dir="$(new_workspace "$ACTION" "$KEY_STEP")"
+    compose "$dir" "$FINGERPRINT" 'buildhash' 'confighash' IOS_SIMULATOR_ARCHS="$archs"
+    if [ "$STEP_STATUS" -eq 0 ] || ! grep -q "ios-simulator-archs" "$dir/log"; then
+        rejected="$rejected '$archs'"
+    fi
+done
+if assert_equals '' "$rejected" 'values accepted or rejected without naming the input'; then
+    pass_case
 fi
 
 finish_suite

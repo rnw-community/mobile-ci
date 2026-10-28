@@ -40,6 +40,15 @@ inputs:
       toolchain gets a different key instead of being repacked onto.
     required: false
     default: ''
+  ios-simulator-archs:
+    description: >-
+      Architecture of the iOS Simulator `.app` the base is built for - `arm64`
+      or `x86_64`, nothing else. `x86_64` is folded into the key so an x86_64
+      base and an arm64 base never share an address; `arm64` adds nothing,
+      keeping every key published before this input existed. Ignored on
+      android beyond validation.
+    required: false
+    default: arm64
   fingerprint-config:
     description: >-
       Path, relative to working-directory, of the @expo/fingerprint config
@@ -53,6 +62,14 @@ inputs:
     description: Pinned @expo/fingerprint npm version.
     required: false
     default: '0.20.6'
+  secrets-digest:
+    description: >-
+      SHA-256 digest of the build secrets the base is compiled with
+      (apply-secret-env's digest output), folded into the build identity so
+      rotating a secret compiled into the base moves the key. Never a secret
+      value. Empty leaves the key exactly as it is without it.
+    required: false
+    default: ''
 outputs:
   key:
     description: The native key - `<fingerprint>-<12 hex of the build identity>`.
@@ -144,7 +161,7 @@ runs:
 
     - name: native-fingerprint
       id: fingerprint
-      uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.0.0 # v4.0.0
+      uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.5.0 # v4.5.0
       with:
         platform: ${{ inputs.platform }}
         working-directory: ${{ inputs.working-directory }}
@@ -161,8 +178,17 @@ runs:
         FINGERPRINT: ${{ steps.fingerprint.outputs.hash }}
         BUILD_ACTION_HASH: ${{ steps.build-identity.outputs.build-action-hash }}
         CONFIG_HASH: ${{ steps.build-identity.outputs.config-hash }}
+        IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
+        SECRETS_DIGEST: ${{ inputs.secrets-digest }}
       run: |
         set -euo pipefail
+        case "$IOS_SIMULATOR_ARCHS" in
+          arm64|x86_64) ;;
+          *)
+            echo "::error::ios-simulator-archs must be 'arm64' or 'x86_64'; got '$IOS_SIMULATOR_ARCHS'. A universal or unknown simulator slice has no single host that is guaranteed to run it, so no key is composed for it."
+            exit 1
+            ;;
+        esac
         if [ -z "$FINGERPRINT" ]; then
           echo "::error::@expo/fingerprint produced an empty hash; a base binary must never be published or fetched under an empty key."
           exit 1
@@ -179,7 +205,19 @@ runs:
           fi
         }
 
-        identity=$(printf '%s\n' "$PLATFORM" "$FLAVOR" "$TOOLCHAIN" "$BUILD_ACTION_HASH" "$CONFIG_HASH" | sha256_stdin)
+        if [ -n "$SECRETS_DIGEST" ] && ! printf '%s' "$SECRETS_DIGEST" | grep -qE '^[0-9a-f]{64}$'; then
+          echo "::error::secrets-digest must be a lowercase SHA-256 hex digest; anything else may be a secret value, which must never enter the key."
+          exit 1
+        fi
+
+        identity_lines=("$PLATFORM" "$FLAVOR" "$TOOLCHAIN" "$BUILD_ACTION_HASH" "$CONFIG_HASH")
+        if [ "$PLATFORM" = ios ] && [ "$IOS_SIMULATOR_ARCHS" != arm64 ]; then
+          identity_lines+=("ios-simulator-archs=$IOS_SIMULATOR_ARCHS")
+        fi
+        if [ -n "$SECRETS_DIGEST" ]; then
+          identity_lines+=("build-secrets=$SECRETS_DIGEST")
+        fi
+        identity=$(printf '%s\n' "${identity_lines[@]}" | sha256_stdin)
         if [ -z "$identity" ]; then
           echo "::error::The build identity came out empty."
           exit 1
@@ -187,5 +225,9 @@ runs:
 
         key="${FINGERPRINT}-$(printf '%s' "$identity" | cut -c1-12)"
         echo "key=$key" >> "$GITHUB_OUTPUT"
-        echo "Native key ($PLATFORM/$FLAVOR): $key"
-        echo "  fingerprint=$FINGERPRINT toolchain=${TOOLCHAIN:-none} build-action=$BUILD_ACTION_HASH config=$CONFIG_HASH"
+        if [ "$PLATFORM" = ios ]; then
+          echo "Native key ($PLATFORM/$FLAVOR/$IOS_SIMULATOR_ARCHS): $key"
+        else
+          echo "Native key ($PLATFORM/$FLAVOR): $key"
+        fi
+        echo "  fingerprint=$FINGERPRINT toolchain=${TOOLCHAIN:-none} build-action=$BUILD_ACTION_HASH config=$CONFIG_HASH secrets=$([ -n "$SECRETS_DIGEST" ] && echo digested || echo none)"

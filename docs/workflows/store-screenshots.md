@@ -517,7 +517,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -725,7 +725,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.8.0 # v1.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -742,7 +742,7 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v1.11.0 # v1.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -766,8 +766,11 @@ loadable from `config-path`; for those, the declared `default:` in
 | -------------------------------- | -------- | -------------------------------------- | -------------- |
 | `config-path`                      | no       | `''`                                     | Repository-relative path to a JSON config file holding this workflow's app-shaped configuration; see [Config file](#config-file). Empty (the default) changes nothing. |
 | `runner-labels`                    | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS build/capture jobs. |
+| `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
+| `runs-on-cache-bypass` | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `build-runner-labels`               | no       | `''`                                     | JSON array of runner labels for the iOS build job (and the Android build job, unless `android-build-runner-labels` is set). Falls back to `runner-labels`. |
-| `capture-runner-labels`             | no       | `''`                                     | JSON array of runner labels for the **iOS** capture job only (Android uses `android-capture-runner-labels` — a deliberate asymmetry, the pools can never overlap). Falls back to `runner-labels`. Must be an arm64 macOS pool. |
+| `capture-runner-labels`             | no       | `''`                                     | JSON array of runner labels for the **iOS** capture job only (Android uses `android-capture-runner-labels` — a deliberate asymmetry, the pools can never overlap). Falls back to `runner-labels`. Must be a macOS pool that can run the `ios-simulator-archs` slice: arm64 for `arm64`; x86_64, or arm64 with Rosetta 2, for `x86_64`. |
+| `ios-simulator-archs`               | no       | `arm64`                                   | Simulator slice the iOS build produces: `arm64` or `x86_64`, anything else fails closed. Same contract as [`ios-maestro.yml`'s](ios-maestro.md#x86_64-simulator-builds): `x86_64` builds with `EXCLUDED_ARCHS=arm64`, gets its own native key, and the capture job checks the host can run it (natively, or under Rosetta 2) before a simulator boots. |
 | `upload-runner-labels`              | no       | `''`                                     | JSON array of runner labels for the gated upload job. Falls back to `runner-labels`. |
 | `ios-target`                        | when the manifest has iOS entries | `''`   | Single iOS build target JSON object: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. Renamed from `target` in v1.6.0. **cfg** |
 | `android-target`                    | when the manifest has Android entries | `''` | Single Android build target JSON object: `{name, appDir, appId, prebuildCommand}` — the same per-target shape as `android-maestro.yml`'s `targets` entries. **cfg** |
@@ -799,7 +802,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `node-version`                      | no       | `22.x`                                    | Node version for `actions/setup-node`. |
 | `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. **cfg** |
 | `enable-corepack`                   | no       | `true`                                    | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
-| `package-manager`                   | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
+| `package-manager`                   | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, the package-manager dependency cache (`node-pm-cache`: restored on every event, saved only off pull requests) — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`                     | no       | `''`                                     | Optional workspace JS build command run at repo root before the native build (both build jobs). **cfg** |
 | `rct-use-prebuilt-rncore`           | no       | `false`                                    | Exports `RCT_USE_PREBUILT_RNCORE=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). **cfg** |
 | `rct-use-rn-dep`                    | no       | `false`                                    | Exports `RCT_USE_RN_DEP=1` for the iOS `expo prebuild` step, `pod install`, and the iOS build step when `true`; exports nothing at all otherwise (an empty export reads as *enabled* on the Ruby side). **cfg** |
@@ -922,6 +925,27 @@ the resolution order is the usual one — explicit `with:` value > `config-path`
 value > the built-in `auto` — and the `validate-manifest` job logs which of
 the three it took.
 
+## Outputs
+
+| Name | Description |
+| ---- | ----------- |
+| `result` | The `status` job's verdict: `passed` or `failed`. |
+
+Read it from a caller job that `needs:` this one. GitHub skips a dependent
+job when its need fails, so a notification job must opt in with `if:
+always()` (or `!cancelled()`) to see a `failed` result:
+
+```yaml
+    notify:
+        needs: screenshots
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - env:
+                  RESULT: ${{ needs.screenshots.outputs.result }}
+              run: echo "store-screenshots: $RESULT"
+```
+
 ## Secrets
 
 | Name                | Required | Description |
@@ -930,13 +954,17 @@ the three it took.
 | `ASC_API_KEY`         | no       | App Store Connect API key contents (`.p8`). When set, written to `asc-key-path` (or `$RUNNER_TEMP`) before `upload-command` runs and removed afterward - same contract as `native-publish.yml`'s `ASC_API_KEY`. Also the key the dedupe gate signs with. |
 | `ASC_KEY_ID`          | with `asc-dedupe-screenshots` | App Store Connect API key ID for the dedupe gate's JWT. |
 | `ASC_ISSUER_ID`       | with `asc-dedupe-screenshots` | App Store Connect API issuer ID (UUID) for the dedupe gate's JWT. |
-| `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - same fail-closed parser and masking as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
+| `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md), the same parser as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan/repack legs and the `build-ios`/`build-android` jobs, parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest enters the native key, never a value, so the warm-up must be passed the same secret. See [ios-maestro.md](ios-maestro.md#secrets). |
+| `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to the resolved `maestro-env` and exported to the capture jobs' environment for `seed-command`. A capture job uploads only screenshots. |
 
 Unlike `native-publish.yml`, none of these secrets are hard-required even
 when `upload-screenshots` is `true` - `upload-command` is entirely
 consumer-owned, and some fastlane setups authenticate a different way (e.g.
 `FASTLANE_SESSION` threaded through `EAS_EXTRA_ENV`). The two capture
-pipelines themselves need no secrets at all.
+pipelines themselves need no secrets at all; `build-secrets-env` and
+`maestro-secrets-env` are there for an app whose build or seed hook does, and
+with neither passed every job behaves exactly as before.
 
 ## Concurrency
 
@@ -975,7 +1003,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v3.3.1 # v3.3.1
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
 ```
 
 - `contents: read` — checkout.
@@ -993,7 +1021,30 @@ artifacts expiring, so a key can go cold and cost a native build again.
 
 This workflow still never writes to the repository.
 
-## Example
+## Examples
+
+### Minimal
+
+iOS only, Maestro flow per scene (`capture-mode: flows`), no upload:
+
+```yaml
+on: workflow_dispatch
+jobs:
+    screenshots:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
+        with:
+            ios-target: >-
+                {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
+            capture-manifest: >-
+                [{"device":"iPhone 17 Pro Max","locales":["en"],"appearances":["light"]}]
+            screenshots-dir: apps/mobile/e2e/flows/screenshots
+```
+
+### Full
 
 `workflow_call` cannot self-schedule, so a nightly capture needs a thin
 caller workflow with both `workflow_dispatch` (for on-demand runs) and
@@ -1013,7 +1064,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@<full-commit-sha>
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.5.0 # v4.5.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}
@@ -1055,6 +1106,9 @@ jobs:
 `fingerprint-env` must pass exactly what the default-branch warm-up passes; a
 single differing byte gives this run a different native key, and every run
 takes a build slot again.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 
 ## Why the native build no longer reads a host cache
 

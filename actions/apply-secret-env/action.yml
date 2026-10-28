@@ -1,0 +1,239 @@
+name: apply-secret-env
+description: >-
+  Parses a secret's newline-separated KEY=VALUE entries, masks every value with
+  ::add-mask:: before anything else can print it, and exports them to the job
+  through $GITHUB_ENV with a random delimiter no value can collide with. Fails
+  closed on a malformed entry without echoing it. Emits a SHA-256 digest of the
+  entries for anything that must change when a value rotates; only the
+  job-local lines output (allow-multiline false) carries values.
+inputs:
+  env:
+    description: >-
+      Newline-separated KEY=VALUE entries, normally `secrets.<name>`. A
+      multi-line value is written as `KEY<<DELIMITER`, the value's lines, then
+      DELIMITER alone on a line, exactly as $GITHUB_ENV takes it. Every name
+      must match ^[A-Za-z_][A-Za-z0-9_]*$. Empty is a no-op.
+    required: false
+    default: ''
+  label:
+    description: Name the error messages give the secret, e.g. build-secrets-env.
+    required: false
+    default: secret-env
+  export:
+    description: Append every entry to $GITHUB_ENV for the rest of the job.
+    required: false
+    default: 'true'
+  allow-multiline:
+    description: >-
+      Accept `KEY<<DELIMITER` entries. Set false where every value has to fit
+      on one line, such as a Maestro -e argument; `lines` is only written then.
+    required: false
+    default: 'true'
+  append-to:
+    description: >-
+      Non-secret lines the `lines` output starts with, passed through
+      unchanged. With no entries in env, `lines` is exactly this value.
+    required: false
+    default: ''
+outputs:
+  digest:
+    description: >-
+      SHA-256 over every entry's name and the SHA-256 of its value, in order;
+      empty when env is empty. Safe to log and to fold into a cache or native
+      key: it changes whenever a value does and reveals none of them.
+    value: ${{ steps.apply.outputs.digest }}
+  lines:
+    description: >-
+      append-to followed by every entry as one KEY=VALUE line, for an input
+      that takes the merged list (masked, so only usable inside this job).
+      Written only when allow-multiline is false.
+    value: ${{ steps.apply.outputs.lines }}
+  names:
+    description: >-
+      Newline-separated names of the entries, never their values - for a step
+      that must scrub those values out of files it is about to upload.
+    value: ${{ steps.apply.outputs.names }}
+  count:
+    description: Number of entries parsed.
+    value: ${{ steps.apply.outputs.count }}
+runs:
+  using: composite
+  steps:
+    - name: Parse, mask and export the secret entries
+      id: apply
+      shell: bash
+      env:
+        SECRET_ENV: ${{ inputs.env }}
+        SECRET_LABEL: ${{ inputs.label }}
+        EXPORT_ENV: ${{ inputs.export }}
+        ALLOW_MULTILINE: ${{ inputs.allow-multiline }}
+        APPEND_TO: ${{ inputs.append-to }}
+      run: |
+        set -euo pipefail
+        case "$EXPORT_ENV" in
+          true|false) ;;
+          *) echo "::error::export must be 'true' or 'false'."; exit 1 ;;
+        esac
+        case "$ALLOW_MULTILINE" in
+          true|false) ;;
+          *) echo "::error::allow-multiline must be 'true' or 'false'."; exit 1 ;;
+        esac
+
+        sha256_stdin() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum | cut -d' ' -f1
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 | cut -d' ' -f1
+          else
+            echo "::error::Neither sha256sum nor shasum is available, so ${SECRET_LABEL} cannot be digested." >&2
+            return 1
+          fi
+        }
+
+        random_delimiter() {
+          printf 'mobile_ci_%s' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+        }
+
+        valid_name() {
+          case "$1" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) return 1 ;;
+          esac
+          return 0
+        }
+
+        mask_value() {
+          local value="$1" masked_line escaped
+          while IFS= read -r masked_line || [ -n "$masked_line" ]; do
+            [ -n "$masked_line" ] || continue
+            escaped="${masked_line//%/%25}"
+            escaped="${escaped//$'\r'/%0D}"
+            printf '::add-mask::%s\n' "$escaped"
+          done <<< "$value"
+        }
+
+        work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/apply-secret-env.XXXXXX")"
+        chmod 700 "$work"
+        trap 'rm -rf "$work"' EXIT
+        names="$work/names"
+        values="$work/values"
+        digests="$work/digests"
+        : > "$names"
+        : > "$values"
+        : > "$digests"
+        count=0
+
+        record() {
+          local name="$1" value="$2"
+          if [ -n "$value" ] && [ "${#value}" -lt 8 ]; then
+            echo "::warning::${SECRET_LABEL} entry '${name}' has a value shorter than 8 characters. Masking it hides every occurrence of that string in this job's log, and GitHub drops any job output that contains it."
+          fi
+          mask_value "$value"
+          count=$((count + 1))
+          printf '%s\n' "$name" >> "$names"
+          printf '%s\0' "$value" >> "$values"
+          printf '%s %s\n' "$name" "$(printf '%s' "$value" | sha256_stdin)" >> "$digests"
+        }
+
+        line_number=0
+        heredoc_name=''
+        heredoc_delimiter=''
+        heredoc_value=''
+        heredoc_lines=0
+        while IFS= read -r line || [ -n "$line" ]; do
+          line_number=$((line_number + 1))
+          if [ -n "$heredoc_delimiter" ]; then
+            if [ "$line" = "$heredoc_delimiter" ]; then
+              record "$heredoc_name" "$heredoc_value"
+              heredoc_name=''
+              heredoc_delimiter=''
+              heredoc_value=''
+              heredoc_lines=0
+            elif [ "$heredoc_lines" -eq 0 ]; then
+              heredoc_value="$line"
+              heredoc_lines=1
+            else
+              heredoc_value="${heredoc_value}"$'\n'"${line}"
+              heredoc_lines=$((heredoc_lines + 1))
+            fi
+            continue
+          fi
+          [ -n "$line" ] || continue
+          case "$line" in
+            *'<<'*)
+              candidate_name="${line%%<<*}"
+              candidate_delimiter="${line#*<<}"
+              if valid_name "$candidate_name" \
+                && [ -n "$candidate_delimiter" ] \
+                && ! printf '%s' "$candidate_delimiter" | grep -q '[^A-Za-z0-9_]'; then
+                if [ "$ALLOW_MULTILINE" != 'true' ]; then
+                  echo "::error::${SECRET_LABEL} line ${line_number} starts a multi-line value, which this input cannot take; every value here has to fit on one KEY=VALUE line."
+                  exit 1
+                fi
+                heredoc_name="$candidate_name"
+                heredoc_delimiter="$candidate_delimiter"
+                continue
+              fi
+              ;;
+          esac
+          case "$line" in
+            *=*) ;;
+            *)
+              echo "::error::${SECRET_LABEL} line ${line_number} is missing '='; expected KEY=VALUE (the line is not echoed, it may be a secret)."
+              exit 1
+              ;;
+          esac
+          name="${line%%=*}"
+          if ! valid_name "$name"; then
+            echo "::error::${SECRET_LABEL} line ${line_number} has a variable name that must match ^[A-Za-z_][A-Za-z0-9_]*\$ (the line is not echoed, it may be a secret)."
+            exit 1
+          fi
+          record "$name" "${line#*=}"
+        done <<< "$SECRET_ENV"
+        if [ -n "$heredoc_delimiter" ]; then
+          echo "::error::${SECRET_LABEL} entry '${heredoc_name}' opens a multi-line value that its delimiter line never closes."
+          exit 1
+        fi
+
+        digest=''
+        if [ "$count" -gt 0 ]; then
+          digest="$(sha256_stdin < "$digests")"
+          if [ -z "$digest" ]; then
+            echo "::error::The ${SECRET_LABEL} digest came out empty."
+            exit 1
+          fi
+        fi
+
+        write_entry() {
+          local file="$1" name="$2" value="$3" delimiter
+          delimiter="$(random_delimiter)"
+          while printf '%s\n' "$value" | grep -qxF -- "$delimiter"; do
+            delimiter="$(random_delimiter)"
+          done
+          printf '%s<<%s\n%s\n%s\n' "$name" "$delimiter" "$value" "$delimiter" >> "$file"
+        }
+
+        merged="$APPEND_TO"
+        exec 3< "$names"
+        exec 4< "$values"
+        while IFS= read -r name <&3; do
+          IFS= read -r -d '' value <&4 || true
+          if [ "$EXPORT_ENV" = 'true' ]; then
+            write_entry "$GITHUB_ENV" "$name" "$value"
+          fi
+          if [ -n "$merged" ]; then
+            merged="${merged%$'\n'}"$'\n'"${name}=${value}"
+          else
+            merged="${name}=${value}"
+          fi
+        done
+        exec 3<&- 4<&-
+
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        echo "count=$count" >> "$GITHUB_OUTPUT"
+        write_entry "$GITHUB_OUTPUT" names "$(cat "$names")"
+        if [ "$ALLOW_MULTILINE" = 'false' ]; then
+          write_entry "$GITHUB_OUTPUT" lines "$merged"
+        fi
+        if [ "$count" -gt 0 ]; then
+          echo "${SECRET_LABEL}: ${count} masked entr$([ "$count" -eq 1 ] && echo y || echo ies)$([ "$EXPORT_ENV" = 'true' ] && echo ' exported to the job environment' || true)."
+        fi

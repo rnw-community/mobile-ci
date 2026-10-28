@@ -1,0 +1,208 @@
+name: assert-distinct-fingerprints
+
+on:
+    workflow_call:
+        inputs:
+            control-runner-labels:
+                description: >-
+                    JSON array of runner labels for the lightweight control jobs
+                    (assert)
+                    that only run Node and the GitHub API and need no self-hosted
+                    hardware. Override when the org has no GitHub-hosted runners,
+                    for example an ephemeral RunsOn label set.
+                required: false
+                type: string
+                default: '["ubuntu-latest"]'
+            runs-on-cache-bypass:
+                description: >-
+                    Run a SHA-pinned runs-on/action before any artifact traffic when
+                    the job lands on a RunsOn runner started with extras=s3-cache,
+                    whose cache proxy takes over the Actions results URL and makes
+                    actions/upload-artifact and download-artifact fail. A no-op on
+                    every other runner. Off by default.
+                required: false
+                type: boolean
+                default: false
+            platform:
+                description: ios or android.
+                type: string
+                required: true
+            targets:
+                description: JSON array of targets; each needs name, appDir and appId, and may carry prebuildCommand, workspace and scheme.
+                type: string
+                required: true
+            runner-labels:
+                description: JSON array of runner labels for the key jobs.
+                type: string
+                required: false
+                default: '["self-hosted","trf-linux-amd64-2x4"]'
+            timeout-minutes:
+                type: number
+                required: false
+                default: 30
+            toolchain:
+                description: Pinned toolchain identity, exactly as passed to the build (a target's workspace and scheme are appended like expo-base-plan.yml does).
+                type: string
+                required: false
+                default: ''
+            base-flavor:
+                type: string
+                required: false
+                default: e2e
+            fingerprint-config:
+                type: string
+                required: false
+                default: fingerprint.config.js
+            fingerprint-env:
+                type: string
+                required: false
+                default: ''
+            expo-fingerprint-version:
+                type: string
+                required: false
+                default: '0.20.6'
+            node-version:
+                type: string
+                required: false
+                default: 22.x
+            install-command:
+                type: string
+                required: false
+                default: yarn install --immutable
+            enable-corepack:
+                type: boolean
+                required: false
+                default: true
+            build-command:
+                type: string
+                required: false
+                default: ''
+
+permissions:
+    contents: read
+
+jobs:
+    key:
+        name: Native key (${{ matrix.target.name }})
+        runs-on: ${{ fromJSON(inputs.runner-labels) }}
+        timeout-minutes: ${{ inputs.timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(inputs.targets) }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Setup Node
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+
+            - name: Enable corepack
+              if: inputs.enable-corepack
+              shell: bash
+              run: corepack enable
+
+            - name: Install dependencies
+              shell: bash
+              env:
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: eval "$INSTALL_COMMAND"
+
+            - name: Build workspace JS dependencies
+              if: inputs.build-command != ''
+              shell: bash
+              env:
+                  BUILD_COMMAND: ${{ inputs.build-command }}
+              run: eval "$BUILD_COMMAND"
+
+            - name: Generate native project
+              if: matrix.target.prebuildCommand != ''
+              working-directory: ${{ matrix.target.appDir }}
+              shell: bash
+              env:
+                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+              run: eval "$PREBUILD_COMMAND"
+
+            - name: expo-native-key
+              id: native-key
+              uses: rnw-community/mobile-ci/actions/expo-native-key@v4.5.0 # v4.5.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  working-directory: ${{ matrix.target.appDir }}
+                  flavor: ${{ inputs.base-flavor }}
+                  extra-env: ${{ inputs.fingerprint-env }}
+                  toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
+                  fingerprint-config: ${{ inputs.fingerprint-config }}
+                  fingerprint-version: ${{ inputs.expo-fingerprint-version }}
+
+            - name: Record this target's key
+              shell: bash
+              env:
+                  TARGET: ${{ toJSON(matrix.target) }}
+                  NATIVE_KEY: ${{ steps.native-key.outputs.key }}
+                  FINGERPRINT: ${{ steps.native-key.outputs.fingerprint }}
+                  CONFIG_HASH: ${{ steps.native-key.outputs.config-hash }}
+              run: |
+                  set -euo pipefail
+                  mkdir -p .ci-artifacts/key
+                  jq -n --argjson target "$TARGET" \
+                        --arg key "$NATIVE_KEY" \
+                        --arg fingerprint "$FINGERPRINT" \
+                        --arg configHash "$CONFIG_HASH" \
+                     '$target + {nativeKey: $key, fingerprint: $fingerprint, configHash: $configHash}' \
+                     > .ci-artifacts/key/key.json
+
+            - name: Upload this target's key
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: distinct-keys-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/key/key.json
+                  if-no-files-found: error
+                  retention-days: 1
+
+    assert:
+        name: No two appIds share a native key
+        needs: key
+        if: ${{ !cancelled() && needs.key.result == 'success' }}
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 10
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: distinct-keys-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}-*
+                  path: .ci-artifacts/keys
+
+            - name: Gather the per-target keys
+              id: gather
+              shell: bash
+              env:
+                  TARGETS: ${{ inputs.targets }}
+              run: |
+                  set -euo pipefail
+                  expected=$(jq 'length' <<< "$TARGETS")
+                  mapfile -d '' -t keys < <(find .ci-artifacts/keys -name key.json -print0 | LC_ALL=C sort -z)
+                  if [ "${#keys[@]}" -ne "$expected" ]; then
+                    echo "::error::Expected one key per target ($expected), found ${#keys[@]}. A missing key is a target that was never compared."
+                    exit 1
+                  fi
+                  echo "plans=$(jq -sc '.' "${keys[@]}")" >> "$GITHUB_OUTPUT"
+
+            - name: assert-distinct-fingerprints
+              uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@v4.5.0 # v4.5.0
+              with:
+                  platform: ${{ inputs.platform }}
+                  plans: ${{ steps.gather.outputs.plans }}

@@ -127,9 +127,37 @@ inputs:
       directory, and this action always passes individual flow files, so
       without this input a workspace config is silently ignored. Relative
       paths resolve against the job's working directory. Fails closed when
-      set to a path that is not a file. Leave empty to pass no --config.
+      set to a path that is not a file. Its includeTags/excludeTags are
+      honoured when the shard is planned (see include-tags). Leave empty to
+      pass no --config.
     required: false
     default: ''
+  include-tags:
+    description: >-
+      Comma-separated Maestro tags: only flows whose config section's `tags:`
+      list holds any of them are run. Applied when the shard is planned,
+      with Maestro's own semantics (exclude-tags wins), and also passed to
+      every flow's `maestro test` as --include-tags. Added to the
+      includeTags of maestro-config, as `maestro test <dir>` does. An
+      unparsable flow config section, or a selection left with no flow,
+      fails the step. Leave empty to select by maestro-config alone.
+    required: false
+    default: ''
+  exclude-tags:
+    description: >-
+      Comma-separated Maestro tags: flows whose `tags:` list holds any of
+      them are never run, even when include-tags selects them. Added to
+      the excludeTags of maestro-config. See include-tags.
+    required: false
+    default: ''
+  junit-report:
+    description: >-
+      When 'true', every flow's final attempt writes a JUnit report
+      (`maestro test --format junit`) to junit/ in artifacts-dir, one file
+      per flow, so the shard's artifact carries its test results. 'false'
+      writes none.
+    required: false
+    default: 'true'
   flow-retries:
     description: >-
       Non-negative retry budget per flow. Each flow gets up to
@@ -253,6 +281,15 @@ inputs:
     description: Uploaded artifact retention in days.
     required: false
     default: '7'
+  redact-env-names:
+    description: >-
+      Newline- or space-separated names of job environment variables (as
+      apply-secret-env's names output lists them) whose values are replaced
+      with *** in every text file under artifacts-dir before it is uploaded,
+      so a secret a flow typed never survives in maestro.log, a commands
+      JSON or a logcat. Leave empty (default) to upload unchanged.
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -732,6 +769,10 @@ runs:
         MAESTRO_ENV: ${{ inputs.maestro-env }}
         MAESTRO_CONFIG: ${{ inputs.maestro-config }}
         MAESTRO_REUSE_DRIVER: ${{ inputs.maestro-reuse-driver }}
+        INCLUDE_TAGS: ${{ inputs.include-tags }}
+        EXCLUDE_TAGS: ${{ inputs.exclude-tags }}
+        JUNIT_REPORT: ${{ inputs.junit-report }}
+        MAESTRO_SCRIPTS_DIR: ${{ github.action_path }}/../../scripts/maestro
       run: |
           set -euo pipefail
           # A shard-private scratch directory passed to every `maestro test`
@@ -810,6 +851,35 @@ runs:
             esac
             maestro_config_args=(--config "$MAESTRO_CONFIG")
           fi
+
+          case "$JUNIT_REPORT" in
+            true) junit_dir="${MAESTRO_DEBUG_OUTPUT_DIRECTORY:?}/junit" ;;
+            false) junit_dir='' ;;
+            *)
+              echo "::error::junit-report '$JUNIT_REPORT' must be 'true' or 'false'."
+              exit 1
+              ;;
+          esac
+
+          normalize_tags() {
+            printf '%s\n' "$1" | tr ',' '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | { grep -v '^$' || true; } | paste -s -d , -
+          }
+          included_tags="$(normalize_tags "$INCLUDE_TAGS")"
+          excluded_tags="$(normalize_tags "$EXCLUDE_TAGS")"
+          maestro_tag_args=()
+          if [ -n "$included_tags" ]; then
+            maestro_tag_args+=(--include-tags "$included_tags")
+          fi
+          if [ -n "$excluded_tags" ]; then
+            maestro_tag_args+=(--exclude-tags "$excluded_tags")
+          fi
+
+          junit_report_file() {
+            local rel="${1#"$FLOWS_DIR"/}"
+            rel="${rel%.yaml}"
+            rel="${rel%.yml}"
+            printf '%s/%s.xml' "$junit_dir" "${rel//[^A-Za-z0-9._-]/_}"
+          }
 
           maestro_driver_args=()
           case "$MAESTRO_REUSE_DRIVER" in
@@ -963,12 +1033,24 @@ runs:
 
           run_flow_with_retries() {
             local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
-            local recovery_seconds=0 recovery_start attempt_ok flow_env_file
+            local recovery_seconds=0 recovery_start attempt_ok flow_env_file junit_file=''
+            local scenario_args=()
+            if [ "$run_precondition" = '1' ]; then
+              scenario_args=(${maestro_tag_args[@]+"${maestro_tag_args[@]}"})
+              if [ -n "$junit_dir" ]; then
+                mkdir -p "$junit_dir"
+                junit_file="$(junit_report_file "$flow")"
+                scenario_args+=(--format junit --output "$junit_file" --test-suite-name "maestro-ios shard $SHARD_INDEX")
+              fi
+            fi
             start=$(date +%s)
             maestro_debug_units > "$maestro_debug_units_before_file"
             while [ "$attempts" -lt "$max_attempts" ]; do
               attempts=$((attempts + 1))
               attempt_ok=1
+              if [ -n "$junit_file" ]; then
+                rm -f "$junit_file"
+              fi
               flow_env_args=()
               if [ "$run_precondition" = '1' ] && [ -n "$pre_flow_script" ]; then
                 flow_env_seq=$((flow_env_seq + 1))
@@ -981,7 +1063,7 @@ runs:
                   echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
                 fi
               fi
-              if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} "$flow"; then
+              if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${maestro_driver_args[@]+"${maestro_driver_args[@]}"} ${scenario_args[@]+"${scenario_args[@]}"} "$flow"; then
                 status=passed
                 break
               fi
@@ -991,6 +1073,9 @@ runs:
                 recovery_seconds=$((recovery_seconds + $(date +%s) - recovery_start))
               fi
             done
+            if [ -n "$junit_file" ] && [ "$status" = failed ] && [ ! -f "$junit_file" ]; then
+              bash "$MAESTRO_SCRIPTS_DIR/junit-failure.sh" "$junit_file" "maestro-ios shard $SHARD_INDEX" "$label" "Failed after $attempts attempt(s) without a Maestro report; see the step log."
+            fi
             end=$(date +%s)
             duration=$((end - start - recovery_seconds))
             record_maestro_debug_units "$label" "$status"
@@ -1071,6 +1156,31 @@ runs:
             flows=(${remaining_flows[@]+"${remaining_flows[@]}"})
           fi
 
+          discovered_flows=(${flows[@]+"${flows[@]}"})
+          select_by_tags=0
+          if [ -n "$included_tags$excluded_tags" ]; then
+            select_by_tags=1
+          elif [ -n "$MAESTRO_CONFIG" ] && grep -Eq '(include|exclude)Tags' "$MAESTRO_CONFIG"; then
+            select_by_tags=1
+          fi
+          if [ "$select_by_tags" = '1' ] && [ "${#flows[@]}" -gt 0 ]; then
+            tag_selection_file="$RUNNER_TEMP/maestro-tag-selection-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+            if ! bash "$MAESTRO_SCRIPTS_DIR/select-flows-by-tags.sh" "$MAESTRO_CONFIG" "$included_tags" "$excluded_tags" "${flows[@]}" > "$tag_selection_file"; then
+              echo "::error::Could not select flows by tag (include-tags '$included_tags', exclude-tags '$excluded_tags', maestro-config '$MAESTRO_CONFIG'); refusing to run an unfiltered shard."
+              exit 1
+            fi
+            flows=()
+            while IFS= read -r flow; do
+              flows+=("$flow")
+            done < "$tag_selection_file"
+            rm -f "$tag_selection_file"
+            if [ "${#flows[@]}" -eq 0 ]; then
+              echo "::error::No flow under flows-dir '$FLOWS_DIR' is selected by include-tags '$included_tags' / exclude-tags '$excluded_tags' together with maestro-config '$MAESTRO_CONFIG''s includeTags/excludeTags."
+              exit 1
+            fi
+            printf 'Tag-selected flow list (%s total):\n%s\n' "${#flows[@]}" "${flows[*]}"
+          fi
+
           selected=()
           if [ -n "$SHARD_MANIFEST_DIR" ]; then
             manifest_file="$SHARD_MANIFEST_DIR/shard-$SHARD_INDEX.txt"
@@ -1090,6 +1200,18 @@ runs:
                   break
                 fi
               done
+              if [ "$match" -ne 1 ]; then
+                for candidate in ${discovered_flows[@]+"${discovered_flows[@]}"}; do
+                  if [ "$candidate" = "$flow_path" ]; then
+                    match=2
+                    break
+                  fi
+                done
+              fi
+              if [ "$match" -eq 2 ]; then
+                echo "Skipping shard-manifest entry '$rel': deselected by tags."
+                continue
+              fi
               if [ "$match" -ne 1 ]; then
                 echo "::error::shard-manifest entry '$rel' (resolved '$flow_path') is not among the flows discovered under '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH, flows-name-pattern='$FLOWS_NAME_PATTERN'); refusing an entry that bypasses discovery."
                 exit 1
@@ -1264,9 +1386,50 @@ runs:
             echo "::warning::'perl' is not on PATH; skipping the bounded simulator shutdown."
           fi
 
+    - name: Redact secret values from the artifacts
+      if: always() && inputs.redact-env-names != ''
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        REDACT_ENV_NAMES: ${{ inputs.redact-env-names }}
+      run: |
+        set -euo pipefail
+        if ! command -v perl >/dev/null 2>&1; then
+          echo "::error::perl is not on PATH, so the secret values in $ARTIFACTS_DIR cannot be redacted; refusing to upload them unredacted."
+          rm -rf "$ARTIFACTS_DIR"
+          exit 1
+        fi
+        [ -d "$ARTIFACTS_DIR" ] || exit 0
+        redacted=0
+        for name in $REDACT_ENV_NAMES; do
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::redact-env-names entry '$name' is not a variable name."
+              rm -rf "$ARTIFACTS_DIR"
+              exit 1
+              ;;
+          esac
+          value="$(printenv "$name" || true)"
+          [ -n "$value" ] || continue
+          while IFS= read -r value_line || [ -n "$value_line" ]; do
+            [ -n "$value_line" ] || continue
+            while IFS= read -r -d '' file; do
+              if grep -qIF -- "$value_line" "$file"; then
+                if ! REDACT_VALUE="$value_line" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"; then
+                  echo "::error::Redacting '$name' from an artifact file failed; removing the artifacts rather than upload them unredacted."
+                  rm -rf "$ARTIFACTS_DIR"
+                  exit 1
+                fi
+                redacted=$((redacted + 1))
+              fi
+            done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          done <<< "$value"
+        done
+        echo "Redacted secret values from ${redacted} artifact file(s)."
+
     - name: Upload Maestro artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
           name: ${{ inputs.artifact-name }}
           path: ${{ inputs.artifacts-dir }}/**

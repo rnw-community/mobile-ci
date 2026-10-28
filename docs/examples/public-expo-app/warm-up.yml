@@ -1,0 +1,41 @@
+# Public Expo app: the warm-up. Copy to .github/workflows/warm-up.yml.
+#
+# Builds natively for every native key that has no published base yet and
+# publishes the base binary that pull requests repack (e2e.yml). The paths:
+# filter keeps it honest: a push that touches neither the app nor the lockfile
+# cannot have moved a native key. Dispatch it once by hand after merging, since
+# GitHub only dispatches a workflow that exists on the default branch.
+name: Warm-up
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - 'apps/mobile/**'
+            - 'pnpm-lock.yaml'
+            - '.github/workflows/warm-up.yml'
+    workflow_dispatch:
+        inputs:
+            force-base:
+                description: Rebuild and republish a base that already exists
+                type: boolean
+                default: false
+
+permissions: {}
+
+jobs:
+    warm:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.5.0 # v4.5.0
+        with:
+            ios-targets: >-
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
+            android-targets: >-
+                [{"name":"app","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]
+            install-command: pnpm install --frozen-lockfile
+            # The same values e2e.yml passes: they are two halves of one key.
+            fingerprint-config: fingerprint.config.js
+            force-base: ${{ inputs.force-base || false }}

@@ -1,0 +1,97 @@
+name: node-pm-cache
+description: >-
+  Restores the package manager's download store on every event and exposes
+  the path and key for the calling workflow's own bounded, best-effort
+  `actions/cache/save` step, which runs only off pull requests. Replaces
+  actions/setup-node's `cache:` option, whose save runs in an unboundable post
+  step on every event: a stalled upload there cancels a job whose real work
+  already succeeded, and a pull-request save is scoped to that PR's ref, so
+  nothing else can ever restore it.
+inputs:
+  package-manager:
+    description: '`npm`, `yarn` or `pnpm`. The manager must already be on PATH.'
+    required: true
+  working-directory:
+    description: Directory holding the lockfile.
+    required: false
+    default: '.'
+outputs:
+  cache-hit:
+    description: '`true` when an exact-key entry was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: The computed cache key.
+    value: ${{ steps.resolve.outputs.key }}
+  path:
+    description: The resolved store path, for the calling workflow's `actions/cache/save` step.
+    value: ${{ steps.resolve.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve package manager cache path and key
+      id: resolve
+      shell: bash
+      env:
+        PACKAGE_MANAGER: ${{ inputs.package-manager }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        RUNNER_ARCH_NAME: ${{ runner.arch }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        case "$PACKAGE_MANAGER" in
+          pnpm)
+            lockfile=pnpm-lock.yaml
+            store="$(pnpm store path --silent)"
+            ;;
+          yarn)
+            lockfile=yarn.lock
+            major="$(yarn --version | cut -d. -f1)"
+            case "$major" in
+              ''|*[!0-9]*)
+                echo "::error::Cannot read the yarn major version from 'yarn --version'."
+                exit 1
+                ;;
+            esac
+            if [ "$major" -ge 2 ]; then
+              store="$(yarn config get cacheFolder)"
+            else
+              store="$(yarn cache dir)"
+            fi
+            ;;
+          npm)
+            lockfile=package-lock.json
+            if [ ! -f "$lockfile" ] && [ -f npm-shrinkwrap.json ]; then lockfile=npm-shrinkwrap.json; fi
+            store="$(npm config get cache)"
+            ;;
+          *)
+            echo "::error::Unsupported package-manager '$PACKAGE_MANAGER'; expected npm, yarn or pnpm."
+            exit 1
+            ;;
+        esac
+        if [ -z "$store" ]; then
+          echo "::error::$PACKAGE_MANAGER reported an empty cache path."
+          exit 1
+        fi
+        if [ ! -f "$lockfile" ]; then
+          echo "::error::No $lockfile in '$WORKING_DIRECTORY'; the cache key is derived from it."
+          exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          hash="$(sha256sum "$lockfile" | cut -d' ' -f1)"
+        else
+          hash="$(shasum -a 256 "$lockfile" | cut -d' ' -f1)"
+        fi
+        prefix="node-pm-v1-${RUNNER_OS_NAME}-${RUNNER_ARCH_NAME}-${PACKAGE_MANAGER}-"
+        echo "path=$store" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${hash}" >> "$GITHUB_OUTPUT"
+        echo "restore-prefix=$prefix" >> "$GITHUB_OUTPUT"
+
+    - name: Restore package manager cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.path }}
+        key: ${{ steps.resolve.outputs.key }}
+        restore-keys: ${{ steps.resolve.outputs.restore-prefix }}
+

@@ -1,0 +1,493 @@
+name: run-maestro-device-cloud
+description: >-
+  Runs a Maestro flow selection on hosted devices at devicecloud.dev instead of
+  a simulator or emulator the runner boots itself, so the test job needs only a
+  plain Linux runner with Node. The flows are discovered with the same rules as
+  run-maestro-ios / run-maestro-android, submitted once with the pinned
+  @devicecloud.dev/dcd CLI, and the run's artifacts and JUnit report are
+  downloaded and uploaded under the caller's artifact name. A rejected
+  submission (auth, quota, an unsupported device) and any result other than an
+  explicit pass fail the step with the reason.
+inputs:
+  platform:
+    description: '`ios` or `android`.'
+    required: true
+  app-path:
+    description: >-
+      The app to test: an `.apk` on android; an iOS Simulator `.app` directory
+      (or a `.zip` / `.tar.gz` holding exactly one) on ios.
+    required: true
+  api-key:
+    description: >-
+      Device Cloud API key, normally `secrets.device-cloud-api-key`. Handed to
+      the CLI through DEVICE_CLOUD_API_KEY, never on its command line. Empty
+      fails the step.
+    required: true
+  cli-version:
+    description: Exact @devicecloud.dev/dcd npm version.
+    required: false
+    default: '5.7.1'
+  node-version:
+    description: Node version the CLI runs on (it needs 22 or later).
+    required: false
+    default: 22.x
+  flows-dir:
+    description: Directory containing the Maestro flows.
+    required: true
+  flows-max-depth:
+    description: find -maxdepth under flows-dir, as in run-maestro-ios. 0 is unbounded.
+    required: false
+    default: '1'
+  flows-name-pattern:
+    description: Space-separated find -name globs selecting runnable flows.
+    required: false
+    default: '*.flow.yaml'
+  flows-exclude-pattern:
+    description: Comma- and/or newline-separated find ! -name globs excluding flows by basename.
+    required: false
+    default: ''
+  include-tags:
+    description: >-
+      Comma-separated Maestro tags, passed as --include-tags: only flows
+      whose `tags:` hold any of them run. Device Cloud unions them with
+      maestro-config's includeTags; a selection left with no flow fails.
+    required: false
+    default: ''
+  exclude-tags:
+    description: Comma-separated Maestro tags, passed as --exclude-tags. Exclusion wins.
+    required: false
+    default: ''
+  maestro-config:
+    description: >-
+      Optional Maestro workspace config. Its settings are sent with the run;
+      it may not carry its own top-level `flows:`, since the flow selection is
+      this action's. Fails closed when set to a path that is not a file.
+    required: false
+    default: ''
+  maestro-env:
+    description: >-
+      Newline-separated KEY=VALUE pairs, each passed as -e KEY=VALUE. Rejects
+      a line without '=' or a name not matching ^[A-Za-z_][A-Za-z0-9_]*$.
+    required: false
+    default: ''
+  maestro-version:
+    description: >-
+      Maestro version Device Cloud runs the flows with (--maestro-version).
+      Empty uses Device Cloud's default.
+    required: false
+    default: ''
+  retries:
+    description: Times Device Cloud retries a failed flow (--retry). 0 retries nothing.
+    required: false
+    default: '0'
+  android-api-level:
+    description: '[android] Android API level (--android-api-level). Empty uses Device Cloud''s default.'
+    required: false
+    default: ''
+  android-device:
+    description: '[android] Device model, e.g. pixel-7 (--android-device). Empty uses Device Cloud''s default.'
+    required: false
+    default: ''
+  ios-device:
+    description: '[ios] Device model, e.g. iphone-16 (--ios-device). Empty uses Device Cloud''s default.'
+    required: false
+    default: ''
+  ios-version:
+    description: '[ios] iOS major version, e.g. 18 (--ios-version). Empty uses Device Cloud''s default.'
+    required: false
+    default: ''
+  junit-report:
+    description: When 'true', the run's JUnit report is downloaded to junit/report.xml in artifacts-dir.
+    required: false
+    default: 'true'
+  run-name:
+    description: Name the submission carries in the Device Cloud console.
+    required: false
+    default: ''
+  artifacts-dir:
+    description: Directory the run's downloaded logs, screenshots, videos and result are unpacked to.
+    required: true
+  artifact-name:
+    description: Uploaded artifact name.
+    required: true
+  retention-days:
+    description: Uploaded artifact retention in days.
+    required: false
+    default: '7'
+  redact-env-names:
+    description: >-
+      Newline- or space-separated names of job environment variables (as
+      apply-secret-env's names output lists them) whose values are replaced
+      with *** in every text file under artifacts-dir before it is uploaded,
+      so a secret a flow typed never survives in maestro.log, a commands
+      JSON or a logcat. Leave empty (default) to upload unchanged.
+    required: false
+    default: ''
+outputs:
+  result:
+    description: '`PASSED`, `FAILED`, or `REJECTED` when Device Cloud never ran the flows.'
+    value: ${{ steps.submit.outputs.result }}
+  upload-id:
+    description: Device Cloud upload id of the run, when one was created.
+    value: ${{ steps.submit.outputs.upload-id }}
+  console-url:
+    description: Device Cloud console URL of the run, when one was created.
+    value: ${{ steps.submit.outputs.console-url }}
+runs:
+  using: composite
+  steps:
+    - name: Setup Node for the Device Cloud CLI
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Plan the Device Cloud submission
+      id: plan
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        APP_PATH: ${{ inputs.app-path }}
+        API_KEY: ${{ inputs.api-key }}
+        CLI_VERSION: ${{ inputs.cli-version }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        FLOWS_MAX_DEPTH: ${{ inputs.flows-max-depth }}
+        FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
+        FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
+        MAESTRO_CONFIG: ${{ inputs.maestro-config }}
+        RETRIES: ${{ inputs.retries }}
+        JUNIT_REPORT: ${{ inputs.junit-report }}
+      run: |
+        set -euo pipefail
+        case "$PLATFORM" in
+          ios|android) ;;
+          *) echo "::error::Unsupported platform '$PLATFORM'; expected 'ios' or 'android'."; exit 1 ;;
+        esac
+        if [ -z "$API_KEY" ]; then
+          echo "::error::The Device Cloud API key is empty. Pass it as the calling workflow's device-cloud-api-key secret; the device-cloud driver never runs unauthenticated."
+          exit 1
+        fi
+        if ! printf '%s' "$CLI_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "::error::cli-version '$CLI_VERSION' must be an exact X.Y.Z version; a range would let the CLI change under a pinned workflow."
+          exit 1
+        fi
+        case "$RETRIES" in
+          ''|*[!0-9]*|0[0-9]*) echo "::error::retries '$RETRIES' must be a non-negative integer without leading zeros."; exit 1 ;;
+        esac
+        case "$FLOWS_MAX_DEPTH" in
+          ''|*[!0-9]*|0[0-9]*) echo "::error::flows-max-depth '$FLOWS_MAX_DEPTH' must be a non-negative integer without leading zeros."; exit 1 ;;
+        esac
+        case "$JUNIT_REPORT" in
+          true|false) ;;
+          *) echo "::error::junit-report must be 'true' or 'false'; got '$JUNIT_REPORT'."; exit 1 ;;
+        esac
+        case "$PLATFORM:$APP_PATH" in
+          android:*.apk)
+            test -f "$APP_PATH" || { echo "::error::app-path '$APP_PATH' is not a file."; exit 1; } ;;
+          ios:*.app)
+            test -d "$APP_PATH" || { echo "::error::app-path '$APP_PATH' is not an .app directory."; exit 1; } ;;
+          ios:*.zip|ios:*.tar.gz)
+            test -f "$APP_PATH" || { echo "::error::app-path '$APP_PATH' is not a file."; exit 1; } ;;
+          *)
+            echo "::error::app-path '$APP_PATH' is not an app Device Cloud takes for $PLATFORM (.apk on android; .app, .zip or .tar.gz on ios)."
+            exit 1
+            ;;
+        esac
+        test -d "$FLOWS_DIR" || { echo "::error::flows-dir '$FLOWS_DIR' is not a directory."; exit 1; }
+
+        find_cmd=(find "$FLOWS_DIR")
+        if [ "$FLOWS_MAX_DEPTH" != '0' ]; then
+          find_cmd+=(-maxdepth "$FLOWS_MAX_DEPTH")
+        fi
+        find_cmd+=(-type f)
+        IFS=' ' read -r -a name_patterns <<< "$FLOWS_NAME_PATTERN"
+        name_args=('(')
+        for i in "${!name_patterns[@]}"; do
+          if [ "$i" -gt 0 ]; then
+            name_args+=(-o)
+          fi
+          name_args+=(-name "${name_patterns[$i]}")
+        done
+        name_args+=(')')
+        find_cmd+=("${name_args[@]}")
+        while IFS= read -r exclude_glob; do
+          exclude_glob="${exclude_glob#"${exclude_glob%%[![:space:]]*}"}"
+          exclude_glob="${exclude_glob%"${exclude_glob##*[![:space:]]}"}"
+          [ -z "$exclude_glob" ] || find_cmd+=(! -name "$exclude_glob")
+        done < <(printf '%s\n' "$FLOWS_EXCLUDE_PATTERN" | tr ',' '\n')
+        flows=()
+        while IFS= read -r flow; do
+          flows+=("$flow")
+        done < <("${find_cmd[@]}" | sort)
+        if [ "${#flows[@]}" -eq 0 ]; then
+          echo "::error::No flows matching '$FLOWS_NAME_PATTERN' found under flows-dir '$FLOWS_DIR' (flows-max-depth=$FLOWS_MAX_DEPTH)."
+          exit 1
+        fi
+
+        work="$RUNNER_TEMP/device-cloud-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
+        mkdir -p "$work"
+        config="$work/config.yaml"
+        if [ -n "$MAESTRO_CONFIG" ]; then
+          test -f "$MAESTRO_CONFIG" || { echo "::error::maestro-config '$MAESTRO_CONFIG' is not a file."; exit 1; }
+          if grep -qE '^flows[[:space:]]*:' "$MAESTRO_CONFIG"; then
+            echo "::error::maestro-config '$MAESTRO_CONFIG' sets its own top-level flows:, which would override the flows-dir/flows-name-pattern selection on Device Cloud only. Drop it from the config and select flows with the workflow's inputs."
+            exit 1
+          fi
+          cat "$MAESTRO_CONFIG" > "$config"
+          [ -z "$(tail -c 1 "$config")" ] || printf '\n' >> "$config"
+        else
+          : > "$config"
+        fi
+        echo 'flows:' >> "$config"
+        for flow in "${flows[@]}"; do
+          rel="${flow#"$FLOWS_DIR"}"
+          rel="${rel#/}"
+          case "$rel" in
+            *[][*?{}\\\"]*)
+              echo "::error::Flow '$rel' has a glob or quote character in its path; Device Cloud selects flows by glob, so it cannot be named exactly."
+              exit 1
+              ;;
+          esac
+          printf '  - "%s"\n' "$rel" >> "$config"
+        done
+        printf 'Device Cloud flow selection (%s):\n' "${#flows[@]}"
+        printf '  %s\n' "${flows[@]}"
+        {
+          echo "work=$work"
+          echo "config=$config"
+          echo "count=${#flows[@]}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Submit the flows to Device Cloud
+      id: submit
+      shell: bash
+      env:
+        PLATFORM: ${{ inputs.platform }}
+        APP_PATH: ${{ inputs.app-path }}
+        DEVICE_CLOUD_API_KEY: ${{ inputs.api-key }}
+        CLI_VERSION: ${{ inputs.cli-version }}
+        FLOWS_DIR: ${{ inputs.flows-dir }}
+        WORK: ${{ steps.plan.outputs.work }}
+        CONFIG: ${{ steps.plan.outputs.config }}
+        INCLUDE_TAGS: ${{ inputs.include-tags }}
+        EXCLUDE_TAGS: ${{ inputs.exclude-tags }}
+        MAESTRO_ENV: ${{ inputs.maestro-env }}
+        MAESTRO_VERSION: ${{ inputs.maestro-version }}
+        RETRIES: ${{ inputs.retries }}
+        ANDROID_API_LEVEL: ${{ inputs.android-api-level }}
+        ANDROID_DEVICE: ${{ inputs.android-device }}
+        IOS_DEVICE: ${{ inputs.ios-device }}
+        IOS_VERSION: ${{ inputs.ios-version }}
+        JUNIT_REPORT: ${{ inputs.junit-report }}
+        RUN_NAME: ${{ inputs.run-name }}
+        DCD_TELEMETRY_DISABLED: '1'
+      run: |
+        set -euo pipefail
+        export DCD_CONFIG_DIR="$WORK/dcd-config"
+        mkdir -p "$DCD_CONFIG_DIR"
+        args=(cloud --app-file "$APP_PATH" --flows "$FLOWS_DIR" --config "$CONFIG" --json
+              --download-artifacts ALL --artifacts-path "$WORK/artifacts.zip")
+        if [ -n "$RUN_NAME" ]; then
+          args+=(--name "$RUN_NAME")
+        fi
+        if [ "$PLATFORM" = android ]; then
+          [ -z "$ANDROID_API_LEVEL" ] || args+=(--android-api-level "$ANDROID_API_LEVEL")
+          [ -z "$ANDROID_DEVICE" ] || args+=(--android-device "$ANDROID_DEVICE")
+        else
+          [ -z "$IOS_DEVICE" ] || args+=(--ios-device "$IOS_DEVICE")
+          [ -z "$IOS_VERSION" ] || args+=(--ios-version "$IOS_VERSION")
+        fi
+        [ -z "$MAESTRO_VERSION" ] || args+=(--maestro-version "$MAESTRO_VERSION")
+        [ -z "$INCLUDE_TAGS" ] || args+=(--include-tags "$INCLUDE_TAGS")
+        [ -z "$EXCLUDE_TAGS" ] || args+=(--exclude-tags "$EXCLUDE_TAGS")
+        [ "$RETRIES" = 0 ] || args+=(--retry "$RETRIES")
+        if [ "$JUNIT_REPORT" = true ]; then
+          args+=(--report junit --junit-path "$WORK/report.xml")
+        fi
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          case "$line" in
+            *=*) ;;
+            *)
+              echo "::error::maestro-env line '$line' is missing '='; expected KEY=VALUE."
+              exit 1
+              ;;
+          esac
+          name="${line%%=*}"
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::maestro-env variable name '$name' must match ^[A-Za-z_][A-Za-z0-9_]*\$."
+              exit 1
+              ;;
+          esac
+          args+=(-e "$line")
+        done <<< "$MAESTRO_ENV"
+
+        result_file="$WORK/result.json"
+        cli_status=0
+        npx --yes "@devicecloud.dev/dcd@${CLI_VERSION}" "${args[@]}" > "$WORK/stdout.log" 2> "$WORK/stderr.log" || cli_status=$?
+        if [ -s "$WORK/stderr.log" ]; then
+          echo "::group::Device Cloud CLI output"
+          cat "$WORK/stderr.log"
+          echo "::endgroup::"
+        fi
+
+        if ! node -e '
+          const fs = require("fs");
+          const text = fs.readFileSync(process.argv[1], "utf8");
+          const start = text.search(/^\{/m);
+          if (start < 0) process.exit(1);
+          const parsed = JSON.parse(text.slice(start));
+          fs.writeFileSync(process.argv[2], JSON.stringify(parsed, null, 2) + "\n");
+        ' "$WORK/stdout.log" "$result_file" 2>/dev/null; then
+          echo "::error::Device Cloud CLI exited ${cli_status} without a JSON result, so whether any flow ran is unknown; failing closed. Its output:"
+          tail -n 40 "$WORK/stdout.log" || true
+          echo "result=REJECTED" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        node -e '
+          const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+          const clean = (v) => String(v ?? "").replace(/[\t\r\n\u001f]+/g, " ");
+          console.log(["status", clean(r.status)].join("\u001f"));
+          console.log(["error", clean(r.error)].join("\u001f"));
+          console.log(["upload-id", clean(r.uploadId)].join("\u001f"));
+          console.log(["console-url", clean(r.consoleUrl)].join("\u001f"));
+          for (const t of Array.isArray(r.tests) ? r.tests : []) {
+            console.log(["test", clean(t.status), clean(t.name || t.fileName), clean(t.device), clean(t.failReason)].join("\u001f"));
+          }
+        ' "$result_file" > "$WORK/result.tsv"
+
+        run_status=''
+        run_error=''
+        upload_id=''
+        console_url=''
+        passed=0
+        failed=0
+        rows=''
+        while IFS=$'\x1f' read -r kind a b c d; do
+          case "$kind" in
+            status) run_status="$a" ;;
+            error) run_error="$a" ;;
+            upload-id) upload_id="$a" ;;
+            console-url) console_url="$a" ;;
+            test)
+              if [ "$a" = PASSED ]; then
+                passed=$((passed + 1))
+              else
+                failed=$((failed + 1))
+                echo "::error title=Device Cloud flow ${b}::${a} on ${c:-device}${d:+: $d}"
+              fi
+              rows="${rows}| \`${b}\` | ${c} | ${a} |"$'\n'
+              ;;
+          esac
+        done < "$WORK/result.tsv"
+        {
+          echo "upload-id=$upload_id"
+          echo "console-url=$console_url"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### Device Cloud ($PLATFORM): ${run_status:-no result}"
+          [ -z "$console_url" ] || echo "Run: $console_url"
+          if [ -n "$rows" ]; then
+            echo
+            echo '| Flow | Device | Result |'
+            echo '| ---- | ------ | ------ |'
+            printf '%s' "$rows"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$cli_status" -eq 0 ] && [ "$run_status" = PASSED ] && [ "$failed" -eq 0 ] && [ "$passed" -gt 0 ]; then
+          echo "result=PASSED" >> "$GITHUB_OUTPUT"
+          echo "Device Cloud run passed: ${passed} flow(s)."
+          exit 0
+        fi
+        if [ "$cli_status" -eq 2 ] || { [ "$run_status" = FAILED ] && [ -n "$upload_id" ] && [ -z "$run_error" ]; }; then
+          echo "result=FAILED" >> "$GITHUB_OUTPUT"
+          echo "::error::Device Cloud run failed: ${failed} of $((passed + failed)) flow(s) did not pass.${console_url:+ $console_url}"
+          exit 1
+        fi
+        echo "result=REJECTED" >> "$GITHUB_OUTPUT"
+        if [ -n "$run_error" ]; then
+          echo "::error::Device Cloud rejected the submission: ${run_error}"
+        else
+          echo "::error::Device Cloud returned '${run_status:-nothing}' (CLI exit ${cli_status}) with ${passed} passed flow(s); only an explicit pass of at least one flow is a pass."
+        fi
+        exit 1
+
+    - name: Unpack the Device Cloud artifacts
+      if: always() && steps.plan.outputs.work != ''
+      shell: bash
+      env:
+        WORK: ${{ steps.plan.outputs.work }}
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$ARTIFACTS_DIR"
+        if [ -f "$WORK/artifacts.zip" ]; then
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -q -o "$WORK/artifacts.zip" -d "$ARTIFACTS_DIR/device-cloud"
+          else
+            python3 -m zipfile -e "$WORK/artifacts.zip" "$ARTIFACTS_DIR/device-cloud"
+          fi
+        else
+          echo "::warning::Device Cloud produced no artifacts archive for this run."
+        fi
+        if [ -f "$WORK/report.xml" ]; then
+          mkdir -p "$ARTIFACTS_DIR/junit"
+          cp "$WORK/report.xml" "$ARTIFACTS_DIR/junit/report.xml"
+        fi
+        if [ -f "$WORK/result.json" ]; then
+          cp "$WORK/result.json" "$ARTIFACTS_DIR/device-cloud-result.json"
+        fi
+
+    - name: Redact secret values from the artifacts
+      if: always() && inputs.redact-env-names != ''
+      shell: bash
+      env:
+        ARTIFACTS_DIR: ${{ inputs.artifacts-dir }}
+        REDACT_ENV_NAMES: ${{ inputs.redact-env-names }}
+      run: |
+        set -euo pipefail
+        if ! command -v perl >/dev/null 2>&1; then
+          echo "::error::perl is not on PATH, so the secret values in $ARTIFACTS_DIR cannot be redacted; refusing to upload them unredacted."
+          rm -rf "$ARTIFACTS_DIR"
+          exit 1
+        fi
+        [ -d "$ARTIFACTS_DIR" ] || exit 0
+        redacted=0
+        for name in $REDACT_ENV_NAMES; do
+          case "$name" in
+            ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+              echo "::error::redact-env-names entry '$name' is not a variable name."
+              rm -rf "$ARTIFACTS_DIR"
+              exit 1
+              ;;
+          esac
+          value="$(printenv "$name" || true)"
+          [ -n "$value" ] || continue
+          while IFS= read -r value_line || [ -n "$value_line" ]; do
+            [ -n "$value_line" ] || continue
+            while IFS= read -r -d '' file; do
+              if grep -qIF -- "$value_line" "$file"; then
+                if ! REDACT_VALUE="$value_line" perl -pi -e 's/\Q$ENV{REDACT_VALUE}\E/***/g' "$file"; then
+                  echo "::error::Redacting '$name' from an artifact file failed; removing the artifacts rather than upload them unredacted."
+                  rm -rf "$ARTIFACTS_DIR"
+                  exit 1
+                fi
+                redacted=$((redacted + 1))
+              fi
+            done < <(find "$ARTIFACTS_DIR" -type f -print0)
+          done <<< "$value"
+        done
+        echo "Redacted secret values from ${redacted} artifact file(s)."
+
+    - name: Upload Maestro artifacts
+      if: always()
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifacts-dir }}/**
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}

@@ -28,7 +28,9 @@ the same on every VM.
 ```yaml
 jobs:
     ios:
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v1
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.5.0 # v4.5.0
         with:
             xcode-version: '26.4.1'
             xcode-build: '17E202'
@@ -83,6 +85,7 @@ number is what this workflow's shape exists to attack.
 | --------------------------- | -------------------------------------------------- |
 | `runs-on-json`              | `["self-hosted","trf-macos-arm64-4x7"]` (build **and** test) |
 | `publish-runs-on-json`      | `["self-hosted","trf-macos-arm64-6x12"]`           |
+| `runs-on-cache-bypass`      | `false` — opt-in `runs-on/action` before artifact traffic on a RunsOn `extras=s3-cache` runner (see [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md)) |
 | `validate-timeout-minutes`  | `45` (applies to `build` and to each `test` shard)  |
 | `publish-timeout-minutes`   | `90`                                               |
 
@@ -182,11 +185,43 @@ caller's unrelated secrets never enter the job.
 ## Permissions
 
 `contents: read` for the workflow; the `publish` job raises itself to
-`contents: write` so `create-release` can cut the tag and release. A caller
-whose `create-release` stays `false` still grants `contents: write` to the job,
-which is the smallest granularity GitHub offers here.
+`contents: write` so `create-release` can cut the tag and release. GitHub
+refuses to start a run whose called job requests more than the calling job
+granted, even when that job is skipped, so **every caller grants
+`contents: write`** — including one that never publishes or keeps
+`create-release: false`:
 
-## Full example
+```yaml
+jobs:
+    ios:
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.5.0 # v4.5.0
+```
+
+## Examples
+
+### Minimal
+
+Build and test only; no secrets, no publish. `contents: write` is still
+required (see [Permissions](#permissions)).
+
+```yaml
+on: pull_request
+jobs:
+    ios:
+        permissions:
+            contents: write
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.5.0 # v4.5.0
+        with:
+            xcode-version: '26.4.1'
+            xcode-build: '17E202'
+            project: MyApp.xcodeproj
+            scheme: MyApp
+            simulator-device-type: 'iPhone 17'
+```
+
+### Full
 
 ```yaml
 name: iOS
@@ -200,7 +235,7 @@ permissions:
 
 jobs:
     ios:
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v1
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.5.0 # v4.5.0
         permissions:
             contents: write
         with:
@@ -229,4 +264,10 @@ jobs:
 
 A consumer that needs extra jobs between the two (a release-notes preview, a
 store metadata step) composes the **actions** à la carte instead — see the
-per-action READMEs under [`actions/`](../../actions/).
+per-action READMEs under [`actions/`](../../actions/), and
+[docs/examples/swift-xcode-app/release.yml](../examples/swift-xcode-app/release.yml)
+for `apple-signing` + `xcode-archive-upload` in a job gated by a GitHub
+Environment.
+
+Complete caller workflows for whole apps, linted and checked against this
+workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
