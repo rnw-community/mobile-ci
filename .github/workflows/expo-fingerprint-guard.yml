@@ -428,7 +428,7 @@ jobs:
               run: |
                   set -euo pipefail
                   labels=''
-                  if labels="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null)"; then
+                  if labels="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.labels[].name' 2>/dev/null)"; then
                     :
                   else
                     echo "::warning::Could not read the pull request's labels from the API; falling back to the labels carried by the triggering event payload, which do not reflect labels added after this run started."
