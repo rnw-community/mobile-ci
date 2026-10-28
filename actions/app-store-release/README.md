@@ -22,7 +22,8 @@ What a run does, in order:
    carries the answer.
 4. Creates the version when none exists, or renames the one editable version
    App Store Connect allows (`PREPARE_FOR_SUBMISSION`, `REJECTED`, ...) to
-   `version`, and sets `release-type` (plus `scheduled-release-date`).
+   `version`, and sets `release-type` (plus `scheduled-release-date`) unless
+   it is empty.
 5. Attaches the build, then adds or removes the phased release.
 6. Reuses an open review submission (`READY_FOR_REVIEW` or
    `UNRESOLVED_ISSUES`) or creates one, adds the version to it, and submits it.
@@ -40,10 +41,11 @@ them first (for example with fastlane `deliver`, or
 
 | Name | Required | Default | Description |
 | --- | --- | --- | --- |
-| `app-id` | yes | - | Numeric App Store Connect app id (App Information > Apple ID), e.g. `6449440933`. |
+| `app-id` | `app-id` or `bundle-id` | `''` | Numeric App Store Connect app id (App Information > Apple ID), e.g. `6449440933`. Empty resolves it from `bundle-id`. |
+| `bundle-id` | `app-id` or `bundle-id` | `''` | Bundle identifier, e.g. `com.example.app`, resolved with `GET /v1/apps?filter[bundleId]=`. With both set they must name the same app, or the step fails before any change. |
 | `version` | yes | - | Marketing version (`CFBundleShortVersionString`) to submit. |
 | `build-number` | no | `''` | Build number (`CFBundleVersion`) to attach. Empty picks the newest `VALID`, unexpired build of `version`. |
-| `release-type` | no | `MANUAL` | `MANUAL`, `AFTER_APPROVAL` or `SCHEDULED`. |
+| `release-type` | no | `''` | `MANUAL`, `AFTER_APPROVAL` or `SCHEDULED`. Empty keeps an existing version's release type and creates a new version as `MANUAL`. |
 | `scheduled-release-date` | no | `''` | ISO-8601 date-time of the earliest release; required with `SCHEDULED`, rejected otherwise. |
 | `phased-release` | no | `'false'` | `true` adds Apple's 7-day phased release to the version; `false` removes it. |
 | `dry-run` | no | `'true'` | `true` resolves and prints the plan with read-only calls; `false` changes App Store Connect. |

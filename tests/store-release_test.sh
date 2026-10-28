@@ -16,10 +16,12 @@ validate() {
     run_step "$dir" \
         PLATFORMS='ios,android' \
         IOS_APP_ID='6449440933' \
+        IOS_BUNDLE_ID='' \
         IOS_VERSION='2.35.0' \
         VERSION_FILE='' \
         ANDROID_PACKAGE='com.example.app' \
         ASC_API_KEY='key' \
+        ASC_API_KEY_BASE64='' \
         ASC_KEY_ID='ABC123DEFG' \
         ASC_ISSUER_ID='69a6de70-03db-47e3-e053-5b8c7c11a4d1' \
         GOOGLE_SERVICE_ACCOUNT_JSON='{}' \
@@ -44,11 +46,40 @@ case_start 'ios without its secrets fails closed naming every missing one'
 validate PLATFORMS=ios ASC_API_KEY='' ASC_ISSUER_ID=''
 log="$(cat "$dir/log")"
 assert_equals 1 "$STEP_STATUS" 'exit status' \
-    && assert_contains "$log" "::error::platforms 'ios' requires secret ASC_API_KEY, which is empty." 'ASC_API_KEY' \
+    && assert_contains "$log" "::error::platforms 'ios' requires secret ASC_API_KEY or ASC_API_KEY_BASE64, which is empty." 'ASC_API_KEY' \
     && assert_contains "$log" "::error::platforms 'ios' requires secret ASC_ISSUER_ID, which is empty." 'ASC_ISSUER_ID' \
     && assert_not_contains "$log" 'ASC_KEY_ID' 'present secret' \
     && assert_equals '' "$(cat "$dir/outputs")" 'outputs' \
     && pass_case
+
+case_start 'ios accepts a base64 key and a bundle id in place of the raw key and the app id'
+validate PLATFORMS=ios ASC_API_KEY='' ASC_API_KEY_BASE64='a2V5' IOS_APP_ID='' IOS_BUNDLE_ID=com.example.app
+assert_equals 0 "$STEP_STATUS" "exit status ($(cat "$dir/log"))" && assert_equals true "$(step_output "$dir" ios)" 'ios' && pass_case
+
+case_start 'ios with both key forms, or with neither app id nor bundle id, fails closed'
+validate PLATFORMS=ios ASC_API_KEY_BASE64='a2V5'
+both="$STEP_STATUS $(cat "$dir/log")"
+validate PLATFORMS=ios IOS_APP_ID=''
+if assert_contains "$both" "1 " 'both keys status' \
+    && assert_contains "$both" '::error::set only one of ASC_API_KEY and ASC_API_KEY_BASE64' 'both keys' \
+    && assert_equals 1 "$STEP_STATUS" 'no app status' \
+    && assert_contains "$(cat "$dir/log")" "requires input ios-app-id or ios-bundle-id, which is empty." 'no app'; then
+    pass_case
+fi
+
+case_start 'a base64 key is decoded into the key file, and invalid base64 fails closed'
+key_step() {
+    dir="$(new_workflow_workspace "$WORKFLOW" release 'Write store credentials')"
+    run_step "$dir" IOS=true ANDROID=false ASC_API_KEY='' GOOGLE_SERVICE_ACCOUNT_JSON='' "$@"
+}
+key_step ASC_API_KEY_BASE64="$(printf -- '-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n' | base64 | tr -d '\n')"
+decoded="$(cat "$(step_output "$dir" asc-key-path)" 2>/dev/null || true)"
+key_step ASC_API_KEY_BASE64='not base64!'
+if assert_contains "$decoded" '-----BEGIN PRIVATE KEY-----' 'decoded key' \
+    && assert_equals 1 "$STEP_STATUS" 'invalid base64 status' \
+    && assert_contains "$(cat "$dir/log")" '::error::ASC_API_KEY_BASE64 is not valid base64' 'invalid base64'; then
+    pass_case
+fi
 
 case_start 'android without the service account fails closed'
 validate PLATFORMS=android GOOGLE_SERVICE_ACCOUNT_JSON=''

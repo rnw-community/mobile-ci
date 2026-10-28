@@ -256,8 +256,12 @@ source every OTA path uses (the project's own `expo-updates`).
   production channels. Clean up with `eas-channel-cleanup-reusable.yml`.
 - Production updates: `eas-update` in a job with `environment:` (required
   reviewers), gated on `native-publish.yml`'s `decision` output. A job that
-  calls a reusable workflow cannot name an `environment:`, so environment
-  secrets never reach one.
+  calls a reusable workflow cannot name an `environment:`. Environment secrets
+  reach a reusable workflow only through one of its own jobs that declares
+  `environment:` (`store-release.yml`'s `github-environment`, `swift-ios.yml`'s
+  `publish-environment`), and only when the caller still passes each secret by
+  name (`NAME: ${{ secrets.NAME }}`); one it does not name arrives empty.
+  `native-publish.yml` declares none.
 
 ### Maestro flow-file convention
 

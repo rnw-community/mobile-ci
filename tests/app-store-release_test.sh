@@ -58,6 +58,7 @@ release() {
         FETCH_MOCK_ROUTES="$dir/routes.json" \
         FETCH_MOCK_LOG="$dir/requests.jsonl" \
         APP_ID="$APP" \
+        BUNDLE_ID='' \
         VERSION='2.35.0' \
         BUILD_NUMBER='' \
         RELEASE_TYPE='MANUAL' \
@@ -229,6 +230,70 @@ release "$dir" APP_ID=com.example.app
 assert_equals 1 "$STEP_STATUS" 'exit status' \
     && assert_contains "$(cat "$dir/log")" "::error::app-id 'com.example.app' must be the numeric App Store Connect app id" 'error' \
     && assert_equals '' "$(requests "$dir")" 'requests' \
+    && pass_case
+
+case_start 'release-type defaults to empty, keeping the version as App Store Connect has it'
+assert_equals '' "$(action_input_default "$ACTION" release-type)" 'release-type default' && pass_case
+
+case_start 'a bundle id resolves the numeric app id'
+dir="$(asc_workspace)"
+new_version_routes "$dir"
+route "$dir" "GET $ASC/apps?filter[bundleId]=com.example.app&limit=2" 200 '{"data":[{"id":"6449440933","attributes":{"bundleId":"com.example.app"}}]}'
+release "$dir" APP_ID='' BUNDLE_ID=com.example.app
+log="$(cat "$dir/log")"
+assert_equals 0 "$STEP_STATUS" "exit status (log: $log)" \
+    && assert_contains "$(requests "$dir")" "GET $ASC/apps?filter[bundleId]=com.example.app&limit=2" 'lookup' \
+    && assert_equals planned "$(step_output "$dir" result)" 'result' \
+    && pass_case
+
+case_start 'a bundle id that matches no app, or only a different one, fails closed'
+failed=false
+for body in '{"data":[]}' '{"data":[{"id":"1","attributes":{"bundleId":"com.example.app.widget"}}]}'; do
+    dir="$(asc_workspace)"
+    route "$dir" "GET $ASC/apps?filter[bundleId]=com.example.app&limit=2" 200 "$body"
+    release "$dir" APP_ID='' BUNDLE_ID=com.example.app
+    if ! { assert_equals 1 "$STEP_STATUS" "exit status ($body)" \
+        && assert_contains "$(cat "$dir/log")" "::error::no App Store Connect app has bundle id com.example.app" 'error'; }; then
+        failed=true
+        break
+    fi
+done
+[ "$failed" = true ] || pass_case
+
+case_start 'an app id and a bundle id that disagree fail before any change'
+dir="$(asc_workspace)"
+base_routes "$dir"
+release "$dir" BUNDLE_ID=com.example.other DRY_RUN=false
+assert_equals 1 "$STEP_STATUS" 'exit status' \
+    && assert_contains "$(cat "$dir/log")" "::error::app 6449440933 has bundle id com.example.app, not com.example.other" 'error' \
+    && assert_equals '' "$(mutations "$dir")" 'mutating requests' \
+    && pass_case
+
+case_start 'neither app-id nor bundle-id fails before any request'
+dir="$(asc_workspace)"
+release "$dir" APP_ID=''
+assert_equals 1 "$STEP_STATUS" 'exit status' \
+    && assert_contains "$(cat "$dir/log")" '::error::pass app-id (numeric) or bundle-id' 'error' \
+    && assert_equals '' "$(requests "$dir")" 'requests' \
+    && pass_case
+
+case_start 'an empty release type leaves an existing version alone and creates a new one as MANUAL'
+dir="$(asc_workspace)"
+base_routes "$dir"
+route "$dir" "GET $VERSIONS&filter[versionString]=2.35.0" 200 '{"data":[{"id":"ver-1","attributes":{"versionString":"2.35.0","appVersionState":"PREPARE_FOR_SUBMISSION","releaseType":"AFTER_APPROVAL"}}]}'
+route "$dir" "GET $ASC/appStoreVersions/ver-1/build" 200 '{"data":null}'
+route "$dir" "GET $ASC/appStoreVersions/ver-1/appStoreVersionPhasedRelease" 404 '{"errors":[]}'
+route "$dir" "GET $SUBMISSIONS" 200 '{"data":[]}'
+release "$dir" RELEASE_TYPE=''
+kept="$(cat "$dir/summary")"
+dir="$(asc_workspace)"
+new_version_routes "$dir"
+release "$dir" RELEASE_TYPE=''
+log="$(cat "$dir/log")"
+assert_equals 0 "$STEP_STATUS" "exit status (log: $log)" \
+    && assert_not_contains "$kept" 'Set release type' 'existing version release type' \
+    && assert_contains "$kept" 'AFTER_APPROVAL (kept)' 'kept release type reported' \
+    && assert_contains "$(cat "$dir/summary")" '| Create App Store version | 2.35.0, MANUAL | would do |' 'new version is MANUAL' \
     && pass_case
 
 case_start 'a missing key file fails closed'
