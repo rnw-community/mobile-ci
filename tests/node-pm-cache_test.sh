@@ -230,4 +230,28 @@ PYTHON
 )"
 assert_equals '' "$missing" 'jobs with a missing or misconfigured save' && pass_case
 
+case_start 'every job that resolves a package manager and installs restores node-pm-cache before the install'
+uncached="$(WORKFLOW_ROOT="$REPO_ROOT" python3 - <<'PYTHON'
+import glob
+import os
+
+import yaml
+
+root = os.environ['WORKFLOW_ROOT']
+bad = []
+for path in sorted(glob.glob(f'{root}/.github/workflows/*.yml')):
+    doc = yaml.safe_load(open(path, encoding='utf-8'))
+    for job_id, job in doc.get('jobs', {}).items():
+        steps = job.get('steps', [])
+        installs = [s for s in steps if 'inputs.install-command' in str((s.get('env') or {}).get('INSTALL_COMMAND', ''))]
+        if not installs or not any(s.get('id') == 'package-manager' for s in steps):
+            continue
+        restores = [i for i, s in enumerate(steps) if 'actions/node-pm-cache@' in str(s.get('uses', ''))]
+        if not restores or restores[0] > steps.index(installs[0]):
+            bad.append(f'{os.path.basename(path)}:{job_id}')
+print('\n'.join(bad))
+PYTHON
+)"
+assert_equals '' "$uncached" 'jobs installing without the package manager cache' && pass_case
+
 finish_suite

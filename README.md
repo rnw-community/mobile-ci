@@ -357,10 +357,10 @@ Environment with required reviewers or a branch policy.
 Every reusable workflow above resolves the JS package manager once per job that
 installs JS dependencies, after checkout and before `actions/setup-node`. The
 result drives pnpm provisioning everywhere, and the
-[`node-pm-cache`](actions/node-pm-cache/README.md) dependency cache in the jobs
-that configure one (the `ios-maestro` / `android-maestro` / `store-screenshots`
-build jobs, `expo-base-plan`, `expo-ota-preview`, `expo-fingerprint-guard`).
-That cache is restored on every event but saved only off pull requests, as a
+[`node-pm-cache`](actions/node-pm-cache/README.md) dependency cache in every
+such job. That cache is restored on every event but saved only off pull
+requests, so the default-branch warm-up (`seed-native-cache`) and release runs
+are what seed the macOS store that pull-request iOS builds restore. It is saved as a
 bounded non-fatal step, so a stalled upload can never cancel a finished job. Resolution order:
 
 1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;

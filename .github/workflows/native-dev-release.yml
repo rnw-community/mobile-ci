@@ -528,11 +528,26 @@ jobs:
               shell: bash
               run: corepack enable
 
+            - name: Restore package manager cache
+              id: pm-cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.5.0 # v4.5.0
+              with:
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
+
             - name: Install dependencies
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save package manager cache
+              if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.pm-cache.outputs.path }}
+                  key: ${{ steps.pm-cache.outputs.cache-key }}
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
@@ -1171,11 +1186,26 @@ jobs:
               shell: bash
               run: corepack enable
 
+            - name: Restore package manager cache
+              id: pm-cache
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.5.0 # v4.5.0
+              with:
+                  package-manager: ${{ steps.package-manager.outputs.pm }}
+
             - name: Install dependencies
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save package manager cache
+              if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.pm-cache.outputs.path }}
+                  key: ${{ steps.pm-cache.outputs.cache-key }}
 
             - name: Build workspace JS dependencies
               if: inputs.build-command != ''
