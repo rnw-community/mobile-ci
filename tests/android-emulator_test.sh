@@ -557,7 +557,7 @@ printf "image.sysdir.1=%s/\nhw.ramSize=1536\n" "$sysdir" > "$ANDROID_AVD_HOME/$n
     stub "$dir" adb 'printf "%s\n" "$*" >> "$ADB_CALLS"
 case "$*" in
   devices) printf "List of devices attached\n%s" "${ADB_DEVICES:-}" ;;
-  *"getprop sys.boot_completed"*) [ "${ADB_BOOTED:-1}" = 1 ] && echo 1 || echo ;;
+  *"getprop sys.boot_completed"*) [ "${ADB_BOOTED:-1}" = 1 ] && [ -s "${EMULATOR_ARGS:-/nonexistent}" ] && echo 1 || echo ;;
 esac
 exit 0'
     : > "$dir/adb-calls"
