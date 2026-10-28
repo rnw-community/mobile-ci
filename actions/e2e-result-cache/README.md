@@ -21,7 +21,7 @@ dependencies and build workspace dependencies before lookup. Prefer the
 | `test-paths` | empty | Newline-separated test dependencies relative to repo root; literal files/directories or globs. Every pattern must match. |
 | `extra-paths` | empty | Additional fixtures, scripts and dependency trees. Same syntax as `test-paths`. |
 | `state-command` | empty | App-directory command whose nonempty stdout versions mutable state, e.g. `date -u +%F`; only its digest enters the key. Errors prevent reuse. |
-| `export-command` | empty | Custom exporter, run from app-dir. Write nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`. Empty uses the installed Expo CLI. |
+| `export-command` | empty | Custom exporter, run from app-dir. Write nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`; its output must be byte-identical across runs of one commit, so a Hermes exporter must emit source maps. `*.map` files are not hashed. Empty uses the installed Expo CLI with `--source-maps`. |
 | `repack-env` | empty | Same `KEY=VALUE` environment as the production repack; applied over the job's build environment. |
 | `secrets-digest` | empty | Maestro environment digest from `apply-secret-env` with `export: 'false'`. Raw secrets are rejected. |
 | `key` | empty | SHA-256 from an earlier lookup; required for publish. |
