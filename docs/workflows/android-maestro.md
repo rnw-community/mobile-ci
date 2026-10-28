@@ -80,6 +80,11 @@ major release.
 | Name                        | Required | Default                                       | Description |
 | ------------------------------ | -------- | ------------------------------------------------ | -------------- |
 | `runner-labels`                 | no       | `["self-hosted","trf-linux-amd64-4x8"]`             | JSON array of self-hosted runner labels for the build/test jobs. The default is the x86_64 Linux KVM pool (4 vCPU / 8 GiB) the default `avd` driver needs; override it together with `android-driver: redroid` to run on a `linux-aarch64` binder/privileged-docker pool. |
+| `e2e-result-cache` | no | `false` | Reuse a validated exact pass for the native key, production bundle/config, tests, inputs and device. See [cache contract and rollout](../e2e-result-cache.md). Bypasses Turbo/path detection when on; forced, manual and quarantined runs do not cache. |
+| `e2e-cache-test-paths` | no | `''` | Newline-separated literal paths/globs replacing the default flows-dir tree; explicit config, pre-run/recovery flows and shard manifests remain automatic. Every pattern must match. |
+| `e2e-cache-extra-paths` | no | `''` | Additional fixture/script dependency paths/globs relative to repository root. Include shared hook/test dependencies. |
+| `e2e-cache-state-command` | no | `''` | Optional app-directory command whose nonempty stdout versions mutable test state, e.g. `date -u +%F`. Errors disable reuse. |
+| `e2e-cache-export-command` | no | `''` | Optional custom exporter writing nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`; empty uses the installed production Expo export. |
 | `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
 | `runs-on-cache-bypass` | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `build-runner-labels`           | no       | `''`                                               | JSON array of self-hosted runner labels for the build job only. Falls back to `runner-labels` when empty; set this and `test-runner-labels` together to split build/test across separate runner pools. |
@@ -163,6 +168,13 @@ major release.
 | `tolerate-test-failures`        | no       | `false`                                            | `true` keeps the test job green when the Maestro run step fails, and reports the failure as a `::warning::` instead. For a time-boxed quarantine of a known-broken suite. The default of every target's `tolerateTestFailures`, which quarantines one target alone. |
 | `call-scope`                    | no       | `''`                                               | Names this call's artifacts, plans, Redroid containers and concurrency groups, so several calls in one run (one per package, say) never share or cancel them. Calls that share a run must each set a distinct, non-empty value. `[A-Za-z0-9._]` with single `-` between them. Empty keeps today's names. See [Several packages](#several-packages-per-target-fields-and-call-scope). |
 
+With `e2e-result-cache: true`, the planner checks exact pass records before base
+fetch/repack and returns only cache misses to the build/test matrices. Complete
+hits report `result=passed` with successful producer links. Default-branch E2E
+pushes seed evidence for other PRs; the native-base warm-up does not. Additional
+planner work is one production export; cache failures require the normal suite.
+See [identity, test dependency and trust contracts](../e2e-result-cache.md).
+
 ## Outputs
 
 | Name | Description |
@@ -199,7 +211,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -264,7 +276,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -510,7 +522,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -690,7 +702,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
 ```
 
 - `contents: read` — checkout.
@@ -723,7 +735,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
@@ -750,7 +762,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -794,7 +806,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.5.0 # v4.5.0
         with:
             force-label: e2e:force
 ```

@@ -754,7 +754,7 @@ PYTHON
 done
 
 for workflow in ios-maestro android-maestro; do
-    case_start "$workflow.yml hands its targets to turbo-affected and is always affected only off pull requests"
+    case_start "$workflow.yml hands its targets to turbo-affected and is always affected off pull requests or when the content cache owns detection"
     wiring="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON'
 import os
 
@@ -771,7 +771,7 @@ print(workflow.get('on', workflow.get(True))['workflow_call']['inputs'].get('tri
 PYTHON
 )"
     # shellcheck disable=SC2016 # the expressions are matched literally.
-    assert_equals "$(printf '%s\n%s\n%s\n\n%s\n' '${{ inputs.targets }}' "\${{ github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}' '${{ inputs.trigger-paths }}')" "$wiring" 'turbo-affected with:' \
+    assert_equals "$(printf '%s\n%s\n%s\n\n%s\n' '${{ inputs.targets }}' "\${{ inputs.e2e-result-cache || github.event_name != 'pull_request' }}" '${{ inputs.exempt-paths }}' '${{ inputs.trigger-paths }}')" "$wiring" 'turbo-affected with:' \
         && pass_case
 done
 

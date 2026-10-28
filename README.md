@@ -23,12 +23,22 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.4.1`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.5.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
+
+Opt in to **[content-addressed E2E pass records](docs/e2e-result-cache.md)** with
+`e2e-result-cache: true` on either Maestro workflow. The Linux planner hashes the
+production bundle/assets, resolved config, native key, complete test contract
+and device inputs. A validated prior pass skips base fetch/repack, native builds
+and all Maestro shards, with producer links on the successful required check.
+Unrelated docs, store copy, screenshots and CI workflows need no app path
+exemption list. Cache errors run the suite; the default remains off. See the
+[Budgie caller patch](docs/examples/budgie-e2e-result-cache.patch) and rollout
+requirements before enabling it.
 
 ## A pull request no longer compiles native code
 
@@ -63,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -99,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -144,6 +154,10 @@ called workflow's jobs request — see the table in
 [docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
 
 ## What changed in v4.x
+
+- **v4.5.0** — opt-in content-addressed Maestro pass records skip build, repack
+  and test shards when production app output and the complete test contract
+  match a validated previous pass. Cache errors run the suite.
 
 - **v3 → v4.0.0** — the one breaking change: `store-screenshots.yml` captures
   Android on the `avd` driver and the x86_64 KVM pool by default. A Redroid
@@ -198,6 +212,11 @@ called workflow's jobs request — see the table in
   v6.1.0 and the composite actions' `actions/upload-artifact` to v6.0.0, so no
   step runs on Node 20 any more (runners need >= 2.327.1). Cache keys and
   entries are unchanged: caches saved by earlier releases still restore.
+- **v4.4.2** — `build-android-app` always builds with
+  `-Pandroid.enableShrinkResourcesInReleaseBuilds=false`, so a base built for
+  an app that turns resource shrinking on still repacks (apktool cannot relink a
+  shrunk resource table). The android native key changes once, so the next
+  run per key builds natively and publishes an unshrunk base.
 
 No input was removed or had its default changed after v4.0.0, so within v4
 bumping the pin is the whole migration.
@@ -371,7 +390,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -444,7 +463,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.5.0 # v4.5.0
 ```
 
 ## Scope
@@ -490,7 +509,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.4.1 # v4.4.1`). A major tag such as `@v4` floats to the
+checked against (`@v4.5.0 # v4.5.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

@@ -72,7 +72,7 @@ The API key needs the App Manager role (or Admin).
       printf '%s' "$ASC_API_KEY" > "$RUNNER_TEMP/asc-api-key.p8"
       chmod 600 "$RUNNER_TEMP/asc-api-key.p8"
 
-- uses: rnw-community/mobile-ci/actions/app-store-release@v4.4.1 # v4.4.1
+- uses: rnw-community/mobile-ci/actions/app-store-release@v4.5.0 # v4.5.0
   with:
       app-id: '6449440933'
       version: 2.35.0

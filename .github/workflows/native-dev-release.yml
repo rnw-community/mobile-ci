@@ -324,7 +324,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
@@ -418,7 +418,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -543,7 +543,7 @@ jobs:
 
             - name: Compute the runtime version
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
               with:
                   app-dir: ${{ inputs.app-dir }}
                   platform: ios
@@ -967,7 +967,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.5.0 # v4.5.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
@@ -1061,7 +1061,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.5.0 # v4.5.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -1186,7 +1186,7 @@ jobs:
 
             - name: Compute the runtime version
               id: fingerprint
-              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
               with:
                   app-dir: ${{ inputs.app-dir }}
                   platform: android
@@ -1778,7 +1778,7 @@ jobs:
 
             - name: Update the sticky preview comment
               if: inputs.enable-ios || inputs.enable-android
-              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@v4.5.0 # v4.5.0
               with:
                   pr-number: ${{ github.event.pull_request.number }}
                   sections-dir: ${{ runner.temp }}/preview-comment-sections

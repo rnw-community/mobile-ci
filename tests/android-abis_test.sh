@@ -171,19 +171,31 @@ build() {
 case_start 'build-android-app passes android-abis to Gradle'
 build ANDROID_ABIS=x86_64
 assert_equals 0 "$STEP_STATUS" 'exit status' \
-    && assert_equals $'--no-daemon\nassembleRelease\n-x\nlint\n-PreactNativeArchitectures=x86_64' "$(cat "$dir/gradle-args")" 'gradle argv' \
+    && assert_equals $'--no-daemon\nassembleRelease\n-x\nlint\n-Pandroid.enableShrinkResourcesInReleaseBuilds=false\n-PreactNativeArchitectures=x86_64' "$(cat "$dir/gradle-args")" 'gradle argv' \
     && pass_case
 
 case_start 'build-android-app passes nothing for an empty android-abis'
 build
 assert_equals 0 "$STEP_STATUS" 'exit status' \
-    && assert_equals $'--no-daemon\nassembleRelease\n-x\nlint' "$(cat "$dir/gradle-args")" 'gradle argv' \
+    && assert_equals $'--no-daemon\nassembleRelease\n-x\nlint\n-Pandroid.enableShrinkResourcesInReleaseBuilds=false' "$(cat "$dir/gradle-args")" 'gradle argv' \
+    && pass_case
+
+case_start 'build-android-app keeps resource shrinking off over a caller that turns it on'
+build GRADLE_ARGS='-Pandroid.enableShrinkResourcesInReleaseBuilds=true'
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_equals $'--no-daemon\nassembleRelease\n-Pandroid.enableShrinkResourcesInReleaseBuilds=true\n-Pandroid.enableShrinkResourcesInReleaseBuilds=false' "$(cat "$dir/gradle-args")" 'gradle argv' \
+    && pass_case
+
+case_start 'build-android-app turns resource shrinking off even with no gradle-args'
+build GRADLE_ARGS=''
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_equals $'--no-daemon\nassembleRelease\n-Pandroid.enableShrinkResourcesInReleaseBuilds=false' "$(cat "$dir/gradle-args")" 'gradle argv' \
     && pass_case
 
 case_start 'build-android-app does not repeat an ABI gradle-args already pins to the same value'
 build ANDROID_ABIS=x86_64 GRADLE_ARGS='-PreactNativeArchitectures=x86_64'
 assert_equals 0 "$STEP_STATUS" 'exit status' \
-    && assert_equals $'--no-daemon\nassembleRelease\n-PreactNativeArchitectures=x86_64' "$(cat "$dir/gradle-args")" 'gradle argv' \
+    && assert_equals $'--no-daemon\nassembleRelease\n-PreactNativeArchitectures=x86_64\n-Pandroid.enableShrinkResourcesInReleaseBuilds=false' "$(cat "$dir/gradle-args")" 'gradle argv' \
     && pass_case
 
 case_start 'build-android-app fails closed when gradle-args pins a different ABI'

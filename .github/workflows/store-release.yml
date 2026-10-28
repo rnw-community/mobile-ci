@@ -249,7 +249,7 @@ jobs:
             - name: Release on the App Store
               id: ios
               if: steps.plan.outputs.ios == 'true'
-              uses: rnw-community/mobile-ci/actions/app-store-release@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/app-store-release@v4.5.0 # v4.5.0
               with:
                   app-id: ${{ inputs.ios-app-id }}
                   version: ${{ steps.ios-version.outputs.version }}
@@ -265,7 +265,7 @@ jobs:
             - name: Release on Google Play
               id: android
               if: ${{ !cancelled() && steps.keys.outcome == 'success' && steps.plan.outputs.android == 'true' }}
-              uses: rnw-community/mobile-ci/actions/play-store-release@v4.4.1 # v4.4.1
+              uses: rnw-community/mobile-ci/actions/play-store-release@v4.5.0 # v4.5.0
               with:
                   package-name: ${{ inputs.android-package }}
                   from-track: ${{ inputs.android-from-track }}

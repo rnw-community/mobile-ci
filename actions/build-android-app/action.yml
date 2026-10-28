@@ -410,6 +410,7 @@ runs:
           normalized_gradle_args="${normalized_gradle_args//$'\r'/ }"
           read -r -a gradle_args <<< "$normalized_gradle_args"
         fi
+        gradle_args+=(-Pandroid.enableShrinkResourcesInReleaseBuilds=false)
 
         if [ -n "$ANDROID_ABIS" ]; then
           IFS=, read -r -a abi_list <<< "$ANDROID_ABIS"

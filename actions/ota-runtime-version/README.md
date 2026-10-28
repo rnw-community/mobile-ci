@@ -47,11 +47,11 @@ Fails closed: a resolution that fails or prints no runtime version (no
 
 ```yaml
 - id: runtime
-  uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.4.1 # v4.4.1
+  uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.5.0 # v4.5.0
   with:
       app-dir: apps/mobile
       eas-profile: development
-- uses: rnw-community/mobile-ci/actions/eas-update@v4.4.1 # v4.4.1
+- uses: rnw-community/mobile-ci/actions/eas-update@v4.5.0 # v4.5.0
   with:
       app-dir: apps/mobile
       channel: development

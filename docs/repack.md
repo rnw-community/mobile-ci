@@ -63,7 +63,10 @@ folded in beside it:
 
 - **the mobile-ci build action** that produced the base (`build-ios-app` plus
   `setup-xcode-pinned` on ios, `build-android-app` on android), so changing how
-  a base is built invalidates every base built the old way;
+  a base is built invalidates every base built the old way. `build-android-app`
+  always builds with `-Pandroid.enableShrinkResourcesInReleaseBuilds=false`:
+  apktool cannot relink a resource-shrunk table, so a shrunk base fails to
+  repack at `aapt2 link`;
 - **the pinned toolchain and everything that changes what it produces** — the
   Xcode version and build with `rct-use-prebuilt-rncore`, `rct-use-rn-dep` and
   `expo-use-precompiled-modules` on ios, the cmdline-tools version with
@@ -382,7 +385,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.5.0 # v4.5.0
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -417,7 +420,7 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.4.1 # v4.4.1
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
