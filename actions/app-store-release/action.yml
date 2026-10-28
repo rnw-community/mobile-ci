@@ -11,8 +11,13 @@ description: >-
   Connect's own error list (missing screenshots, metadata) on a rejected call.
 inputs:
   app-id:
-    description: Numeric App Store Connect app id (App Information > Apple ID), e.g. 6449440933.
-    required: true
+    description: Numeric App Store Connect app id (App Information > Apple ID), e.g. 6449440933. Empty resolves it from bundle-id.
+    required: false
+    default: ''
+  bundle-id:
+    description: Bundle identifier, e.g. com.example.app. Resolves app-id when that is empty; with both set they must name the same app.
+    required: false
+    default: ''
   version:
     description: Marketing version (CFBundleShortVersionString) to submit, e.g. 1.2.3.
     required: true
@@ -21,9 +26,9 @@ inputs:
     required: false
     default: ''
   release-type:
-    description: MANUAL, AFTER_APPROVAL or SCHEDULED - what App Store Connect does once the version is approved.
+    description: MANUAL, AFTER_APPROVAL or SCHEDULED - what App Store Connect does once the version is approved. Empty keeps an existing version's release type and creates a new version as MANUAL.
     required: false
-    default: MANUAL
+    default: ''
   scheduled-release-date:
     description: ISO-8601 date-time of the earliest release; required with release-type SCHEDULED and rejected otherwise.
     required: false
@@ -72,6 +77,7 @@ runs:
       shell: bash
       env:
         APP_ID: ${{ inputs.app-id }}
+        BUNDLE_ID: ${{ inputs.bundle-id }}
         VERSION: ${{ inputs.version }}
         BUILD_NUMBER: ${{ inputs.build-number }}
         RELEASE_TYPE: ${{ inputs.release-type }}

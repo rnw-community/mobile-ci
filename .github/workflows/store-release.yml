@@ -48,7 +48,12 @@ on:
                 required: false
                 default: ''
             ios-app-id:
-                description: Numeric App Store Connect app id (App Information > Apple ID).
+                description: Numeric App Store Connect app id (App Information > Apple ID). Empty resolves it from ios-bundle-id.
+                type: string
+                required: false
+                default: ''
+            ios-bundle-id:
+                description: iOS bundle identifier, e.g. com.example.app. Resolves ios-app-id when that is empty; with both set they must name the same app.
                 type: string
                 required: false
                 default: ''
@@ -63,10 +68,10 @@ on:
                 required: false
                 default: ''
             ios-release-type:
-                description: MANUAL, AFTER_APPROVAL or SCHEDULED.
+                description: MANUAL, AFTER_APPROVAL or SCHEDULED. Empty keeps an existing version's release type and creates a new version as MANUAL.
                 type: string
                 required: false
-                default: MANUAL
+                default: ''
             ios-scheduled-release-date:
                 description: ISO-8601 earliest release date-time; required with ios-release-type SCHEDULED.
                 type: string
@@ -107,7 +112,10 @@ on:
                 default: true
         secrets:
             ASC_API_KEY:
-                description: App Store Connect API key contents (.p8). Required for ios.
+                description: App Store Connect API key contents (.p8). For ios, this or ASC_API_KEY_BASE64.
+                required: false
+            ASC_API_KEY_BASE64:
+                description: The same .p8 key, base64-encoded (the form apple-signing and xcode-archive-upload take). For ios, this or ASC_API_KEY.
                 required: false
             ASC_KEY_ID:
                 description: App Store Connect API key ID. Required for ios.
@@ -120,7 +128,7 @@ on:
                 required: false
 
 concurrency:
-    group: store-release-${{ github.repository }}-${{ inputs.ios-app-id }}-${{ inputs.android-package }}
+    group: store-release-${{ github.repository }}-${{ inputs.ios-app-id }}-${{ inputs.ios-bundle-id }}-${{ inputs.android-package }}
     cancel-in-progress: false
 
 jobs:
@@ -138,10 +146,12 @@ jobs:
               env:
                   PLATFORMS: ${{ inputs.platforms }}
                   IOS_APP_ID: ${{ inputs.ios-app-id }}
+                  IOS_BUNDLE_ID: ${{ inputs.ios-bundle-id }}
                   IOS_VERSION: ${{ inputs.ios-version }}
                   VERSION_FILE: ${{ inputs.version-file }}
                   ANDROID_PACKAGE: ${{ inputs.android-package }}
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
                   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
                   GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
@@ -167,9 +177,13 @@ jobs:
                   fi
                   problems=()
                   if [ "$ios" = true ]; then
-                    [ -n "$IOS_APP_ID" ] || problems+=("input ios-app-id")
+                    [ -n "$IOS_APP_ID" ] || [ -n "$IOS_BUNDLE_ID" ] || problems+=("input ios-app-id or ios-bundle-id")
                     [ -n "$IOS_VERSION" ] || [ -n "$VERSION_FILE" ] || problems+=("input ios-version or version-file")
-                    [ -n "${ASC_API_KEY:-}" ] || problems+=("secret ASC_API_KEY")
+                    if [ -n "${ASC_API_KEY:-}" ] && [ -n "${ASC_API_KEY_BASE64:-}" ]; then
+                      echo "::error::set only one of ASC_API_KEY and ASC_API_KEY_BASE64; both hold the same .p8 key."
+                      exit 1
+                    fi
+                    [ -n "${ASC_API_KEY:-}" ] || [ -n "${ASC_API_KEY_BASE64:-}" ] || problems+=("secret ASC_API_KEY or ASC_API_KEY_BASE64")
                     [ -n "${ASC_KEY_ID:-}" ] || problems+=("secret ASC_KEY_ID")
                     [ -n "${ASC_ISSUER_ID:-}" ] || problems+=("secret ASC_ISSUER_ID")
                   fi
@@ -179,7 +193,7 @@ jobs:
                   fi
                   if [ "${#problems[@]}" -gt 0 ]; then
                     for problem in "${problems[@]}"; do
-                      echo "::error::platforms '$PLATFORMS' requires $problem, which is empty. Pass secrets through an explicit secrets: block in the caller."
+                      echo "::error::platforms '$PLATFORMS' requires $problem, which is empty. Pass secrets through an explicit secrets: block in the caller, naming each one even when it exists only in the github-environment; an environment secret the caller does not pass by name arrives empty."
                     done
                     exit 1
                   fi
@@ -229,6 +243,7 @@ jobs:
                   IOS: ${{ steps.plan.outputs.ios }}
                   ANDROID: ${{ steps.plan.outputs.android }}
                   ASC_API_KEY: ${{ secrets.ASC_API_KEY }}
+                  ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
                   GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
               run: |
                   set -euo pipefail
@@ -236,7 +251,15 @@ jobs:
                   mkdir -p "$dir"
                   chmod 700 "$dir"
                   if [ "$IOS" = true ]; then
-                    printf '%s' "$ASC_API_KEY" > "$dir/asc-api-key.p8"
+                    if [ -n "${ASC_API_KEY_BASE64:-}" ]; then
+                      if ! printf '%s' "$ASC_API_KEY_BASE64" | base64 -d > "$dir/asc-api-key.p8" 2>/dev/null; then
+                        rm -f "$dir/asc-api-key.p8"
+                        echo "::error::ASC_API_KEY_BASE64 is not valid base64; encode the .p8 file with base64 and store the result."
+                        exit 1
+                      fi
+                    else
+                      printf '%s' "$ASC_API_KEY" > "$dir/asc-api-key.p8"
+                    fi
                     chmod 600 "$dir/asc-api-key.p8"
                     echo "asc-key-path=$dir/asc-api-key.p8" >> "$GITHUB_OUTPUT"
                   fi
@@ -252,6 +275,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/app-store-release@v4.5.0 # v4.5.0
               with:
                   app-id: ${{ inputs.ios-app-id }}
+                  bundle-id: ${{ inputs.ios-bundle-id }}
                   version: ${{ steps.ios-version.outputs.version }}
                   build-number: ${{ inputs.ios-build-number }}
                   release-type: ${{ inputs.ios-release-type }}

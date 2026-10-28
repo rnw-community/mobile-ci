@@ -23,6 +23,7 @@ const fail = message => {
 const readInputs = env => {
     const inputs = {
         appId: env.APP_ID ?? '',
+        bundleId: env.BUNDLE_ID ?? '',
         version: env.VERSION ?? '',
         buildNumber: env.BUILD_NUMBER ?? '',
         releaseType: env.RELEASE_TYPE ?? '',
@@ -33,8 +34,14 @@ const readInputs = env => {
         keyId: env.ASC_KEY_ID ?? '',
         issuerId: env.ASC_ISSUER_ID ?? '',
     };
-    if (!/^\d+$/.test(inputs.appId)) {
-        fail(`app-id '${inputs.appId}' must be the numeric App Store Connect app id (App Information > Apple ID).`);
+    if (inputs.appId === '' && inputs.bundleId === '') {
+        fail('pass app-id (numeric) or bundle-id to identify the app.');
+    }
+    if (inputs.appId !== '' && !/^\d+$/.test(inputs.appId)) {
+        fail(`app-id '${inputs.appId}' must be the numeric App Store Connect app id (App Information > Apple ID); pass a bundle id as bundle-id.`);
+    }
+    if (inputs.bundleId !== '' && !/^[A-Za-z0-9.-]+$/.test(inputs.bundleId)) {
+        fail(`bundle-id '${inputs.bundleId}' must be a bundle identifier such as com.example.app.`);
     }
     if (!/^\d+(\.\d+){0,2}$/.test(inputs.version)) {
         fail(`version '${inputs.version}' must be a marketing version such as 1.2.3.`);
@@ -42,8 +49,8 @@ const readInputs = env => {
     if (inputs.buildNumber !== '' && !/^\d+(\.\d+){0,2}$/.test(inputs.buildNumber)) {
         fail(`build-number '${inputs.buildNumber}' must be a CFBundleVersion such as 42 or 1.2.3, or empty.`);
     }
-    if (!RELEASE_TYPES.has(inputs.releaseType)) {
-        fail(`release-type '${inputs.releaseType}' must be MANUAL, AFTER_APPROVAL or SCHEDULED.`);
+    if (inputs.releaseType !== '' && !RELEASE_TYPES.has(inputs.releaseType)) {
+        fail(`release-type '${inputs.releaseType}' must be MANUAL, AFTER_APPROVAL, SCHEDULED, or empty to keep the version's current one.`);
     }
     if (inputs.releaseType === 'SCHEDULED') {
         if (Number.isNaN(Date.parse(inputs.scheduledReleaseDate))) {
@@ -193,7 +200,23 @@ const run = async () => {
         return result;
     };
 
-    const app = (await client.get(`/apps/${inputs.appId}`))?.data ?? fail(`App Store Connect app ${inputs.appId} was not found, or this API key cannot see it.`);
+    let app;
+    if (inputs.appId === '') {
+        const matches = ((await client.get(query('/apps', { 'filter[bundleId]': inputs.bundleId, limit: '2' })))?.data ?? []).filter(
+            candidate => candidate.attributes?.bundleId === inputs.bundleId,
+        );
+        if (matches.length !== 1) {
+            fail(`no App Store Connect app has bundle id ${inputs.bundleId}${matches.length > 1 ? ' uniquely' : ''}, or this API key cannot see it.`);
+        }
+        [app] = matches;
+        inputs.appId = app.id;
+        rows.push(['Resolve app', `${inputs.bundleId} -> ${app.id}`, 'resolved']);
+    } else {
+        app = (await client.get(`/apps/${inputs.appId}`))?.data ?? fail(`App Store Connect app ${inputs.appId} was not found, or this API key cannot see it.`);
+        if (inputs.bundleId !== '' && app.attributes?.bundleId !== inputs.bundleId) {
+            fail(`app ${inputs.appId} has bundle id ${app.attributes?.bundleId}, not ${inputs.bundleId}; app-id and bundle-id must name the same app.`);
+        }
+    }
     const build = await resolveBuild(client, inputs);
     const buildNumber = build.attributes.version;
     rows.push(['Resolve build', `${inputs.version} (${buildNumber})`, 'resolved']);
@@ -220,32 +243,37 @@ const run = async () => {
         fail(`build ${buildNumber} has no export compliance answer (usesNonExemptEncryption is unset). Set ITSAppUsesNonExemptEncryption in Info.plist (expo: ios.config.usesNonExemptEncryption) or answer it for this build in App Store Connect, then re-run.`);
     }
 
-    const releaseAttributes = {
-        releaseType: inputs.releaseType,
-        ...(inputs.scheduledReleaseDate !== null && { earliestReleaseDate: inputs.scheduledReleaseDate }),
-    };
+    const keepReleaseType = inputs.releaseType === '';
+    const releaseAttributes = keepReleaseType
+        ? {}
+        : {
+              releaseType: inputs.releaseType,
+              ...(inputs.scheduledReleaseDate !== null && { earliestReleaseDate: inputs.scheduledReleaseDate }),
+          };
     if (version === null) {
         const [editable] = await findVersions({ 'filter[appVersionState]': EDITABLE_STATES.join(',') });
         if (editable) {
             version = editable;
             attachedBuildId = (await client.get(`/appStoreVersions/${version.id}/build`))?.data?.id ?? null;
-            await step('Rename editable version', `${editable.attributes.versionString} -> ${inputs.version}, ${inputs.releaseType}`, () =>
+            await step('Rename editable version', `${editable.attributes.versionString} -> ${inputs.version}, ${inputs.releaseType || `${editable.attributes.releaseType} (kept)`}`, () =>
                 client.mutate('PATCH', `/appStoreVersions/${version.id}`, {
                     data: { type: 'appStoreVersions', id: version.id, attributes: { versionString: inputs.version, ...releaseAttributes } },
                 }),
             );
         } else {
-            const created = await step('Create App Store version', `${inputs.version}, ${inputs.releaseType}`, () =>
+            const created = await step('Create App Store version', `${inputs.version}, ${inputs.releaseType || 'MANUAL'}`, () =>
                 client.mutate('POST', '/appStoreVersions', {
                     data: {
                         type: 'appStoreVersions',
-                        attributes: { platform: 'IOS', versionString: inputs.version, ...releaseAttributes },
+                        attributes: { platform: 'IOS', versionString: inputs.version, ...(keepReleaseType ? { releaseType: 'MANUAL' } : releaseAttributes) },
                         relationships: { app: { data: { type: 'apps', id: inputs.appId } } },
                     },
                 }),
             );
             version = created?.data ?? null;
         }
+    } else if (keepReleaseType) {
+        rows.push(['Release type', `${version.attributes.releaseType} (kept)`, 'unchanged']);
     } else if (
         version.attributes.releaseType !== inputs.releaseType ||
         (inputs.scheduledReleaseDate !== null && Date.parse(version.attributes.earliestReleaseDate ?? '') !== Date.parse(inputs.scheduledReleaseDate))
