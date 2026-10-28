@@ -1,0 +1,55 @@
+name: rn-prebuilt-cache
+description: >-
+  Restores React Native's prebuilt iOS tarball cache (~/Library/Caches/ReactNative:
+  the ReactNativeCore and ReactNativeDependencies debug and release tarballs
+  pod install downloads from repo.reactnative.dev) for the app's installed
+  react-native version, and exposes the path and key for the calling
+  workflow's own bounded `actions/cache/save` step, which runs only off pull
+  requests. React Native verifies each tarball's checksum before using it.
+inputs:
+  app-dir:
+    description: Directory whose node_modules resolves react-native.
+    required: false
+    default: '.'
+outputs:
+  cache-hit:
+    description: '`true` when the entry for this react-native version was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: The computed cache key.
+    value: ${{ steps.resolve.outputs.key }}
+  path:
+    description: The cache directory, for the calling workflow's `actions/cache/save` step.
+    value: ${{ steps.resolve.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve the react-native version and cache path
+      id: resolve
+      shell: bash
+      env:
+        APP_DIR: ${{ inputs.app-dir }}
+        RUNNER_ARCH_NAME: ${{ runner.arch }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+      run: |
+        set -euo pipefail
+        cd "$APP_DIR"
+        if ! version="$(node -p "require(require.resolve('react-native/package.json', { paths: [process.cwd()] })).version" 2>/dev/null)"; then
+          echo "::error::Cannot resolve react-native from '$APP_DIR'; install the app's dependencies before this step."
+          exit 1
+        fi
+        case "$version" in
+          ''|*[!0-9A-Za-z.+-]*)
+            echo "::error::react-native reported an unusable version '$version'."
+            exit 1
+            ;;
+        esac
+        echo "path=$HOME/Library/Caches/ReactNative" >> "$GITHUB_OUTPUT"
+        echo "key=rn-prebuilts-v1-${RUNNER_OS_NAME}-${RUNNER_ARCH_NAME}-${version}_" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the React Native prebuilt cache
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.path }}
+        key: ${{ steps.resolve.outputs.key }}

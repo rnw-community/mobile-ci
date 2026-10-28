@@ -1709,6 +1709,12 @@ jobs:
                   BUILD_COMMAND: ${{ needs.validate-manifest.outputs.build-command }}
               run: eval "$BUILD_COMMAND"
 
+            - name: Restore the React Native prebuilt cache
+              id: rn-prebuilts
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.6.0 # v4.6.0
+              with:
+                  app-dir: ${{ matrix.target.appDir }}
+
             - name: Generate native project
               if: matrix.target.prebuildCommand != ''
               working-directory: ${{ matrix.target.appDir }}
@@ -1759,6 +1765,15 @@ jobs:
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
                   archs: ${{ inputs.ios-simulator-archs }}
                   excluded-archs: ${{ inputs.ios-simulator-archs == 'x86_64' && 'arm64' || 'x86_64' }}
+
+            - name: Save the React Native prebuilt cache
+              if: github.event_name != 'pull_request' && steps.rn-prebuilts.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.rn-prebuilts.outputs.path }}
+                  key: ${{ steps.rn-prebuilts.outputs.cache-key }}
 
             - name: setup-ccache-ios (save)
               uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.5.0 # v4.5.0
