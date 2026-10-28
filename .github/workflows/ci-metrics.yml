@@ -1,0 +1,99 @@
+name: ci-metrics
+
+on:
+    schedule:
+        - cron: '17 6 * * 1'
+    workflow_dispatch:
+        inputs:
+            since:
+                description: First day of the window (YYYY-MM-DD). Empty reports the last full Monday-to-Sunday week.
+                type: string
+                default: ''
+            until:
+                description: Day after the window's last day (YYYY-MM-DD). Required with since.
+                type: string
+                default: ''
+            post:
+                description: Post the report as a comment on the metrics issue.
+                type: boolean
+                default: false
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-metrics
+    cancel-in-progress: false
+
+jobs:
+    report:
+        name: Weekly mobile CI metrics
+        runs-on: [self-hosted, trf-linux-amd64-2x4]
+        timeout-minutes: 120
+        permissions:
+            contents: read
+            issues: write
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+
+            - name: Resolve the report window
+              id: window
+              shell: bash
+              env:
+                  SINCE: ${{ inputs.since }}
+                  UNTIL: ${{ inputs.until }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "$SINCE" ] && [ -z "$UNTIL" ]; then
+                    until_day=$(date -u -d "$(date -u +%F) -$(( ($(date -u +%u) + 6) % 7 )) days" +%F)
+                    since_day=$(date -u -d "$until_day -7 days" +%F)
+                  elif [ -n "$SINCE" ] && [ -n "$UNTIL" ]; then
+                    since_day=$(date -u -d "$SINCE" +%F)
+                    until_day=$(date -u -d "$UNTIL" +%F)
+                  else
+                    echo "::error::Set both since and until, or neither."
+                    exit 1
+                  fi
+                  days=$(( ($(date -u -d "$until_day" +%s) - $(date -u -d "$since_day" +%s)) / 86400 ))
+                  if [ "$days" -le 0 ]; then
+                    echo "::error::since ($since_day) must be before until ($until_day)."
+                    exit 1
+                  fi
+                  {
+                    echo "since=$since_day"
+                    echo "until=$until_day"
+                    echo "baseline-since=$(date -u -d "$since_day -$days days" +%F)"
+                  } >> "$GITHUB_OUTPUT"
+
+            - name: Compute the report
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ secrets.CI_METRICS_TOKEN }}
+                  REPOS: ${{ vars.CI_METRICS_REPOS || 'vitalyiegorov/suuudokuuu budgie-at/budgie rnw-community/rnw-community vitalyiegorov/pony-labirinth rnw-community/mobile-ci' }}
+                  SINCE: ${{ steps.window.outputs.since }}
+                  UNTIL: ${{ steps.window.outputs.until }}
+                  BASELINE_SINCE: ${{ steps.window.outputs.baseline-since }}
+              run: |
+                  set -euo pipefail
+                  if [ -z "$GH_TOKEN" ]; then
+                    echo "::error::CI_METRICS_TOKEN is not set. It must be a token that can read Actions and check runs on every repository in CI_METRICS_REPOS; the job token can only read this one."
+                    exit 1
+                  fi
+                  args=()
+                  for repo in $REPOS; do args+=(--repo "$repo"); done
+                  python3 -I scripts/ci-metrics.py "${args[@]}" --since "$SINCE" --until "$UNTIL" \
+                    --baseline-since "$BASELINE_SINCE" --baseline-until "$SINCE" \
+                    --cache-dir "$RUNNER_TEMP/ci-metrics-cache" --json "$RUNNER_TEMP/ci-metrics.json" > "$RUNNER_TEMP/ci-metrics.md"
+                  cat "$RUNNER_TEMP/ci-metrics.md" >> "$GITHUB_STEP_SUMMARY"
+
+            - name: Post the report on the metrics issue
+              if: github.event_name == 'schedule' || inputs.post
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  REPOSITORY: ${{ github.repository }}
+                  ISSUE: ${{ vars.CI_METRICS_ISSUE || '272' }}
+              run: gh issue comment "$ISSUE" --repo "$REPOSITORY" --body-file "$RUNNER_TEMP/ci-metrics.md"
