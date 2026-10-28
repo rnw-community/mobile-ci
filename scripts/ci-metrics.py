@@ -117,6 +117,20 @@ class Api:
             cached.write_text(json.dumps(data))
         return data
 
+    def post(self, path):
+        if self.fixtures:
+            with open(Path(self.fixtures) / 'posts.log', 'a') as log:
+                log.write(f'POST {path}\n')
+            return {}
+        request = urllib.request.Request(f'{API}{path}', data=b'', method='POST', headers={
+            'Authorization': f'Bearer {self.token}',
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+        })
+        with urllib.request.urlopen(request, timeout=60) as response:
+            body = response.read()
+        return json.loads(body) if body else {}
+
     def pages(self, path, key, cacheable):
         items, page = [], 1
         while True:

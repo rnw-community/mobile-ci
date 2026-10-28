@@ -1,0 +1,60 @@
+name: rerun-infra-failures
+description: >-
+  Re-runs a failed workflow run's failed jobs once when every failure is
+  infrastructure (lost runner, exec format error, job not acquired, shutdown
+  signal, disk full, network, timeout, missing command), classified from the
+  jobs' annotations with the same rules as scripts/ci-metrics.py. A test
+  failure anywhere in the run means nothing is re-run. Call it from a
+  workflow_run job; it needs actions write and checks read.
+inputs:
+  run-id:
+    description: Workflow run id to inspect, e.g. github.event.workflow_run.id.
+    required: true
+  repository:
+    description: owner/name of the run's repository.
+    required: false
+    default: ${{ github.repository }}
+  max-attempts:
+    description: Automatic retries allowed per run; a run whose attempt is above this is left alone.
+    required: false
+    default: '1'
+  dry-run:
+    description: true classifies and reports without re-running anything.
+    required: false
+    default: 'false'
+  github-token:
+    description: Token with actions write and checks read on the repository.
+    required: false
+    default: ${{ github.token }}
+outputs:
+  decision:
+    description: rerun, test-failure, retries-exhausted, unclassified, nothing-failed or not-finished.
+    value: ${{ steps.classify.outputs.decision }}
+  infra-jobs:
+    description: Number of failed jobs classified as infrastructure.
+    value: ${{ steps.classify.outputs.infra-jobs }}
+  test-jobs:
+    description: Number of failed jobs classified as test failures.
+    value: ${{ steps.classify.outputs.test-jobs }}
+runs:
+  using: composite
+  steps:
+    - name: Validate tooling
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error::rerun-infra-failures needs python3 on PATH and found none."
+          exit 1
+        fi
+
+    - name: Classify the failures and re-run infra-only runs
+      id: classify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPOSITORY: ${{ inputs.repository }}
+        RUN_ID: ${{ inputs.run-id }}
+        MAX_ATTEMPTS: ${{ inputs.max-attempts }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: python3 -I "$GITHUB_ACTION_PATH/rerun.py"
