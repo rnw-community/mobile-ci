@@ -11,7 +11,7 @@ const canonical = value => {
     }
     return value;
 };
-const tree = root => {
+const tree = (root, skip = () => false) => {
     const hash = crypto.createHash('sha256');
     const visit = (filename, relative, ancestors) => {
         const resolved = fs.realpathSync(filename);
@@ -19,7 +19,7 @@ const tree = root => {
         const stat = fs.statSync(filename);
         hash.update(JSON.stringify([relative, stat.mode & 0o777, stat.isDirectory() ? 'directory' : 'file']));
         if (stat.isDirectory()) {
-            for (const name of fs.readdirSync(filename).sort()) {
+            for (const name of fs.readdirSync(filename).sort().filter(name => !skip(name))) {
                 visit(path.join(filename, name), `${relative}/${name}`, [...ancestors, resolved]);
             }
         } else if (stat.isFile()) {
@@ -67,7 +67,7 @@ try {
         if (fs.statSync(path.join(outputDirectory, 'bundle')).size === 0) throw new Error('Empty custom bundle');
         config = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'config.json'), 'utf8'));
     } else {
-        expo(['export', '--platform', environment.PLATFORM, '--output-dir', outputDirectory, '--clear']);
+        expo(['export', '--platform', environment.PLATFORM, '--output-dir', outputDirectory, '--clear', '--source-maps']);
         const bundleDirectory = path.join(outputDirectory, '_expo', 'static', 'js', environment.PLATFORM);
         if (!fs.readdirSync(bundleDirectory).some(name => /\.(hbc|js)$/.test(name) && fs.statSync(path.join(bundleDirectory, name)).size > 0)) {
             throw new Error('Export has no production bundle');
@@ -103,7 +103,7 @@ try {
         repository: environment.GITHUB_REPOSITORY,
         platform: environment.PLATFORM,
         nativeKey: environment.NATIVE_KEY,
-        bundle: tree(outputDirectory),
+        bundle: tree(outputDirectory, name => name.endsWith('.map')),
         config,
         testTrees,
         stateVersion: digest(stateVersion),

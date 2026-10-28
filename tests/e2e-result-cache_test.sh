@@ -35,11 +35,24 @@ identity_workspace() {
     stub "$workspace" npx "$(cat <<'STUB'
 if [ "${EXPORT_FAIL:-false}" = true ]; then exit 1; fi
 if [ "$3" = config ]; then printf "{\"extra\":{\"flag\":\"%s\"}}" "${CONFIG_FLAG:-one}"; exit 0; fi
+out=''
+maps=false
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = --output-dir ]; then shift; mkdir -p "$1/_expo/static/js/ios"; printf "%s" "${BUNDLE_CONTENT:-bundle}" > "$1/_expo/static/js/ios/app.hbc"; printf asset > "$1/asset.png"; exit 0; fi
+  case "$1" in
+    --output-dir) shift; out="$1" ;;
+    --source-maps) maps=true ;;
+  esac
   shift
 done
-exit 1
+[ -n "$out" ] || exit 1
+mkdir -p "$out/_expo/static/js/ios"
+if [ "$maps" = true ]; then
+  printf "%s" "${BUNDLE_CONTENT:-bundle}" > "$out/_expo/static/js/ios/app.hbc"
+  printf "{\"sources\":[\"%s/index.js\"]}" "$(mktemp -u)" > "$out/_expo/static/js/ios/app.hbc.map"
+else
+  printf "%s %s" "${BUNDLE_CONTENT:-bundle}" "$(mktemp -u)" > "$out/_expo/static/js/ios/app.hbc"
+fi
+printf asset > "$out/asset.png"
 STUB
 )"
 }
@@ -55,6 +68,9 @@ identity_workspace
 identity
 original=$(step_output "$workspace" key)
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" && [[ "$original" =~ ^[a-f0-9]{64}$ ]]; then pass_case; else fail_case 'no SHA-256 key'; fi
+case_start 'two default exports of the same commit produce the same key'
+identity
+assert_equals "$original" "$(step_output "$workspace" key)" key && pass_case
 case_start 'unreferenced metadata and docs do not change the key'
 printf docs > "$workspace/work/README.md"
 mkdir -p "$workspace/work/.github/workflows"
@@ -104,6 +120,12 @@ pass_case
 case_start 'custom RN exporter hashes bundle, config and assets without Expo'
 identity EXPORT_COMMAND="printf rn > \"\$E2E_CACHE_EXPORT_DIR/bundle\"; printf \"{}\" > \"\$E2E_CACHE_EXPORT_DIR/config.json\"; printf image > \"\$E2E_CACHE_EXPORT_DIR/image.png\"" EXPORT_FAIL=true
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))"; then pass_case; fi
+case_start 'source maps from a custom exporter do not enter the key'
+custom_export="printf rn > \"\$E2E_CACHE_EXPORT_DIR/bundle\"; printf \"{}\" > \"\$E2E_CACHE_EXPORT_DIR/config.json\"; mktemp -u > \"\$E2E_CACHE_EXPORT_DIR/bundle.map\""
+identity EXPORT_COMMAND="$custom_export"
+custom_original=$(step_output "$workspace" key)
+identity EXPORT_COMMAND="$custom_export"
+if [ -n "$custom_original" ] && assert_equals "$custom_original" "$(step_output "$workspace" key)" key; then pass_case; fi
 case_start 'custom exporter missing runtime config cannot produce a key'
 : > "$workspace/outputs"
 identity EXPORT_COMMAND="printf rn > \"\$E2E_CACHE_EXPORT_DIR/bundle\""
