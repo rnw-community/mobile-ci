@@ -96,6 +96,7 @@ assert_equals '2 1' "$(value '.results["o/r"].failures | "\(.infra) \(.test)"')"
 
 case_start 'a baseline window adds deltas to the report'
 metrics --baseline-since 2026-10-01 --baseline-until 2026-10-02
+# shellcheck disable=SC2016 # the backticks are Markdown in the expected report, not a command.
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$fixtures/err"))" \
     && assert_contains "$(cat "$fixtures/report.md")" '15.0 min (+0.0)' 'feedback delta' \
     && assert_contains "$(cat "$fixtures/report.md")" '50% (+0 pp)' 'native share delta' \
