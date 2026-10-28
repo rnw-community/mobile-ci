@@ -21,8 +21,11 @@ request can drop out of a run's `pull_requests`), cancels any still active
 again, and returns once none is left. A run still active after
 `wait-for-runs-timeout-minutes`, or a run list the API refuses, fails the job,
 and the deletion below never runs: the previews stay until the job is re-run.
-Runs are never force-cancelled, so a run's `always()` cleanup steps (simulator
-leases, emulator containers) still run.
+A run with a job in progress is never force-cancelled, so its `always()`
+cleanup steps (simulator leases, emulator containers) still run. A run that is
+still `queued`, `waiting`, `requested` or `pending` after two minutes of cancel
+requests has no job running and nothing to tear down; GitHub sometimes leaves
+such a run queued indefinitely, so the job then force-cancels it.
 
 The workflow runs in its own concurrency group, keyed on the pull request,
 with `cancel-in-progress: false`, and its cancel step excludes its own run, so

@@ -231,6 +231,31 @@ if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
     pass_case
 fi
 
+case_start 'a run that ignores cancel for two minutes of polls is force-cancelled'
+wait_setup
+for poll in 1 2 3 4 5 6 7 8 9; do
+    printf '{"workflow_runs": [%s]}' "$(run_json 6 queued pull_request 42)" > "$workspace/fake/poll-${poll}.json"
+done
+wait_for_runs
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals 8 "$(grep -c 'actions/runs/6/cancel$' "$workspace/fake/cancelled")" 'plain cancels before escalating' \
+    && assert_equals 1 "$(grep -c 'actions/runs/6/force-cancel$' "$workspace/fake/cancelled")" 'force-cancels' \
+    && assert_contains "$(cat "$workspace/log")" 'force-cancel' 'escalation is logged'; then
+    pass_case
+fi
+
+case_start 'an in-progress run is never force-cancelled, so its teardown steps still run'
+wait_setup
+for poll in 1 2 3 4 5 6 7 8 9; do
+    printf '{"workflow_runs": [%s]}' "$(run_json 5 in_progress pull_request 42)" > "$workspace/fake/poll-${poll}.json"
+done
+wait_for_runs
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals 9 "$(grep -c 'actions/runs/5/cancel$' "$workspace/fake/cancelled")" 'plain cancels' \
+    && assert_not_contains "$(cat "$workspace/fake/cancelled")" 'force-cancel' 'force-cancels'; then
+    pass_case
+fi
+
 case_start 'a run on the branch that lost its PR association is still waited for'
 wait_setup
 printf '{"workflow_runs": [%s]}' "$(run_json 5 waiting)" > "$workspace/fake/poll-1.json"

@@ -26,9 +26,13 @@ requested rollout, reports and succeeds without a change.
 
 **Gate it with an Environment.** `github-environment` names a GitHub
 Environment for the job, so its protection rules (required reviewers, wait
-timer, deployment branches) hold the release until someone approves it. The
-store secrets themselves still come through `secrets:` — a reusable
-workflow's job cannot read the caller's environment secrets.
+timer, deployment branches) hold the release until someone approves it.
+Store secrets kept only in that environment work too, but the caller must
+still pass each one **by name** in its `secrets:` block
+(`ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}`): the release job declares the
+environment, so GitHub resolves the name to the environment's value there.
+A secret the caller does not name arrives empty, with no error from GitHub;
+the first step then fails naming it.
 
 ## iOS
 
@@ -37,7 +41,9 @@ workflow's job cannot read the caller's environment secrets.
 2. App Store version: the version string's own version if it exists; else the
    one editable version (App Store Connect allows one) renamed to it; else a
    new one. `ios-release-type` (and `ios-scheduled-release-date` for
-   `SCHEDULED`) is set on it.
+   `SCHEDULED`) is set on it; empty (the default) leaves an existing
+   version's release type as App Store Connect has it and creates a new
+   version as `MANUAL`.
 3. The build must carry an export compliance answer, or the job fails before
    any change: set `ITSAppUsesNonExemptEncryption` in `Info.plist` (Expo:
    `ios.config.usesNonExemptEncryption: false`).
@@ -77,10 +83,11 @@ tracks and discards it. Full behaviour:
 | `timeout-minutes` | number | no | `15` | Job timeout. |
 | `node-version` | string | no | `22.x` | Node version for `actions/setup-node`. |
 | `version-file` | string | no | `''` | Repository-relative JSON file whose top-level `"version"` is the iOS marketing version, e.g. `apps/mobile/package.json`; read when `ios-version` is empty. |
-| `ios-app-id` | string | for `ios` | `''` | Numeric App Store Connect app id (App Information > Apple ID). |
+| `ios-app-id` | string | for `ios`, or `ios-bundle-id` | `''` | Numeric App Store Connect app id (App Information > Apple ID). Empty resolves it from `ios-bundle-id`. |
+| `ios-bundle-id` | string | for `ios`, or `ios-app-id` | `''` | Bundle identifier, e.g. `com.example.app`, resolved to the app id through App Store Connect. With both set they must name the same app. |
 | `ios-version` | string | no | `''` | Marketing version to submit. Empty reads `version-file`; one of the two is required for `ios`. |
 | `ios-build-number` | string | no | `''` | Build number to attach. Empty picks the newest `VALID`, unexpired build of the version. |
-| `ios-release-type` | string | no | `MANUAL` | `MANUAL`, `AFTER_APPROVAL` or `SCHEDULED`: what happens once the version is approved. |
+| `ios-release-type` | string | no | `''` | `MANUAL`, `AFTER_APPROVAL` or `SCHEDULED`: what happens once the version is approved. Empty keeps an existing version's release type and creates a new version as `MANUAL`. |
 | `ios-scheduled-release-date` | string | no | `''` | ISO-8601 earliest release date-time; required with `SCHEDULED`, rejected otherwise. |
 | `ios-phased-release` | boolean | no | `false` | Release over Apple's 7-day phased rollout once the version goes live. |
 | `android-package` | string | for `android` | `''` | Android application id. |
@@ -96,18 +103,21 @@ is not offered: every input here is a scalar, so a caller is already a short
 
 ## Secrets
 
-> Secret values are the raw file contents, not base64, exactly as
-> [`native-publish.yml`](native-publish.md#secrets) takes them, so both
-> workflows share one set of secrets.
+> `ASC_API_KEY` is the raw `.p8` contents, exactly as
+> [`native-publish.yml`](native-publish.md#secrets) takes it, so both
+> workflows can share one set of secrets. `ASC_API_KEY_BASE64` takes the
+> same key base64-encoded, the form `apple-signing`, `xcode-archive-upload`
+> and `swift-ios.yml` use; set one of the two.
 
 | Name | Required | Description |
 | ---- | -------- | ----------- |
-| `ASC_API_KEY` | for `ios` | App Store Connect API key contents (`.p8`); the key needs the App Manager role. |
+| `ASC_API_KEY` | for `ios`, or `ASC_API_KEY_BASE64` | App Store Connect API key contents (`.p8`); the key needs the App Manager role. |
+| `ASC_API_KEY_BASE64` | for `ios`, or `ASC_API_KEY` | The same `.p8` key, base64-encoded. Setting both fails the job. |
 | `ASC_KEY_ID` | for `ios` | App Store Connect API key ID. |
 | `ASC_ISSUER_ID` | for `ios` | App Store Connect API issuer ID. |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | for `android` | Google Play service account key JSON contents; the account needs release permission on the target track. |
 
-All four are optional at the `workflow_call` level so a single-platform caller
+All of them are optional at the `workflow_call` level so a single-platform caller
 passes only its own. The first step fails the job, before either store is
 called, naming every secret and input the selected platforms need and lack.
 
@@ -118,7 +128,8 @@ The calling job grants `contents: read` (the sparse checkout of
 
 ## Concurrency
 
-Runs are serialized per repository, `ios-app-id` and `android-package`, never
+Runs are serialized per repository, `ios-app-id`, `ios-bundle-id` and
+`android-package`, never
 cancelled: two overlapping releases of one app would race on the same review
 submission or edit.
 

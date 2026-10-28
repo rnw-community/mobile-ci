@@ -16,8 +16,9 @@ the section that matches your task; skip the other.
 - `actions/<name>/action.yml` — one composite action per directory.
 - `actions/<name>/README.md` — that action's input/output table + one example.
 - `.github/workflows/*.yml` — reusable `workflow_call` workflows, plus
-  `self-test.yml` (CI lint/scan) and `pr-closed-cleanup.yml` (this repo's own
-  consumer of `pr-closed-cleanup-reusable.yml`).
+  `self-test.yml` (CI lint/scan), `pr-closed-cleanup.yml` (this repo's own
+  consumer of `pr-closed-cleanup-reusable.yml`) and `ci-metrics.yml` (the
+  weekly fleet CI report, #272, posted on that issue).
 - `docs/workflows/<name>.md` — full input/secret/permission reference per
   reusable workflow, one file per workflow in `.github/workflows/`, each with a
   `### Minimal` and a `### Full` example.
@@ -44,6 +45,12 @@ the section that matches your task; skip the other.
   step script.
 - `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
   is slimmed against; the actions resolve `slim-profile: bundled` to it.
+- `scripts/ci-metrics.py` — the #272 report: PR feedback, queue time per
+  pool, native-build share, shard durations and the infra/test failure split
+  across the consumer repos, from the Actions API. Runs locally with
+  `GH_TOKEN=$(gh auth token) scripts/ci-metrics.py --repo <owner/name> --since
+  <day> --until <day>`; `ci-metrics.yml` needs a `CI_METRICS_TOKEN` secret
+  that can read every repo in `CI_METRICS_REPOS`.
 - `scripts/slim-simulator.sh` — sourceable `slim_simulator` /
   `slim_booted_simulators` helpers consumers fetch at a pinned tag instead of
   keeping a copy.
@@ -256,8 +263,12 @@ source every OTA path uses (the project's own `expo-updates`).
   production channels. Clean up with `eas-channel-cleanup-reusable.yml`.
 - Production updates: `eas-update` in a job with `environment:` (required
   reviewers), gated on `native-publish.yml`'s `decision` output. A job that
-  calls a reusable workflow cannot name an `environment:`, so environment
-  secrets never reach one.
+  calls a reusable workflow cannot name an `environment:`. Environment secrets
+  reach a reusable workflow only through one of its own jobs that declares
+  `environment:` (`store-release.yml`'s `github-environment`, `swift-ios.yml`'s
+  `publish-environment`), and only when the caller still passes each secret by
+  name (`NAME: ${{ secrets.NAME }}`); one it does not name arrives empty.
+  `native-publish.yml` declares none.
 
 ### Maestro flow-file convention
 

@@ -13,15 +13,20 @@ prebuild and native-key computation. Before fetching a base binary it exports
 production JavaScript/assets with the **installed** Expo CLI:
 
 ```sh
-NODE_ENV=production npx --no-install expo export --platform ios --output-dir <fresh-directory> --clear
+NODE_ENV=production npx --no-install expo export --platform ios --output-dir <fresh-directory> --clear --source-maps
 NODE_ENV=production npx --no-install expo config --type public --json
 ```
 
 Android uses `--platform android`. The build environment/secrets are already
 applied; `repack-env` is applied over them just as in the real repack. Neither
 command installs an unrelated latest CLI. A fresh export must contain a nonempty
-platform production bundle. The entire output is hashed, including all chunks,
-Hermes bytecode when configured, assets and metadata. The resolved public config
+platform production bundle. The entire output except `*.map` source maps is
+hashed, including all chunks, Hermes bytecode when configured, assets and
+metadata. `--source-maps` is what makes Hermes deterministic: without it, Hermes
+compiles from a randomly named temporary file and embeds that path in the
+`.hbc`, so two exports of one commit differ and the key never hits. The maps
+themselves can carry absolute checkout paths and do not ship in the app, so
+they are left out of the hash. The resolved public config
 is separately included: changes to values the native fingerprint deliberately
 skips can still change what the app reads at runtime.
 
@@ -30,8 +35,8 @@ The key is SHA-256 of a recursively sorted JSON object containing:
 - Schema version, consumer repository and platform.
 - Existing native key: fingerprint, fingerprint-config contract, native build
   action identity, build-secret digest, toolchain, scheme/workspace and ABI.
-- Sorted export tree paths, file bytes, file/directory modes and empty directories;
-  plus resolved public app config. Paths are relative to the fresh export root;
+- Sorted export tree paths, file bytes, file/directory modes and empty directories,
+  excluding `*.map` files; plus resolved public app config. Paths are relative to the fresh export root;
   timestamps and absolute export-directory names are not hashed.
 - Test dependency paths and content trees: resolved target's `flowsDir` by
   default, explicit Maestro config, pre-run/recovery flows and shard manifests,
@@ -58,8 +63,9 @@ The complete output hash is more reliable than a source-file/lockfile digest:
 Metro resolves workspace dependencies, package exports, Babel transforms,
 platform extensions, static assets and Expo Router chunks. A source allowlist
 cannot reliably model all of those. Nondeterministic output produces extra
-misses, never false hits; the action does not strip source URLs, runtime config
-or arbitrary metadata in pursuit of a stable key.
+misses, never false hits; apart from leaving out source maps, the action does
+not strip source URLs, runtime config or arbitrary metadata in pursuit of a
+stable key.
 
 The existing native-key correctness boundary still applies: ignored paths must
 not alter native behavior. If a warm-up intentionally force-replaces a base
@@ -77,7 +83,9 @@ bundling, provide `e2e-cache-export-command` to reproduce that production
 payload. It runs in `app-dir` with `$E2E_CACHE_EXPORT_DIR` naming a fresh absolute
 directory. Write a nonempty `bundle`, valid `config.json` (resolved runtime
 configuration; `{}` only if none) and **all** shipped assets/chunks there. Every
-output byte is hashed. A bare React Native project can invoke its installed
+output byte except `*.map` files is hashed, so the output must be byte-identical
+across two runs of one commit; a command that compiles Hermes bytecode must emit
+source maps, for the reason above. A bare React Native project can invoke its installed
 Metro/RN CLI in this command; the exporter must use the native lane's entry,
 platform, production flags and asset settings. Export failures or missing files
 fall back to running; the cache does not replace the native planner's Expo
@@ -197,6 +205,9 @@ emulator/simulator startup and all shards (Budgie's reported 40+ minute lane).
 4. Remove the consumer path exemption classifier. Until a shared default-branch
    record exists, the first PR runs normally and its later identical pushes can
    reuse that PR's own record. Cross-PR savings require the baseline push lane.
+   On a fleet whose LAN Actions cache refuses pull-request saves, a PR never
+   stores its own record and each node holds its own records; see
+   [A LAN Actions cache on the fleet](self-hosted-runners.md#a-lan-actions-cache-on-the-fleet-no-inputs-needed).
 
 ### Budgie
 

@@ -33,10 +33,11 @@ under identical tooling.
 A native change is legitimate — it just cannot ship as OTA. Label the pull
 request with `override-label` (default `native-change-acknowledged`) and
 re-run the job: the failure becomes a `::warning::` and the job passes. The
-label is read live from the API on every run, so re-running an existing job
-after labelling is enough; no new push is needed. When the API read fails,
-the workflow falls back to the labels carried by the triggering event payload
-and emits a warning saying so.
+label is read live from the pulls API on every run, so re-running an
+existing job after labelling is enough; no new push is needed. The read uses
+the Node the job already sets up, so the runner needs no `gh`. When the API
+read fails, the workflow falls back to the labels carried by the triggering
+event payload and emits a warning naming the error.
 
 ## Inputs
 

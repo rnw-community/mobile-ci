@@ -273,6 +273,7 @@ bumping the pin is the whole migration.
 | [`asc-dedupe-screenshots`](actions/asc-dedupe-screenshots/README.md) | Post-upload App Store Connect duplicate-screenshot verify/repair gate — self-signed ES256 JWT, `curl`/`jq`/`openssl` only; deletes all but the oldest copy of every `deliver` retry duplicate and fails closed so the flaky upload lane gets fixed. |
 | [`app-store-release`](actions/app-store-release/README.md) | Submits an uploaded iOS build for App Review through the App Store Connect API (Node, no fastlane): finds or creates the version, attaches the newest valid build, sets release type and phased release, submits; dry run by default, idempotent on a version already in review. |
 | [`play-store-release`](actions/play-store-release/README.md) | Promotes an uploaded Android build between Google Play tracks through the edits API (Node, no fastlane): highest version code on the source track, release notes copied, completed or staged rollout; dry run by default, idempotent. |
+| [`rerun-infra-failures`](actions/rerun-infra-failures/README.md) | Re-run a failed run's failed jobs once when every failure is infrastructure (lost runner, exec format, timeout, ...); never retries a test failure. |
 | [`rn-prebuilt-cache`](actions/rn-prebuilt-cache/README.md) | Restore React Native's prebuilt iOS tarball cache for the installed `react-native` version; the calling job saves it off pull requests. |
 | [`runs-on-cache-bypass`](actions/runs-on-cache-bypass/README.md) | Opt-in: runs a SHA-pinned `runs-on/action` on a RunsOn `extras=s3-cache` runner so artifact upload/download work behind its cache proxy; a no-op elsewhere. |
 | [`apply-secret-env`](actions/apply-secret-env/README.md)         | Masks and exports a secret's `KEY=VALUE` entries (multi-line via `KEY<<DELIMITER`) with a collision-proof `$GITHUB_ENV` delimiter, fails closed without echoing a malformed line, and emits a SHA-256 digest of the values (plus, with `allow-multiline: false`, a job-local merged `lines` output that does carry them) — the one parser behind `build-secrets-env`, `maestro-secrets-env` and `EAS_EXTRA_ENV`. |
@@ -358,10 +359,10 @@ Environment with required reviewers or a branch policy.
 Every reusable workflow above resolves the JS package manager once per job that
 installs JS dependencies, after checkout and before `actions/setup-node`. The
 result drives pnpm provisioning everywhere, and the
-[`node-pm-cache`](actions/node-pm-cache/README.md) dependency cache in the jobs
-that configure one (the `ios-maestro` / `android-maestro` / `store-screenshots`
-build jobs, `expo-base-plan`, `expo-ota-preview`, `expo-fingerprint-guard`).
-That cache is restored on every event but saved only off pull requests, as a
+[`node-pm-cache`](actions/node-pm-cache/README.md) dependency cache in every
+such job. That cache is restored on every event but saved only off pull
+requests, so the default-branch warm-up (`seed-native-cache`) and release runs
+are what seed the macOS store that pull-request iOS builds restore. It is saved as a
 bounded non-fatal step, so a stalled upload can never cancel a finished job. Resolution order:
 
 1. the `package-manager` input, when set to `yarn`, `pnpm` or `npm`;

@@ -42,8 +42,8 @@ import sys
 
 import yaml
 
-# Not reusable workflows: this repo's own CI, release and consumers.
-SKIP = {'self-test.yml', 'release.yml', 'pr-closed-cleanup.yml'}
+# Not reusable workflows: this repo's own CI, release, metrics and consumers.
+SKIP = {'self-test.yml', 'release.yml', 'pr-closed-cleanup.yml', 'ci-metrics.yml'}
 mode = os.environ['MODE']
 bypass_ref = 'rnw-community/mobile-ci/actions/runs-on-cache-bypass@'
 

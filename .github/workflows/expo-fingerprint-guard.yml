@@ -428,10 +428,21 @@ jobs:
               run: |
                   set -euo pipefail
                   labels=''
-                  if labels="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" --paginate --jq '.[].name' 2>/dev/null)"; then
+                  error_log="$(mktemp)"
+                  # shellcheck disable=SC2016 # JavaScript template literals, expanded by node.
+                  if labels="$(node -e '
+                    const { GITHUB_API_URL = "https://api.github.com", REPOSITORY, PR_NUMBER, GH_TOKEN } = process.env;
+                    fetch(`${GITHUB_API_URL}/repos/${REPOSITORY}/pulls/${PR_NUMBER}`, {
+                      headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json" },
+                      signal: AbortSignal.timeout(30000)
+                    })
+                      .then(response => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.json(); })
+                      .then(pull => { for (const label of pull.labels) console.log(label.name); })
+                      .catch(error => { console.error(error.message); process.exit(1); });
+                  ' 2> "$error_log")"; then
                     :
                   else
-                    echo "::warning::Could not read the pull request's labels from the API; falling back to the labels carried by the triggering event payload, which do not reflect labels added after this run started."
+                    echo "::warning::Could not read the pull request's labels from the API ($(head -c 300 "$error_log")); falling back to the labels carried by the triggering event payload, which do not reflect labels added after this run started."
                     labels="$(printf '%s' "$PAYLOAD_LABELS" | tr ',' '\n')"
                   fi
                   acknowledged=false
