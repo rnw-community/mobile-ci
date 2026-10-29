@@ -18,7 +18,7 @@ prepare_exclude() {
     dir="$(new_empty_workspace)"
     cp "$RUN_SHARD" "$dir/step.sh"
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
-    stub "$dir" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
+    stub "$dir" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; get-state) echo device ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
     stub "$dir" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"'
     write_exclude_fixture_flows "$dir/work/flows"
@@ -50,7 +50,7 @@ prepare_tagged() {
     dir="$(new_empty_workspace)"
     cp "$RUN_SHARD" "$dir/step.sh"
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
-    stub "$dir" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
+    stub "$dir" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; get-state) echo device ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
     # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
     stub "$dir" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"; case "$*" in *fail.flow.yaml*) exit 1 ;; esac'
     printf '%s\n' "$dir"
@@ -61,6 +61,40 @@ invoke_tagged() {
     shift
     invoke_shard "$dir" JUNIT_REPORT=true ARTIFACTS_DIR="$dir/artifacts" "$@"
 }
+
+case_start 'a shard whose emulator is lost stops with an infrastructure annotation and records the unrun flows'
+workspace="$(new_empty_workspace)"
+cp "$RUN_SHARD" "$workspace/step.sh"
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$workspace" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; get-state) [ -f "$LOST" ] && { echo "error: device not found" >&2; exit 1; }; echo device ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$workspace" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"; case "$*" in *02.lost.flow.yaml*) : > "$LOST"; exit 1 ;; esac'
+mkdir -p "$workspace/work/flows"
+for name in 01.ok 02.lost 03.after 04.after; do printf 'appId: x\n' > "$workspace/work/flows/$name.flow.yaml"; done
+invoke_shard "$workspace" LOST="$workspace/lost" JUNIT_REPORT=true ARTIFACTS_DIR="$workspace/artifacts"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_equals 'flows/01.ok.flow.yaml flows/02.lost.flow.yaml' "$(shard_flows_run "$workspace")" 'flows run' \
+    && assert_contains "$(cat "$workspace/log")" "::error::Infrastructure failure: emulator 'emulator-5554' is gone" 'log' \
+    && assert_contains "$(cat "$workspace/summary")" '| 04.after.flow.yaml | 0s | not run (emulator lost) |' 'summary' \
+    && assert_contains "$(cat "$workspace/artifacts/junit/03.after.flow.xml" 2>/dev/null)" 'emulator' 'unrun flow JUnit'; then
+    pass_case
+fi
+
+case_start 'a failed flow on a live emulator keeps running the rest of the shard'
+workspace="$(new_empty_workspace)"
+cp "$RUN_SHARD" "$workspace/step.sh"
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$workspace" adb 'case "$*" in "shell getprop sys.boot_completed") echo 1 ;; get-state) echo device ;; devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;; esac'
+# shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+stub "$workspace" maestro 'printf "%s\n" "$*" >> "$MAESTRO_CALLS"; case "$*" in *02.fail.flow.yaml*) exit 1 ;; esac'
+mkdir -p "$workspace/work/flows"
+for name in 01.ok 02.fail 03.after; do printf 'appId: x\n' > "$workspace/work/flows/$name.flow.yaml"; done
+invoke_shard "$workspace"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_equals 'flows/01.ok.flow.yaml flows/02.fail.flow.yaml flows/03.after.flow.yaml' "$(shard_flows_run "$workspace")" 'flows run' \
+    && assert_not_contains "$(cat "$workspace/log")" 'Infrastructure failure' 'log'; then
+    pass_case
+fi
 
 run_maestro_tag_junit_cases
 

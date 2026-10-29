@@ -52,6 +52,7 @@ INFRA_PATTERNS = [
         r'exceeded the maximum execution time',
         r'an error occurred trying to start process',
         r'process completed with exit code (127|137|143)\b',
+        r'^infrastructure failure:',
     )
 ]
 ROLLUP = re.compile(r'required jobs did not succeed', re.I)

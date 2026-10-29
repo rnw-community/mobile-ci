@@ -593,6 +593,18 @@ for flow_index in "${!selected[@]}"; do
   fi
   if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt" 1; then
     overall_status=1
+    device_state="$(timeout 10 adb get-state 2>/dev/null | tr -d '\r\n ' || true)"
+    if [ "$device_state" != 'device' ]; then
+      remaining=$(( last_flow_index - flow_index ))
+      echo "::error::Infrastructure failure: emulator '$ANDROID_SERIAL' is gone (adb get-state: '${device_state:-no answer}') after '$(basename "$flow")', so shard $SHARD_INDEX stops; its $remaining remaining flow(s) were not run."
+      for skipped in "${selected[@]:$((flow_index + 1))}"; do
+        summary_rows+=("| $(basename "$skipped") | 0s | not run (emulator lost) | 0 | 0 |")
+        if [ -n "$junit_dir" ]; then
+          bash "$MAESTRO_SCRIPTS_DIR/junit-failure.sh" "$(junit_report_file "$skipped")" "maestro-android shard $SHARD_INDEX" "$(basename "$skipped")" "Not run: emulator '$ANDROID_SERIAL' was lost earlier in the shard."
+        fi
+      done
+      break
+    fi
   fi
 done
 
