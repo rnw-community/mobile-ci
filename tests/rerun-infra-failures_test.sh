@@ -11,7 +11,9 @@ set -euo pipefail
 ACTION="$REPO_ROOT/actions/rerun-infra-failures/action.yml"
 STEP='Classify the failures and re-run infra-only runs'
 
-# scenario <run json> <job json lines: id|name|conclusion|annotation>
+# scenario <run json> <job json lines: id|name|conclusion|annotations>, where
+# annotations are separated by ^^ and a warning: or notice: prefix sets the level;
+# a runner exit-code line carries the job name as its title, as GitHub sends it
 scenario() {
     workspace="$(new_workspace "$ACTION" "$STEP")"
     fixtures="$workspace/fixtures"
@@ -33,7 +35,8 @@ jobs = []
 for line in filter(None, os.environ['JOBS'].splitlines()):
     job_id, name, conclusion, annotation = line.split('|')
     jobs.append({'id': int(job_id), 'name': name, 'conclusion': conclusion})
-    put(f'/repos/o/r/check-runs/{job_id}/annotations', [{'message': annotation, 'title': ''}] if annotation else [])
+    notes = [note.split(':', 1) if note.startswith(('warning:', 'notice:')) else ('failure', note) for note in filter(None, annotation.split('^^'))]
+    put(f'/repos/o/r/check-runs/{job_id}/annotations', [{'message': text, 'title': 'Build (e2e)' if text.startswith('Process completed') else '', 'annotation_level': level} for level, text in notes])
 put(f"/repos/o/r/actions/runs/7/attempts/{run.get('run_attempt', 1)}/jobs?per_page=100&page=1", {'jobs': jobs})
 PYTHON
 }
@@ -66,6 +69,19 @@ scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
 classify
 if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a job whose infra-looking annotation sits beside a test failure is a test failure'
+scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
+2|Playwright web E2E|failure|Error: expect(received).toBe(200): request to http://localhost:3000 failed, connection refused^^1 failed^^Process completed with exit code 1."
+classify
+if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'warnings and the bare exit-code line beside an infra cause still allow the retry'
+scenario "$FAILED" "1|Build (e2e)|failure|warning:Maestro failed and tolerate-test-failures kept the job green^^No space left on device^^Process completed with exit code 1."
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a failed job with no annotation counts as a test failure'
 scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST

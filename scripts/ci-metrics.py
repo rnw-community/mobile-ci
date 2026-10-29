@@ -21,8 +21,9 @@ Definitions:
                 over head commits whose lane ran a Plan job.
   Shards        duration of jobs named "Maestro shard ...".
   Failures      failed or timed-out jobs, except roll-up jobs that only
-                report other jobs' results; infra when an annotation or the
-                conclusion matches INFRA_PATTERNS, test otherwise.
+                report other jobs' results; infra when the job timed out or
+                its failure annotations name an INFRA_PATTERNS cause and
+                nothing else but the bare exit-code line, test otherwise.
 """
 import argparse
 import datetime as dt
@@ -54,6 +55,7 @@ INFRA_PATTERNS = [
     )
 ]
 ROLLUP = re.compile(r'required jobs did not succeed', re.I)
+EXIT_LINE = re.compile(r'process completed with exit code [0-9]+\.?', re.I)
 POOL_LABEL = re.compile(r'^(trf-|linux-|macos-|ubuntu|windows)', re.I)
 
 
@@ -174,10 +176,16 @@ def pool_of(job):
 
 
 def is_infra(job, annotations):
-    texts = [job.get('conclusion', '')] + [a.get('message', '') + ' ' + a.get('title', '') for a in annotations]
+    """Infra when the job timed out, or when an annotation names an infra cause and
+    every other failure annotation is too, or is the runner's bare exit-code line.
+    One test failure among them makes the job a test failure: a test that hit a
+    refused connection mentions the network, but it still failed a test."""
     if job.get('conclusion') == 'timed_out':
         return True
-    return any(pattern.search(text) for pattern in INFRA_PATTERNS for text in texts)
+    failures = [a for a in annotations
+                if a.get('annotation_level', 'failure') == 'failure' and (a.get('message') or a.get('title'))]
+    infra = [any(pattern.search(a.get('message', '') + ' ' + a.get('title', '')) for pattern in INFRA_PATTERNS) for a in failures]
+    return any(infra) and all(hit or EXIT_LINE.fullmatch(a.get('message', '').strip()) for hit, a in zip(infra, failures))
 
 
 def quantile(values, q):

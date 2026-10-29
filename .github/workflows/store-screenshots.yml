@@ -2759,14 +2759,14 @@ jobs:
                   result=failed
                   trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
                   fail() {
-                    echo "$1"
+                    echo "::error::$1"
                     if [ "$2" = 'cancelled' ]; then
                       echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/capture-timeout-minutes (or their android-* siblings) before assuming external cancellation."
                     fi
                     exit 1
                   }
                   if [ "$VALIDATE_RESULT" != "success" ]; then
-                    fail "capture-manifest/capture-scenes validation failed." "$VALIDATE_RESULT"
+                    fail "Required jobs did not succeed: capture-manifest/capture-scenes validation failed." "$VALIDATE_RESULT"
                   fi
                   # Honest-skip semantics: a platform's plan/capture results
                   # must be success when the manifest has entries for it, and
@@ -2775,16 +2775,16 @@ jobs:
                   ran_platforms=''
                   if [ "$HAS_IOS" = 'true' ]; then
                     if [ "$PLAN_IOS_RESULT" != "success" ]; then
-                      fail "iOS plan job did not succeed (result: $PLAN_IOS_RESULT) despite the manifest having iOS entries." "$PLAN_IOS_RESULT"
+                      fail "Required jobs did not succeed: iOS plan job did not succeed (result: $PLAN_IOS_RESULT) despite the manifest having iOS entries." "$PLAN_IOS_RESULT"
                     fi
                     if [ "$BUILD_IOS_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS_IOS" != '[]' ]; then
                       fail "The iOS build was skipped while ${NATIVE_TARGETS_IOS} still needed one; a skipped build is not a build." "$BUILD_IOS_RESULT"
                     fi
                     if [ "$BUILD_IOS_RESULT" != "success" ] && [ "$BUILD_IOS_RESULT" != 'skipped' ]; then
-                      fail "iOS build job did not succeed (result: $BUILD_IOS_RESULT) despite the manifest having iOS entries." "$BUILD_IOS_RESULT"
+                      fail "Required jobs did not succeed: iOS build job did not succeed (result: $BUILD_IOS_RESULT) despite the manifest having iOS entries." "$BUILD_IOS_RESULT"
                     fi
                     if [ "$CAPTURE_IOS_RESULT" != "success" ]; then
-                      fail "iOS capture job did not succeed (result: $CAPTURE_IOS_RESULT) despite the manifest having iOS entries." "$CAPTURE_IOS_RESULT"
+                      fail "Required jobs did not succeed: iOS capture job did not succeed (result: $CAPTURE_IOS_RESULT) despite the manifest having iOS entries." "$CAPTURE_IOS_RESULT"
                     fi
                     ran_platforms="$ran_platforms ios"
                   else
@@ -2792,16 +2792,16 @@ jobs:
                   fi
                   if [ "$HAS_ANDROID" = 'true' ]; then
                     if [ "$PLAN_ANDROID_RESULT" != "success" ]; then
-                      fail "Android plan job did not succeed (result: $PLAN_ANDROID_RESULT) despite the manifest having Android entries." "$PLAN_ANDROID_RESULT"
+                      fail "Required jobs did not succeed: Android plan job did not succeed (result: $PLAN_ANDROID_RESULT) despite the manifest having Android entries." "$PLAN_ANDROID_RESULT"
                     fi
                     if [ "$BUILD_ANDROID_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS_ANDROID" != '[]' ]; then
                       fail "The Android build was skipped while ${NATIVE_TARGETS_ANDROID} still needed one; a skipped build is not a build." "$BUILD_ANDROID_RESULT"
                     fi
                     if [ "$BUILD_ANDROID_RESULT" != "success" ] && [ "$BUILD_ANDROID_RESULT" != 'skipped' ]; then
-                      fail "Android build job did not succeed (result: $BUILD_ANDROID_RESULT) despite the manifest having Android entries." "$BUILD_ANDROID_RESULT"
+                      fail "Required jobs did not succeed: Android build job did not succeed (result: $BUILD_ANDROID_RESULT) despite the manifest having Android entries." "$BUILD_ANDROID_RESULT"
                     fi
                     if [ "$CAPTURE_ANDROID_RESULT" != "success" ]; then
-                      fail "Android capture job did not succeed (result: $CAPTURE_ANDROID_RESULT) despite the manifest having Android entries." "$CAPTURE_ANDROID_RESULT"
+                      fail "Required jobs did not succeed: Android capture job did not succeed (result: $CAPTURE_ANDROID_RESULT) despite the manifest having Android entries." "$CAPTURE_ANDROID_RESULT"
                     fi
                     ran_platforms="$ran_platforms android"
                   else
