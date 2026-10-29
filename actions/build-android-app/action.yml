@@ -449,7 +449,41 @@ runs:
         fi
 
         build_start=$(date +%s)
-        ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
+        gradle_log="$RUNNER_TEMP/mobile-ci-gradle-build.log"
+        if ! ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"} 2>&1 | tee "$gradle_log"; then
+          missing="$(awk '/Failed to install the following SDK components/ { listing = 1; next } listing && match($0, /^[[:space:]]+[a-z-]+;[A-Za-z0-9._-]+([[:space:]]|$)/) { split(substr($0, RSTART, RLENGTH), field, " "); print field[1] }' "$gradle_log" | sort -u)"
+          if [ -z "$missing" ]; then
+            exit 1
+          fi
+          sdk_root=''
+          [ ! -f local.properties ] || sdk_root="$(sed -n 's/^sdk\.dir=//p' local.properties | tail -n 1)"
+          sdk_root="${sdk_root:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}}"
+          sdkmanager=''
+          for candidate in "$sdk_root"/cmdline-tools/*/bin/sdkmanager; do
+            [ -x "$candidate" ] && sdkmanager="$candidate" && break
+          done
+          if [ -z "$sdkmanager" ]; then
+            echo "::error::Infrastructure failure: Gradle could not install the SDK component(s) $(echo "$missing" | tr '\n' ' ')and no sdkmanager is on the SDK root to retry them."
+            exit 1
+          fi
+          echo "::warning::Gradle could not install the SDK component(s) $(echo "$missing" | tr '\n' ' ')(a truncated or corrupt download); installing them with sdkmanager, up to 3 attempts each, and building once more."
+          for package in $missing; do
+            installed=0
+            for attempt in 1 2 3; do
+              if "$sdkmanager" --sdk_root="$sdk_root" --install "$package" < <(yes 2>/dev/null); then
+                installed=1
+                break
+              fi
+              echo "sdkmanager could not install '$package' (attempt $attempt of 3)."
+              [ "$attempt" = 3 ] || sleep $((attempt * 15))
+            done
+            if [ "$installed" != 1 ]; then
+              echo "::error::Infrastructure failure: sdkmanager could not install the SDK component '$package' after 3 attempts."
+              exit 1
+            fi
+          done
+          ./gradlew --no-daemon "$GRADLE_TASK" ${gradle_args[@]+"${gradle_args[@]}"}
+        fi
         build_end=$(date +%s)
         {
           echo "### Android build (cold — native build ran)"

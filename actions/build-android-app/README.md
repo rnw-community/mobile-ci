@@ -9,6 +9,13 @@ around the build, and an [Android SDK cache](#android-sdk-cache) in front of
 `setup-android`. `android-abis` limits the build to the ABIs a test device
 runs.
 
+When Gradle fails because it could not install SDK components the project
+needs (`Failed to install the following SDK components`, usually a truncated
+NDK or Build-Tools download on a node whose SDK cache missed), the step
+installs exactly those components with `sdkmanager`, up to 3 attempts each,
+and runs the build once more. A component `sdkmanager` cannot install either
+fails as an `Infrastructure failure:`, which `rerun-infra-failures` retries.
+
 ## Android SDK cache
 
 Before this, `setup-android` ran uncached: the cmdline-tools, platform-tools,
@@ -39,7 +46,9 @@ every retired NDK forward forever.
 
 - **Hit**: the restored SDK is exported as `ANDROID_HOME`/`ANDROID_SDK_ROOT`
   and put on `PATH`; `setup-android` and `sdkmanager` do not run, and nothing
-  is downloaded. A restored tree with no `sdkmanager` or `adb` falls back to
+  is downloaded unless the restored tree lacks a component the build needs:
+  Gradle then installs it, and if that install fails, `sdkmanager` retries it
+  (see above). A restored tree with no `sdkmanager` or `adb` falls back to
   `setup-android` with a warning.
 - **Miss**: `setup-android` installs into that same root, Gradle adds what it
   needs, and after a **successful** build the SDK is saved — never on a
