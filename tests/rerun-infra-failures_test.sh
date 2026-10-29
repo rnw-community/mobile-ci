@@ -83,6 +83,11 @@ classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
+case_start "an action's own 'Infrastructure failure:' annotation is infra"
+scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|Infrastructure failure: emulator 'emulator-5554' is gone (adb get-state: 'no answer') after 'a.flow.yaml', so shard 0 stops; its 2 remaining flow(s) were not run.^^Process completed with exit code 1."
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision; then pass_case; fi
+
 case_start 'a failed job with no annotation counts as a test failure'
 scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
 2|Unit tests|failure|"

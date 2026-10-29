@@ -62,6 +62,7 @@ prepare() {
 printf "%s\n" "$*" >> "$ADB_CALLS"
 case "$*" in
   "shell getprop sys.boot_completed") echo 1 ;;
+  get-state) echo device ;;
   devices) printf "List of devices attached\nemulator-5554\tdevice\n" ;;
   "shell date +%s") printf "%s\r\n" "$MARKER" ;;
   "shell pidof "*)

@@ -348,6 +348,17 @@ run_flow_recovery() {
   fi
 }
 
+emulator_lost=0
+device_state=''
+emulator_gone() {
+  device_state="$(timeout 10 adb get-state 2>/dev/null | tr -d '\r\n ' || true)"
+  [ "$device_state" != 'device' ]
+}
+
+lost_emulator_error() {
+  echo "::error::Infrastructure failure: emulator '$ANDROID_SERIAL' is gone (adb get-state: '${device_state:-no answer}') $1."
+}
+
 run_flow_with_retries() {
   local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
   local recovery_seconds=0 recovery_start attempt_ok flow_env_file infra_used=0 attempt_epoch retry junit_file=''
@@ -378,12 +389,20 @@ run_flow_with_retries() {
         read_flow_env_file "$flow_env_file" "$label"
       else
         attempt_ok=0
-        echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
+        if emulator_gone; then
+          emulator_lost=1
+        else
+          echo "::error::pre-flow-command failed before attempt $attempts of '$label'; failing the attempt without running the flow."
+        fi
       fi
     fi
     attempt_epoch="$(device_epoch)"
     if [ "$attempt_ok" = '1' ] && maestro test -e "APP_ID=$APP_ID" --debug-output "$maestro_debug_scratch_dir" ${maestro_env_args[@]+"${maestro_env_args[@]}"} ${flow_env_args[@]+"${flow_env_args[@]}"} ${maestro_config_args[@]+"${maestro_config_args[@]}"} ${scenario_args[@]+"${scenario_args[@]}"} "$flow"; then
       status=passed
+      break
+    fi
+    if [ "$emulator_lost" = '1' ] || emulator_gone; then
+      emulator_lost=1
       break
     fi
     keep_events_evidence "$label" "$attempts"
@@ -571,7 +590,11 @@ fi
 if [ -n "$PRE_RUN_FLOW" ]; then
   if ! run_flow_with_retries "$PRE_RUN_FLOW" "$(basename "$PRE_RUN_FLOW") (priming)" 0 0; then
     write_summary
-    echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
+    if [ "$emulator_lost" = '1' ]; then
+      lost_emulator_error "during the priming flow '$(basename "$PRE_RUN_FLOW")', so shard $SHARD_INDEX ran none of its flows"
+    else
+      echo "::error::Priming flow '$PRE_RUN_FLOW' failed; aborting shard $SHARD_INDEX."
+    fi
     exit 1
   fi
 fi
@@ -593,6 +616,17 @@ for flow_index in "${!selected[@]}"; do
   fi
   if ! run_flow_with_retries "$flow" "$(basename "$flow")" "$recover_after_last_attempt" 1; then
     overall_status=1
+    if [ "$emulator_lost" = '1' ]; then
+      remaining=$(( last_flow_index - flow_index ))
+      lost_emulator_error "during '$(basename "$flow")', so shard $SHARD_INDEX stops; its $remaining remaining flow(s) were not run"
+      for skipped in "${selected[@]:$((flow_index + 1))}"; do
+        summary_rows+=("| $(basename "$skipped") | 0s | not run (emulator lost) | 0 | 0 |")
+        if [ -n "$junit_dir" ]; then
+          bash "$MAESTRO_SCRIPTS_DIR/junit-failure.sh" "$(junit_report_file "$skipped")" "maestro-android shard $SHARD_INDEX" "$(basename "$skipped")" "Not run: emulator '$ANDROID_SERIAL' was lost earlier in the shard."
+        fi
+      done
+      break
+    fi
   fi
 done
 
