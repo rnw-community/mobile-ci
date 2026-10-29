@@ -356,16 +356,23 @@ emulator_gone() {
 }
 
 lost_emulator_error() {
-  local log oom_kills cause=''
+  local log oom_kills cause='' events
+  [ -z "${ARTIFACTS_DIR:-}" ] || mkdir -p "$ARTIFACTS_DIR" 2>/dev/null || true
   for log in "${RUNNER_TEMP:-}"/mobile-ci-emulator-*.log; do
     [ -f "$log" ] || continue
     echo "Last emulator output ($log):"
     tail -n 40 "$log" || true
-    cp "$log" "$ARTIFACTS_DIR/" 2>/dev/null || true
+    [ -z "${ARTIFACTS_DIR:-}" ] || cp "$log" "$ARTIFACTS_DIR/" 2>/dev/null || true
   done
-  if [ -r "${CGROUP_ROOT:-/sys/fs/cgroup}/memory.events" ]; then
-    echo "Job cgroup memory.events: $(tr '\n' ' ' < "${CGROUP_ROOT:-/sys/fs/cgroup}/memory.events")"
-    oom_kills="$(awk '$1 == "oom_kill" { print $2 }' "${CGROUP_ROOT:-/sys/fs/cgroup}/memory.events")"
+  if [ -n "${CGROUP_ROOT:-}" ]; then
+    events="$CGROUP_ROOT/memory.events"
+  else
+    events="/sys/fs/cgroup$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup 2>/dev/null)/memory.events"
+    [ -r "$events" ] || events=/sys/fs/cgroup/memory.events
+  fi
+  if [ -r "$events" ]; then
+    echo "Job cgroup memory.events ($events): $(tr '\n' ' ' < "$events")"
+    oom_kills="$(awk '$1 == "oom_kill" { print $2 }' "$events")"
     [ "${oom_kills:-0}" = 0 ] || cause="; the job's cgroup recorded $oom_kills OOM kill(s)"
   fi
   echo "::error::Infrastructure failure: emulator '$ANDROID_SERIAL' is gone (adb get-state: '${device_state:-no answer}'$cause) $1."
