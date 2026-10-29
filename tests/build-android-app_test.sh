@@ -628,8 +628,20 @@ sdk_install_workspace
 run_sdk_build SDK_FAILS=1
 if assert_equals 0 "$STEP_STATUS" "status ($(tail -n 5 "$workspace/log"))" \
     && assert_equals 2 "$(cat "$workspace/gradle-count")" 'gradle runs' \
-    && assert_equals $'--install build-tools;36.0.0\n--install build-tools;36.0.0\n--install ndk;27.1.12297006' "$(cat "$workspace/sdk-calls")" 'sdkmanager calls (one retry)' \
+    && assert_equals "--sdk_root=$workspace/sdk --install build-tools;36.0.0
+--sdk_root=$workspace/sdk --install build-tools;36.0.0
+--sdk_root=$workspace/sdk --install ndk;27.1.12297006" "$(cat "$workspace/sdk-calls")" 'sdkmanager calls (one retry)' \
     && assert_contains "$(cat "$workspace/log")" '::warning::Gradle could not install the SDK component(s) build-tools;36.0.0 ndk;27.1.12297006' 'log'; then
+    pass_case
+fi
+
+case_start "local.properties' sdk.dir is the SDK root sdkmanager installs into"
+sdk_install_workspace
+mv "$workspace/sdk" "$workspace/project-sdk"
+printf 'sdk.dir=%s\n' "$workspace/project-sdk" > "$workspace/work/local.properties"
+run_sdk_build SDK_FAILS=0
+if assert_equals 0 "$STEP_STATUS" "status ($(tail -n 5 "$workspace/log"))" \
+    && assert_contains "$(head -n 1 "$workspace/sdk-calls")" "--sdk_root=$workspace/project-sdk --install" 'sdkmanager call'; then
     pass_case
 fi
 

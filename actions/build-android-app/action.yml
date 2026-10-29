@@ -455,8 +455,11 @@ runs:
           if [ -z "$missing" ]; then
             exit 1
           fi
+          sdk_root=''
+          [ ! -f local.properties ] || sdk_root="$(sed -n 's/^sdk\.dir=//p' local.properties | tail -n 1)"
+          sdk_root="${sdk_root:-${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}}"
           sdkmanager=''
-          for candidate in "${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"/cmdline-tools/*/bin/sdkmanager; do
+          for candidate in "$sdk_root"/cmdline-tools/*/bin/sdkmanager; do
             [ -x "$candidate" ] && sdkmanager="$candidate" && break
           done
           if [ -z "$sdkmanager" ]; then
@@ -467,7 +470,7 @@ runs:
           for package in $missing; do
             installed=0
             for attempt in 1 2 3; do
-              if "$sdkmanager" --install "$package" < <(yes 2>/dev/null); then
+              if "$sdkmanager" --sdk_root="$sdk_root" --install "$package" < <(yes 2>/dev/null); then
                 installed=1
                 break
               fi

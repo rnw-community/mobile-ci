@@ -46,7 +46,9 @@ every retired NDK forward forever.
 
 - **Hit**: the restored SDK is exported as `ANDROID_HOME`/`ANDROID_SDK_ROOT`
   and put on `PATH`; `setup-android` and `sdkmanager` do not run, and nothing
-  is downloaded. A restored tree with no `sdkmanager` or `adb` falls back to
+  is downloaded unless the restored tree lacks a component the build needs:
+  Gradle then installs it, and if that install fails, `sdkmanager` retries it
+  (see above). A restored tree with no `sdkmanager` or `adb` falls back to
   `setup-android` with a warning.
 - **Miss**: `setup-android` installs into that same root, Gradle adds what it
   needs, and after a **successful** build the SDK is saved — never on a
