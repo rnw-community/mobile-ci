@@ -41,7 +41,7 @@ def main():
     rows, infra, test = [], [], []
     if run.get('status') != 'completed':
         decision = 'not-finished'
-    elif run.get('conclusion') != 'failure':
+    elif run.get('conclusion') not in ('failure', 'timed_out'):
         decision = 'nothing-failed'
     else:
         jobs = api.pages(f'/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs', 'jobs', False)

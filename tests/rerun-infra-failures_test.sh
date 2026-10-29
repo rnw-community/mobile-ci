@@ -101,6 +101,12 @@ classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
+case_start 'a run that concluded timed_out is classified like a failed one'
+scenario '{"status":"completed","conclusion":"timed_out","run_attempt":1}' "1|Maestro shard 0 (e2e)|timed_out|"
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
 case_start 'a run already retried is left alone'
 scenario '{"status":"completed","conclusion":"failure","run_attempt":2}' "1|Maestro shard 0 (e2e)|failure|$LOST"
 classify
