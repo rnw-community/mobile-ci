@@ -162,8 +162,13 @@ called workflow's jobs request — see the table in
   prebuilt tarballs (`rn-prebuilt-cache`); `pr-closed-cleanup` force-cancels
   runs stuck in `queued`; `store-release.yml` takes environment-held,
   base64 (`ASC_API_KEY_BASE64`) and bundle-id (`ios-bundle-id`) credentials,
-  and `ios-release-type` now defaults to keeping an existing version's type;
-  new `rerun-infra-failures` action and weekly CI metrics report.
+  and `ios-release-type` now defaults to keeping an existing version's type
+  (pass `ios-release-type: MANUAL` to keep v4.5's behaviour, since an existing
+  `AFTER_APPROVAL` version would otherwise release itself once approved);
+  new `rerun-infra-failures` action and weekly CI metrics report. Markdown
+  no longer enters the native key's build-action hash, so later releases stop
+  orphaning published bases; the key moves once with this one, and each
+  app's first warm-up after the bump republishes its base.
 
 - **v4.5.0** — opt-in content-addressed Maestro pass records skip build, repack
   and test shards when production app output and the complete test contract
@@ -228,8 +233,10 @@ called workflow's jobs request — see the table in
   shrunk resource table). The android native key changes once, so the next
   run per key builds natively and publishes an unshrunk base.
 
-No input was removed or had its default changed after v4.0.0, so within v4
-bumping the pin is the whole migration.
+No input was removed after v4.0.0, and the only default changed since is
+v4.6.0's `ios-release-type` (above), so within v4 bumping the pin is the whole
+migration, plus `ios-release-type: MANUAL` for a `store-release.yml` caller
+that relied on the old default.
 
 ## Pick your tier
 
