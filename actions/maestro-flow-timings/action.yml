@@ -1,0 +1,142 @@
+name: maestro-flow-timings
+description: >-
+  Keeps the per-flow Maestro durations the reusable e2e workflows balance
+  shards on. fetch reads the newest flow-timings.json artifact the default
+  branch recorded; select writes one target's shard-timings-file from it;
+  record folds a run's shard flow-timings.tsv records into a new artifact.
+  Missing or unreadable history never fails a run: it only means the
+  index-modulo split.
+inputs:
+  mode:
+    description: fetch, select or record.
+    required: true
+  artifact-name:
+    description: Name of the timings artifact (fetch, record), e.g. maestro-flow-timings-ios.
+    required: false
+    default: ''
+  branch:
+    description: Branch whose recorded timings fetch reads.
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+  repository:
+    description: owner/name of the repository whose artifacts fetch reads.
+    required: false
+    default: ${{ github.repository }}
+  github-token:
+    description: Token with actions read on the repository (fetch).
+    required: false
+    default: ${{ github.token }}
+  timings:
+    description: Aggregate timings JSON fetch printed (select, record).
+    required: false
+    default: ''
+  target:
+    description: Target whose timings select writes.
+    required: false
+    default: ''
+  records-dir:
+    description: Directory holding this run's downloaded shard artifacts, one subdirectory per artifact (record).
+    required: false
+    default: ''
+  artifact-prefix:
+    description: Name prefix, before the target name, of the per-shard timing artifacts, e.g. maestro-flow-timings-ios- (record).
+    required: false
+    default: ''
+  retention-days:
+    description: Retention of the recorded timings artifact (record).
+    required: false
+    default: '90'
+outputs:
+  timings:
+    description: Aggregate timings JSON (fetch); {"version":1,"targets":{}} when none is recorded.
+    value: ${{ steps.fetch.outputs.timings }}
+  file:
+    description: Path of the target's shard-timings-file (select).
+    value: ${{ steps.select.outputs.file }}
+runs:
+  using: composite
+  steps:
+    - name: Validate the mode and tooling
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$MODE" in
+          fetch|select|record) ;;
+          *)
+            echo "::error::mode must be fetch, select or record, got '$MODE'."
+            exit 1
+            ;;
+        esac
+        if ! command -v python3 >/dev/null 2>&1; then
+          echo "::error::maestro-flow-timings needs python3 on PATH and found none."
+          exit 1
+        fi
+
+    - name: Fetch the recorded flow timings
+      id: fetch
+      if: inputs.mode == 'fetch'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPOSITORY: ${{ inputs.repository }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        if [ -z "$ARTIFACT_NAME" ] || [ -z "$BRANCH" ]; then
+          echo "::error::fetch needs artifact-name and branch."
+          exit 1
+        fi
+        timings="$(python3 -I "$GITHUB_ACTION_PATH/../../scripts/maestro/flow-timings.py" fetch \
+          --repository "$REPOSITORY" --name "$ARTIFACT_NAME" --branch "$BRANCH")"
+        printf 'timings=%s\n' "$timings" >> "$GITHUB_OUTPUT"
+
+    - name: Write the target's shard timings file
+      id: select
+      if: inputs.mode == 'select'
+      shell: bash
+      env:
+        FLOW_TIMINGS: ${{ inputs.timings }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        if [ -z "$TARGET" ]; then
+          echo "::error::select needs target."
+          exit 1
+        fi
+        file="$RUNNER_TEMP/maestro-shard-timings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$$.json"
+        python3 -I "$GITHUB_ACTION_PATH/../../scripts/maestro/flow-timings.py" select --target "$TARGET" --output "$file"
+        echo "file=$file" >> "$GITHUB_OUTPUT"
+
+    - name: Fold this run's shard records into the timings
+      id: record
+      if: inputs.mode == 'record'
+      shell: bash
+      env:
+        FLOW_TIMINGS: ${{ inputs.timings }}
+        RECORDS_DIR: ${{ inputs.records-dir }}
+        ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+        ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      run: |
+        set -euo pipefail
+        if [ -z "$RECORDS_DIR" ] || [ -z "$ARTIFACT_PREFIX" ] || [ -z "$ARTIFACT_NAME" ]; then
+          echo "::error::record needs records-dir, artifact-prefix and artifact-name."
+          exit 1
+        fi
+        out="$RUNNER_TEMP/maestro-flow-timings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        mkdir -p "$out"
+        python3 -I "$GITHUB_ACTION_PATH/../../scripts/maestro/flow-timings.py" record \
+          --records-dir "$RECORDS_DIR" --artifact-prefix "$ARTIFACT_PREFIX" --output "$out/flow-timings.json"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Upload the recorded flow timings
+      if: inputs.mode == 'record'
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.record.outputs.dir }}/flow-timings.json
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: error
+        overwrite: true
