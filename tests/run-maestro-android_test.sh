@@ -88,6 +88,7 @@ fi
 
 case_start 'a pre-flow-command that fails because the emulator is gone leaves only the infrastructure annotation'
 lost_emulator_workspace 01.ok 03.after
+# shellcheck disable=SC2016 # the script expands $LOST when the shard runs it.
 printf ': > "$LOST"\nexit 1\n' > "$workspace/pre-flow.sh"
 invoke_shard "$workspace" LOST="$workspace/lost" PRE_FLOW_COMMAND="bash $workspace/pre-flow.sh"
 errors="$(grep '^::error::' "$workspace/log" || true)"
