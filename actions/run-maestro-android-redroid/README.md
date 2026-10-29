@@ -288,7 +288,7 @@ action neither deduplicates nor claims a precedence.
 ### Example: seeding a per-flow database fixture
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.6.0 # v4.6.0
+- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.7.0 # v4.7.0
   with:
       container-name: redroid-e2e-${{ strategy.job-index }}
       apk-path: ./build/app-release.apk
@@ -315,7 +315,7 @@ and run exactly as they did before, with no extra `-e` argument.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.6.0 # v4.6.0
+- uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.7.0 # v4.7.0
   with:
       container-name: redroid-e2e-${{ strategy.job-index }}
       apk-path: .ci-artifacts/android-e2e-app-bare/app-release.apk

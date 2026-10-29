@@ -20,7 +20,7 @@ jobs:
         permissions:
             # publish cuts a tag and a GitHub Release (create-release: true).
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.6.0 # v4.6.0
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.7.0 # v4.7.0
         with:
             xcode-version: '26.4.1'
             xcode-build: '17E202'

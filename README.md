@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.6.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.7.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -154,6 +154,19 @@ called workflow's jobs request — see the table in
 [docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
 
 ## What changed in v4.x
+
+- **v4.7.0** — Maestro shards can balance on recorded flow durations
+  (`balance-shards: true` on `ios-maestro.yml` / `android-maestro.yml`, new
+  `maestro-flow-timings` action; default-branch runs record, every run reads).
+  `rerun-infra-failures` no longer retries a job whose failures name a test
+  error beside an infra cause (a job whose only failure mentions a network
+  error still reads as infra), and the e2e and screenshot status jobs report
+  as roll-ups,
+  so a lost runner on a shard is now actually retried. A lost Android
+  emulator stops its shard as an `Infrastructure failure:` and uploads the
+  emulator log, its process state, crash dumps and any cgroup OOM kills.
+  `android-emulator` logs the emulator and system-image revisions.
+  `build-android-app` retries SDK components Gradle failed to download.
 
 - **v4.6.0** — `e2e-result-cache` identities are deterministic (Hermes is
   exported with source maps), so pass records can hit; `expo-fingerprint-guard`
@@ -410,7 +423,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -483,7 +496,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.6.0 # v4.6.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.7.0 # v4.7.0
 ```
 
 ## Scope
@@ -529,7 +542,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.6.0 # v4.6.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.7.0 # v4.7.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.
