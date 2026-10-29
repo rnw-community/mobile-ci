@@ -42,7 +42,7 @@ permissions:
     contents: read
 jobs:
     retry:
-        if: github.event.workflow_run.conclusion == 'failure'
+        if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out'
         runs-on: [self-hosted, trf-linux-amd64-2x4]
         timeout-minutes: 10
         permissions:
