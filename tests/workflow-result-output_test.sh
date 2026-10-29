@@ -8,6 +8,17 @@ set -euo pipefail
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
+# rollup_lines <log>: the log's ::error:: lines rerun-infra-failures reads as a
+# roll-up (scripts/ci-metrics.py ROLLUP), so a roll-up never blocks a retry.
+rollup_lines() {
+    SCRIPT="$REPO_ROOT/scripts/ci-metrics.py" python3 -I -c '
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("metrics", os.environ["SCRIPT"])
+metrics = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(metrics)
+print(sum(1 for line in sys.stdin if line.startswith("::error::") and metrics.ROLLUP.search(line)))' < "$1"
+}
+
 report_maestro() {
     workspace="$(new_workflow_workspace "$REPO_ROOT/.github/workflows/$1.yml" status Report)"
     shift
@@ -44,6 +55,19 @@ for workflow in ios-maestro android-maestro; do
         pass_case
     fi
 
+    case_start "$workflow: a failed job is reported as the roll-up annotation the infra retry skips"
+    statuses=''
+    for failed in DETECT_RESULT PLAN_RESULT BUILD_RESULT TEST_RESULT; do
+        report_maestro "$workflow" "$failed=failure"
+        statuses="$statuses$STEP_STATUS$(rollup_lines "$workspace/log")"
+    done
+    report_maestro "$workflow" NATIVE_TARGETS='["app"]'
+    own="$STEP_STATUS$(rollup_lines "$workspace/log")"
+    if assert_equals 11111111 "$statuses" 'status and roll-up annotations per failed job' \
+        && assert_equals 10 "$own" "the status job's own skipped-build verdict"; then
+        pass_case
+    fi
+
     case_start "$workflow: a failed detection reports result=failed"
     report_maestro "$workflow" DETECT_RESULT=failure
     if assert_equals 1 "$STEP_STATUS" 'status' \
@@ -71,6 +95,12 @@ case_start 'store-screenshots: a failed capture reports result=failed'
 report_screenshots CAPTURE_IOS_RESULT=failure
 if assert_equals 1 "$STEP_STATUS" 'status' \
     && assert_equals failed "$(step_output "$workspace" result)" 'result'; then
+    pass_case
+fi
+
+case_start 'store-screenshots: a failed capture is reported as the roll-up annotation the infra retry skips'
+report_screenshots CAPTURE_IOS_RESULT=failure
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_equals 1 "$(rollup_lines "$workspace/log")" 'roll-up annotations'; then
     pass_case
 fi
 

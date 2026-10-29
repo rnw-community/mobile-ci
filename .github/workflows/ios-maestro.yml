@@ -1539,7 +1539,7 @@ jobs:
                     fi
                   }
                   if [ "$DETECT_RESULT" != "success" ]; then
-                    echo "Detection job did not succeed (result: $DETECT_RESULT)."
+                    echo "::error::Required jobs did not succeed: detection job (result: $DETECT_RESULT)."
                     summary "### iOS Maestro E2E: failed (detect job result: $DETECT_RESULT)"
                     cancelled_hint "$DETECT_RESULT"
                     exit 1
@@ -1551,7 +1551,7 @@ jobs:
                     exit 0
                   fi
                   if [ "$PLAN_RESULT" != "success" ]; then
-                    echo "Plan job did not succeed (result: $PLAN_RESULT)."
+                    echo "::error::Required jobs did not succeed: plan job (result: $PLAN_RESULT)."
                     summary "### iOS Maestro E2E: failed (plan job result: $PLAN_RESULT)"
                     cancelled_hint "$PLAN_RESULT"
                     exit 1
@@ -1572,13 +1572,13 @@ jobs:
                     exit 1
                   fi
                   if [ "$BUILD_RESULT" != "success" ] && [ "$BUILD_RESULT" != 'skipped' ]; then
-                    echo "Build job did not succeed (result: $BUILD_RESULT)."
+                    echo "::error::Required jobs did not succeed: build job (result: $BUILD_RESULT)."
                     summary "### iOS Maestro E2E: failed (build job result: $BUILD_RESULT)"
                     cancelled_hint "$BUILD_RESULT"
                     exit 1
                   fi
                   if [ "$TEST_RESULT" != "success" ]; then
-                    echo "Maestro suite did not succeed (result: $TEST_RESULT)."
+                    echo "::error::Required jobs did not succeed: maestro suite (result: $TEST_RESULT)."
                     summary "### iOS Maestro E2E: failed (test job result: $TEST_RESULT)"
                     cancelled_hint "$TEST_RESULT"
                     exit 1
