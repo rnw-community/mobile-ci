@@ -109,7 +109,7 @@ immediately instead of silently testing on something else.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.6.0 # v4.6.0
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.7.0 # v4.7.0
   id: simulator
   with:
       device-type: 'iPad Pro 11-inch (M4)'
@@ -120,7 +120,7 @@ immediately instead of silently testing on something else.
       xcodebuild test -project MyApp.xcodeproj -scheme MyApp \
         -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}"
 
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.6.0 # v4.6.0
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.7.0 # v4.7.0
   if: always()
   with:
       mode: release
