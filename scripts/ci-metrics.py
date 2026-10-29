@@ -182,10 +182,10 @@ def is_infra(job, annotations):
     refused connection mentions the network, but it still failed a test."""
     if job.get('conclusion') == 'timed_out':
         return True
-    failures = [a.get('message', '') + ' ' + a.get('title', '') for a in annotations
+    failures = [a for a in annotations
                 if a.get('annotation_level', 'failure') == 'failure' and (a.get('message') or a.get('title'))]
-    infra = [any(pattern.search(text) for pattern in INFRA_PATTERNS) for text in failures]
-    return any(infra) and all(hit or EXIT_LINE.fullmatch(text.strip()) for hit, text in zip(infra, failures))
+    infra = [any(pattern.search(a.get('message', '') + ' ' + a.get('title', '')) for pattern in INFRA_PATTERNS) for a in failures]
+    return any(infra) and all(hit or EXIT_LINE.fullmatch(a.get('message', '').strip()) for hit, a in zip(infra, failures))
 
 
 def quantile(values, q):

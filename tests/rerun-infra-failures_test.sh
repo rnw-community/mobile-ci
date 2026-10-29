@@ -12,7 +12,8 @@ ACTION="$REPO_ROOT/actions/rerun-infra-failures/action.yml"
 STEP='Classify the failures and re-run infra-only runs'
 
 # scenario <run json> <job json lines: id|name|conclusion|annotations>, where
-# annotations are separated by ^^ and a warning: or notice: prefix sets the level
+# annotations are separated by ^^ and a warning: or notice: prefix sets the level;
+# a runner exit-code line carries the job name as its title, as GitHub sends it
 scenario() {
     workspace="$(new_workspace "$ACTION" "$STEP")"
     fixtures="$workspace/fixtures"
@@ -35,7 +36,7 @@ for line in filter(None, os.environ['JOBS'].splitlines()):
     job_id, name, conclusion, annotation = line.split('|')
     jobs.append({'id': int(job_id), 'name': name, 'conclusion': conclusion})
     notes = [note.split(':', 1) if note.startswith(('warning:', 'notice:')) else ('failure', note) for note in filter(None, annotation.split('^^'))]
-    put(f'/repos/o/r/check-runs/{job_id}/annotations', [{'message': text, 'title': '', 'annotation_level': level} for level, text in notes])
+    put(f'/repos/o/r/check-runs/{job_id}/annotations', [{'message': text, 'title': 'Build (e2e)' if text.startswith('Process completed') else '', 'annotation_level': level} for level, text in notes])
 put(f"/repos/o/r/actions/runs/7/attempts/{run.get('run_attempt', 1)}/jobs?per_page=100&page=1", {'jobs': jobs})
 PYTHON
 }
