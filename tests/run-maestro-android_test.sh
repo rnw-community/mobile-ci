@@ -86,6 +86,19 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start "a lost emulator's own log and the cgroup's OOM kills are reported"
+lost_emulator_workspace 01.ok 02.lost
+mkdir -p "$workspace/runner-temp" "$workspace/cgroup" "$workspace/artifacts"
+printf 'INFO | boot completed\nqemu-system-x86_64: terminating on signal 9\n' > "$workspace/runner-temp/mobile-ci-emulator-5554.log"
+printf 'low 0\nhigh 12\nmax 40\noom 2\noom_kill 1\n' > "$workspace/cgroup/memory.events"
+invoke_shard "$workspace" LOST="$workspace/lost" CGROUP_ROOT="$workspace/cgroup" ARTIFACTS_DIR="$workspace/artifacts"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "is gone (adb get-state: 'no answer'; the job's cgroup recorded 1 OOM kill(s)) during '02.lost.flow.yaml'" 'annotation' \
+    && assert_contains "$(cat "$workspace/log")" 'terminating on signal 9' 'emulator log tail' \
+    && assert_contains "$(cat "$workspace/artifacts/mobile-ci-emulator-5554.log" 2>/dev/null)" 'signal 9' 'emulator log artifact'; then
+    pass_case
+fi
+
 case_start 'a pre-flow-command that fails because the emulator is gone leaves only the infrastructure annotation'
 lost_emulator_workspace 01.ok 03.after
 # shellcheck disable=SC2016 # the script expands $LOST when the shard runs it.
