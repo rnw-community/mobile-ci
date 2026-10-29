@@ -603,6 +603,18 @@ if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
 fi
 stop_booted "$workspace"
 
+case_start 'boot logs the emulator and system-image revisions'
+workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
+mkdir -p "$workspace/sdk/emulator" "$workspace/sdk/system-images/android-34/google_apis/x86_64"
+printf 'Pkg.Revision=36.1.9\n' > "$workspace/sdk/emulator/source.properties"
+printf 'Pkg.Revision=14\n' > "$workspace/sdk/system-images/android-34/google_apis/x86_64/source.properties"
+boot "$workspace"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_contains "$(cat "$workspace/log")" 'Emulator 36.1.9, system image system-images;android-34;google_apis;x86_64 14.' 'revisions'; then
+    pass_case
+fi
+stop_booted "$workspace"
+
 case_start 'a reused AVD keeps one value per key and is not recreated'
 workspace="$(new_workspace "$ACTION" "$BOOT_STEP")"
 boot "$workspace"

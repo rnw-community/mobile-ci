@@ -91,11 +91,16 @@ lost_emulator_workspace 01.ok 02.lost
 mkdir -p "$workspace/runner-temp" "$workspace/cgroup"
 printf 'INFO | boot completed\nqemu-system-x86_64: terminating on signal 9\n' > "$workspace/runner-temp/mobile-ci-emulator-5554.log"
 printf 'low 0\nhigh 12\nmax 40\noom 2\noom_kill 1\n' > "$workspace/cgroup/memory.events"
-invoke_shard "$workspace" LOST="$workspace/lost" CGROUP_ROOT="$workspace/cgroup" ARTIFACTS_DIR="$workspace/artifacts-not-yet-created"
+mkdir -p "$workspace/home/.android/breakpad"
+printf 'minidump' > "$workspace/home/.android/breakpad/qemu-1.dmp"
+invoke_shard "$workspace" LOST="$workspace/lost" CGROUP_ROOT="$workspace/cgroup" ARTIFACTS_DIR="$workspace/artifacts-not-yet-created" HOME="$workspace/home"
 if assert_equals 1 "$STEP_STATUS" 'step status' \
     && assert_contains "$(cat "$workspace/log")" "is gone (adb get-state: 'no answer'; the job's cgroup recorded 1 OOM kill(s)) during '02.lost.flow.yaml'" 'annotation' \
     && assert_contains "$(cat "$workspace/log")" 'terminating on signal 9' 'emulator log tail' \
-    && assert_contains "$(cat "$workspace/artifacts-not-yet-created/mobile-ci-emulator-5554.log" 2>/dev/null)" 'signal 9' 'emulator log artifact'; then
+    && assert_contains "$(cat "$workspace/artifacts-not-yet-created/mobile-ci-emulator-5554.log" 2>/dev/null)" 'signal 9' 'emulator log artifact' \
+    && assert_contains "$(cat "$workspace/log")" 'Emulator processes after the loss:' 'process listing' \
+    && assert_contains "$(cat "$workspace/log")" "Emulator crash dump: $workspace/home/.android/breakpad/qemu-1.dmp" 'crash dump' \
+    && assert_equals minidump "$(cat "$workspace/artifacts-not-yet-created/qemu-1.dmp" 2>/dev/null)" 'crash dump artifact'; then
     pass_case
 fi
 
