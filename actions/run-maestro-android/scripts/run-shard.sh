@@ -464,7 +464,7 @@ run_flow_with_retries() {
   duration=$((end - start - recovery_seconds))
   record_maestro_debug_units "$label" "$status"
   summary_rows+=("| $label | ${duration}s | $status | $attempts | $infra_used |")
-  if [ "$run_precondition" = '1' ]; then
+  if [ "$run_precondition" = '1' ] && [ -n "${ARTIFACTS_DIR:-}" ]; then
     mkdir -p "$ARTIFACTS_DIR"
     timing_name="${flow#"${FLOWS_DIR%/}"/}"
     printf '%s\t%s\t%s\n' "${timing_name#/}" "$duration" "$status" >> "$ARTIFACTS_DIR/flow-timings.tsv"
