@@ -117,7 +117,7 @@ runs:
 
         directory_digest() {
           local root="$1" file
-          find "$root" -type f ! -name '.DS_Store' -print0 \
+          find "$root" -type f ! -name '.DS_Store' ! -name '*.md' -print0 \
             | LC_ALL=C sort -z \
             | while IFS= read -r -d '' file; do
                 printf '%s %s\n' "${file#"$root"/}" "$(sha256_stdin < "$file")"

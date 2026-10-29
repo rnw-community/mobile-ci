@@ -52,7 +52,7 @@ contract and what the ignore list does and does not cover.
 | `key`               | `<fingerprint>-<12 hex of the build identity>`.                              |
 | `fingerprint`       | The bare `@expo/fingerprint` hash, without the build identity.               |
 | `config-hash`       | SHA-256 of the fingerprint config, or `none` when the file is absent.        |
-| `build-action-hash` | SHA-256 of the mobile-ci build action(s) that produce this platform's base.  |
+| `build-action-hash` | SHA-256 of the mobile-ci build action(s) that produce this platform's base, Markdown files excluded.  |
 
 ## Example
 
