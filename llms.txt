@@ -6,7 +6,7 @@
 > warm-up, store screenshots, development and store releases, and OTA updates
 > (EAS-free GitHub Release previews or EAS Update).
 
-Pin `@v4.5.0 # v4.5.0` (or a full commit SHA); `v4` floats on the current
+Pin `@v4.6.0 # v4.6.0` (or a full commit SHA); `v4` floats on the current
 major. The test pipelines need no secrets. Every calling job needs a
 `permissions:` block granting what the called workflow's jobs request — see
 docs/examples/README.md. Start from the complete, CI-checked examples, then read

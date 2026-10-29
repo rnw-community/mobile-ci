@@ -157,7 +157,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -215,7 +215,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -410,7 +410,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -609,7 +609,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
 ```
 
 - `contents: read` — checkout.
@@ -642,7 +642,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -671,7 +671,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -716,7 +716,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.5.0 # v4.5.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.6.0 # v4.6.0
         with:
             force-label: e2e:force
 ```
