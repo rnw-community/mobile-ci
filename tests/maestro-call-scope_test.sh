@@ -163,8 +163,8 @@ for job_id, job in jobs.items():
         uses = str(step.get('uses', ''))
         given = step.get('with') or {}
         if 'actions/upload-artifact' in uses or 'actions/download-artifact' in uses:
-            if SCOPE not in str(given.get('name', '')):
-                problems.append(f'{job_id} {name!r} artifact {given.get("name")!r} is not scoped')
+            if SCOPE not in str(given.get('name', given.get('pattern', ''))):
+                problems.append(f'{job_id} {name!r} artifact {given.get("name", given.get("pattern"))!r} is not scoped')
         if '/actions/run-maestro-' in uses:
             if given.get('flows-dir') != '${{ matrix.target.flowsDir }}':
                 problems.append(f'{name!r} flows-dir is {given.get("flows-dir")!r}')

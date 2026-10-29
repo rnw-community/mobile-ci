@@ -95,6 +95,7 @@ major release.
 | `flows-name-pattern`            | no       | `*.flow.yaml`                                      | Space-separated `find -name` globs (OR'd together) selecting runnable flows directly inside `flows-dir`. Keeps reusable subflows and capture-only flows in subdirectories out of the shard by default. |
 | `flows-exclude-pattern`         | no       | `''`                                                | Optional `find ! -name` globs excluding matched flows by basename: one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
 | `shard-manifest-dir`            | no       | `''`                                                | Optional directory (relative to repo root) of hand-curated `shard-<index>.txt` files (one `flows-dir`-relative flow path per line) overriding the computed index-modulo split. Unset falls back to modulo entirely; once set, every shard-index this job can run must have its own file — a partial manifest fails closed. |
+| `balance-shards` | no | `false` | Balance each target's flows over its shards on the durations earlier default-branch runs recorded (longest flow first onto the least-loaded shard) instead of the index-modulo split. Default-branch push, schedule and dispatch runs record their shards' flow durations to a `maestro-flow-timings-android` artifact (90-day retention) in a `Record flow timings` job; pull requests only read it. No history yet, or an unreadable one, splits by index. `shard-manifest-dir` takes precedence; the `device-cloud` driver does not shard. |
 | `pre-run-flow`                  | no       | `''`                                               | Path to a single priming flow run once before each shard's flows, excluded from sharding. Its failure fails that shard immediately. |
 | `flow-recovery-flow`            | no       | `''`                                               | Path to a single best-effort recovery flow run after a **failed** flow attempt — before the same flow's next retry attempt, and before the next flow starts — so one failure cannot strand the app in a state that cascades into the flows after it. Never run after a passing attempt, and not after a shard's last flow. Its own failure only logs a `::warning::` and never fails the shard. Like `pre-run-flow`, it is removed from the shard's discovered flow list, so it never also runs as a scenario of its own. Its duration is excluded from the per-flow timing table; a line below that table reports how many times it ran and how many of those runs failed. Passed to both `android-driver` options. |
 | `pre-test-command`              | no       | `''`                                               | Optional consumer-owned shell command run once after the app is installed on the device/container and before any flow (including `pre-run-flow`) executes, e.g. seeding a fixture into the app's data container. Runs with `ANDROID_SERIAL`, `APP_ID`, and `APK_PATH` in its environment. Its failure fails that shard immediately. Passed to both `android-driver` options. |
@@ -711,8 +712,9 @@ jobs:
   a repository whose keys are published by something else, but then a key this
   repository does not already have a base for can never be warmed by this
   workflow.
-- `actions: read` — the `artifact` backend's cross-run artifact lookup; harmless
-  and recommended on the `ghcr` backend too.
+- `actions: read` — the `artifact` backend's cross-run artifact lookup, and
+  `balance-shards` reading the recorded flow timings; harmless and recommended
+  on the `ghcr` backend too.
 
 With `base-backend: artifact` no package scope is needed at all —
 `contents: read` + `actions: read` suffices — at the cost of workflow artifacts

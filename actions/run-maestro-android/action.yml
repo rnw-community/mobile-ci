@@ -51,6 +51,18 @@ inputs:
       omits.
     required: false
     default: ''
+  shard-timings-file:
+    description: >-
+      Optional per-flow timings file ({"version": 1, "flows": {"<flows-dir-relative
+      path>": seconds}}) replacing the index-modulo split with a longest-first
+      balance on recorded durations; every shard must be given the same file.
+      A flow without history weighs the median, an unreadable file falls back
+      to the modulo split with a warning, and shard-manifest-dir takes
+      precedence. Each shard records its passed flows' durations to
+      flow-timings.tsv in artifacts-dir, which scripts/maestro/flow-timings.py
+      merge folds into such a file.
+    required: false
+    default: ''
   shard-index:
     description: Zero-based shard index this job runs.
     required: true
@@ -465,6 +477,7 @@ runs:
           FLOWS_NAME_PATTERN: ${{ inputs.flows-name-pattern }}
           FLOWS_EXCLUDE_PATTERN: ${{ inputs.flows-exclude-pattern }}
           SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
+          SHARD_TIMINGS_FILE: ${{ inputs.shard-timings-file }}
           SHARD_INDEX: ${{ inputs.shard-index }}
           SHARD_COUNT: ${{ inputs.shard-count }}
           PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}

@@ -9,6 +9,8 @@ set -euo pipefail
 . "$REPO_ROOT/tests/lib/exclude-pattern-cases.sh"
 # shellcheck source=tests/lib/maestro-tag-junit-cases.sh
 . "$REPO_ROOT/tests/lib/maestro-tag-junit-cases.sh"
+# shellcheck source=tests/lib/shard-timings-cases.sh
+. "$REPO_ROOT/tests/lib/shard-timings-cases.sh"
 
 ACTION="$REPO_ROOT/actions/run-maestro-android-redroid/action.yml"
 SHARD_STEP='Run Maestro shard'
@@ -28,7 +30,7 @@ invoke_shard() {
     run_step "$dir" MAESTRO_CALLS="$dir/calls" \
         GITHUB_ENV="$dir/github-env" GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT=1 \
         APP_ID=com.example.app FLOWS_DIR=flows FLOWS_MAX_DEPTH=1 \
-        FLOWS_NAME_PATTERN='*.flow.yaml' FLOWS_EXCLUDE_PATTERN='' SHARD_MANIFEST_DIR='' \
+        FLOWS_NAME_PATTERN='*.flow.yaml' FLOWS_EXCLUDE_PATTERN='' SHARD_MANIFEST_DIR='' SHARD_TIMINGS_FILE='' \
         SHARD_INDEX=0 SHARD_COUNT=1 PRE_RUN_FLOW='' FLOW_RECOVERY_FLOW='' FLOW_RETRIES=0 \
         PRE_FLOW_COMMAND='' MAESTRO_ENV='' MAESTRO_CONFIG='' INCLUDE_TAGS='' EXCLUDE_TAGS='' JUNIT_REPORT=false MAESTRO_SCRIPTS_DIR="$REPO_ROOT/scripts/maestro" \
         "$@"
@@ -55,5 +57,6 @@ invoke_tagged() {
 }
 
 run_maestro_tag_junit_cases
+run_shard_timings_cases
 
 finish_suite

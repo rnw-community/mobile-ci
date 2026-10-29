@@ -22,7 +22,7 @@ validate() {
         DRIVER=device-cloud DRIVER_INPUT=ios-driver LOCAL_DRIVERS=local \
         HAS_DEVICE_CLOUD_API_KEY=true \
         PRE_RUN_FLOW='' FLOW_RECOVERY_FLOW='' PRE_TEST_COMMAND='' PRE_FLOW_COMMAND='' \
-        SHARD_COUNT=1 SHARD_MANIFEST_DIR='' \
+        SHARD_COUNT=1 SHARD_MANIFEST_DIR='' SHARD_TIMINGS_FILE='' \
         "$@"
 }
 

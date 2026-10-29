@@ -279,6 +279,19 @@ on:
                 type: string
                 required: false
                 default: '20'
+            balance-shards:
+                description: >-
+                    Balance each target's flows over its shards on the durations
+                    earlier default-branch runs recorded (longest flow first onto the
+                    least-loaded shard) instead of the index-modulo split. Every
+                    default-branch push, schedule or dispatch run records its shards'
+                    flow durations to a maestro-flow-timings-android artifact; pull
+                    requests only read it. No history yet, or an unreadable one, splits
+                    by index. shard-manifest-dir takes precedence; the device-cloud
+                    driver does not shard.
+                type: boolean
+                required: false
+                default: false
             shard-count:
                 type: number
                 required: false
@@ -752,6 +765,9 @@ jobs:
     detect:
         name: Detect affected packages
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        permissions:
+            contents: read
+            actions: read
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
             forced: ${{ steps.affected.outputs.forced }}
@@ -759,9 +775,14 @@ jobs:
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
             targets: ${{ steps.targets.outputs.targets }}
             artifact-scope: ${{ steps.targets.outputs.artifact-scope }}
+            flow-timings: ${{ steps.flow-timings.outputs.timings }}
             android-abis: ${{ steps.android-abis.outputs.abis }}
             android-abi-key: ${{ steps.android-abis.outputs.key-segment }}
         steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.6.0 # v4.6.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   fetch-depth: 0
@@ -984,6 +1005,13 @@ jobs:
                     echo "targets=$targets"
                     echo "artifact-scope=${CALL_SCOPE:+-$CALL_SCOPE-}"
                   } >> "$GITHUB_OUTPUT"
+            - name: Fetch the recorded flow timings
+              id: flow-timings
+              if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              with:
+                  mode: fetch
+                  artifact-name: maestro-flow-timings-android${{ steps.targets.outputs.artifact-scope }}
 
 
     plan:
@@ -1406,6 +1434,15 @@ jobs:
                   allow-multiline: false
                   append-to: ${{ inputs.maestro-env }}
 
+            - name: Select the target's flow timings
+              id: shard-timings
+              if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              with:
+                  mode: select
+                  timings: ${{ needs.detect.outputs.flow-timings }}
+                  target: ${{ matrix.target.name }}
+
             - name: run-maestro-android-redroid
               id: run-maestro-android-redroid
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
@@ -1421,6 +1458,7 @@ jobs:
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
                   shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
+                  shard-timings-file: ${{ steps.shard-timings.outputs.file }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
@@ -1457,6 +1495,7 @@ jobs:
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
                   shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
+                  shard-timings-file: ${{ steps.shard-timings.outputs.file }}
                   shard-index: ${{ matrix.shard-index }}
                   shard-count: ${{ inputs.shard-count }}
                   pre-run-flow: ${{ inputs.pre-run-flow }}
@@ -1517,12 +1556,47 @@ jobs:
                   retention-days: ${{ inputs.artifact-retention-days }}
                   redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
 
+            - name: Upload the shard's flow timings
+              if: always() && inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  path: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}/flow-timings.tsv
+                  retention-days: 1
+                  if-no-files-found: ignore
+                  overwrite: true
+
             - name: Report a tolerated Maestro failure
               if: steps.run-maestro-android-redroid.outcome == 'failure' || steps.run-maestro-android.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
               shell: bash
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
               run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
+
+    record-timings:
+        name: Record flow timings
+        needs: [detect, test]
+        if: ${{ always() && inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == '' && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && (needs.test.result == 'success' || needs.test.result == 'failure') }}
+        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
+        timeout-minutes: 10
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.6.0 # v4.6.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Download this run's shard artifacts
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  pattern: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-*-shard-*
+                  path: ${{ runner.temp }}/maestro-shard-artifacts
+            - name: Record the flow timings
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              with:
+                  mode: record
+                  timings: ${{ needs.detect.outputs.flow-timings }}
+                  records-dir: ${{ runner.temp }}/maestro-shard-artifacts
+                  artifact-prefix: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-
+                  artifact-name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}
 
     cache-pass:
         name: Record E2E pass (${{ matrix.target.name }})
