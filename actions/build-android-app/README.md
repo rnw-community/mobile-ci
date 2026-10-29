@@ -9,6 +9,13 @@ around the build, and an [Android SDK cache](#android-sdk-cache) in front of
 `setup-android`. `android-abis` limits the build to the ABIs a test device
 runs.
 
+When Gradle fails because it could not install SDK components the project
+needs (`Failed to install the following SDK components`, usually a truncated
+NDK or Build-Tools download on a node whose SDK cache missed), the step
+installs exactly those components with `sdkmanager`, up to 3 attempts each,
+and runs the build once more. A component `sdkmanager` cannot install either
+fails as an `Infrastructure failure:`, which `rerun-infra-failures` retries.
+
 ## Android SDK cache
 
 Before this, `setup-android` ran uncached: the cmdline-tools, platform-tools,

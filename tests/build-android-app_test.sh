@@ -589,6 +589,74 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+# sdk_install_workspace <sdkmanager failures before success>: gradlew fails
+# once listing two SDK components Gradle could not install, then succeeds.
+sdk_install_workspace() {
+    workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
+    cat > "$workspace/work/gradlew" <<'GRADLEW'
+#!/bin/sh
+n=$(cat "$GRADLE_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$GRADLE_COUNT"
+[ "$n" -gt 1 ] && exit 0
+cat <<'OUT' >&2
+* What went wrong:
+A problem occurred configuring project ':app'.
+   > com.android.builder.sdk.InstallFailedException: Failed to install the following SDK components:
+         ndk;27.1.12297006 NDK (Side by side) 27.1.12297006
+         build-tools;36.0.0 Android SDK Build-Tools 36
+     Install the missing components using the SDK manager in Android Studio.
+OUT
+exit 1
+GRADLEW
+    chmod +x "$workspace/work/gradlew"
+    mkdir -p "$workspace/sdk/cmdline-tools/latest/bin"
+    cat > "$workspace/sdk/cmdline-tools/latest/bin/sdkmanager" <<'SDKMANAGER'
+#!/bin/sh
+printf '%s\n' "$*" >> "$SDK_CALLS"
+n=$(cat "$SDK_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$SDK_COUNT"
+[ "$n" -gt "$SDK_FAILS" ]
+SDKMANAGER
+    chmod +x "$workspace/sdk/cmdline-tools/latest/bin/sdkmanager"
+    stub "$workspace" sleep 'exit 0'
+}
+run_sdk_build() {
+    run_step "$workspace" GRADLE_TASK=assembleRelease GRADLE_ARGS='' ANDROID_ABIS='' ANDROID_SDK_ROOT="$workspace/sdk" \
+        GRADLE_COUNT="$workspace/gradle-count" SDK_CALLS="$workspace/sdk-calls" SDK_COUNT="$workspace/sdk-count" "$@"
+}
+
+case_start 'SDK components Gradle failed to install are installed with sdkmanager and the build runs once more'
+sdk_install_workspace
+run_sdk_build SDK_FAILS=1
+if assert_equals 0 "$STEP_STATUS" "status ($(tail -n 5 "$workspace/log"))" \
+    && assert_equals 2 "$(cat "$workspace/gradle-count")" 'gradle runs' \
+    && assert_equals $'--install build-tools;36.0.0\n--install build-tools;36.0.0\n--install ndk;27.1.12297006' "$(cat "$workspace/sdk-calls")" 'sdkmanager calls (one retry)' \
+    && assert_contains "$(cat "$workspace/log")" '::warning::Gradle could not install the SDK component(s) build-tools;36.0.0 ndk;27.1.12297006' 'log'; then
+    pass_case
+fi
+
+case_start 'an SDK component sdkmanager cannot install either fails as infrastructure'
+sdk_install_workspace
+run_sdk_build SDK_FAILS=99
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_equals 1 "$(cat "$workspace/gradle-count")" 'gradle runs' \
+    && assert_equals 3 "$(grep -c . "$workspace/sdk-calls")" 'sdkmanager attempts' \
+    && assert_contains "$(cat "$workspace/log")" "::error::Infrastructure failure: sdkmanager could not install the SDK component 'build-tools;36.0.0' after 3 attempts." 'log'; then
+    pass_case
+fi
+
+case_start 'a Gradle failure that is not an SDK install fails at once, without sdkmanager'
+workspace="$(new_workspace "$ACTION" "$BUILD_STEP")"
+printf '#!/bin/sh\necho "e: Unresolved reference: foo" >&2\nexit 1\n' > "$workspace/work/gradlew"
+chmod +x "$workspace/work/gradlew"
+mkdir -p "$workspace/sdk/cmdline-tools/latest/bin"
+# shellcheck disable=SC2016 # the stub expands $SDK_CALLS when it runs.
+printf '#!/bin/sh\necho called >> "$SDK_CALLS"\n' > "$workspace/sdk/cmdline-tools/latest/bin/sdkmanager"
+chmod +x "$workspace/sdk/cmdline-tools/latest/bin/sdkmanager"
+run_sdk_build
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_equals '' "$(cat "$workspace/sdk-calls" 2>/dev/null)" 'sdkmanager calls'; then
+    pass_case
+fi
+
 case_start 'the eas build --local Android lanes bound native compiles with the same step'
 differing=''
 for lane in native-publish.yml:android-publish native-dev-release.yml:android-dev-release; do
