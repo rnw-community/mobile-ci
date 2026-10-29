@@ -464,6 +464,10 @@ run_flow_with_retries() {
   duration=$((end - start - recovery_seconds))
   record_maestro_debug_units "$label" "$status"
   summary_rows+=("| $label | ${duration}s | $status | $attempts | $infra_used |")
+  if [ "$run_precondition" = '1' ]; then
+    mkdir -p "$ARTIFACTS_DIR"
+    printf '%s\t%s\t%s\n' "${flow#"$FLOWS_DIR"/}" "$duration" "$status" >> "$ARTIFACTS_DIR/flow-timings.tsv"
+  fi
   [ "$status" = "passed" ]
 }
 
@@ -605,6 +609,16 @@ if [ -n "$SHARD_MANIFEST_DIR" ]; then
     fi
     selected+=("$flow_path")
   done < "$manifest_file"
+elif [ -n "$SHARD_TIMINGS_FILE" ]; then
+  balanced_file="$RUNNER_TEMP/maestro-balanced-${SHARD_INDEX}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+  if ! printf '%s\n' ${flows[@]+"${flows[@]}"} | python3 -I "$MAESTRO_SCRIPTS_DIR/flow-timings.py" balance --count "$SHARD_COUNT" --index "$SHARD_INDEX" --flows-dir "$FLOWS_DIR" --timings "$SHARD_TIMINGS_FILE" > "$balanced_file"; then
+    echo "::error::Could not balance the flows over $SHARD_COUNT shard(s) from shard-timings-file '$SHARD_TIMINGS_FILE'."
+    exit 1
+  fi
+  while IFS= read -r flow; do
+    selected+=("$flow")
+  done < "$balanced_file"
+  rm -f "$balanced_file"
 else
   for index in "${!flows[@]}"; do
     if (( index % SHARD_COUNT == SHARD_INDEX )); then
