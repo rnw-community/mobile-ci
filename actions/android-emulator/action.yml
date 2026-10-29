@@ -630,6 +630,9 @@ runs:
             sleep 2
           done
           echo "$serial booted in ${SECONDS}s."
+          emulator_revision="$(sed -n 's/^Pkg\.Revision=//p' "$sdk/emulator/source.properties" 2>/dev/null | head -n 1 || true)"
+          image_revision="$(sed -n 's/^Pkg\.Revision=//p' "$sdk/$sysdir/source.properties" 2>/dev/null | head -n 1 || true)"
+          echo "Emulator ${emulator_revision:-revision unknown}, system image $package ${image_revision:-revision unknown}."
 
           timeout 30 adb -s "$serial" shell input keyevent 82 || true
           for setting in 'global window_animation_scale 0.0' 'global transition_animation_scale 0.0' 'global animator_duration_scale 0.0' 'secure spell_checker_enabled 0'; do

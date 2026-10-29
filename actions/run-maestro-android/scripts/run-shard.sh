@@ -364,6 +364,13 @@ lost_emulator_error() {
     tail -n 40 "$log" || true
     [ -z "${ARTIFACTS_DIR:-}" ] || cp "$log" "$ARTIFACTS_DIR/" 2>/dev/null || true
   done
+  echo "Emulator processes after the loss:"
+  ps -eo pid,stat,etime,rss,args 2>/dev/null | awk 'NR == 1 || /qemu-system|emulator64|crashpad_handler/' | grep -v awk || true
+  for dump in "$HOME"/.android/breakpad/*.dmp "${TMPDIR:-/tmp}"/android-*/emu-crash-*; do
+    [ -e "$dump" ] || continue
+    echo "Emulator crash dump: $dump"
+    [ -z "${ARTIFACTS_DIR:-}" ] || cp -R "$dump" "$ARTIFACTS_DIR/" 2>/dev/null || true
+  done
   if [ -n "${CGROUP_ROOT:-}" ]; then
     events="$CGROUP_ROOT/memory.events"
   else
