@@ -108,6 +108,15 @@ if assert_equals 0 "$STEP_STATUS" status \
     pass_case
 fi
 
+case_start 'a malformed API body never fails fetch, and an artifact without an id is still read'
+statuses=''
+for body in '[1, 2]' '{"artifacts": ["not an object"]}' '{"artifacts": [{"expired": false, "archive_download_url": "'"$api_url"'/zip/2", "workflow_run": {"head_branch": "main"}}]}'; do
+    printf '%s' "$body" > "$api_root/artifacts.json"
+    fetch
+    statuses="$statuses$STEP_STATUS$( (step_output "$workspace" timings 2>/dev/null || true) | grep -c '"targets": {}' || true)"
+done
+assert_equals 010100 "$statuses" 'per body: status, then 1 when the timings are empty' && pass_case
+
 case_start 'select writes one target as a shard-timings-file, and an unknown target as empty timings'
 workspace="$(new_workspace "$ACTION" "Write the target's shard timings file")"
 run_step "$workspace" GITHUB_ACTION_PATH="$REPO_ROOT/actions/maestro-flow-timings" GITHUB_RUN_ID=1 GITHUB_RUN_ATTEMPT=1 \

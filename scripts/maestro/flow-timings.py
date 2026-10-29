@@ -181,11 +181,11 @@ def fetch(args):
         with response, zipfile.ZipFile(io.BytesIO(response.read())) as archive:
             text = archive.read(TIMINGS_FILE).decode('utf-8')
         targets = targets_of(text)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as error:
+    except (OSError, ValueError, KeyError, AttributeError, TypeError, zipfile.BadZipFile) as error:
         warn(f"could not read the recorded flow timings '{args.name}' ({error}); every target is split by index.")
         print(empty)
         return
-    print(f"Using '{args.name}' artifact {artifact['id']} from run {(artifact.get('workflow_run') or {}).get('id')}: "
+    print(f"Using '{args.name}' artifact {artifact.get('id')} from run {(artifact.get('workflow_run') or {}).get('id')}: "
           f'{sum(len(flows) for flows in targets.values())} flow timing(s) over {len(targets)} target(s).', file=sys.stderr)
     print(json.dumps({'version': 1, 'targets': targets}, sort_keys=True))
 
