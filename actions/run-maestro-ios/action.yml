@@ -1045,7 +1045,7 @@ runs:
           }
 
           run_flow_with_retries() {
-            local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
+            local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration timing_name
             local recovery_seconds=0 recovery_start attempt_ok flow_env_file junit_file=''
             local scenario_args=()
             if [ "$run_precondition" = '1' ]; then
@@ -1094,7 +1094,8 @@ runs:
             record_maestro_debug_units "$label" "$status"
             summary_rows+=("| $label | ${duration}s | $status | $attempts |")
             if [ "$run_precondition" = '1' ] && [ -n "${MAESTRO_DEBUG_OUTPUT_DIRECTORY:-}" ]; then
-              printf '%s\t%s\t%s\n' "${flow#"$FLOWS_DIR"/}" "$duration" "$status" >> "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/flow-timings.tsv"
+              timing_name="${flow#"${FLOWS_DIR%/}"/}"
+              printf '%s\t%s\t%s\n' "${timing_name#/}" "$duration" "$status" >> "$MAESTRO_DEBUG_OUTPUT_DIRECTORY/flow-timings.tsv"
             fi
             [ "$status" = "passed" ]
           }

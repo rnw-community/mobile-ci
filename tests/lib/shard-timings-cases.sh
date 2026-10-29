@@ -34,6 +34,16 @@ run_shard_timings_cases() {
         pass_case
     fi
 
+    case_start 'a flows-dir with a trailing slash records and balances on the same flow keys'
+    workspace="$(prepare_tagged)"
+    write_timed_flows "$workspace/work/flows" "$workspace/timings.json"
+    invoke_tagged "$workspace" FLOWS_DIR=flows/ SHARD_COUNT=2 SHARD_INDEX=0 SHARD_TIMINGS_FILE="$workspace/timings.json"
+    if assert_equals 0 "$STEP_STATUS" 'step status' \
+        && assert_equals 'flows/a.flow.yaml' "$(shard_flows_run "$workspace" | sed 's#//*#/#g')" 'shard 0 flows' \
+        && assert_equals 'a.flow.yaml' "$(cut -f 1 "$workspace/artifacts/flow-timings.tsv" 2>/dev/null)" 'recorded flow key'; then
+        pass_case
+    fi
+
     case_start 'an unreadable shard-timings-file falls back to the index-modulo split with a warning'
     workspace="$(prepare_tagged)"
     write_timed_flows "$workspace/work/flows" "$workspace/timings.json"

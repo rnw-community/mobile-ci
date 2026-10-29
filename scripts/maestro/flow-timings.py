@@ -58,6 +58,7 @@ def load(path):
 def relative(path, flows_dir):
     prefix = flows_dir.rstrip('/') + '/'
     path = path[len(prefix):] if path.startswith(prefix) else path
+    path = path.lstrip('/')
     return path[2:] if path.startswith('./') else path
 
 

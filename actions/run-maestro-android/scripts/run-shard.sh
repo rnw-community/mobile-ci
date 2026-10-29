@@ -386,7 +386,7 @@ lost_emulator_error() {
 }
 
 run_flow_with_retries() {
-  local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration
+  local flow="$1" label="$2" recover_after_last_attempt="$3" run_precondition="$4" attempts=0 status=failed start end duration timing_name
   local recovery_seconds=0 recovery_start attempt_ok flow_env_file infra_used=0 attempt_epoch retry junit_file=''
   local scenario_args=()
   if [ "$run_precondition" = '1' ]; then
@@ -466,7 +466,8 @@ run_flow_with_retries() {
   summary_rows+=("| $label | ${duration}s | $status | $attempts | $infra_used |")
   if [ "$run_precondition" = '1' ]; then
     mkdir -p "$ARTIFACTS_DIR"
-    printf '%s\t%s\t%s\n' "${flow#"$FLOWS_DIR"/}" "$duration" "$status" >> "$ARTIFACTS_DIR/flow-timings.tsv"
+    timing_name="${flow#"${FLOWS_DIR%/}"/}"
+    printf '%s\t%s\t%s\n' "${timing_name#/}" "$duration" "$status" >> "$ARTIFACTS_DIR/flow-timings.tsv"
   fi
   [ "$status" = "passed" ]
 }
