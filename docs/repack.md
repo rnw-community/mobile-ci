@@ -50,6 +50,11 @@ is orphaned. The repack itself is architecture-blind - it swaps the embedded
 JavaScript bundle and assets and rewrites the Info.plist, never the Mach-O
 executable - so an x86_64 base repacks the same way an arm64 one does.
 
+The build-action hash covers every file of the platform's build actions
+(`build-ios-app` and `setup-xcode-pinned`, or `build-android-app`) except
+Markdown: a release re-pins the examples in their READMEs, and that must not
+orphan every published base.
+
 `toolchain` carries the target's own `workspace` and `scheme` as well, so two
 targets that share an app directory and a fingerprint but build different
 schemes never share a base. None of it reaches the published address as text —

@@ -102,6 +102,22 @@ assert_equals 0 "$STEP_STATUS" 'compose exit status' \
     && assert_equals "${FINGERPRINT}-${expected_identity}" "$(step_output "$dir" key)" 'key without secrets' \
     && pass_case
 
+case_start 'a documentation-only change to a build action leaves the build-action hash where it was'
+# Every release re-pins the examples in each action's README; hashing them
+# made every release orphan every consumer's published bases.
+dir="$(identity_workspace)"
+printf 'uses: build-ios-app@v1\n' > "$dir/actions/build-ios-app/README.md"
+identity "$dir"
+before="$(step_output "$dir" build-action-hash)"
+dir="$(identity_workspace)"
+printf 'uses: build-ios-app@v2\n' > "$dir/actions/build-ios-app/README.md"
+printf 'notes\n' > "$dir/actions/setup-xcode-pinned/CHANGES.md"
+identity "$dir"
+after="$(step_output "$dir" build-action-hash)"
+if assert_equals 0 "$STEP_STATUS" 'step status' && assert_equals "$before" "$after" 'build-action hash'; then
+    pass_case
+fi
+
 case_start 'with no secrets the key is byte-identical to the keys main published bases under'
 # Golden keys computed with origin/main's (pre-secrets) compose step for these
 # exact inputs. A drift here orphans every base already published.
