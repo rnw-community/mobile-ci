@@ -158,8 +158,10 @@ called workflow's jobs request — see the table in
 - **v4.7.0** — Maestro shards can balance on recorded flow durations
   (`balance-shards: true` on `ios-maestro.yml` / `android-maestro.yml`, new
   `maestro-flow-timings` action; default-branch runs record, every run reads).
-  `rerun-infra-failures` no longer retries a test failure that mentions a
-  network error, and the e2e and screenshot status jobs report as roll-ups,
+  `rerun-infra-failures` no longer retries a job whose failures name a test
+  error beside an infra cause (a job whose only failure mentions a network
+  error still reads as infra), and the e2e and screenshot status jobs report
+  as roll-ups,
   so a lost runner on a shard is now actually retried. A lost Android
   emulator stops its shard as an `Infrastructure failure:` and uploads the
   emulator log, its process state, crash dumps and any cgroup OOM kills.
