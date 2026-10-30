@@ -211,6 +211,17 @@ inputs:
       host in the pool.
     required: false
     default: ''
+  simulator-udid:
+    description: >-
+      UDID of a simulator this job already holds, e.g. simlock-lease's `udid`
+      output on a host-mode runner where several jobs share one Mac. When set,
+      exactly that device is booted (if it is not already) and used; it must
+      be listed by `xcrun simctl list devices available` (a simlock worker on
+      `drivers.ios.deviceSet: default`), and no name matching runs. Cannot be
+      combined with simulator-device. Empty (default) keeps simulator-device's
+      name matching.
+    required: false
+    default: ''
   simulator-reduce-motion:
     description: >-
       When 'true', turns on Settings > Accessibility > Motion > Reduce Motion
@@ -317,8 +328,20 @@ runs:
       shell: bash
       env:
         SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+        SIMULATOR_UDID_INPUT: ${{ inputs.simulator-udid }}
       run: |
           set -euo pipefail
+          udid_re='[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}'
+          if [ -n "$SIMULATOR_UDID_INPUT" ]; then
+            if [ -n "$SIMULATOR_DEVICE" ]; then
+              echo "::error::Set simulator-udid or simulator-device, not both: simulator-udid names the exact device this job holds."
+              exit 1
+            fi
+            if ! [[ "$SIMULATOR_UDID_INPUT" =~ ^${udid_re}$ ]]; then
+              echo "::error::simulator-udid '$SIMULATOR_UDID_INPUT' is not a simulator UDID."
+              exit 1
+            fi
+          fi
           available_devices=$(xcrun simctl list devices available)
           device_name_of() {
             printf '%s\n' "$1" \
@@ -326,7 +349,14 @@ runs:
               | sed -E 's/[[:space:]]+$//' \
               | sed -E 's/ \([0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\) \([A-Za-z ]+\)$//'
           }
-          if [ -n "$SIMULATOR_DEVICE" ]; then
+          if [ -n "$SIMULATOR_UDID_INPUT" ]; then
+            device_line=$(grep -F "($SIMULATOR_UDID_INPUT)" <<< "$available_devices" | head -n 1 || true)
+            if [ -z "$device_line" ]; then
+              echo "::error::simulator-udid '$SIMULATOR_UDID_INPUT' is not among this host's available simulators. A simlock worker must keep its simulators in Xcode's device set (drivers.ios.deviceSet: default). Available devices:"
+              echo "$available_devices"
+              exit 1
+            fi
+          elif [ -n "$SIMULATOR_DEVICE" ]; then
             device_line=''
             while IFS= read -r line; do
               udid=$(grep -oE '[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}' <<< "$line" || true)

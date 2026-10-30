@@ -88,6 +88,17 @@ scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|Infrastructure failure: emul
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision; then pass_case; fi
 
+case_start "simlock-lease's queue and release failures are infra"
+scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|Infrastructure failure: simlock lease failed with QUEUE_TIMEOUT (exit 10): Timed out waiting in the queue^^Process completed with exit code 1.
+2|Maestro shard 1 (e2e)|failure|Infrastructure failure: simlock could not release lease lse_1 (DAEMON_CONNECTION_LOST, exit 1): down. It expires one TTL after it was granted.^^Process completed with exit code 1."
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision; then pass_case; fi
+
+case_start "a simlock-lease configuration refusal is not infra"
+scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|simlock lease refused with UNKNOWN_MODEL (exit 12): Unknown ios model: iPhone 19^^Process completed with exit code 1."
+classify
+assert_equals test-failure "$(step_output "$workspace" decision)" decision && pass_case
+
 case_start 'a failed job with no annotation counts as a test failure'
 scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
 2|Unit tests|failure|"

@@ -403,6 +403,57 @@ on:
                 type: string
                 required: false
                 default: ''
+            simulator-provider:
+                description: >-
+                    Where each test shard's simulator comes from. 'image' (default) boots
+                    one the runner's image already holds, which assumes one shard per
+                    host (a Tart VM per job). 'simlock' leases a simulator from the
+                    host's simlock worker for this one job and releases it when the
+                    shard ends, so several shards run directly on one Mac with no VM
+                    and no shared device; it needs ios-driver 'local', a runner pool of
+                    host-mode Macs in test-runner-labels, and a worker on
+                    `drivers.ios.deviceSet: default` (docs/self-hosted-runners.md).
+                    The lease's TTL is test-timeout-minutes, which simlock caps at 4h.
+                type: string
+                required: false
+                default: image
+            simlock-device:
+                description: >-
+                    simulator-provider 'simlock' only: exact model as `simlock catalog`
+                    prints it, e.g. 'iPhone 17'. Empty lets simlock pick its default phone.
+                type: string
+                required: false
+                default: ''
+            simlock-os:
+                description: >-
+                    simulator-provider 'simlock' only: exact iOS version ('26.2') or a
+                    range ('>=18 <27'). Empty takes the newest runtime the worker has.
+                type: string
+                required: false
+                default: ''
+            simlock-device-mode:
+                description: >-
+                    simulator-provider 'simlock' only: 'slim' (best effort, falls back to
+                    'full' on a runtime older than 18.5) or 'full'.
+                type: string
+                required: false
+                default: slim
+            simlock-queue-timeout:
+                description: >-
+                    simulator-provider 'simlock' only: how long a shard waits in the
+                    worker's queue for a free simulator, as a simlock duration ('30m').
+                    Empty waits without limit. A timeout is an infrastructure failure.
+                type: string
+                required: false
+                default: 30m
+            simlock-version:
+                description: >-
+                    simulator-provider 'simlock' only: exact simlock version (X.Y.Z) the
+                    host's worker must run; another version fails the shard before
+                    leasing, since simlock changes its protocol without a shim.
+                type: string
+                required: false
+                default: 0.3.0
             simslim-version:
                 description: >-
                     Pinned simslim CLI version, consulted only when
@@ -1320,6 +1371,31 @@ jobs:
                     echo "::notice::Device Cloud runs the flows in parallel itself, so the device-cloud driver submits every selected flow once per target as shard 0; shard-count and shard-manifest-dir do not apply."
                   fi
 
+            - name: Validate the simulator provider
+              shell: bash
+              env:
+                  SIMULATOR_PROVIDER: ${{ inputs.simulator-provider }}
+                  DRIVER: ${{ inputs.ios-driver }}
+                  SIMULATOR_DEVICE: ${{ inputs.simulator-device }}
+              run: |
+                  set -euo pipefail
+                  case "$SIMULATOR_PROVIDER" in
+                    image) exit 0 ;;
+                    simlock) ;;
+                    *)
+                      echo "::error::simulator-provider '$SIMULATOR_PROVIDER' is neither 'image' nor 'simlock'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$DRIVER" != local ]; then
+                    echo "::error::simulator-provider 'simlock' needs ios-driver 'local'; '$DRIVER' brings its own devices."
+                    exit 1
+                  fi
+                  if [ -n "$SIMULATOR_DEVICE" ]; then
+                    echo "::error::simulator-device names an image's simulator; with simulator-provider 'simlock' name the model in simlock-device instead."
+                    exit 1
+                  fi
+
             - name: Assert this host can run the packaged simulator architecture
               if: inputs.ios-driver != 'device-cloud'
               shell: bash
@@ -1397,11 +1473,24 @@ jobs:
                   timings: ${{ needs.detect.outputs.flow-timings }}
                   target: ${{ matrix.target.name }}
 
+            - name: Lease a simlock simulator
+              id: simlock
+              if: inputs.ios-driver == 'local' && inputs.simulator-provider == 'simlock'
+              uses: rnw-community/mobile-ci/actions/simlock-lease@v4.8.0 # v4.8.0
+              with:
+                  mode: acquire
+                  device: ${{ inputs.simlock-device }}
+                  os: ${{ inputs.simlock-os }}
+                  device-mode: ${{ inputs.simlock-device-mode }}
+                  ttl: ${{ format('{0}m', inputs.test-timeout-minutes) }}
+                  queue-timeout: ${{ inputs.simlock-queue-timeout }}
+                  simlock-version: ${{ inputs.simlock-version }}
+
             - name: run-maestro-ios
               id: run-maestro-ios
               if: inputs.ios-driver == 'local'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.8.0 # v4.8.0
               with:
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -1428,6 +1517,7 @@ jobs:
                   maestro-version: ${{ inputs.maestro-version }}
                   maestro-reuse-driver: ${{ inputs.maestro-reuse-driver }}
                   simulator-device: ${{ inputs.simulator-device }}
+                  simulator-udid: ${{ steps.simlock.outputs.udid }}
                   simulator-reduce-motion: ${{ inputs.simulator-reduce-motion }}
                   simslim-version: ${{ inputs.simslim-version }}
                   simslim-sha256: ${{ inputs.simslim-sha256 }}
@@ -1467,6 +1557,13 @@ jobs:
                   artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
                   redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
+
+            - name: Release the simlock simulator
+              if: always() && inputs.ios-driver == 'local' && inputs.simulator-provider == 'simlock'
+              uses: rnw-community/mobile-ci/actions/simlock-lease@v4.8.0 # v4.8.0
+              with:
+                  mode: release
+                  lease-file: ${{ steps.simlock.outputs.lease-file }}
 
             - name: Upload the shard's flow timings
               if: always() && inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''

@@ -167,6 +167,83 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+BOOT_STEP='Boot iOS Simulator'
+LEASED_UDID='6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90'
+
+# The stubbed xcrun lists two available iPhones and records every other call,
+# so a case can tell which device was booted and whether name matching ran.
+prepare_boot() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$BOOT_STEP")"
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" xcrun '
+case "$*" in
+    "simctl list devices available")
+        printf -- "-- iOS 26.2 --\n"
+        printf "    iPhone 17 (11111111-2222-3333-4444-555555555555) (Shutdown)\n"
+        printf "    iPhone 17 Pro (%s) (Booted)\n" "$LEASED_UDID"
+        ;;
+    *) printf "%s\n" "$*" >> "$XCRUN_CALLS" ;;
+esac'
+    printf '%s\n' "$dir"
+}
+
+boot() {
+    local dir="$1"
+    shift
+    run_step "$dir" XCRUN_CALLS="$dir/calls" LEASED_UDID="$LEASED_UDID" SIMULATOR_DEVICE='' SIMULATOR_UDID_INPUT='' "$@"
+}
+
+case_start 'simulator-udid defaults to empty'
+if assert_contains "$(python3 -c 'import sys, yaml; print(" ".join(yaml.safe_load(open(sys.argv[1]))["inputs"]))' "$ACTION")" simulator-udid 'simulator-udid declared' \
+    && assert_equals '' "$(action_input_default "$ACTION" simulator-udid)" 'simulator-udid default'; then
+    pass_case
+fi
+
+case_start 'simulator-udid boots exactly the leased device, never a name match'
+workspace="$(prepare_boot)"
+boot "$workspace" SIMULATOR_UDID_INPUT="$LEASED_UDID"
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_contains "$(cat "$workspace/calls")" "simctl bootstatus $LEASED_UDID -b" 'waited on the leased device' \
+    && assert_not_contains "$(cat "$workspace/calls")" '11111111-2222-3333-4444-555555555555' 'other device untouched' \
+    && assert_equals "SIMULATOR_UDID=$LEASED_UDID" "$(cat "$workspace/env")" 'exported udid' \
+    && assert_not_contains "$(cat "$workspace/log")" 'last-available heuristic' 'no name heuristic'; then
+    pass_case
+fi
+
+case_start 'a simulator-udid that is not an available simulator fails closed'
+workspace="$(prepare_boot)"
+boot "$workspace" SIMULATOR_UDID_INPUT='AAAAAAAA-0000-0000-0000-000000000009'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "::error::simulator-udid 'AAAAAAAA-0000-0000-0000-000000000009' is not among this host's available simulators" 'error' \
+    && assert_equals '' "$(cat "$workspace/env")" 'nothing exported'; then
+    pass_case
+fi
+
+case_start 'simulator-udid and simulator-device together fail closed'
+workspace="$(prepare_boot)"
+boot "$workspace" SIMULATOR_UDID_INPUT="$LEASED_UDID" SIMULATOR_DEVICE='iPhone 17'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" '::error::Set simulator-udid or simulator-device, not both' 'error'; then
+    pass_case
+fi
+
+case_start 'a malformed simulator-udid fails closed'
+workspace="$(prepare_boot)"
+boot "$workspace" SIMULATOR_UDID_INPUT='booted'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$workspace/log")" "::error::simulator-udid 'booted' is not a simulator UDID" 'error'; then
+    pass_case
+fi
+
+case_start 'without simulator-udid the named device is still matched by name'
+workspace="$(prepare_boot)"
+boot "$workspace" SIMULATOR_DEVICE='iPhone 17'
+if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
+    && assert_equals 'SIMULATOR_UDID=11111111-2222-3333-4444-555555555555' "$(cat "$workspace/env")" 'exported udid'; then
+    pass_case
+fi
+
 prepare_exclude() {
     local dir
     dir="$(new_workspace "$ACTION" "$SHARD_STEP")"

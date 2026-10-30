@@ -1,0 +1,266 @@
+name: simlock-lease
+description: >-
+  Leases one iOS simulator from the host's simlock worker for one job, so
+  several jobs running directly on one Mac (no VM) never share a device, and
+  hands it back on the paired `mode: release` call.
+inputs:
+  mode:
+    description: '`acquire` or `release`.'
+    required: false
+    default: acquire
+  device:
+    description: >-
+      Exact simulator model as `simlock catalog` prints it, e.g. 'iPhone 17'.
+      Empty lets simlock pick its default phone.
+    required: false
+    default: ''
+  os:
+    description: >-
+      Exact iOS version ('26.2') or a range ('>=18 <27'). Empty takes the
+      newest runtime the worker has installed.
+    required: false
+    default: ''
+  device-mode:
+    description: >-
+      `slim` (background services off, best effort, falls back to `full` on a
+      runtime older than 18.5) or `full`.
+    required: false
+    default: slim
+  ttl:
+    description: >-
+      Lifetime of the detached lease, as a simlock duration (`90m`, `2h`).
+      Nothing renews it, so set it at least as long as the job's
+      `timeout-minutes`; a job that dies without releasing returns the device
+      one TTL later. simlock caps it at `lease.maxTtlMs` (4h by default).
+    required: false
+    default: 90m
+  queue-timeout:
+    description: >-
+      How long to wait in the worker's queue for a free device, as a simlock
+      duration. Empty waits without limit.
+    required: false
+    default: 30m
+  simlock-version:
+    description: >-
+      Exact simlock version (X.Y.Z) the host's worker must run. simlock bumps
+      its protocol without a compatibility shim, so a different worker version
+      fails the step before any lease is taken.
+    required: false
+    default: 0.3.0
+  lease-file:
+    description: >-
+      JSON file recording the lease. Empty writes
+      `$RUNNER_TEMP/simlock-lease-<lease id>.json` on acquire, and sweeps every
+      `simlock-lease-*.json` under `$RUNNER_TEMP` on release.
+    required: false
+    default: ''
+outputs:
+  udid:
+    description: UDID of the leased simulator, in Xcode's own device set.
+    value: ${{ steps.acquire.outputs.udid }}
+  lease-id:
+    description: The simlock lease id.
+    value: ${{ steps.acquire.outputs.lease-id }}
+  device-mode:
+    description: '`slim` or `full`: the mode the device really has.'
+    value: ${{ steps.acquire.outputs.device-mode }}
+  device:
+    description: Model of the leased simulator.
+    value: ${{ steps.acquire.outputs.device }}
+  os:
+    description: iOS version of the leased simulator.
+    value: ${{ steps.acquire.outputs.os }}
+  lease-file:
+    description: The lease file the release call reads back.
+    value: ${{ steps.acquire.outputs.lease-file }}
+runs:
+  using: composite
+  steps:
+    - name: Validate the lease mode
+      shell: bash
+      env:
+        LEASE_ACTION_MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        case "$LEASE_ACTION_MODE" in
+          acquire|release) ;;
+          *)
+            echo "::error::simlock-lease mode '$LEASE_ACTION_MODE' is neither 'acquire' nor 'release'."
+            exit 1
+            ;;
+        esac
+
+    - name: Acquire a simlock simulator
+      if: inputs.mode == 'acquire'
+      id: acquire
+      shell: bash
+      env:
+        LEASE_DEVICE: ${{ inputs.device }}
+        LEASE_OS: ${{ inputs.os }}
+        LEASE_MODE: ${{ inputs.device-mode }}
+        LEASE_TTL: ${{ inputs.ttl }}
+        QUEUE_TIMEOUT: ${{ inputs.queue-timeout }}
+        SIMLOCK_VERSION: ${{ inputs.simlock-version }}
+        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
+      run: |
+        set -euo pipefail
+        duration_re='^[0-9]+(ms|s|m|h|d)?$'
+        case "$LEASE_MODE" in
+          slim|full) ;;
+          *) echo "::error::device-mode '$LEASE_MODE' is neither 'slim' nor 'full'."; exit 1 ;;
+        esac
+        if ! [[ "$LEASE_TTL" =~ $duration_re ]]; then
+          echo "::error::ttl '$LEASE_TTL' is not a simlock duration (a whole number followed by ms, s, m, h or d)."
+          exit 1
+        fi
+        if [ -n "$QUEUE_TIMEOUT" ] && ! [[ "$QUEUE_TIMEOUT" =~ $duration_re ]]; then
+          echo "::error::queue-timeout '$QUEUE_TIMEOUT' is not a simlock duration (a whole number followed by ms, s, m, h or d)."
+          exit 1
+        fi
+        if ! [[ "$SIMLOCK_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::simlock-version '$SIMLOCK_VERSION' is not an exact X.Y.Z version."
+          exit 1
+        fi
+        if ! command -v simlock >/dev/null 2>&1; then
+          echo "::error::simlock lease refused: 'simlock' is not on PATH. A host-mode iOS runner needs the simlock worker installed for the runner's own user (docs/self-hosted-runners.md)."
+          exit 1
+        fi
+
+        scratch="$(mktemp -d "${RUNNER_TEMP:-/tmp}/simlock-lease-XXXXXX")"
+        trap 'rm -rf "$scratch"' EXIT
+
+        report_failure() {
+          local what="$1" exit_code="$2" stderr_file="$3" error_line code message
+          error_line="$(grep -E '^\{"error":' "$stderr_file" | tail -n 1 || true)"
+          code="$(jq -r '.error.code // empty' <<< "$error_line" 2>/dev/null || true)"
+          message="$(jq -r '.error.message // empty' <<< "$error_line" 2>/dev/null || true)"
+          [ -n "$code" ] || code=UNKNOWN
+          [ -n "$message" ] || message="$(tail -n 5 "$stderr_file" | tr '\n' ' ')"
+          case "$exit_code" in
+            1|10|11) echo "::error::Infrastructure failure: simlock $what failed with $code (exit $exit_code): $message" ;;
+            *) echo "::error::simlock $what refused with $code (exit $exit_code): $message" ;;
+          esac
+        }
+
+        status_rc=0
+        simlock --local status --json > "$scratch/status.json" 2> "$scratch/status.err" || status_rc=$?
+        if [ "$status_rc" -ne 0 ]; then
+          report_failure status "$status_rc" "$scratch/status.err"
+          exit 1
+        fi
+        worker_version="$(jq -r '.daemon.version // empty' "$scratch/status.json")"
+        if [ "$worker_version" != "$SIMLOCK_VERSION" ]; then
+          echo "::error::simlock lease refused: the host's simlock worker runs ${worker_version:-an unreadable version}, but simlock-version pins $SIMLOCK_VERSION. Upgrade the worker and the pin together; simlock changes its protocol without a compatibility shim."
+          exit 1
+        fi
+
+        agent_id="$(printf 'github-actions.%s.%s.%s.%s.%s' "${GITHUB_REPOSITORY:-repo}" "${GITHUB_RUN_ID:-0}" "${GITHUB_RUN_ATTEMPT:-1}" "${GITHUB_JOB:-job}" "${RUNNER_NAME:-runner}" | tr '/' '.' | tr -c 'A-Za-z0-9._\n-' '-')"
+        lease_args=(--local lease --platform ios --detach --ttl "$LEASE_TTL" --agent-id "$agent_id" --mode "$LEASE_MODE")
+        [ -z "$LEASE_DEVICE" ] || lease_args+=(--device "$LEASE_DEVICE")
+        [ -z "$LEASE_OS" ] || lease_args+=(--os "$LEASE_OS")
+        [ -z "$QUEUE_TIMEOUT" ] || lease_args+=(--timeout "$QUEUE_TIMEOUT")
+
+        echo "Requesting a ${LEASE_MODE} iOS simulator from simlock as ${agent_id}"
+        lease_rc=0
+        simlock "${lease_args[@]}" > "$scratch/grant.json" 2> "$scratch/lease.err" || lease_rc=$?
+        grep -E '^\{"push":' "$scratch/lease.err" || true
+        if [ "$lease_rc" -ne 0 ]; then
+          report_failure lease "$lease_rc" "$scratch/lease.err"
+          exit 1
+        fi
+
+        lease_id="$(jq -r '.lease.id // empty' "$scratch/grant.json")"
+        if [ -z "$lease_id" ]; then
+          echo "::error::simlock lease exited 0 but printed no lease id; refusing to guess which device this job holds."
+          cat "$scratch/grant.json"
+          exit 1
+        fi
+        lease_file="${LEASE_FILE_INPUT:-${RUNNER_TEMP:?}/simlock-lease-$lease_id.json}"
+        udid="$(jq -r '.device.driverDeviceId // empty' "$scratch/grant.json")"
+        jq -n --arg leaseId "$lease_id" --arg agentId "$agent_id" --arg udid "$udid" \
+          '{leaseId: $leaseId, agentId: $agentId, udid: $udid}' > "$lease_file"
+
+        hand_back() {
+          if SIMLOCK_AGENT_ID="$agent_id" simlock --local release "$lease_id" > /dev/null 2> "$scratch/release.err"; then
+            rm -f "$lease_file"
+          else
+            echo "::warning::Could not hand lease $lease_id back; the release call will retry it, and it expires one TTL after it was granted."
+          fi
+        }
+
+        device_set="$(jq -r '.environment.SIMLOCK_IOS_DEVICE_SET // empty' "$scratch/grant.json")"
+        if [ -n "$device_set" ]; then
+          echo "::error::simlock lease refused: the worker keeps its simulators in its own device set ($device_set), where Maestro and xcodebuild cannot find them by UDID. Set 'simlock config set drivers.ios.deviceSet default' on the worker (simlock ADR 0048)."
+          hand_back
+          exit 1
+        fi
+        if ! [[ "$udid" =~ ^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$ ]]; then
+          echo "::error::simlock granted lease $lease_id without a simulator UDID ('$udid'); handing it back."
+          hand_back
+          exit 1
+        fi
+
+        granted_mode="$(jq -r '.device.mode // empty' "$scratch/grant.json")"
+        device="$(jq -r '.device.spec.model // empty' "$scratch/grant.json")"
+        os="$(jq -r '.device.spec.osVersion // empty' "$scratch/grant.json")"
+        if [ "$LEASE_MODE" = slim ] && [ "$granted_mode" != slim ]; then
+          echo "::warning::simlock granted a ${granted_mode:-unknown-mode} simulator for a slim request (a runtime older than 18.5 cannot be slimmed); the job runs on a stock device."
+        fi
+        echo "Leased $device (iOS $os, $granted_mode) $udid as $lease_id"
+        {
+          echo "udid=$udid"
+          echo "lease-id=$lease_id"
+          echo "device-mode=$granted_mode"
+          echo "device=$device"
+          echo "os=$os"
+          echo "lease-file=$lease_file"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Release the simlock simulator
+      if: inputs.mode == 'release'
+      shell: bash
+      env:
+        LEASE_FILE_INPUT: ${{ inputs.lease-file }}
+      run: |
+        set -euo pipefail
+        lease_files=()
+        if [ -n "$LEASE_FILE_INPUT" ]; then
+          [ ! -f "$LEASE_FILE_INPUT" ] || lease_files+=("$LEASE_FILE_INPUT")
+        else
+          while IFS= read -r file; do
+            lease_files+=("$file")
+          done < <(find "${RUNNER_TEMP:?}" -maxdepth 1 -name 'simlock-lease-*.json' -type f | sort)
+        fi
+        if [ "${#lease_files[@]}" -eq 0 ]; then
+          echo "::warning::No simlock lease file to release; the acquire call never got as far as a grant."
+          exit 0
+        fi
+
+        failed=0
+        for lease_file in "${lease_files[@]}"; do
+          lease_id="$(jq -r '.leaseId // empty' "$lease_file")"
+          agent_id="$(jq -r '.agentId // empty' "$lease_file")"
+          if [ -z "$lease_id" ]; then
+            echo "::error::Lease file '$lease_file' names no lease id; cannot release it."
+            failed=1
+            continue
+          fi
+          stderr_file="$(mktemp "${RUNNER_TEMP:-/tmp}/simlock-release-XXXXXX")"
+          release_rc=0
+          SIMLOCK_AGENT_ID="$agent_id" simlock --local release "$lease_id" > /dev/null 2> "$stderr_file" || release_rc=$?
+          error_line="$(grep -E '^\{"error":' "$stderr_file" | tail -n 1 || true)"
+          rm -f "$stderr_file"
+          code="$(jq -r '.error.code // empty' <<< "$error_line" 2>/dev/null || true)"
+          message="$(jq -r '.error.message // empty' <<< "$error_line" 2>/dev/null || true)"
+          if [ "$release_rc" -eq 0 ]; then
+            echo "Released simlock lease $lease_id"
+            rm -f "$lease_file"
+          elif [ "$code" = UNKNOWN_LEASE ]; then
+            echo "::warning::simlock lease $lease_id had already ended (expired or released by an operator); nothing to hand back."
+            rm -f "$lease_file"
+          else
+            echo "::error::Infrastructure failure: simlock could not release lease $lease_id (${code:-UNKNOWN}, exit $release_rc): ${message:-no error line}. It expires one TTL after it was granted."
+            failed=1
+          fi
+        done
+        exit "$failed"

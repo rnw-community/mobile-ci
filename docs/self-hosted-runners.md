@@ -458,6 +458,82 @@ with:
     parallel-testing-worker-count: '2'
 ```
 
+### Host-mode Macs with a simlock worker
+
+A Tart guest per job caps each Mac at **two** Maestro shards: Apple's
+Virtualization framework runs at most two macOS VMs at once, and a
+`trf-macos-arm64-4x7` shard holds one for its whole run. iOS repack already
+runs on Linux ([repack.md](repack.md)), so on an e2e shard the Mac only hosts
+a simulator. A **host-mode** pool runs the shard directly on the Mac instead —
+one ephemeral just-in-time runner per job, under a dedicated, non-admin user
+with no fleet credentials — and gets each shard its own simulator from a
+[simlock](https://github.com/callstackincubator/simlock) worker running as
+that same user. Native builds stay in VMs.
+
+Select it per call:
+
+```yaml
+with:
+    test-runner-labels: '["self-hosted","<host-mode pool label>"]'
+    simulator-provider: simlock
+    simlock-device: iPhone 17
+```
+
+[`simlock-lease`](../actions/simlock-lease/README.md) takes a detached lease
+whose TTL is `test-timeout-minutes`, hands the UDID to `run-maestro-ios`, and
+releases it in an `if: always()` step. Maestro starts its XCTest driver with
+`xcodebuild test-without-building -destination id=<udid>`, and
+`maestro-reuse-driver` already derives the driver port from the UDID, so
+several shards on one Mac never collide.
+
+**Worker configuration** (once per host, as the runner user):
+
+```sh
+npm i -g simlock@0.3.0
+simlock config set drivers.ios.deviceSet default   # Maestro/xcodebuild only see Xcode's set (simlock ADR 0048)
+simlock config set ios.defaultMode slim
+simlock daemon install                            # LaunchAgent; enable auto-login for the runner user
+simlock doctor
+```
+
+Keep the `store` and `web` slim categories on, as
+[`profiles/ci.json`](../profiles/ci.json) does: set `ios.slim.categories` to
+every other category (`widgets`, `siri`, `search`, `icloud`, `pim`, `family`,
+`health`, `photos`, `apps`, `messaging`, `connectivity`, `telemetry`,
+`other`). Each shard still runs `simulator-slim-profile`'s verify against its
+lease, so a worker that slims differently is caught, and repaired in-job when
+`simulator-slim-repair` is on. Set the capacity explicitly
+(`capacity.config.limits.ios.maxDevices` / `maxRunning`) to what the host can
+run beside its VMs, and give the VM controller's host budget the rest.
+
+Under `deviceSet: default` a bare `xcrun simctl shutdown all` or `erase all`
+hits every leased simulator on the host; `run-maestro-ios` names the UDID in
+every call, and nothing else in a host-mode job may use `booted` or `all`.
+
+**Isolation.** A simulator app is an ordinary process of the runner user, so
+a pull request's JavaScript runs on the host, not in a guest. Keep pull
+requests from forks on the VM pool, and keep the GitHub App key, the VM
+controller's state and any keychain secret unreadable by the runner user.
+
+**Measured on mac-studio, 2026-10-30** (14 cores, 36 GiB, macOS 15.7.4,
+Xcode 26.3, iOS 26.2, `iPhone 17`, simslim 0.12.2 with `profiles/ci.json`),
+alongside the two `4x7` Maestro VMs it was already running:
+
+| | Value |
+| --- | --- |
+| 4 simulators slimmed and booted in parallel | 29–30 s wall, first boot |
+| Each slim simulator, booted and idle | 96 processes, 1.63–1.65 GB `phys_footprint` |
+| System memory free | 75 % before, 57–58 % with the 4 simulators |
+| 1-minute load average / CPU idle right after the parallel boot | 75.8 / 48 % |
+| CPU idle one minute later | 71 % |
+| Swap | unchanged (1.15 GB) |
+
+That is four more simulators on a host whose VM slots were already full. The
+boot storm is short; the steady cost is memory, about 1.65 GB per idle slim
+simulator before the app under test and the Maestro JVM. No flows ran in this
+measurement, so shard density under load is still to be measured on a
+host-mode pool before sizing it.
+
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,

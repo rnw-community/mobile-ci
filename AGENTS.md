@@ -36,7 +36,8 @@ the section that matches your task; skip the other.
   `xcodebuild-affected-tests`, budgie's original media scripts, which are
   the pixel-parity reference for `compose-media`, and recorded eas-cli
   `--json` output per eas-cli version under `eas-cli/` for the EAS Update
-  parsers).
+  parsers, and recorded simlock grant/status JSON under `simlock/` for
+  `simlock-lease`).
 - `tests/` — `run-tests.sh` plus one `<action>_test.sh` per action under test.
   Each suite extracts the step's `run:` body from the parsed `action.yml` and
   executes it against `fixtures/` with stubbed binaries, so no test duplicates
