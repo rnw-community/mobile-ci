@@ -335,7 +335,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             control-runner-labels: '["self-hosted","linux"]'
             config-path: .github/store-screenshots.config.json
@@ -593,7 +593,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -801,7 +801,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -818,7 +818,7 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -1089,7 +1089,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
 ```
 
 - `contents: read` — checkout.
@@ -1121,7 +1121,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             ios-target: >-
                 {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
@@ -1150,7 +1150,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}
