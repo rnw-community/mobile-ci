@@ -71,6 +71,15 @@ resolve FLOWS_DIR='' TARGETS='[{"name":"a","flowsDir":"a/e2e"}]'
 assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals 'a/e2e' "$(field "$dir" a flowsDir)" 'flowsDir' && pass_case
 
+case_start 'with test-framework e2e a target with no flowsDir takes e2e-dir'
+resolve FLOWS_DIR='' TEST_FRAMEWORK=e2e E2E_DIR=e2e TARGETS='[{"name":"a"}]'
+assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 'e2e' "$(field "$dir" a flowsDir)" 'flowsDir' && pass_case
+
+case_start 'with test-framework e2e and no e2e-dir a target with no flowsDir still fails closed'
+resolve FLOWS_DIR='' TEST_FRAMEWORK=e2e E2E_DIR='' TARGETS='[{"name":"a"}]'
+expect_failure "$dir" 'flowsDir'
+
 case_start 'a target with no flowsDir and no flows-dir fails closed'
 resolve FLOWS_DIR='' TARGETS='[{"name":"a","flowsDir":"a/e2e"},{"name":"b"}]'
 expect_failure "$dir" 'flowsDir'

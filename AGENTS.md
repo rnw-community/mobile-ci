@@ -232,7 +232,7 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | `ios-maestro.yml` | iOS Maestro e2e (`ios-driver: local` or `device-cloud`; `tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
 | `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`) | `contents: read`, `packages: write`, `actions: read` |
 | `seed-native-cache.yml` | The warm-up: publishes the base binary pull requests repack. Default-branch push with a `paths:` filter | `contents: read`, `packages: write`, `actions: read` |
-| `store-screenshots.yml` | Store screenshot capture matrix + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
+| `store-screenshots.yml` | Store screenshot capture matrix (`test-framework: maestro` on macOS, or `e2e` on Linux against simlock) + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
 | `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
 | `native-publish.yml` | Signed store publish (`eas build --local` + `eas submit`); `credentials-source: secrets\|eas`, `record-scope` per brand call, `mode: auto` with `ota-baseline: github-release\|eas-channel` | `contents: read` (+ `contents: write` for the store build record, + `actions: read` for `build-number: auto` in a private repo) |
 | `store-release.yml` | Submits an uploaded iOS build for App Review and promotes an Android build between Play tracks; dry run by default, `github-environment` gate | `contents: read` |
@@ -315,7 +315,7 @@ moving with the latest release of that major; `@main` can change without a
 deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
 ```
 
 ### Self-hosted runner prerequisites
@@ -351,7 +351,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -361,7 +361,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.8.0 # v4.8.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]

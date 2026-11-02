@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.7.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.8.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -146,7 +146,7 @@ and checks every input, secret and permission against this commit.
 | OTA previews on pull requests | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `ota-backend: github-release` (default; tokenless, **public repositories and previews only**) or `eas` (EAS Update; private repositories, and the only backend for production). See [Choosing an OTA backend](#choosing-an-ota-backend). |
 | Production OTA updates | the [`eas-update`](actions/eas-update/README.md) action, gated on `native-publish.yml`'s `decision` output | Run the job in a GitHub Environment with required reviewers. [`eas-channel-fingerprint`](actions/eas-channel-fingerprint/README.md) answers "can this commit ship as an OTA on channel X?" on its own. |
 | A gate against orphaning published OTAs | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | Fails a pull request that moves the native runtime fingerprint, unless labelled. |
-| Store screenshots | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `capture-mode: flows` (a Maestro flow per scene, iOS) or `direct` (a deep-link scene manifest, required for Android); optional gated fastlane upload. |
+| Store screenshots | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `capture-mode: flows` (a Maestro flow per scene, iOS) or `direct` (a deep-link scene manifest, required for Android); iOS captured by Maestro on macOS or, with `test-framework: e2e`, by your tester-army e2e project from Linux against simlock; optional gated fastlane upload. |
 | Cleanup | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) + [`preview-sweep-reusable.yml`](docs/workflows/preview-sweep-reusable.md) (GitHub Release previews); [`eas-channel-cleanup-reusable.yml`](docs/workflows/eas-channel-cleanup-reusable.md) (EAS channels) | The first cancels a closed pull request's runs on a shared fleet, whatever else you use. |
 
 Every calling job needs a `permissions:` block granting at least what the
@@ -154,6 +154,14 @@ called workflow's jobs request — see the table in
 [docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
 
 ## What changed in v4.x
+
+- **v4.8.0** — iOS e2e can run on a [simlock](https://github.com/callstack/simlock)
+  simulator farm instead of Maestro: `test-framework: e2e|both` on
+  `ios-maestro.yml` (default `maestro`) runs a tester-army `e2e` suite from Linux
+  (`e2e-dir`, `e2e-runner-labels`, `e2e-workers`, `simlock-url`, secret
+  `simlock-token`). A run passes on its report, not its exit code alone, and an
+  `if: always()` step releases the leases a cancelled run left behind.
+  `store-screenshots.yml` gains the same `test-framework: e2e` capture driver.
 
 - **v4.7.0** — Maestro shards can balance on recorded flow durations
   (`balance-shards: true` on `ios-maestro.yml` / `android-maestro.yml`, new
@@ -423,7 +431,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -496,7 +504,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.8.0 # v4.8.0
 ```
 
 ## Scope
@@ -542,7 +550,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.7.0 # v4.7.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.8.0 # v4.8.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

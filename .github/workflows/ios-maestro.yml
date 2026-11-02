@@ -345,6 +345,94 @@ on:
                 type: string
                 required: false
                 default: local
+            test-framework:
+                description: >-
+                    Which suite tests the repacked or built .app. 'maestro'
+                    (default) runs the Maestro shards (the test job). 'e2e' runs the
+                    consumer's tester-army e2e suite instead, from a Linux runner
+                    against leased simulators (the e2e job; see the e2e-* inputs).
+                    'both' runs the two side by side on the same app, for migrating
+                    flow by flow: the e2e suite gates the result only with
+                    e2e-required: true.
+                type: string
+                required: false
+                default: maestro
+            e2e-dir:
+                description: >-
+                    Directory, relative to the repository root, holding the e2e
+                    project: its package.json, lockfile and e2e config. Required
+                    with test-framework e2e or both.
+                type: string
+                required: false
+                default: ''
+            e2e-runner-labels:
+                description: >-
+                    JSON array of runner labels for the e2e job. It drives remote
+                    simulators, so any Linux runner with Node and network access to
+                    simlock-url will do; give it the CPU the e2e-workers need (the
+                    runner hosts one test worker per leased device). Empty (default)
+                    falls back to repack-runner-labels.
+                type: string
+                required: false
+                default: ''
+            e2e-node-version:
+                description: >-
+                    Node.js version the e2e job runs the e2e project with, independent
+                    of node-version, which builds the app: tester-army e2e needs
+                    22.22.3+ on Node 22, or 24.8+.
+                type: string
+                required: false
+                default: '^24.8.0'
+            e2e-install-command:
+                description: Command run in e2e-dir to install the e2e project's dependencies.
+                type: string
+                required: false
+                default: npm ci --no-audit --no-fund
+            e2e-command:
+                description: >-
+                    Command run in e2e-dir to run the suite. It gets E2E_APP_PATH
+                    (the .app), E2E_APP_ID, E2E_TARGET, E2E_WORKERS, E2E_RETRIES,
+                    E2E_SESSION (unique per job attempt and target), SIMLOCK_URL and
+                    SIMLOCK_TOKEN in its environment, and must write its report under
+                    e2e-dir/.e2e, which the job uploads.
+                type: string
+                required: false
+                default: npx e2e run --target ios
+            e2e-workers:
+                description: >-
+                    Devices leased and tests run at once per target (E2E_WORKERS).
+                    Size it to the simulator farm: each worker holds one simulator for
+                    the whole run.
+                type: string
+                required: false
+                default: '1'
+            e2e-retries:
+                description: Retries per failed test inside the run (E2E_RETRIES).
+                type: string
+                required: false
+                default: '1'
+            e2e-required:
+                description: >-
+                    With test-framework both: true makes a failing e2e suite fail the
+                    result; false (default) runs it as a non-blocking shadow while
+                    Maestro still gates. With test-framework e2e the suite always
+                    gates.
+                type: boolean
+                required: false
+                default: false
+            e2e-timeout-minutes:
+                description: Timeout of the e2e job.
+                type: number
+                required: false
+                default: 60
+            simlock-url:
+                description: >-
+                    Base URL of the simlock gateway or worker the e2e suite leases
+                    simulators from (SIMLOCK_URL), e.g. http://10.10.1.28:4700. Required
+                    with test-framework e2e or both.
+                type: string
+                required: false
+                default: ''
             device-cloud-runner-labels:
                 description: >-
                     JSON array of runner labels for the test job when the ios-driver
@@ -668,6 +756,12 @@ on:
                     device-cloud. Handed to the CLI through its environment, never
                     as an input or on a command line.
                 required: false
+            simlock-token:
+                description: >-
+                    simlock agent token the e2e suite leases simulators with
+                    (SIMLOCK_TOKEN). Required with test-framework e2e or both. Give
+                    each consuming repository its own token.
+                required: false
         outputs:
             result:
                 description: >-
@@ -699,9 +793,72 @@ jobs:
             flow-timings: ${{ steps.flow-timings.outputs.timings }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Validate the test framework
+              shell: bash
+              env:
+                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
+                  E2E_DIR: ${{ inputs.e2e-dir }}
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  HAS_SIMLOCK_TOKEN: ${{ secrets.simlock-token != '' }}
+                  E2E_WORKERS: ${{ inputs.e2e-workers }}
+                  E2E_RETRIES: ${{ inputs.e2e-retries }}
+                  IOS_DRIVER: ${{ inputs.ios-driver }}
+                  IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
+              run: |
+                  set -euo pipefail
+                  case "$TEST_FRAMEWORK" in
+                    maestro) exit 0 ;;
+                    e2e | both) ;;
+                    *)
+                      echo "::error::test-framework must be 'maestro', 'e2e' or 'both'; got '$TEST_FRAMEWORK'."
+                      exit 1
+                      ;;
+                  esac
+                  fail=0
+                  if [ -z "$E2E_DIR" ]; then
+                    echo "::error::test-framework '$TEST_FRAMEWORK' needs e2e-dir: the directory of the e2e project."
+                    fail=1
+                  fi
+                  case "$SIMLOCK_URL" in
+                    http://* | https://*) ;;
+                    *)
+                      echo "::error::test-framework '$TEST_FRAMEWORK' needs simlock-url, an http(s) URL of the simlock gateway or worker; got '$SIMLOCK_URL'."
+                      fail=1
+                      ;;
+                  esac
+                  if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
+                    echo "::error::test-framework '$TEST_FRAMEWORK' needs the simlock-token secret: pass it by name from the calling workflow."
+                    fail=1
+                  fi
+                  for pair in "e2e-workers=$E2E_WORKERS" "e2e-retries=$E2E_RETRIES"; do
+                    case "${pair#*=}" in
+                      '' | *[!0-9]*)
+                        echo "::error::${pair%%=*} must be a whole number; got '${pair#*=}'."
+                        fail=1
+                        ;;
+                    esac
+                  done
+                  case "$E2E_WORKERS" in
+                    '' | *[!0-9]*) ;;
+                    *)
+                      if [ "$((10#$E2E_WORKERS))" -lt 1 ]; then
+                        echo "::error::e2e-workers must be at least 1; got '$E2E_WORKERS'."
+                        fail=1
+                      fi
+                      ;;
+                  esac
+                  if [ "$IOS_SIMULATOR_ARCHS" != arm64 ]; then
+                    echo "::error::test-framework '$TEST_FRAMEWORK' runs the app on the farm's arm64 simulators; ios-simulator-archs '$IOS_SIMULATOR_ARCHS' builds a slice they cannot run."
+                    fail=1
+                  fi
+                  if [ "$TEST_FRAMEWORK" = e2e ] && [ "$IOS_DRIVER" != local ]; then
+                    echo "::error::test-framework 'e2e' brings its own devices; ios-driver '$IOS_DRIVER' applies only to the Maestro suite."
+                    fail=1
+                  fi
+                  exit "$fail"
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   fetch-depth: 0
@@ -709,7 +866,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.7.0 # v4.7.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.8.0 # v4.8.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -794,6 +951,8 @@ jobs:
               env:
                   TARGETS: ${{ inputs.targets }}
                   FLOWS_DIR: ${{ inputs.flows-dir }}
+                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
+                  E2E_DIR: ${{ inputs.e2e-dir }}
                   TOLERATE_TEST_FAILURES: ${{ inputs.tolerate-test-failures }}
                   REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
                   NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
@@ -804,6 +963,10 @@ jobs:
                   if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
                     echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
+                  fi
+                  # An e2e-only call has no Maestro flows: a target's tests are the e2e project.
+                  if [ -z "$FLOWS_DIR" ] && [ "${TEST_FRAMEWORK:-maestro}" = e2e ]; then
+                    FLOWS_DIR=${E2E_DIR:-}
                   fi
                   labelled=false
                   if [ -n "$NATIVE_BUILD_LABEL" ]; then
@@ -838,7 +1001,7 @@ jobs:
             - name: Fetch the recorded flow timings
               id: flow-timings
               if: inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.8.0 # v4.8.0
               with:
                   mode: fetch
                   artifact-name: maestro-flow-timings-ios${{ steps.targets.outputs.artifact-scope }}
@@ -851,7 +1014,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.7.0 # v4.7.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.8.0 # v4.8.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -860,7 +1023,10 @@ jobs:
             e2e-cache-test-paths: ${{ inputs.e2e-cache-test-paths }}
             e2e-cache-state-command: ${{ inputs.e2e-cache-state-command }}
             e2e-cache-export-command: ${{ inputs.e2e-cache-export-command }}
-            e2e-cache-extra-paths: ${{ inputs.e2e-cache-extra-paths }}
+            # A pass vouches for the suite that ran: with the e2e suite running, its project is part of the key.
+            e2e-cache-extra-paths: |
+                ${{ inputs.e2e-cache-extra-paths }}
+                ${{ inputs.test-framework != 'maestro' && inputs.e2e-dir || '' }}
             platform: ios
             targets: ${{ needs.detect.outputs.targets }}
             build-strategy: ${{ needs.detect.outputs.build-strategy }}
@@ -912,7 +1078,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -953,7 +1119,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1065,7 +1231,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.8.0 # v4.8.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1086,7 +1252,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.8.0 # v4.8.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1100,7 +1266,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.8.0 # v4.8.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -1126,7 +1292,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.8.0 # v4.8.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1139,7 +1305,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.8.0 # v4.8.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1166,7 +1332,7 @@ jobs:
                   key: ${{ steps.rn-prebuilts.outputs.cache-key }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.8.0 # v4.8.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1191,7 +1357,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.8.0 # v4.8.0
               with:
                   mode: publish
                   platform: ios
@@ -1258,7 +1424,7 @@ jobs:
     test:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
-        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.ios-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
@@ -1269,7 +1435,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1363,7 +1529,7 @@ jobs:
 
             - name: setup-xcode-pinned
               if: inputs.ios-driver != 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.8.0 # v4.8.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1381,7 +1547,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1391,7 +1557,7 @@ jobs:
             - name: Select the target's flow timings
               id: shard-timings
               if: inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.8.0 # v4.8.0
               with:
                   mode: select
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1401,7 +1567,7 @@ jobs:
               id: run-maestro-ios
               if: inputs.ios-driver == 'local'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.8.0 # v4.8.0
               with:
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -1442,7 +1608,7 @@ jobs:
               id: run-maestro-device-cloud
               if: inputs.ios-driver == 'device-cloud'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.8.0 # v4.8.0
               with:
                   platform: ios
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
@@ -1530,6 +1696,170 @@ jobs:
                       grep -i -E 'exec|node|mach-?o|code ?sign|amfi|apfs|i/o|error' | tail -200
                   echo "::endgroup::"
 
+    e2e:
+        name: E2E suite (${{ matrix.target.name }})
+        needs: [detect, plan, build]
+        if: ${{ !cancelled() && inputs.test-framework != 'maestro' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.repack-runner-labels) }}
+        timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.e2e-node-version }}
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+            - name: Unpack app
+              shell: bash
+              env:
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+              run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
+            - name: Apply maestro-secrets-env to the e2e suite
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+            - name: Install the e2e project
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
+              run: bash -c "$INSTALL_COMMAND"
+            - name: Run the e2e suite
+              id: run
+              continue-on-error: ${{ (inputs.test-framework == 'both' && !inputs.e2e-required) || matrix.target.tolerateTestFailures }}
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  E2E_COMMAND: ${{ inputs.e2e-command }}
+                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
+                  E2E_APP_ID: ${{ matrix.target.appId }}
+                  E2E_TARGET: ${{ matrix.target.name }}
+                  E2E_WORKERS: ${{ inputs.e2e-workers }}
+                  E2E_RETRIES: ${{ inputs.e2e-retries }}
+                  E2E_SESSION: e2e-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  E2E_TELEMETRY_DISABLED: '1'
+                  E2E_SHADOW: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
+                  E2E_TOLERATED: ${{ matrix.target.tolerateTestFailures }}
+                  TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  SIMLOCK_TOKEN: ${{ secrets.simlock-token }}
+              run: |
+                  set -euo pipefail
+                  if [ ! -d "$E2E_APP_PATH" ]; then
+                    echo "::error::The repacked app is not at $E2E_APP_PATH."
+                    exit 1
+                  fi
+                  # One lease per worker, and a run aborts if a lease never comes: ask for no more
+                  # simulators than the farm has free now (limit minus devices leased by anyone).
+                  # Best effort, not a reservation: other runs may lease in between. The free count is
+                  # split across this run's targets, which all read it at the same moment.
+                  E2E_WORKERS=$((10#$E2E_WORKERS))
+                  export E2E_WORKERS
+                  targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
+                  case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
+                  free=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                    | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
+                    | jq -r --argjson targets "$targets" '.capacity.ios | if .limit == null then empty else ([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor end' 2>/dev/null || true)
+                  case "$free" in
+                    '' | *[!0-9]*) echo "::notice::The farm did not report its free capacity; running $E2E_WORKERS workers as asked." ;;
+                    *)
+                      if [ "$free" -lt "$E2E_WORKERS" ]; then
+                        if [ "$free" -lt 1 ]; then free=1; fi
+                        echo "::notice::The farm has $free free simulators; running $free workers instead of $E2E_WORKERS."
+                        E2E_WORKERS=$free
+                        export E2E_WORKERS
+                      fi
+                      ;;
+                  esac
+                  # Only this run's report counts: a stale one must never vouch for a run that wrote none.
+                  rm -rf .e2e
+                  started=$(date +%s)
+                  status=0
+                  bash -c "$E2E_COMMAND" || status=$?
+                  echo "E2E suite exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
+                  if [ -f .e2e/summary.md ]; then
+                    { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  # An exit code of 0 is not evidence that tests ran: the report must say so.
+                  if [ "$status" = 0 ]; then
+                    if [ ! -f .e2e/report.json ]; then
+                      echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran."
+                      status=1
+                    elif ! counts=$(jq -er '.run | select(.status != null) | [.summary.executed // 0, .summary.failed // 0, .summary.flaky // 0] as $n | select(all($n[]; type == "number" and . == floor and . >= 0)) | "\(.status) \($n[0]) \($n[1]) \($n[2])"' .e2e/report.json 2>/dev/null); then
+                      echo "::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts."
+                      status=1
+                    else
+                      read -r run_status executed failed flaky <<< "$counts"
+                      echo "E2E report: $run_status, $executed executed, $failed failed, $flaky flaky." | tee -a "$GITHUB_STEP_SUMMARY"
+                      if [ "$executed" -lt 1 ]; then
+                        echo "::error::The e2e suite exited 0 but executed no test."
+                        status=1
+                      elif [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; then
+                        echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
+                        status=1
+                      fi
+                    fi
+                  fi
+                  if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
+                    echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
+                  elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ]; then
+                    echo "::warning::E2E suite failed (exit $status) for a target with tolerateTestFailures; it does not gate this run."
+                  fi
+                  exit "$status"
+            - name: Release the simulators the suite left leased
+              if: ${{ always() && steps.run.outcome != 'skipped' }}
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  SIMLOCK_TOKEN: ${{ secrets.simlock-token }}
+              run: |
+                  set -uo pipefail
+                  # A cancelled run is killed before the suite releases its leases, which would
+                  # then hold their simulators until the lease TTL. The suite lists the ids it
+                  # acquired in .e2e/simlock-leases.json; this step runs on every exit path.
+                  file=.e2e/simlock-leases.json
+                  if [ ! -f "$file" ]; then
+                    exit 0
+                  fi
+                  if ! ids=$(jq -r '.[] | (.id? // .) | select(type == "string" and test("^[A-Za-z0-9._:-]+$"))' "$file" 2>/dev/null); then
+                    echo "::warning::$file is not a JSON array of lease ids; nothing released."
+                    exit 0
+                  fi
+                  for id in $ids; do
+                    code=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                      | curl -sS -m 15 -o /dev/null -w '%{http_code}' -X DELETE -H @- "${SIMLOCK_URL%/}/v1/leases/$id" 2>/dev/null || echo 000)
+                    case "$code" in
+                      2??) echo "Released lease $id." ;;
+                      404) echo "Lease $id was already released." ;;
+                      *) echo "::warning::Could not release lease $id (HTTP $code); it expires at its TTL." ;;
+                    esac
+                  done
+            - name: Upload the e2e report
+              if: ${{ always() && steps.run.outcome != 'skipped' }}
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: e2e-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: ${{ inputs.e2e-dir }}/.e2e
+                  retention-days: ${{ inputs.artifact-retention-days }}
+                  include-hidden-files: true
+                  if-no-files-found: warn
+
     record-timings:
         name: Record flow timings
         needs: [detect, test]
@@ -1538,7 +1868,7 @@ jobs:
         timeout-minutes: 10
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download this run's shard artifacts
@@ -1547,7 +1877,7 @@ jobs:
                   pattern: maestro-flow-timings-ios${{ needs.detect.outputs.artifact-scope }}-*-shard-*
                   path: ${{ runner.temp }}/maestro-shard-artifacts
             - name: Record the flow timings
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.8.0 # v4.8.0
               with:
                   mode: record
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1557,8 +1887,8 @@ jobs:
 
     cache-pass:
         name: Record E2E pass (${{ matrix.target.name }})
-        needs: [detect, plan, build, test]
-        if: ${{ !cancelled() && needs.plan.result == 'success' && needs.test.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
+        needs: [detect, plan, build, test, e2e]
+        if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success')))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         timeout-minutes: 5
         strategy:
@@ -1567,12 +1897,12 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Save the successful test contract
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.7.0 # v4.7.0
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.8.0 # v4.8.0
               with:
                   mode: publish
                   platform: ios
@@ -1580,7 +1910,7 @@ jobs:
 
     status:
         name: iOS Maestro E2E result
-        needs: [detect, plan, build, test, cache-pass]
+        needs: [detect, plan, build, test, e2e, cache-pass]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
@@ -1597,12 +1927,27 @@ jobs:
                   PLAN_RESULT: ${{ needs.plan.result }}
                   NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
+                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
                   TEST_RESULT: ${{ needs.test.result }}
+                  E2E_RESULT: ${{ needs.e2e.result }}
+                  E2E_REQUIRED: ${{ inputs.e2e-required }}
                   TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
                   CACHED_TARGETS: ${{ needs.plan.outputs.cached-targets }}
               run: |
                   result=failed
                   trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
+                  # The suite that gates: Maestro, e2e, or with 'both' Maestro plus e2e when e2e-required.
+                  MAESTRO_RESULT=${TEST_RESULT:-}
+                  case "${TEST_FRAMEWORK:-maestro}" in
+                    e2e) TEST_RESULT=${E2E_RESULT:-}; SUITE='e2e suite' ;;
+                    both)
+                      TEST_RESULT=$MAESTRO_RESULT; SUITE='maestro suite'
+                      if [ "${E2E_REQUIRED:-}" = true ] && [ "$MAESTRO_RESULT" = success ] && [ "${E2E_RESULT:-}" != success ]; then
+                        TEST_RESULT=$E2E_RESULT; SUITE='e2e suite (e2e-required)'
+                      fi
+                      ;;
+                    *) TEST_RESULT=$MAESTRO_RESULT; SUITE='maestro suite' ;;
+                  esac
                   summary() {
                     printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
                   }
@@ -1651,17 +1996,20 @@ jobs:
                     exit 1
                   fi
                   if [ "$TEST_RESULT" != "success" ]; then
-                    echo "::error::Required jobs did not succeed: maestro suite (result: $TEST_RESULT)."
-                    summary "### iOS Maestro E2E: failed (test job result: $TEST_RESULT)"
+                    echo "::error::Required jobs did not succeed: $SUITE (result: $TEST_RESULT)."
+                    summary "### iOS Maestro E2E: failed ($SUITE result: $TEST_RESULT)"
                     cancelled_hint "$TEST_RESULT"
                     exit 1
                   fi
                   if [ "$DETECT_FORCED" = 'true' ]; then
                     result=passed
-                    echo "Maestro suite passed (forced by the '${FORCE_LABEL}' label)."
+                    echo "Passed: $SUITE (forced by the '${FORCE_LABEL}' label)."
                     summary "### iOS Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
                     exit 0
                   fi
+                  if [ "${TEST_FRAMEWORK:-}" = both ] && [ "${E2E_REQUIRED:-}" != true ]; then
+                    summary "- e2e shadow suite: finished (not gating). Its outcome is the e2e job's warning and summary, not this job result; set e2e-required: true to gate."
+                  fi
                   result=passed
-                  echo "Maestro suite passed."
-                  summary "### iOS Maestro E2E: passed"
+                  echo "Passed: $SUITE."
+                  summary "### iOS Maestro E2E: passed ($SUITE)"
