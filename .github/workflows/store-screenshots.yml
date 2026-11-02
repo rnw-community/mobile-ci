@@ -2542,8 +2542,8 @@ jobs:
                     if [ ! -f .e2e/report.json ]; then
                       echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any cell ran."
                       status=1
-                    elif ! counts=$(jq -er '.run | select(.status != null) | "\(.status) \(.summary.executed // 0) \(.summary.failed // 0)"' .e2e/report.json 2>/dev/null); then
-                      echo "::error::The e2e report (.e2e/report.json) has no run status and summary."
+                    elif ! counts=$(jq -er '.run | select(.status != null) | [.summary.executed // 0, .summary.failed // 0] as $n | select(all($n[]; type == "number" and . == floor and . >= 0)) | "\(.status) \($n[0]) \($n[1])"' .e2e/report.json 2>/dev/null); then
+                      echo "::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts."
                       status=1
                     else
                       read -r run_status executed failed <<< "$counts"

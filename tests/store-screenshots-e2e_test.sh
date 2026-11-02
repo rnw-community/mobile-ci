@@ -165,6 +165,12 @@ if assert_equals 1 "$no_report" 'no report' && assert_equals 1 "$STEP_STATUS" 'n
     pass_case
 fi
 
+case_start 'a report with a fractional failed count fails closed'
+capture "mkdir -p .e2e && printf '%s' '{\"run\":{\"status\":\"passed\",\"summary\":{\"executed\":2,\"failed\":0.5}}}' > .e2e/report.json"
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'whole-number counts' 'error'; then
+    pass_case
+fi
+
 case_start 'a failing command keeps its exit status'
 capture 'exit 3'
 if assert_equals 3 "$STEP_STATUS" 'status'; then
