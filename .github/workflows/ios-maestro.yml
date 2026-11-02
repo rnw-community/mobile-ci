@@ -375,6 +375,14 @@ on:
                 type: string
                 required: false
                 default: ''
+            e2e-node-version:
+                description: >-
+                    Node.js version the e2e job runs the e2e project with, independent
+                    of node-version, which builds the app: tester-army e2e needs
+                    22.22.3+ on Node 22, or 24.8+.
+                type: string
+                required: false
+                default: '24'
             e2e-install-command:
                 description: Command run in e2e-dir to install the e2e project's dependencies.
                 type: string
@@ -1693,7 +1701,7 @@ jobs:
                   persist-credentials: false
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
-                  node-version: ${{ inputs.node-version }}
+                  node-version: ${{ inputs.e2e-node-version }}
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
