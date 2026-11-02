@@ -119,4 +119,36 @@ if assert_contains "$condition" "(inputs.test-framework != 'both' || (inputs.e2e
     pass_case
 fi
 
+RELEASE='Release the simulators the suite left leased'
+release() {
+    dir="$(new_workflow_workspace "$WORKFLOW" e2e "$RELEASE")"
+    mkdir -p "$dir/work/.e2e"
+    stub "$dir" curl 'printf "%s\n" "$*" >> "$(dirname "$0")/../curl-args"; cat > /dev/null; printf 204'
+    : > "$dir/curl-args"
+}
+
+case_start 'with no lease list nothing is released'
+release
+run_step "$dir" SIMLOCK_URL=http://farm.invalid SIMLOCK_TOKEN=secret-token
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals '' "$(cat "$dir/curl-args")" 'curl calls'; then pass_case; fi
+
+case_start 'every listed lease is released, with the token off argv, and a hostile id is skipped'
+release
+printf '%s' '["abc123",{"id":"def456"},"../x",42]' > "$dir/work/.e2e/simlock-leases.json"
+run_step "$dir" SIMLOCK_URL=http://farm.invalid/ SIMLOCK_TOKEN=secret-token
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/curl-args")" 'http://farm.invalid/v1/leases/abc123' 'first lease' \
+    && assert_contains "$(cat "$dir/curl-args")" 'http://farm.invalid/v1/leases/def456' 'second lease' \
+    && assert_not_contains "$(cat "$dir/curl-args")" '../x' 'hostile id' \
+    && assert_not_contains "$(cat "$dir/curl-args")" 'secret-token' 'curl argv' \
+    && assert_contains "$(cat "$dir/log")" 'Released lease abc123' 'log'; then
+    pass_case
+fi
+
+case_start 'a malformed lease list warns and does not fail the job'
+release
+printf '%s' 'not json' > "$dir/work/.e2e/simlock-leases.json"
+run_step "$dir" SIMLOCK_URL=http://farm.invalid SIMLOCK_TOKEN=t
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'not a JSON array' 'warning'; then pass_case; fi
+
 finish_suite

@@ -221,6 +221,12 @@ credentials. A target with `tolerateTestFailures` turns a failing suite into a
 warning, as with Maestro. The farm runs arm64 simulators, so e2e needs
 `ios-simulator-archs: arm64`; `detect` rejects anything else.
 
+A cancelled run (a newer push, with `cancel-in-progress`) is killed before the
+suite can release its simulators. If the suite lists the lease ids it acquired
+in `.e2e/simlock-leases.json` (a JSON array of ids, or of objects with an `id`),
+the job releases them in an `if: always()` step, so a cancel frees the farm at
+once instead of at the lease TTL.
+
 Keep `e2e-dir` a standalone project (its own `package.json` and lockfile, not a
 member of the repository's workspace): its tree is hashed into the result cache
 key, and a workspace's `node_modules` links make that walk slow or circular. The
