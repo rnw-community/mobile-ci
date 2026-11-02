@@ -840,10 +840,15 @@ jobs:
                         ;;
                     esac
                   done
-                  if [ "$E2E_WORKERS" = 0 ]; then
-                    echo "::error::e2e-workers must be at least 1."
-                    fail=1
-                  fi
+                  case "$E2E_WORKERS" in
+                    '' | *[!0-9]*) ;;
+                    *)
+                      if [ "$((10#$E2E_WORKERS))" -lt 1 ]; then
+                        echo "::error::e2e-workers must be at least 1; got '$E2E_WORKERS'."
+                        fail=1
+                      fi
+                      ;;
+                  esac
                   if [ "$TEST_FRAMEWORK" = e2e ] && [ "$IOS_DRIVER" != local ]; then
                     echo "::error::test-framework 'e2e' brings its own devices; ios-driver '$IOS_DRIVER' applies only to the Maestro suite."
                     fail=1
@@ -1810,7 +1815,7 @@ jobs:
     cache-pass:
         name: Record E2E pass (${{ matrix.target.name }})
         needs: [detect, plan, build, test, e2e]
-        if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || !inputs.e2e-required || needs.e2e.result == 'success'))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
+        if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success')))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         timeout-minutes: 5
         strategy:
@@ -1925,7 +1930,7 @@ jobs:
                   fi
                   if [ "$DETECT_FORCED" = 'true' ]; then
                     result=passed
-                    echo "Maestro suite passed (forced by the '${FORCE_LABEL}' label)."
+                    echo "${SUITE^} passed (forced by the '${FORCE_LABEL}' label)."
                     summary "### iOS Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
                     exit 0
                   fi
