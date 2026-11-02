@@ -1766,12 +1766,34 @@ jobs:
                       fi
                       ;;
                   esac
+                  # Only this run's report counts: a stale one must never vouch for a run that wrote none.
+                  rm -rf .e2e
                   started=$(date +%s)
                   status=0
                   bash -c "$E2E_COMMAND" || status=$?
                   echo "E2E suite exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
                   if [ -f .e2e/summary.md ]; then
                     { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  # An exit code of 0 is not evidence that tests ran: the report must say so.
+                  if [ "$status" = 0 ]; then
+                    if [ ! -f .e2e/report.json ]; then
+                      echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran."
+                      status=1
+                    elif ! counts=$(jq -er '.run | select(.status != null) | "\(.status) \(.summary.executed // 0) \(.summary.failed // 0) \(.summary.flaky // 0)"' .e2e/report.json 2>/dev/null); then
+                      echo "::error::The e2e report (.e2e/report.json) has no run status and summary."
+                      status=1
+                    else
+                      read -r run_status executed failed flaky <<< "$counts"
+                      echo "E2E report: $run_status, $executed executed, $failed failed, $flaky flaky." | tee -a "$GITHUB_STEP_SUMMARY"
+                      if [ "$executed" -lt 1 ]; then
+                        echo "::error::The e2e suite exited 0 but executed no test."
+                        status=1
+                      elif [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; then
+                        echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
+                        status=1
+                      fi
+                    fi
                   fi
                   if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
                     echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
