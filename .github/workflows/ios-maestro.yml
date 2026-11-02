@@ -999,7 +999,10 @@ jobs:
             e2e-cache-test-paths: ${{ inputs.e2e-cache-test-paths }}
             e2e-cache-state-command: ${{ inputs.e2e-cache-state-command }}
             e2e-cache-export-command: ${{ inputs.e2e-cache-export-command }}
-            e2e-cache-extra-paths: ${{ inputs.e2e-cache-extra-paths }}
+            # A pass vouches for the suite that ran: with the e2e suite running, its project is part of the key.
+            e2e-cache-extra-paths: |
+                ${{ inputs.e2e-cache-extra-paths }}
+                ${{ inputs.test-framework != 'maestro' && inputs.e2e-dir || '' }}
             platform: ios
             targets: ${{ needs.detect.outputs.targets }}
             build-strategy: ${{ needs.detect.outputs.build-strategy }}
@@ -1718,7 +1721,7 @@ jobs:
                   E2E_TARGET: ${{ matrix.target.name }}
                   E2E_WORKERS: ${{ inputs.e2e-workers }}
                   E2E_RETRIES: ${{ inputs.e2e-retries }}
-                  E2E_SESSION: e2e-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.target.name }}
+                  E2E_SESSION: e2e-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   E2E_TELEMETRY_DISABLED: '1'
                   E2E_SHADOW: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
                   SIMLOCK_URL: ${{ inputs.simlock-url }}
@@ -1732,7 +1735,7 @@ jobs:
                   # One lease per worker, and a run aborts if a lease never comes: ask for no more
                   # simulators than the farm has free now (limit minus devices leased by anyone).
                   free=$(curl -fsS -m 15 -H "Authorization: Bearer $SIMLOCK_TOKEN" "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
-                    | jq -r '.capacity.ios | if .limit == null then empty else .limit - ((.used // 0) - (.warm // 0)) end' 2>/dev/null || true)
+                    | jq -r '.capacity.ios | if .limit == null then empty else [.limit - ((.used // 0) - (.warm // 0)), 0] | max | floor end' 2>/dev/null || true)
                   case "$free" in
                     '' | *[!0-9]*) echo "::notice::The farm did not report its free capacity; running $E2E_WORKERS workers as asked." ;;
                     *)
@@ -1913,7 +1916,7 @@ jobs:
                     exit 0
                   fi
                   if [ "${TEST_FRAMEWORK:-}" = both ] && [ "${E2E_REQUIRED:-}" != true ]; then
-                    summary "- e2e shadow suite: ${E2E_RESULT} (not gating; set e2e-required: true to gate)"
+                    summary "- e2e shadow suite: job ${E2E_RESULT} (not gating: a failing suite shows as a warning and in the e2e job's summary; set e2e-required: true to gate)"
                   fi
                   result=passed
                   echo "${SUITE^} passed."
