@@ -278,6 +278,80 @@ on:
                 type: string
                 required: false
                 default: '2.8.0'
+            test-framework:
+                description: >-
+                    What drives the iOS capture. 'maestro' (default) captures on a
+                    macOS runner: deep-link scenes through simctl, flow scenes
+                    through Maestro. 'e2e' runs the consumer's tester-army e2e
+                    project from a Linux runner against simulators leased from
+                    simlock instead: it gets every cell of the device's locales x
+                    appearances x scenes as a plan file and writes each one to the
+                    same raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png
+                    path (see docs/workflows/store-screenshots.md#e2e-capture).
+                    Needs capture-mode direct and no Android entries.
+                type: string
+                required: false
+                default: maestro
+            e2e-dir:
+                description: >-
+                    Directory, relative to the repository root, holding the e2e
+                    project: its package.json, lockfile and e2e config. Required
+                    with test-framework e2e.
+                type: string
+                required: false
+                default: ''
+            e2e-runner-labels:
+                description: >-
+                    JSON array of runner labels for the e2e capture job. It drives
+                    remote simulators, so any Linux runner with Node and network
+                    access to simlock-url will do; give it the CPU the e2e-workers
+                    need. Empty (default) falls back to control-runner-labels.
+                type: string
+                required: false
+                default: ''
+            e2e-node-version:
+                description: >-
+                    Node.js version the e2e capture job runs the e2e project with:
+                    tester-army e2e needs 22.22.3+ on Node 22, or 24.8+.
+                type: string
+                required: false
+                default: '^24.8.0'
+            e2e-install-command:
+                description: Command run in e2e-dir to install the e2e project's dependencies.
+                type: string
+                required: false
+                default: npm ci --no-audit --no-fund
+            e2e-command:
+                description: >-
+                    Command run in e2e-dir to capture one device's cells. It gets
+                    SCREENSHOT_PLAN, SCREENSHOT_DEVICE, SCREENSHOT_DEVICE_SLUG,
+                    SCREENSHOT_STATUS_BAR, E2E_APP_PATH, E2E_APP_ID, E2E_WORKERS,
+                    E2E_RETRIES, E2E_SESSION, SIMLOCK_URL and SIMLOCK_TOKEN in its
+                    environment, must write every planned PNG, and must write its
+                    report under e2e-dir/.e2e, which the job uploads.
+                type: string
+                required: false
+                default: npx e2e run --target ios
+            e2e-workers:
+                description: >-
+                    Devices leased and cells captured at once per device entry
+                    (E2E_WORKERS); lowered to the farm's free capacity when the farm
+                    reports it.
+                type: string
+                required: false
+                default: '1'
+            e2e-retries:
+                description: Retries per failed cell inside the run (E2E_RETRIES).
+                type: string
+                required: false
+                default: '1'
+            simlock-url:
+                description: >-
+                    Base URL of the simlock gateway or worker the e2e capture leases
+                    simulators from (SIMLOCK_URL). Required with test-framework e2e.
+                type: string
+                required: false
+                default: ''
             simslim-version:
                 description: >-
                     Pinned simslim CLI version, consulted only when
@@ -878,6 +952,12 @@ on:
                     passwords and the credentials a seed hook uses to prepare the
                     backend it captures against.
                 required: false
+            simlock-token:
+                description: >-
+                    simlock agent token (SIMLOCK_TOKEN) the e2e capture leases
+                    simulators with. Required with test-framework e2e; reaches only
+                    the e2e capture job's run and lease-release steps.
+                required: false
         outputs:
             result:
                 description: >-
@@ -1125,6 +1205,10 @@ jobs:
                   SCREENSHOTS_DIR: ${{ steps.resolve.outputs.screenshots-dir }}
                   IOS_TARGET: ${{ steps.resolve.outputs.ios-target }}
                   ANDROID_TARGET: ${{ steps.resolve.outputs.android-target }}
+                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
+                  E2E_DIR: ${{ inputs.e2e-dir }}
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  HAS_SIMLOCK_TOKEN: ${{ secrets.simlock-token != '' }}
               run: |
                   set -euo pipefail
                   if [ -z "$CAPTURE_MANIFEST" ]; then
@@ -1138,6 +1222,35 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  case "$TEST_FRAMEWORK" in
+                    maestro|e2e) ;;
+                    *)
+                      echo "::error::test-framework '$TEST_FRAMEWORK' must be 'maestro' or 'e2e'."
+                      exit 1
+                      ;;
+                  esac
+                  if [ "$TEST_FRAMEWORK" = 'e2e' ]; then
+                    if [ "$CAPTURE_MODE" != 'direct' ]; then
+                      echo "::error::test-framework 'e2e' needs capture-mode 'direct': the e2e project captures the capture-scenes cells, and flows mode discovers Maestro flows instead."
+                      exit 1
+                    fi
+                    if [ -z "$E2E_DIR" ]; then
+                      echo "::error::test-framework 'e2e' needs e2e-dir, the directory of the e2e project that captures the cells."
+                      exit 1
+                    fi
+                    if [ -z "$SIMLOCK_URL" ]; then
+                      echo "::error::test-framework 'e2e' needs simlock-url, the simlock gateway the capture leases simulators from."
+                      exit 1
+                    fi
+                    if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
+                      echo "::error::test-framework 'e2e' needs the simlock-token secret: pass it by name from the calling workflow."
+                      exit 1
+                    fi
+                    if [ -n "$SEED_COMMAND" ]; then
+                      echo "::error::seed-command is set but test-framework is 'e2e'; the seed hook runs on a macOS capture host, which an e2e capture has none of, so it would be silently ignored. Seed each cell from the e2e project instead."
+                      exit 1
+                    fi
+                  fi
                   if [ "$CAPTURE_MODE" = 'flows' ]; then
                     if [ -n "$CAPTURE_SCENES" ]; then
                       echo "::error::capture-scenes is set but capture-mode is 'flows'; the scene manifest is only consumed in capture-mode: direct, so it would be silently ignored."
@@ -1279,6 +1392,15 @@ jobs:
                     echo "::error::capture-manifest has invalid Android entries (each needs a 'device' label matching ^[A-Za-z0-9 ._-]+\$, a 'locales' array of non-empty strings, an 'appearances' array containing only 'light'/'dark', positive integer 'width'/'height'/'density', and no orientation other than 'portrait' - Android landscape is a documented v1.6.0 non-goal): $invalid_android"
                     exit 1
                   fi
+                  landscape_ios=$(jq -r '[.[] | select((.orientation // "portrait") != "portrait") | .device] | join(", ")' <<< "$ios_entries")
+                  if [ -n "$landscape_ios" ] && [ "$TEST_FRAMEWORK" = 'e2e' ]; then
+                    echo "::error::capture-manifest entries $landscape_ios ask for landscape, which test-framework 'e2e' does not capture; use portrait or test-framework 'maestro'."
+                    exit 1
+                  fi
+                  if [ "$android_count" -gt 0 ] && [ "$TEST_FRAMEWORK" = 'e2e' ]; then
+                    echo "::error::capture-manifest has Android entries but test-framework is 'e2e', which captures iOS only (simlock leases iOS simulators); capture Android from a separate call with test-framework 'maestro'."
+                    exit 1
+                  fi
                   if [ "$android_count" -gt 0 ] && [ "$CAPTURE_MODE" != 'direct' ]; then
                     echo "::error::capture-manifest has Android entries but capture-mode is 'flows'; Android capture requires capture-mode: direct."
                     exit 1
@@ -1364,7 +1486,9 @@ jobs:
                     invalid_scenes=$(jq -c '
                         [.[] | select(
                             ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
-                            (([has("deepLink"), has("flow")] | map(select(.)) | length) != 1) or
+                            (([has("deepLink"), has("flow"), has("test")] | map(select(.)) | length) != 1) or
+                            (has("test") and ((.test | type) != "string" or (.test | test("^[A-Za-z0-9_.-]+$") | not))) or
+                            (has("test") and has("readySelector")) or
                             (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
                             (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
                             (has("flow") and has("readySelector")) or
@@ -1376,8 +1500,21 @@ jobs:
                         )]
                     ' <<< "$CAPTURE_SCENES")
                     if [ "$invalid_scenes" != '[]' ]; then
-                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or a screenshots-dir-relative 'flow' without '..' segments, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
+                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink', a screenshots-dir-relative 'flow' without '..' segments or an e2e 'test' name matching ^[A-Za-z0-9_.-]+\$, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
                       exit 1
+                    fi
+                    if [ "$TEST_FRAMEWORK" = 'e2e' ]; then
+                      flow_scenes=$(jq -r '[.[] | select(has("flow")) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                      if [ -n "$flow_scenes" ]; then
+                        echo "::error::capture-scenes entries $flow_scenes declare a Maestro 'flow', but test-framework is 'e2e'; name the e2e project's scene with 'test' instead."
+                        exit 1
+                      fi
+                    else
+                      test_scenes=$(jq -r '[.[] | select(has("test")) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                      if [ -n "$test_scenes" ]; then
+                        echo "::error::capture-scenes entries $test_scenes declare an e2e 'test', which only test-framework 'e2e' runs; with '$TEST_FRAMEWORK' they would never be captured."
+                        exit 1
+                      fi
                     fi
                     duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
                     if [ -n "$duplicate_scene_names" ]; then
@@ -2115,7 +2252,7 @@ jobs:
     capture-ios:
         name: Capture iOS (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-ios, build-ios]
-        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
+        if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
@@ -2249,6 +2386,251 @@ jobs:
                   path: screenshots-output/raw/**
                   if-no-files-found: warn
                   retention-days: 14
+
+    capture-ios-e2e:
+        name: Capture iOS with e2e (${{ matrix.entry.device }})
+        needs: [validate-manifest, plan-ios, build-ios]
+        if: ${{ !cancelled() && inputs.test-framework == 'e2e' && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
+        runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.control-runner-labels) }}
+        timeout-minutes: ${{ inputs.capture-timeout-minutes }}
+        strategy:
+            fail-fast: false
+            matrix:
+                entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
+        steps:
+            - name: Apply RunsOn cache bypass
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.7.0 # v4.7.0
+              with:
+                  enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Checkout repository
+              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: ${{ inputs.e2e-node-version }}
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+            - name: Unpack app
+              shell: bash
+              env:
+                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+              run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
+            - name: Apply maestro-secrets-env to the e2e capture
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.7.0 # v4.7.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
+            - name: Install the e2e project
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
+              run: bash -c "$INSTALL_COMMAND"
+            - name: Plan the e2e capture cells
+              id: plan
+              shell: bash
+              env:
+                  CAPTURE_SCENES: ${{ needs.validate-manifest.outputs.capture-scenes }}
+                  DEVICE: ${{ matrix.entry.device }}
+                  LOCALES: ${{ toJSON(matrix.entry.locales) }}
+                  APPEARANCES: ${{ toJSON(matrix.entry.appearances) }}
+                  SETTLE_SECONDS: ${{ needs.validate-manifest.outputs.settle-seconds }}
+                  OUTPUT_DIR: ${{ github.workspace }}/screenshots-output
+              run: |
+                  set -euo pipefail
+                  # The capture actions' slug: lowercased, every run of non-alphanumerics one hyphen.
+                  slug=$(printf '%s' "$DEVICE" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+                  if [ -z "$slug" ]; then
+                    echo "::error::Device '$DEVICE' has no slug."
+                    exit 1
+                  fi
+                  case "$SETTLE_SECONDS" in
+                    '' | *[!0-9]*)
+                      echo "::error::settle-seconds must be a non-negative integer; got '$SETTLE_SECONDS'."
+                      exit 1
+                      ;;
+                  esac
+                  root="$OUTPUT_DIR/raw/ios/$slug"
+                  # Only this run's captures may reach the raw artifact.
+                  rm -rf "$root"
+                  mkdir -p "$root"
+                  plan="$RUNNER_TEMP/screenshot-plan-$slug.json"
+                  # One cell per locale x appearance x scene, with the per-scene platforms,
+                  # locales and appearances filters the macOS capture applies.
+                  jq -n \
+                    --argjson scenes "$CAPTURE_SCENES" \
+                    --argjson locales "$LOCALES" \
+                    --argjson appearances "$APPEARANCES" \
+                    --argjson settle "$SETTLE_SECONDS" \
+                    --arg root "$root" '
+                    [ $locales[] as $locale | $appearances[] as $appearance | $scenes[]
+                      | select((.platforms // ["ios"]) | index("ios"))
+                      | select((.locales // null) == null or (.locales | index($locale)))
+                      | select((.appearances // null) == null or (.appearances | index($appearance)))
+                      | {scene: .name, locale: $locale, appearance: $appearance, settleSeconds: (.settleSeconds // $settle)}
+                        + (if has("deepLink") then {deepLink: .deepLink} + (if has("readySelector") then {readySelector: .readySelector} else {} end) else {test: .test} end)
+                        + {path: "\($root)/\($locale)/\($appearance)/\(.name).png"}
+                    ]' > "$plan"
+                  cells=$(jq 'length' "$plan")
+                  if [ "$cells" -lt 1 ]; then
+                    echo "::error::No capture cell for $DEVICE: the per-scene locales/appearances filters excluded every scene."
+                    exit 1
+                  fi
+                  echo "Planned $cells cells for $DEVICE ($slug)."
+                  {
+                    echo "device-slug=$slug"
+                    echo "plan=$plan"
+                  } >> "$GITHUB_OUTPUT"
+            - name: Run the e2e capture
+              id: run
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  E2E_COMMAND: ${{ inputs.e2e-command }}
+                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  E2E_APP_ID: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
+                  E2E_TARGET: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  E2E_WORKERS: ${{ inputs.e2e-workers }}
+                  E2E_RETRIES: ${{ inputs.e2e-retries }}
+                  E2E_SESSION: screenshots-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.plan.outputs.device-slug }}
+                  E2E_TELEMETRY_DISABLED: '1'
+                  SCREENSHOT_PLAN: ${{ steps.plan.outputs.plan }}
+                  SCREENSHOT_DEVICE: ${{ matrix.entry.device }}
+                  SCREENSHOT_DEVICE_SLUG: ${{ steps.plan.outputs.device-slug }}
+                  SCREENSHOT_STATUS_BAR: ${{ needs.validate-manifest.outputs.status-bar-override == 'false' && 'real' || 'override' }}
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  SIMLOCK_TOKEN: ${{ secrets.simlock-token }}
+              run: |
+                  set -euo pipefail
+                  if [ ! -d "$E2E_APP_PATH" ]; then
+                    echo "::error::The capture app is not at $E2E_APP_PATH."
+                    exit 1
+                  fi
+                  # One lease per worker, and a run aborts if a lease never comes: ask for no more
+                  # simulators than the farm has free now. Best effort, not a reservation.
+                  E2E_WORKERS=$((10#$E2E_WORKERS))
+                  export E2E_WORKERS
+                  free=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                    | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
+                    | jq -r '.capacity.ios | if .limit == null then empty else ([.limit - ((.used // 0) - (.warm // 0)), 0] | max) end' 2>/dev/null || true)
+                  case "$free" in
+                    '' | *[!0-9]*) echo "::notice::The farm did not report its free capacity; running $E2E_WORKERS workers as asked." ;;
+                    *)
+                      if [ "$free" -lt "$E2E_WORKERS" ]; then
+                        if [ "$free" -lt 1 ]; then free=1; fi
+                        echo "::notice::The farm has $free free simulators; running $free workers instead of $E2E_WORKERS."
+                        E2E_WORKERS=$free
+                        export E2E_WORKERS
+                      fi
+                      ;;
+                  esac
+                  # Only this run's report counts: a stale one must never vouch for a run that wrote none.
+                  rm -rf .e2e
+                  started=$(date +%s)
+                  status=0
+                  bash -c "$E2E_COMMAND" || status=$?
+                  echo "E2E capture exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
+                  if [ -f .e2e/summary.md ]; then
+                    { echo "### E2E capture (${SCREENSHOT_DEVICE})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  # An exit code of 0 is not evidence that cells ran: the report must say so.
+                  if [ "$status" = 0 ]; then
+                    if [ ! -f .e2e/report.json ]; then
+                      echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any cell ran."
+                      status=1
+                    elif ! counts=$(jq -er '.run | select(.status != null) | "\(.status) \(.summary.executed // 0) \(.summary.failed // 0)"' .e2e/report.json 2>/dev/null); then
+                      echo "::error::The e2e report (.e2e/report.json) has no run status and summary."
+                      status=1
+                    else
+                      read -r run_status executed failed <<< "$counts"
+                      echo "E2E report: $run_status, $executed executed, $failed failed." | tee -a "$GITHUB_STEP_SUMMARY"
+                      if [ "$executed" -lt 1 ]; then
+                        echo "::error::The e2e capture exited 0 but executed no test."
+                        status=1
+                      elif [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; then
+                        echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
+                        status=1
+                      fi
+                    fi
+                  fi
+                  exit "$status"
+            - name: Check every planned capture was written
+              shell: bash
+              env:
+                  SCREENSHOT_PLAN: ${{ steps.plan.outputs.plan }}
+              run: |
+                  set -euo pipefail
+                  # A passing report is not a capture: every planned cell must have left a PNG at its path.
+                  missing=0
+                  while IFS= read -r path; do
+                    if [ ! -s "$path" ] || [ "$(head -c 8 "$path" | od -An -tx1 | tr -d ' \n')" != 89504e470d0a1a0a ]; then
+                      echo "::error::No PNG was captured at $path."
+                      missing=$((missing + 1))
+                    fi
+                  done < <(jq -r '.[].path' "$SCREENSHOT_PLAN")
+                  total=$(jq 'length' "$SCREENSHOT_PLAN")
+                  if [ "$missing" -gt 0 ]; then
+                    echo "::error::$missing of $total planned captures are missing."
+                    exit 1
+                  fi
+                  echo "All $total planned captures were written."
+            - name: Run post-capture-command
+              if: inputs.post-capture-command != ''
+              shell: bash
+              env:
+                  SCREENSHOTS_OUTPUT_DIR: ${{ github.workspace }}/screenshots-output
+                  DEVICE_SLUG: ${{ steps.plan.outputs.device-slug }}
+                  POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
+              run: eval "$POST_CAPTURE_COMMAND"
+            - name: Release the simulators the capture left leased
+              if: ${{ always() && steps.run.outcome != 'skipped' }}
+              shell: bash
+              working-directory: ${{ inputs.e2e-dir }}
+              env:
+                  SIMLOCK_URL: ${{ inputs.simlock-url }}
+                  SIMLOCK_TOKEN: ${{ secrets.simlock-token }}
+              run: |
+                  set -uo pipefail
+                  # A cancelled run is killed before the suite releases its leases; the suite
+                  # lists the ids it acquired in .e2e/simlock-leases.json.
+                  file=.e2e/simlock-leases.json
+                  if [ ! -f "$file" ]; then
+                    exit 0
+                  fi
+                  if ! ids=$(jq -r '.[] | (.id? // .) | select(type == "string" and test("^[A-Za-z0-9._:-]+$"))' "$file" 2>/dev/null); then
+                    echo "::warning::$file is not a JSON array of lease ids; nothing released."
+                    exit 0
+                  fi
+                  for id in $ids; do
+                    code=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                      | curl -sS -m 15 -o /dev/null -w '%{http_code}' -X DELETE -H @- "${SIMLOCK_URL%/}/v1/leases/$id" 2>/dev/null || echo 000)
+                    case "$code" in
+                      2??) echo "Released lease $id." ;;
+                      404) echo "Lease $id was already released." ;;
+                      *) echo "::warning::Could not release lease $id (HTTP $code); it expires at its TTL." ;;
+                    esac
+                  done
+            - name: Upload raw screenshots (including partial results from a failed capture)
+              if: always() && steps.plan.outputs.device-slug != ''
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: raw-screenshots-ios-${{ steps.plan.outputs.device-slug }}
+                  path: screenshots-output/raw/**
+                  if-no-files-found: warn
+                  retention-days: 14
+            - name: Upload the e2e report
+              if: ${{ always() && steps.run.outcome != 'skipped' }}
+              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+              with:
+                  name: e2e-screenshots-ios-${{ steps.plan.outputs.device-slug }}
+                  path: ${{ inputs.e2e-dir }}/.e2e
+                  retention-days: 14
+                  include-hidden-files: true
+                  if-no-files-found: warn
 
     capture-android:
         name: Capture Android (${{ matrix.entry.device }})
@@ -2393,11 +2775,11 @@ jobs:
 
     upload:
         name: Upload screenshots
-        needs: [validate-manifest, capture-ios, capture-android]
+        needs: [validate-manifest, capture-ios, capture-ios-e2e, capture-android]
         if: >-
             always() && needs.validate-manifest.outputs.upload-screenshots == 'true' &&
             needs.validate-manifest.result == 'success' &&
-            (needs.capture-ios.result == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
+            ((inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result) == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
             (needs.capture-android.result == 'success' || needs.validate-manifest.outputs.has-android != 'true')
         runs-on: ${{ fromJSON(inputs.upload-runner-labels != '' && inputs.upload-runner-labels || inputs.runner-labels) }}
         env:
@@ -2416,7 +2798,7 @@ jobs:
               shell: bash
               env:
                   UPLOAD_COMMAND: ${{ needs.validate-manifest.outputs.upload-command }}
-                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
+                  CAPTURE_IOS_RESULT: ${{ inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
                   ASC_DEDUPE: ${{ needs.validate-manifest.outputs.asc-dedupe-screenshots }}
                   IOS_TARGET: ${{ needs.validate-manifest.outputs.ios-target }}
@@ -2732,7 +3114,7 @@ jobs:
 
     status:
         name: Store screenshots result
-        needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-android, upload]
+        needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-ios-e2e, capture-android, upload]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
@@ -2751,7 +3133,7 @@ jobs:
                   PLAN_ANDROID_RESULT: ${{ needs.plan-android.result }}
                   NATIVE_TARGETS_ANDROID: ${{ needs.plan-android.outputs.native-targets }}
                   BUILD_ANDROID_RESULT: ${{ needs.build-android.result }}
-                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
+                  CAPTURE_IOS_RESULT: ${{ inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
                   UPLOAD_ENABLED: ${{ needs.validate-manifest.outputs.upload-screenshots }}
                   UPLOAD_RESULT: ${{ needs.upload.result }}
