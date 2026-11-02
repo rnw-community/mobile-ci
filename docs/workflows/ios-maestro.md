@@ -211,14 +211,25 @@ The job runs `e2e-install-command`, then `e2e-command`, in `e2e-dir`, with:
 | `E2E_APP_PATH` | absolute path of the repacked or built `.app` |
 | `E2E_APP_ID` | the target's `appId` |
 | `E2E_TARGET` | the target's `name` |
-| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free capacity when the farm reports it |
+| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free simulators split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
 | `E2E_RETRIES` | `e2e-retries` |
 | `E2E_SESSION` | unique per run, attempt and target; give it to agent-device as the session name |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
+`maestro-secrets-env` entries are exported to the suite too (masked), for test
+credentials. A target with `tolerateTestFailures` turns a failing suite into a
+warning, as with Maestro. The farm runs arm64 simulators, so e2e needs
+`ios-simulator-archs: arm64`; `detect` rejects anything else.
+
+Keep `e2e-dir` a standalone project (its own `package.json` and lockfile, not a
+member of the repository's workspace): its tree is hashed into the result cache
+key, and a workspace's `node_modules` links make that walk slow or circular. The
+default `e2e-install-command` is npm; set it for pnpm or yarn (corepack is not
+enabled for you).
+
 Your e2e config turns these into a `DeviceProvider` that leases from simlock:
 one lease per worker, pinned to the leased UDID, released on every exit path.
-The report under `e2e-dir/.e2e` is uploaded as `e2e-ios-<target>`, and its
+The report under `e2e-dir/.e2e` is uploaded as `e2e-ios<call-scope suffix>-<target>`, and its
 `summary.md` is added to the job summary. An exit code of 0 is not enough to
 pass: the job clears `.e2e` before the run, then requires the run's
 `.e2e/report.json` (tester-army's report) with `status: passed`, at least one
@@ -229,7 +240,7 @@ executed test and none failed. A command that exits 0 without that evidence
 
 1. `test-framework: both` with `e2e-required: false`: Maestro still gates, and
    the e2e suite runs beside it on the same app as a shadow. A failure there
-   is a warning, not a red check.
+   is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
 3. `test-framework: e2e`: the Maestro shards stop, and with them the macOS
    test runners.

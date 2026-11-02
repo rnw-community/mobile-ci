@@ -806,6 +806,7 @@ jobs:
                   E2E_WORKERS: ${{ inputs.e2e-workers }}
                   E2E_RETRIES: ${{ inputs.e2e-retries }}
                   IOS_DRIVER: ${{ inputs.ios-driver }}
+                  IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
               run: |
                   set -euo pipefail
                   case "$TEST_FRAMEWORK" in
@@ -849,6 +850,10 @@ jobs:
                       fi
                       ;;
                   esac
+                  if [ "$IOS_SIMULATOR_ARCHS" != arm64 ]; then
+                    echo "::error::test-framework '$TEST_FRAMEWORK' runs the app on the farm's arm64 simulators; ios-simulator-archs '$IOS_SIMULATOR_ARCHS' builds a slice they cannot run."
+                    fail=1
+                  fi
                   if [ "$TEST_FRAMEWORK" = e2e ] && [ "$IOS_DRIVER" != local ]; then
                     echo "::error::test-framework 'e2e' brings its own devices; ios-driver '$IOS_DRIVER' applies only to the Maestro suite."
                     fail=1
@@ -1722,6 +1727,12 @@ jobs:
               env:
                   APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
               run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
+            - name: Apply maestro-secrets-env to the e2e suite
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.7.0 # v4.7.0
+              with:
+                  env: ${{ secrets.maestro-secrets-env }}
+                  label: maestro-secrets-env
+                  allow-multiline: false
             - name: Install the e2e project
               shell: bash
               working-directory: ${{ inputs.e2e-dir }}
@@ -1730,7 +1741,7 @@ jobs:
               run: bash -c "$INSTALL_COMMAND"
             - name: Run the e2e suite
               id: run
-              continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
+              continue-on-error: ${{ (inputs.test-framework == 'both' && !inputs.e2e-required) || matrix.target.tolerateTestFailures }}
               shell: bash
               working-directory: ${{ inputs.e2e-dir }}
               env:
@@ -1743,6 +1754,8 @@ jobs:
                   E2E_SESSION: e2e-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   E2E_TELEMETRY_DISABLED: '1'
                   E2E_SHADOW: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
+                  E2E_TOLERATED: ${{ matrix.target.tolerateTestFailures }}
+                  TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
                   SIMLOCK_URL: ${{ inputs.simlock-url }}
                   SIMLOCK_TOKEN: ${{ secrets.simlock-token }}
               run: |
@@ -1753,8 +1766,15 @@ jobs:
                   fi
                   # One lease per worker, and a run aborts if a lease never comes: ask for no more
                   # simulators than the farm has free now (limit minus devices leased by anyone).
-                  free=$(curl -fsS -m 15 -H "Authorization: Bearer $SIMLOCK_TOKEN" "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
-                    | jq -r '.capacity.ios | if .limit == null then empty else [.limit - ((.used // 0) - (.warm // 0)), 0] | max | floor end' 2>/dev/null || true)
+                  # Best effort, not a reservation: other runs may lease in between. The free count is
+                  # split across this run's targets, which all read it at the same moment.
+                  E2E_WORKERS=$((10#$E2E_WORKERS))
+                  export E2E_WORKERS
+                  targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
+                  case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
+                  free=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                    | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
+                    | jq -r --argjson targets "$targets" '.capacity.ios | if .limit == null then empty else ([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor end' 2>/dev/null || true)
                   case "$free" in
                     '' | *[!0-9]*) echo "::notice::The farm did not report its free capacity; running $E2E_WORKERS workers as asked." ;;
                     *)
@@ -1797,6 +1817,8 @@ jobs:
                   fi
                   if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
                     echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
+                  elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ]; then
+                    echo "::warning::E2E suite failed (exit $status) for a target with tolerateTestFailures; it does not gate this run."
                   fi
                   exit "$status"
             - name: Upload the e2e report
@@ -1952,13 +1974,13 @@ jobs:
                   fi
                   if [ "$DETECT_FORCED" = 'true' ]; then
                     result=passed
-                    echo "${SUITE^} passed (forced by the '${FORCE_LABEL}' label)."
+                    echo "Passed: $SUITE (forced by the '${FORCE_LABEL}' label)."
                     summary "### iOS Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
                     exit 0
                   fi
                   if [ "${TEST_FRAMEWORK:-}" = both ] && [ "${E2E_REQUIRED:-}" != true ]; then
-                    summary "- e2e shadow suite: job ${E2E_RESULT} (not gating: a failing suite shows as a warning and in the e2e job's summary; set e2e-required: true to gate)"
+                    summary "- e2e shadow suite: finished (not gating). Its outcome is the e2e job's warning and summary, not this job result; set e2e-required: true to gate."
                   fi
                   result=passed
-                  echo "${SUITE^} passed."
+                  echo "Passed: $SUITE."
                   summary "### iOS Maestro E2E: passed ($SUITE)"

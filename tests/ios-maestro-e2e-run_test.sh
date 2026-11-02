@@ -79,4 +79,44 @@ if assert_equals 2 "$STEP_STATUS" "status ($(cat "$dir/log"))"; then
     pass_case
 fi
 
+case_start 'the farm'"'"'s free simulators are split across the targets, and the token never reaches argv'
+dir="$(new_workflow_workspace "$WORKFLOW" e2e 'Run the e2e suite')"
+mkdir -p "$dir/work/Base.app"
+stub "$dir" curl 'printf "%s\n" "$*" > "$(dirname "$0")/../curl-args"; cat > /dev/null; printf "%s" "{\"capacity\":{\"ios\":{\"limit\":12,\"used\":3,\"warm\":1}}}"'
+run_step "$dir" E2E_COMMAND="$(writes "$(report passed 1 0)")" E2E_APP_PATH="$dir/work/Base.app" E2E_APP_ID=com.example.app \
+    E2E_TARGET=app E2E_WORKERS=08 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
+    TEST_TARGETS='[{"name":"a"},{"name":"b"}]' SIMLOCK_URL=http://farm.invalid SIMLOCK_TOKEN=secret-token
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/log")" 'running 5 workers instead of 8' 'split notice' \
+    && assert_not_contains "$(cat "$dir/curl-args")" 'secret-token' 'curl argv'; then
+    pass_case
+fi
+
+VALIDATE='Validate the test framework'
+validate() {
+    dir="$(new_workflow_workspace "$WORKFLOW" detect "$VALIDATE")"
+    run_step "$dir" TEST_FRAMEWORK=e2e E2E_DIR=e2e SIMLOCK_URL=http://farm.invalid HAS_SIMLOCK_TOKEN=true \
+        E2E_WORKERS=2 E2E_RETRIES=1 IOS_DRIVER=local IOS_SIMULATOR_ARCHS=arm64 "$@"
+}
+
+case_start 'detect accepts a complete e2e call'
+validate
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))"; then pass_case; fi
+
+case_start 'detect rejects an x86_64 slice for the arm64 farm'
+validate IOS_SIMULATOR_ARCHS=x86_64
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'arm64' 'error'; then pass_case; fi
+
+case_start 'detect rejects 00 workers'
+validate E2E_WORKERS=00
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'at least 1' 'error'; then pass_case; fi
+
+case_start 'cache-pass never records a pass from a shadow e2e suite'
+condition="$(WORKFLOW="$WORKFLOW" python3 -c '
+import os, yaml
+print(yaml.safe_load(open(os.environ["WORKFLOW"]))["jobs"]["cache-pass"]["if"])')"
+if assert_contains "$condition" "(inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success'))" 'cache-pass if'; then
+    pass_case
+fi
+
 finish_suite
