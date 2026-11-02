@@ -82,6 +82,7 @@ fi
 case_start 'the farm'"'"'s free simulators are split across the targets, and the token never reaches argv'
 dir="$(new_workflow_workspace "$WORKFLOW" e2e 'Run the e2e suite')"
 mkdir -p "$dir/work/Base.app"
+# shellcheck disable=SC2016 # expanded when the stub runs.
 stub "$dir" curl 'printf "%s\n" "$*" > "$(dirname "$0")/../curl-args"; cat > /dev/null; printf "%s" "{\"capacity\":{\"ios\":{\"limit\":12,\"used\":3,\"warm\":1}}}"'
 run_step "$dir" E2E_COMMAND="$(writes "$(report passed 1 0)")" E2E_APP_PATH="$dir/work/Base.app" E2E_APP_ID=com.example.app \
     E2E_TARGET=app E2E_WORKERS=08 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
@@ -123,6 +124,7 @@ RELEASE='Release the simulators the suite left leased'
 release() {
     dir="$(new_workflow_workspace "$WORKFLOW" e2e "$RELEASE")"
     mkdir -p "$dir/work/.e2e"
+    # shellcheck disable=SC2016 # expanded when the stub runs.
     stub "$dir" curl 'printf "%s\n" "$*" >> "$(dirname "$0")/../curl-args"; cat > /dev/null; printf 204'
     : > "$dir/curl-args"
 }
