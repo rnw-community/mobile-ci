@@ -239,7 +239,7 @@ The report under `e2e-dir/.e2e` is uploaded as `e2e-ios<call-scope suffix>-<targ
 `summary.md` is added to the job summary. An exit code of 0 is not enough to
 pass: the job clears `.e2e` before the run, then requires the run's
 `.e2e/report.json` (tester-army's report) with `status: passed`, at least one
-executed test and none failed. A command that exits 0 without that evidence
+executed test and none failed, every count a whole number. A command that exits 0 without that evidence
 (no report, nothing selected, a swallowed exit code) fails the job.
 
 ### Migrating gradually

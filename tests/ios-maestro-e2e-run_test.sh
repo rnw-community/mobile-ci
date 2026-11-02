@@ -60,6 +60,15 @@ if assert_equals 1 "$STEP_STATUS" 'status' \
     pass_case
 fi
 
+case_start 'a report whose counts are not whole numbers fails closed'
+for summary in '"executed":3,"failed":0.5' '"executed":"x","failed":0' '"executed":3,"failed":"1"'; do
+    run_suite "$(writes "{\"run\":{\"status\":\"passed\",\"summary\":{${summary}}}}")"
+    assert_equals 1 "$STEP_STATUS" "status for ${summary} ($(cat "$dir/log"))" || break
+done
+if [ "$STEP_STATUS" = 1 ] && assert_contains "$(cat "$dir/log")" 'no run status and summary' 'error'; then
+    pass_case
+fi
+
 case_start 'a stale report from an earlier run does not count'
 dir="$(new_workflow_workspace "$WORKFLOW" e2e 'Run the e2e suite')"
 mkdir -p "$dir/work/Base.app" "$dir/work/.e2e"
