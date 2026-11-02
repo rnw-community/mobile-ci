@@ -382,7 +382,7 @@ on:
                     22.22.3+ on Node 22, or 24.8+.
                 type: string
                 required: false
-                default: '24'
+                default: '^24.8.0'
             e2e-install-command:
                 description: Command run in e2e-dir to install the e2e project's dependencies.
                 type: string
