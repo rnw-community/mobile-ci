@@ -941,6 +941,8 @@ jobs:
               env:
                   TARGETS: ${{ inputs.targets }}
                   FLOWS_DIR: ${{ inputs.flows-dir }}
+                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
+                  E2E_DIR: ${{ inputs.e2e-dir }}
                   TOLERATE_TEST_FAILURES: ${{ inputs.tolerate-test-failures }}
                   REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
                   NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
@@ -951,6 +953,10 @@ jobs:
                   if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
                     echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
+                  fi
+                  # An e2e-only call has no Maestro flows: a target's tests are the e2e project.
+                  if [ -z "$FLOWS_DIR" ] && [ "${TEST_FRAMEWORK:-maestro}" = e2e ]; then
+                    FLOWS_DIR=${E2E_DIR:-}
                   fi
                   labelled=false
                   if [ -n "$NATIVE_BUILD_LABEL" ]; then

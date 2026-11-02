@@ -975,6 +975,10 @@ jobs:
                     echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
                   fi
+                  # An e2e-only call has no Maestro flows: a target's tests are the e2e project.
+                  if [ -z "$FLOWS_DIR" ] && [ "${TEST_FRAMEWORK:-maestro}" = e2e ]; then
+                    FLOWS_DIR=${E2E_DIR:-}
+                  fi
                   labelled=false
                   if [ -n "$NATIVE_BUILD_LABEL" ]; then
                     labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")

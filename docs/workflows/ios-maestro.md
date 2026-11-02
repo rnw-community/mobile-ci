@@ -200,6 +200,10 @@ Mac's CPU goes to simulators instead of a VM per shard, and one job with
 `e2e-workers: N` balances the tests over N devices as each finishes, instead
 of a fixed shard split.
 
+With `test-framework: e2e` the call needs no Maestro inputs: a target with no
+`flowsDir` and an empty `flows-dir` takes `e2e-dir` as its tests, which is also
+what the e2e result cache hashes.
+
 The job runs `e2e-install-command`, then `e2e-command`, in `e2e-dir`, with:
 
 | Variable | Value |
