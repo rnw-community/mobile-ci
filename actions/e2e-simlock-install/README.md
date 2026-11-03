@@ -29,7 +29,7 @@ run it for you. Add it to a pipeline of your own; for local runs,
 - name: Install the e2e project
   working-directory: e2e
   run: npm ci --no-audit --no-fund
-- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@69b46b83105a68657aac5bd02b96e15c1ca55b45 # feat/android-e2e-simlock-farm fleet-validation pin
+- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.9.0 # v4.9.0
   with:
       e2e-dir: e2e
 ```
