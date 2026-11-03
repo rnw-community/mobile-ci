@@ -84,6 +84,13 @@ const positive = (name: string, value: number | undefined, fallback: number): nu
     return value;
 };
 
+const whole = (name: string, value: number | undefined, fallback: number): number => {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+        throw new Error(`simlockDevices: ${name} must be a whole number of at least 1; got ${String(value)}`);
+    }
+    return value ?? fallback;
+};
+
 function validated(options: SimlockOptions) {
     if (!/^https?:\/\/[^/]/.test(options.url ?? '')) {
         throw new Error(`simlockDevices: url must be an http(s) URL of the simlock gateway or worker; got ${JSON.stringify(options.url)}`);
@@ -119,7 +126,7 @@ function validated(options: SimlockOptions) {
     return {
         baseUrl: `${options.url.replace(/\/$/, '')}/v1/agent-device`,
         ttlMs: positive('ttlMs', options.ttlMs, 3 * 60_000),
-        installConcurrency: Math.floor(positive('installConcurrency', options.installConcurrency, 3)),
+        installConcurrency: whole('installConcurrency', options.installConcurrency, 3),
         queueMs: positive('queueMs', options.queueMs, 20 * 60_000),
         tenant: options.tenant || 'mobile-ci-e2e'
     };

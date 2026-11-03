@@ -278,10 +278,11 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
+            trigger-paths: e2e/**
             test-framework: e2e
             e2e-dir: e2e
             e2e-workers: '2'
@@ -289,6 +290,13 @@ jobs:
         secrets:
             simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
+
+A standalone `e2e/` sits outside the app workspace, so turbo never reports a
+change there as affecting the app: list it in `trigger-paths`. GitHub withholds
+secrets from pull requests opened from forks, so give the calling job
+`if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository`
+and run the suite on fork contributions with `workflow_dispatch` once reviewed;
+never hand the token to untrusted code.
 
 Use the farm's public HTTPS address in CI. A LAN address reaches only the hosts
 on that LAN, and the shared pools also schedule jobs on machines outside it.
@@ -308,7 +316,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `scripts/fetch-e2e-simlock.sh v4.9.0 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.9.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.9.0 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export type Platform = 'ios' | 'android';
@@ -112,6 +112,8 @@ export async function allocateQueued<L>(queue: QueuedAllocation<L>): Promise<L> 
                 throw cause;
             }
             queue.log(`simlock: lease request cut off while the farm was full (${message}); waiting to ask again`);
+            // A cut-off that comes back at once (a dropped socket) must not turn the queue into a busy loop.
+            await wait(POLL_MS + Math.floor(Math.random() * POLL_JITTER_MS), queue.signal);
         }
     }
 }
@@ -130,5 +132,8 @@ export function recordLease(projectRoot: string, id: string): void {
     }
     const known = Array.isArray(ids) ? ids.filter((entry): entry is string => typeof entry === 'string') : [];
     mkdirSync(join(projectRoot, '.e2e'), { recursive: true });
-    writeFileSync(file, JSON.stringify([...new Set([...known, id])]));
+    // Written whole and renamed into place, so the release step never reads a half-written list.
+    const next = `${file}.${process.pid}.tmp`;
+    writeFileSync(next, JSON.stringify([...new Set([...known, id])]));
+    renameSync(next, file);
 }

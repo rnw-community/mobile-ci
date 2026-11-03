@@ -113,7 +113,7 @@ describe('allocateQueued', () => {
 
     it('releases a cut-off request by its own id and asks again under a new one', async () => {
         const ids: string[] = [];
-        const { q, released, logs } = queue({
+        const { q, released, logs, pauses } = queue({
             allocate: async id => {
                 ids.push(id);
                 if (ids.length === 1) {
@@ -124,6 +124,7 @@ describe('allocateQueued', () => {
         });
         assert.equal(await allocateQueued(q), 'lease');
         assert.equal(ids.length, 2);
+        assert.equal(pauses.length, 1, 'a fast, repeating cut-off must not spin');
         assert.notEqual(ids[0], ids[1]);
         assert.deepEqual(released, [ids[0]]);
         assert.deepEqual(logs, ['simlock: lease request cut off while the farm was full (error code: 524); waiting to ask again']);

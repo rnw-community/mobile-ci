@@ -204,9 +204,6 @@ runs:
                 android) [ -f "$E2E_APP_PATH" ] || { echo "::error::The Android app is not at $E2E_APP_PATH (expected an .apk file)."; exit 1; } ;;
                 *) echo "::error::e2e-suite platform must be 'ios' or 'android'; got '$E2E_PLATFORM'."; exit 1 ;;
               esac
-              # One lease per worker, and a run aborts if a lease never comes: ask for no more devices
-              # than the farm has free now (limit minus devices leased by anyone), split across this
-              # call's targets, which all read it at the same moment. Best effort, not a reservation.
               E2E_WORKERS=$((10#$E2E_WORKERS))
               export E2E_WORKERS
               targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
@@ -225,7 +222,6 @@ runs:
                   fi
                   ;;
               esac
-              # Only this run's report counts: a stale one must never vouch for a run that wrote none.
               rm -rf .e2e
               started=$(date +%s)
               status=0
@@ -234,7 +230,6 @@ runs:
               if [ -f .e2e/summary.md ]; then
                 { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
               fi
-              # An exit code of 0 is not evidence that tests ran: the report must say so.
               if [ "$status" = 0 ]; then
                 if [ ! -f .e2e/report.json ]; then
                   echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran."
@@ -270,9 +265,6 @@ runs:
               SIMLOCK_TOKEN: ${{ inputs.simlock-token }}
           run: |
               set -uo pipefail
-              # A cancelled run is killed before the suite releases its leases, which would then
-              # hold their devices until the lease TTL. @mobile-ci/e2e-simlock lists the ids it
-              # acquired in .e2e/simlock-leases.json; this mode runs on every exit path.
               file=.e2e/simlock-leases.json
               if [ ! -f "$file" ]; then
                 exit 0

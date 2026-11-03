@@ -23,6 +23,10 @@ def step(job_name, name):
         if s.get('name') == name or s.get('id') == name:
             return s
     sys.exit(f'no step {name!r} in job {job_name!r}')
+import re
+def pinned(uses, action):
+    """A self-reference to `action` pinned to a release tag (the tag itself moves with every release)."""
+    return re.fullmatch(rf'rnw-community/mobile-ci/actions/{re.escape(action)}@v\d+\.\d+\.\d+', uses or '') is not None
 problems = eval(os.environ['EXPR'])
 if problems:
     print(problems)
@@ -30,7 +34,6 @@ if problems:
 PYTHON
 }
 
-SUITE='rnw-community/mobile-ci/actions/e2e-suite@v4.9.0'
 
 for platform in ios android; do
     workflow="$REPO_ROOT/.github/workflows/$platform-maestro.yml"
@@ -43,7 +46,7 @@ for platform in ios android; do
     case_start "$platform-maestro: detect validates the e2e call through e2e-suite"
     # shellcheck disable=SC2016 # the literal expressions the workflow must carry.
     if out="$(check "$workflow" "[p for p in [
-        step('detect', 'Validate the e2e call').get('uses') != '$SUITE' and 'uses',
+        not pinned(step('detect', 'Validate the e2e call').get('uses'), 'e2e-suite') and 'uses',
         step('detect', 'Validate the e2e call')['with'] != {'mode': 'validate', 'platform': '$platform',
             'test-framework': '\${{ inputs.test-framework }}', 'driver': '\${{ inputs.$driver }}', 'abis': '$abis',
             'e2e-dir': '\${{ inputs.e2e-dir }}', 'workers': '\${{ inputs.e2e-workers }}', 'retries': '\${{ inputs.e2e-retries }}',
@@ -55,7 +58,7 @@ for platform in ios android; do
     case_start "$platform-maestro: the e2e job runs the suite and releases its leases on every exit path"
     # shellcheck disable=SC2016
     if out="$(check "$workflow" "[p for p in [
-        step('e2e', 'run').get('uses') != '$SUITE' and 'run uses',
+        not pinned(step('e2e', 'run').get('uses'), 'e2e-suite') and 'run uses',
         {k: v for k, v in step('e2e', 'run')['with'].items() if k in ('mode', 'platform')} != {'mode': 'run', 'platform': '$platform'} and 'run mode',
         not step('e2e', 'run')['with']['app-path'].endswith('-\${{ matrix.target.name }}/$app') and step('e2e', 'run')['with']['app-path'],
         step('e2e', 'run')['with']['simlock-token'] != '\${{ secrets.simlock-token }}' and 'run token',
@@ -92,8 +95,9 @@ case_start 'store-screenshots installs the package after the e2e project, and re
 # shellcheck disable=SC2016
 if out="$(check "$REPO_ROOT/.github/workflows/store-screenshots.yml" "[p for p in [
     (lambda names: names.index('Install the e2e project') + 1 != names.index('Install @mobile-ci/e2e-simlock') and names)([s.get('name') for s in job('capture-ios-e2e')['steps']]),
-    step('capture-ios-e2e', 'Install @mobile-ci/e2e-simlock') != {'name': 'Install @mobile-ci/e2e-simlock', 'uses': 'rnw-community/mobile-ci/actions/e2e-simlock-install@v4.9.0', 'with': {'e2e-dir': '\${{ inputs.e2e-dir }}'}} and 'install step',
-    step('capture-ios-e2e', 'Release the simulators the capture left leased').get('uses') != '$SUITE' and 'release uses',
+    not pinned(step('capture-ios-e2e', 'Install @mobile-ci/e2e-simlock').get('uses'), 'e2e-simlock-install') and 'install uses',
+    step('capture-ios-e2e', 'Install @mobile-ci/e2e-simlock').get('with') != {'e2e-dir': '\${{ inputs.e2e-dir }}'} and 'install with',
+    not pinned(step('capture-ios-e2e', 'Release the simulators the capture left leased').get('uses'), 'e2e-suite') and 'release uses',
     step('capture-ios-e2e', 'Release the simulators the capture left leased')['with'].get('mode') != 'release' and 'release mode',
 ] if p]")"; then pass_case; else fail_case "$out"; fi
 
