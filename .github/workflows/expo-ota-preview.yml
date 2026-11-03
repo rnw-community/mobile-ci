@@ -441,7 +441,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -493,7 +493,7 @@ jobs:
             - name: Resolve the runtime versions
               if: inputs.ota-backend == 'eas' || inputs.runtime-version-ios == '' || inputs.runtime-version-android == ''
               id: runtime
-              uses: rnw-community/mobile-ci/actions/ota-runtime-version@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   app-dir: ${{ inputs.app-dir }}
                   platform: ${{ steps.backend.outputs.platform }}
@@ -622,7 +622,7 @@ jobs:
             - name: Generate Expo Updates manifests
               if: inputs.ota-backend != 'eas'
               id: manifest
-              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-ota-manifest@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   dist-dir: ${{ inputs.app-dir }}/dist
                   public-base-url: ${{ steps.paths.outputs.base-url }}
@@ -637,7 +637,7 @@ jobs:
             - name: Publish the EAS update
               if: inputs.ota-backend == 'eas'
               id: eas
-              uses: rnw-community/mobile-ci/actions/eas-update@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/eas-update@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   app-dir: ${{ inputs.app-dir }}
                   channel: ${{ steps.backend.outputs.channel }}
@@ -655,7 +655,7 @@ jobs:
 
             - name: Publish to GitHub Release
               if: inputs.publish && inputs.ota-backend != 'eas' && steps.head.outputs.stale != 'true'
-              uses: rnw-community/mobile-ci/actions/github-release-publish@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/github-release-publish@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   source-dir: ${{ inputs.app-dir }}/dist
                   tag: ${{ steps.paths.outputs.tag }}
@@ -882,7 +882,7 @@ jobs:
 
             - name: Update the sticky preview comment
               if: inputs.post-comment && github.event_name == 'pull_request' && steps.result.outputs.skipped-reason != 'stale-head'
-              uses: rnw-community/mobile-ci/actions/pr-preview-comment@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/pr-preview-comment@e766f5e85a4bc5b432e044c592c707b5ab32feb5 # fleet-validation pin
               with:
                   pr-number: ${{ github.event.pull_request.number }}
                   sections-dir: ${{ runner.temp }}/preview-comment-sections
