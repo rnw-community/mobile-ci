@@ -5,10 +5,9 @@ import { LARGE_PAYLOAD_BYTES, transfer } from './transfers.ts';
 import { acrossTunnel } from './tunnel.ts';
 
 /**
- * Host-side iOS simulator work over simlock's HTTP API, for test fixtures (iOS only:
- * every helper here runs `simctl`). `POST /v1/leases/<id>/exec` runs one `simctl` command
- * on the worker for the leased simulator only
- * (simlock inserts the UDID). `simctl spawn … /bin/sh -c` runs the simulator
+ * Host-side device work over simlock's HTTP API, for test fixtures. `POST /v1/leases/<id>/exec` runs one
+ * `simctl` or `adb` command on the worker for the leased device only (simlock inserts the UDID or serial).
+ * The file helpers are iOS only: `simctl spawn … /bin/sh -c` runs the simulator
  * runtime's shell, which reaches the Mac's own `/bin` and `/usr/bin` by
  * absolute path, so files travel as base64 on stdin and are unpacked by the
  * worker's own tools: the runner needs no SSH key and no shared disk.
@@ -66,16 +65,54 @@ export async function leaseIdForUdid(api: SimlockApi, udid: string): Promise<str
 /** undici's wording for a connection lost before (`fetch failed`) or during (`terminated`) the answer, and simlock's for a lost worker. */
 const TRANSIENT = /WORKER_UNREACHABLE|fetch failed|terminated/;
 
-/** Runs one `simctl` command on the leased simulator. */
-export async function exec(api: SimlockApi, leaseId: string, args: readonly string[], stdin?: string): Promise<ExecResult> {
-    const body = JSON.stringify({ tool: 'simctl', args, ...(stdin === undefined ? {} : { stdin }) });
+export type ExecTool = 'simctl' | 'adb';
+
+const PLATFORM_TOOLS: Record<string, ExecTool> = { ios: 'simctl', android: 'adb' };
+
+const leaseTools = new Map<string, Promise<ExecTool>>();
+
+/** The tool that serves this lease's platform, asked of the farm once per lease. */
+function leaseTool(api: SimlockApi, leaseId: string): Promise<ExecTool> {
+    return remembered(leaseTools, leaseId, async () => {
+        const { platform } = (await (await call(api, `/v1/leases/${leaseId}`)).json()) as { platform?: string };
+        const tool = PLATFORM_TOOLS[platform ?? ''];
+        if (tool === undefined) {
+            throw new Error(`simlock lease ${leaseId} is on platform '${platform}': exec needs a tool, 'simctl' or 'adb'`);
+        }
+        return tool;
+    });
+}
+
+/** Runs `work` once per key; a failure is forgotten, so the next caller asks again. */
+function remembered<T>(known: Map<string, Promise<T>>, key: string, work: () => Promise<T>): Promise<T> {
+    let result = known.get(key);
+    if (result === undefined) {
+        result = work();
+        known.set(key, result);
+        result.catch(() => known.delete(key));
+    }
+    return result;
+}
+
+/**
+ * Runs one command on the leased device: `tool` defaults to the one its platform has (`simctl` on iOS, `adb` on
+ * Android). A payload over 1 MiB takes one of the machine-wide transfer slots app uploads use (`installConcurrency`).
+ */
+export async function exec(api: SimlockApi, leaseId: string, args: readonly string[], stdin?: string, tool?: ExecTool): Promise<ExecResult> {
+    if (tool !== undefined && !Object.values(PLATFORM_TOOLS).includes(tool)) {
+        throw new Error(`exec: tool must be 'simctl' or 'adb'; got '${String(tool)}'`);
+    }
+    const resolved = tool ?? (await leaseTool(api, leaseId));
+    const body = JSON.stringify({ tool: resolved, args, ...(stdin === undefined ? {} : { stdin }) });
     // One attempt is the request and its whole answer: the tunnel can drop either. A gateway's worker uplink can
     // drop and reconnect within a second too; every command the suite sends is idempotent. An error the gateway
     // answered, or the request timeout, is not transient.
-    const text = await acrossTunnel(
-        async () => (await call(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body })).text(),
-        cause => TRANSIENT.test(String(cause))
-    );
+    const send = () =>
+        acrossTunnel(
+            async () => (await call(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body })).text(),
+            cause => TRANSIENT.test(String(cause))
+        );
+    const text = await (stdin !== undefined && stdin.length > LARGE_PAYLOAD_BYTES ? transfer(api.url, send) : send());
     let stdout = '';
     let stderr = '';
     let exitCode = -1;
@@ -113,10 +150,11 @@ export async function exec(api: SimlockApi, leaseId: string, args: readonly stri
     return { exitCode, stdout, stderr };
 }
 
-export async function mustExec(api: SimlockApi, leaseId: string, args: readonly string[], stdin?: string): Promise<string> {
-    const result = await exec(api, leaseId, args, stdin);
+export async function mustExec(api: SimlockApi, leaseId: string, args: readonly string[], stdin?: string, tool?: ExecTool): Promise<string> {
+    const resolved = tool ?? (await leaseTool(api, leaseId));
+    const result = await exec(api, leaseId, args, stdin, resolved);
     if (result.exitCode !== 0) {
-        throw new Error(`simctl ${args.slice(0, 3).join(' ')} exited ${result.exitCode}: ${result.stderr.trim()}`);
+        throw new Error(`${resolved} ${args.slice(0, 3).join(' ')} exited ${result.exitCode}: ${result.stderr.trim()}`);
     }
     return result.stdout;
 }
@@ -133,23 +171,15 @@ const E2E_DROP_BUNDLE_ID = 'dev.e2e.simlock.drop';
 
 const dropPaths = new Map<string, Promise<string>>();
 
-async function dropExecutable(api: SimlockApi, leaseId: string): Promise<string> {
-    let path = dropPaths.get(leaseId);
-    if (path === undefined) {
-        path = mustExec(api, leaseId, ['get_app_container', E2E_DROP_BUNDLE_ID, 'app']).then(out => `${out.trim()}/E2EDrop`);
-        dropPaths.set(leaseId, path);
-        path.catch(() => dropPaths.delete(leaseId));
-    }
-    return path;
+function dropExecutable(api: SimlockApi, leaseId: string): Promise<string> {
+    return remembered(dropPaths, leaseId, async () => `${(await mustExec(api, leaseId, ['get_app_container', E2E_DROP_BUNDLE_ID, 'app'], undefined, 'simctl')).trim()}/E2EDrop`);
 }
 
 /** Runs one E2EDrop command on the leased simulator; `payload` travels on stdin. */
 export async function drop(api: SimlockApi, leaseId: string, args: readonly string[], payload?: Buffer): Promise<ExecResult> {
     const executable = await dropExecutable(api, leaseId);
     const stdin = payload === undefined ? undefined : deflateRawSync(payload).toString('base64');
-    const send = () => exec(api, leaseId, ['spawn', executable, ...args], stdin);
-    // A large payload takes one of the machine-wide transfer slots app uploads use (`installConcurrency`).
-    return stdin !== undefined && stdin.length > LARGE_PAYLOAD_BYTES ? transfer(api.url, send) : send();
+    return exec(api, leaseId, ['spawn', executable, ...args], stdin, 'simctl');
 }
 
 export async function mustDrop(api: SimlockApi, leaseId: string, args: readonly string[], payload?: Buffer): Promise<string> {

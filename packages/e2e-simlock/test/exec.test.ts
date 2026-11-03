@@ -42,7 +42,7 @@ describe('simlockApiFromEnv', () => {
 describe('exec', () => {
     it("runs simctl on the lease's simulator and collects its output and exit status", async () => {
         answers.push(() => new Response(sse(['output', { stream: 'stdout', chunk: 'a' }], ['output', { stream: 'stderr', chunk: 'warn' }], ['output', { stream: 'stdout', chunk: 'b' }], ['exit', { exitCode: 3 }])));
-        assert.deepEqual(await exec(api, 'L1', ['listapps'], 'payload'), { exitCode: 3, stdout: 'ab', stderr: 'warn' });
+        assert.deepEqual(await exec(api, 'L1', ['listapps'], 'payload', 'simctl'), { exitCode: 3, stdout: 'ab', stderr: 'warn' });
         assert.equal(requests[0]!.url, 'https://farm.test/v1/leases/L1/exec');
         assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { tool: 'simctl', args: ['listapps'], stdin: 'payload' });
         assert.equal(new Headers(requests[0]!.init.headers).get('authorization'), 'Bearer tok');
@@ -50,22 +50,60 @@ describe('exec', () => {
 
     it('fails closed on a stream cut off before its exit status, and on an error event', async () => {
         answers.push(() => new Response(sse(['output', { stream: 'stdout', chunk: 'partial' }])));
-        await assert.rejects(exec(api, 'L1', ['spawn', 'x']), { message: 'simlock exec spawn x ended without an exit status (stream cut off)' });
+        await assert.rejects(exec(api, 'L1', ['spawn', 'x'], undefined, 'simctl'), { message: 'simlock exec spawn x ended without an exit status (stream cut off)' });
         answers.push(() => new Response(sse(['error', { code: 'LEASE_EXPIRED', message: 'gone' }])));
-        await assert.rejects(exec(api, 'L1', ['spawn', 'x']), { message: 'simlock exec spawn x failed: LEASE_EXPIRED gone' });
+        await assert.rejects(exec(api, 'L1', ['spawn', 'x'], undefined, 'simctl'), { message: 'simlock exec spawn x failed: LEASE_EXPIRED gone' });
     });
 
     it('retries only a worker that dropped its uplink, and reports any other HTTP failure', async () => {
         answers.push(() => new Response('{"code":"WORKER_UNREACHABLE"}', { status: 503 }));
         answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
-        assert.equal((await exec(api, 'L1', ['getenv'])).exitCode, 0);
+        assert.equal((await exec(api, 'L1', ['getenv'], undefined, 'simctl')).exitCode, 0);
         answers.push(() => new Response('nope', { status: 403 }));
-        await assert.rejects(exec(api, 'L1', ['getenv']), { message: 'simlock POST /v1/leases/L1/exec answered 403: nope' });
+        await assert.rejects(exec(api, 'L1', ['getenv'], undefined, 'simctl'), { message: 'simlock POST /v1/leases/L1/exec answered 403: nope' });
+    });
+
+    it('runs adb when asked, and keeps the stdin payload', async () => {
+        answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+        await exec(api, 'L-adb', ['shell', 'cat'], 'payload', 'adb');
+        assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { tool: 'adb', args: ['shell', 'cat'], stdin: 'payload' });
+        assert.equal(requests.length, 1, 'a named tool asks the lease nothing');
+    });
+
+    it('defaults to the tool of the lease platform, asking the farm once per lease', async () => {
+        for (const [leaseId, platform, tool] of [['L-android', 'android', 'adb'], ['L-ios', 'ios', 'simctl']] as const) {
+            requests.length = 0;
+            answers.push(() => new Response(JSON.stringify({ id: leaseId, platform })));
+            answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+            answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+            await exec(api, leaseId, ['one']);
+            await exec(api, leaseId, ['two']);
+            assert.deepEqual(requests.map(({ url }) => url), [`https://farm.test/v1/leases/${leaseId}`, `https://farm.test/v1/leases/${leaseId}/exec`, `https://farm.test/v1/leases/${leaseId}/exec`]);
+            assert.equal(JSON.parse(String(requests[2]!.init.body)).tool, tool);
+        }
+    });
+
+    it('fails closed on a lease of no known platform, and asks again after a failed lookup', async () => {
+        answers.push(() => new Response(JSON.stringify({ id: 'L-odd', platform: 'tvos' })));
+        await assert.rejects(exec(api, 'L-odd', ['one']), { message: "simlock lease L-odd is on platform 'tvos': exec needs a tool, 'simctl' or 'adb'" });
+        answers.push(() => new Response(JSON.stringify({ id: 'L-odd', platform: 'android' })));
+        answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+        assert.equal((await exec(api, 'L-odd', ['one'])).exitCode, 0);
+    });
+
+    it('refuses a tool it does not know, before any request', async () => {
+        await assert.rejects(exec(api, 'L1', ['x'], undefined, 'xcrun' as 'adb'), { message: "exec: tool must be 'simctl' or 'adb'; got 'xcrun'" });
+        assert.equal(requests.length, 0);
+    });
+
+    it('mustExec names the tool that failed', async () => {
+        answers.push(() => new Response(sse(['output', { stream: 'stderr', chunk: 'no device' }], ['exit', { exitCode: 1 }])));
+        await assert.rejects(mustExec(api, 'L-adb', ['shell', 'pm', 'clear', 'x'], undefined, 'adb'), { message: 'adb shell pm clear exited 1: no device' });
     });
 
     it('mustExec fails on a non-zero exit with the command and its stderr', async () => {
         answers.push(() => new Response(sse(['output', { stream: 'stderr', chunk: ' no such app \n' }], ['exit', { exitCode: 2 }])));
-        await assert.rejects(mustExec(api, 'L1', ['get_app_container', 'x', 'app', 'extra']), { message: 'simctl get_app_container x app exited 2: no such app' });
+        await assert.rejects(mustExec(api, 'L1', ['get_app_container', 'x', 'app', 'extra'], undefined, 'simctl'), { message: 'simctl get_app_container x app exited 2: no such app' });
     });
 });
 
@@ -108,7 +146,7 @@ describe('exec over a tunnel that drops connections', () => {
     it('asks again when the connection is reset before the answer', async () => {
         const farm = await gateway([reset, exitZero]);
         try {
-            assert.deepEqual(await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), { exitCode: 0, stdout: 'ok', stderr: '' });
+            assert.deepEqual(await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'], undefined, 'simctl'), { exitCode: 0, stdout: 'ok', stderr: '' });
             assert.equal(farm.requests(), 2);
         } finally {
             farm.close();
@@ -118,7 +156,7 @@ describe('exec over a tunnel that drops connections', () => {
     it('asks again when the answer is cut off mid-stream', async () => {
         const farm = await gateway([cutMidStream, exitZero]);
         try {
-            assert.equal((await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'])).exitCode, 0);
+            assert.equal((await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'], undefined, 'simctl')).exitCode, 0);
             assert.equal(farm.requests(), 2);
         } finally {
             farm.close();
@@ -128,7 +166,7 @@ describe('exec over a tunnel that drops connections', () => {
     it('fails closed after exactly three attempts when the transport keeps failing', async () => {
         const farm = await gateway([reset]);
         try {
-            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), /fetch failed/);
+            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'], undefined, 'simctl'), /fetch failed/);
             assert.equal(farm.requests(), 3);
         } finally {
             farm.close();
@@ -138,7 +176,7 @@ describe('exec over a tunnel that drops connections', () => {
     it('never asks again after an error the gateway answered', async () => {
         const farm = await gateway([forbidden, exitZero]);
         try {
-            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), { message: 'simlock POST /v1/leases/lease/exec answered 403: {"error":"FORBIDDEN"}' });
+            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'], undefined, 'simctl'), { message: 'simlock POST /v1/leases/lease/exec answered 403: {"error":"FORBIDDEN"}' });
             assert.equal(farm.requests(), 1);
         } finally {
             farm.close();
@@ -182,6 +220,25 @@ describe('drop', () => {
             await holding;
             assert.equal((await big).exitCode, 0);
             assert.ok(farm.spawns[0]! >= released);
+        } finally {
+            farm.close();
+        }
+    });
+
+    it("sends a large adb payload only in a free transfer slot too", async () => {
+        const farm = await dropGateway();
+        try {
+            configureTransfers(farm.api.url, 1);
+            let release!: () => void;
+            const holding = transfer(farm.api.url, () => new Promise<void>(resolve => (release = resolve)));
+            await new Promise(resolve => setTimeout(resolve, 20));
+            let finished = false;
+            const big = exec(farm.api, 'lease-adb', ['spawn', 'seed'], 'x'.repeat(1_200_000), 'adb').then(result => ((finished = true), result));
+            await new Promise(resolve => setTimeout(resolve, 400));
+            assert.equal(finished, false, 'the large payload waits while the only slot is held');
+            release();
+            await holding;
+            assert.equal((await big).exitCode, 0);
         } finally {
             farm.close();
         }
