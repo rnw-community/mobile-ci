@@ -96,14 +96,14 @@ describe('idempotentCommand', () => {
     const command = (name: string, positionals?: string[]) => ({ method: 'agent_device.command', params: { command: name, ...(positionals === undefined ? {} : { positionals }) } });
 
     it('takes the commands that only read', () => {
-        for (const name of ['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps', 'devices']) {
+        for (const name of ['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps']) {
             assert.equal(idempotentCommand(command(name)), true, name);
         }
         assert.equal(idempotentCommand({ ...command('snapshot'), method: 'agent-device.command' }), true);
     });
 
     it('never takes a command that changes app state, or anything that is not a command', () => {
-        for (const name of ['press', 'click', 'fill', 'type', 'swipe', 'scroll', 'open', 'close', 'record', 'install', 'batch', 'settings', '']) {
+        for (const name of ['press', 'click', 'fill', 'type', 'swipe', 'scroll', 'open', 'close', 'record', 'install', 'batch', 'settings', 'devices', '']) {
             assert.equal(idempotentCommand(command(name)), false, name);
         }
         assert.equal(idempotentCommand({ method: 'agent_device.lease.allocate', params: { command: 'snapshot' } }), false);
@@ -135,18 +135,22 @@ describe('a tunnel that cuts commands off', () => {
     const ok = answer(200, '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}');
 
     /** Sends one command through a relay to a gateway answering with `replies` in order (the last repeats); returns the answer and the requests the gateway saw. */
-    async function command(name: string, replies: readonly Reply[]) {
+    async function command(name: string, replies: readonly Reply[], bodies: string[] = []) {
         let seen = 0;
-        const gateway = createServer((request, response) => {
+        const gateway = createServer(async (request, response) => {
             const reply = replies[Math.min(seen, replies.length - 1)]!;
             seen += 1;
-            request.resume();
-            request.on('end', () => reply(request, response));
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) {
+                chunks.push(chunk as Buffer);
+            }
+            bodies.push(Buffer.concat(chunks).toString('utf8'));
+            reply(request, response);
         });
         await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
         const relay = await startBootRelay(`http://127.0.0.1:${(gateway.address() as AddressInfo).port}/v1/agent-device`);
         try {
-            const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent_device.command', params: { command: name } });
+            const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent_device.command', params: { command: name, meta: { requestId: 'req:1' } } });
             const reply = await new Promise<{ status: number; body: string }>((resolve, reject) => {
                 const out = request(`${relay.baseUrl}/rpc`, { method: 'POST' }, res => {
                     const chunks: Buffer[] = [];
@@ -170,6 +174,12 @@ describe('a tunnel that cuts commands off', () => {
             assert.deepEqual([reply.status, reply.requests], [200, 2]);
             assert.equal(JSON.parse(reply.body).result.ok, true);
         }
+    });
+
+    it('names each attempt with its own request id: the daemon refuses an id still in flight, and the cut-off request may be', async () => {
+        const bodies: string[] = [];
+        await command('snapshot', [reset, reset, ok], bodies);
+        assert.deepEqual(bodies.map(body => JSON.parse(body).params.meta.requestId), ['req:1', 'req:1:r2', 'req:1:r3']);
     });
 
     it('fails closed after exactly three attempts', async () => {

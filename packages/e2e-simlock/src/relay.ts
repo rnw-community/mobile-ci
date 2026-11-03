@@ -119,7 +119,7 @@ export function rewritten(rpc: Rpc, rewrites: RelayRewrites): Rpc | undefined {
     return undefined;
 }
 
-const READS = new Set(['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps', 'devices']);
+const READS = new Set(['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps']);
 const FIND_ACTS = new Set(['click', 'press', 'tap', 'focus', 'fill', 'type']);
 
 /**
@@ -150,6 +150,12 @@ function cutOff(status: number, body: Buffer): boolean {
     } catch {
         return true;
     }
+}
+
+/** The daemon refuses a request id still in flight, and a request the tunnel cut off may still be running on the farm. */
+function withAttempt(rpc: Rpc, attempt: number): Rpc {
+    const meta = rpc.params?.meta as { requestId?: unknown } | undefined;
+    return typeof meta?.requestId === 'string' ? { ...rpc, params: { ...rpc.params, meta: { ...meta, requestId: `${meta.requestId}:r${attempt}` } } } : rpc;
 }
 
 export async function startBootRelay(upstreamBaseUrl: string, rewrites: RelayRewrites = {}): Promise<BootRelay> {
@@ -222,10 +228,11 @@ export async function startBootRelay(upstreamBaseUrl: string, rewrites: RelayRew
                 return;
             }
             const changed = rewritten(rpc, rewrites);
+            const sent = changed ?? rpc;
             const body = changed === undefined ? raw : Buffer.from(JSON.stringify(changed));
             const name = String(rpc.params?.command);
-            const answered = async () => {
-                const reply = await forward(incoming, path, body);
+            const answered = async (attempt: number) => {
+                const reply = await forward(incoming, path, attempt === 1 ? body : Buffer.from(JSON.stringify(withAttempt(sent, attempt))));
                 if (cutOff(reply.status, reply.body!)) {
                     throw new Error(`${name} answered ${reply.status}: ${reply.body!.toString('utf8').slice(0, 200)}`);
                 }
