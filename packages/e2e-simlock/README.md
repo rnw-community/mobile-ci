@@ -111,7 +111,14 @@ What it does for each worker slot:
 
 A loopback relay answers agent-device's `boot` (the farm grants booted devices)
 and a bare session `close` (which would end the lease mid-run). It forwards
-everything else to the configured gateway only. The lease allocate goes through
+everything else to the configured gateway only. A read the tunnel cuts off
+(`snapshot`, `screenshot`, `get`, `is`, `wait`, `appstate`, `apps`, and a `find`
+whose positionals can only name a read) is asked again, at most three times and
+2 s × attempt apart, each under its own request id, and logged to stderr. A cut-off
+is a dropped connection, or an answer that isn't JSON on a 200 or a 5xx: what
+agent-device reports as `Invalid daemon response`. Three cut-offs fail the command,
+so a farm that is really down still fails. A command that changes state is never
+sent twice, and a `find` it can't prove reads (`find` clicks by default) counts as one. The lease allocate goes through
 it too, and gains the target's `deviceMode` on the wire as `params.deviceMode`:
 agent-device 0.21.36 and older drop the field from `leases.allocate`, and the
 relay rewrite goes away once it passes it (callstack/agent-device#4183). The
@@ -152,7 +159,17 @@ platform. App-specific steps stay in your suite.
 | `scrollTo(screen, target, direction?, timeoutMs?)` | Maestro's `scrollUntilVisible`. `direction` is where the content goes (default `'down'`, timeout 20 s); an already visible target does not scroll. |
 | `tapUntil(target, next, { attempts?, timeoutMs? })` | Maestro's `retryTapIfNoChange`. It taps `target`, then awaits `next` (the state the tap leads to). It taps again only while `target` is still visible, i.e. the tap was swallowed while a screen settled, up to `attempts` taps (default 2). A target that is gone took the tap, so `next`'s failure is thrown as is. `timeoutMs` bounds each wait. |
 | `done({ screen, device })` | Maestro's `tapOn: Done`. It taps the keyboard's own Done key (a `key` with id `Done`), else an accessory bar's Done button, else dismisses the keyboard. Looking for the button alone makes `dismissKeyboard` hang for 30 s on a keyboard whose Done key is the key itself. |
-| `scrollToCentered({ screen }, id, { viewportHeight, bottomBandPx? })` | Maestro's `centerElement`. It scrolls `id` into view and, if its centre is in the bottom band (default the bottom third), drags it to the middle of the viewport, where a tab bar or floating button can't take the tap. `viewportHeight` is the device's, in `boundingBox()` points. It fails closed when the node has no bounds or stays in the band. |
+| `scrollToCentered({ screen }, id, { viewportHeight, bottomBandPx?, dragX? })` | Maestro's `centerElement`. It scrolls `id` into view and, if its centre is in the bottom band (default the bottom third), drags the content to bring it to the middle of the viewport, where a tab bar or floating button can't take the tap. The drag starts 40 pt above the band, never on the node, which may be under the overlay. `viewportHeight` is the device's, in `boundingBox()` points. |
+| `scrollToMiddle({ screen }, id, { viewportHeight, direction?, tolerancePx?, maxDragPx?, dragX? })` | The same when the node can sit under a header or a tab bar: it scrolls in either `direction` (default `'down'`), then drags at most `maxDragPx` (300) at a time from the middle of the viewport until the node's centre is within `tolerancePx` (150) of it. |
+| `scrollAbove({ screen }, id, element, { marginPx?, dragPx?, dragX? })` | Scrolls `id` into view, then drags `dragPx` (250) at a time, starting above `element` (a sticky footer), until the node's bottom edge is `marginPx` (8) above the element's top. An `element` not on screen has nothing to clear. |
+| `retry(retries, body)` | Maestro's `retry: { maxRetries }`. It runs `body(attempt)` up to `1 + retries` times, logs each failed attempt and rethrows the last failure. |
+| `measureRecording(file)` | How much of a recording repeats itself: `{ frames, durationMs, repeatedFrames, longestStallFrames, longestStallMs }`. See [below](#detecting-a-stalled-recording). Needs `ffmpeg` and `ffprobe` on PATH. |
+
+The three scroll helpers share one drag. A drag that moves nothing means the list
+is at its end, so the node stays where it is and the helper returns. A list still
+moving after three drags, or a node with no bounds, fails. `dragX` is the x every
+drag runs along, by default the node's centre; set it when that column has switches
+or other controls that would take the gesture.
 
 ```ts
 import { byId, done, scrollToCentered, tapUntil } from '@mobile-ci/e2e-simlock/steps';
@@ -164,23 +181,55 @@ await byId(screen, 'Amount').fill('12.50');
 await done({ screen, device });
 ```
 
-### `@mobile-ci/e2e-simlock/exec` (iOS)
+#### Detecting a stalled recording
 
-Fixture helpers over simlock's `POST /v1/leases/<id>/exec`, which runs `simctl`
-for the leased simulator only: `simlockApiFromEnv()`, `leaseIdForUdid()`,
-`exec()`, `mustExec()`, and the E2EDrop file helpers `writeFile()`, `untar()`,
-`drop()` and `mustDrop()`. macOS 26 refuses `simctl spawn` of host tools, and the
-simulator runtime has no shell, `cp` or `tar`. E2EDrop (`E2E_DROP_APP`, built
-from `e2e-drop/`) is a helper app that does the copying. To use it, pass it in
-`extraApps`. Nothing installs it by default.
+An iOS recording from the farm can stall mid-clip: about a second of one stale image,
+with monotonic timestamps, so `ffmpeg -xerror` decodes it cleanly and the test stays
+green. `measureRecording` compares each frame with the one before, as small grey
+thumbnails, since lossy encoding leaves a repeated image a level or two off. A clip
+of a scroll that stalled for 50 of its 292 frames reports `longestStallMs: 1140`,
+and the five clips of the same run that didn't report at most 281.
 
-A payload over 1 MiB (`writeFile()`, `untar()`, `drop()`) waits for one of the
-machine-wide transfer slots app uploads use: lock files in the OS temp directory,
-one set per farm, `installConcurrency` of them. So ten workers dropping a large
-fixture send at most three at once; a slot whose holder died is reclaimed. (If
-two processes reclaim the same dead holder's slot at the same moment, one extra
-transfer can run until either finishes.) A single payload still travels as one
-request; splitting drops into chunks is planned for v4.10.0.
+A still screen repeats frames too, so the helper only reports. A caller that knows the
+clip should move decides what is too long:
+
+```ts
+import { measureRecording } from '@mobile-ci/e2e-simlock/steps';
+
+const { longestStallMs } = await measureRecording(clip);
+if (longestStallMs > 500) {
+    throw new Error(`${clip} stalled for ${longestStallMs} ms: capture it again`);
+}
+```
+
+### `@mobile-ci/e2e-simlock/exec`
+
+Fixture helpers over simlock's `POST /v1/leases/<id>/exec`, which runs one command
+for the leased device only: `simlockApiFromEnv()`, `leaseIdForUdid()`, `exec()` and
+`mustExec()`. Both take `(api, leaseId, args, stdin?, tool?)`. `tool` is `'simctl'`
+or `'adb'`; left out, it is the one the lease's platform has, asked of the farm once
+per lease.
+
+```ts
+import { leaseIdForUdid, mustExec, simlockApiFromEnv } from '@mobile-ci/e2e-simlock/exec';
+
+const api = simlockApiFromEnv();
+const lease = await leaseIdForUdid(api, device.id);
+await mustExec(api, lease, ['shell', 'pm', 'clear', 'com.example.app']);
+```
+
+On iOS, the E2EDrop file helpers `writeFile()`, `untar()`, `drop()` and `mustDrop()`
+move files onto the simulator. macOS 26 refuses `simctl spawn` of host tools, and the
+simulator runtime has no shell, `cp` or `tar`. E2EDrop (`E2E_DROP_APP`, built from
+`e2e-drop/`) is a helper app that does the copying. To use it, pass it in `extraApps`.
+Nothing installs it by default.
+
+A payload over 1 MiB waits for one of the machine-wide transfer slots app uploads
+use: lock files in the OS temp directory, one set per farm, `installConcurrency` of
+them. So ten workers dropping a large fixture send at most three at once; a slot
+whose holder died is reclaimed. (If two processes reclaim the same dead holder's slot
+at the same moment, one extra transfer can run until either finishes.) A single
+payload still travels as one request.
 
 `exec()` asks again, at most three times and 2 s × attempt apart, when the
 connection drops before or during the answer (`fetch failed`, `terminated`) or the

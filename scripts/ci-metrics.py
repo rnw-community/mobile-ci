@@ -48,7 +48,7 @@ INFRA_PATTERNS = [
         r'no space left on device',
         r'the operation was canceled',
         r'could not resolve host|connection (reset|refused|timed out)',
-        r'fetch-pack: |^early eof$|rpc failed; curl|bytes of body are still expected',
+        r'fetch-pack: |^early eof\s*$|rpc failed; curl|bytes of body are still expected',
         r'unable to resolve action',
         r'exceeded the maximum execution time',
         r'an error occurred trying to start process',
