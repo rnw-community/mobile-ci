@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { byId, done, scrollTo, scrollToCentered, tapUntil } from '../src/steps.ts';
+import { byId, done, retry, scrollAbove, scrollTo, scrollToCentered, scrollToMiddle, tapUntil } from '../src/steps.ts';
 
 import type { Locator, Screen } from 'e2e';
 
@@ -131,49 +131,213 @@ describe('done', () => {
     });
 });
 
+type Swipe = { from: { x: number; y: number }; to: { x: number; y: number }; duration: number };
+
+/**
+ * A scrolling list under a fixed overlay. A drag that starts below `overlayTop` lands on the overlay and moves nothing;
+ * any other drag moves the node with the content, as far as the list can still go (`up` and `down`, in px).
+ */
+function list({ y, height = 40, overlayTop = Number.POSITIVE_INFINITY, up = Number.POSITIVE_INFINITY, down = Number.POSITIVE_INFINITY, width = 100, box = true }: { y: number; height?: number; overlayTop?: number; up?: number; down?: number; width?: number; box?: boolean }) {
+    let position = y;
+    const swipes: Swipe[] = [];
+    const scrolled: unknown[] = [];
+    const node = { isVisible: async () => true, boundingBox: async () => (box ? { x: 0, y: position, width, height } : null) };
+    const screen = {
+        getByTestId: () => ({ first: () => node }),
+        scrollUntilVisible: async (_target: unknown, options: unknown) => void scrolled.push(options),
+        swipe: async (swipe: Swipe) => {
+            swipes.push(swipe);
+            if (swipe.from.y < overlayTop) {
+                const moved = Math.max(-up, Math.min(down, swipe.to.y - swipe.from.y));
+                position += moved;
+                up += moved;
+                down -= moved;
+            }
+        }
+    } as unknown as Screen;
+    return { ctx: { screen }, node, swipes, scrolled, y: () => position };
+}
+
 describe('scrollToCentered', () => {
-    const screenWith = (node: ReturnType<typeof locator>) => {
-        const swipes: unknown[] = [];
-        const screen = {
-            getByTestId: () => ({ first: () => node }),
-            scrollUntilVisible: async () => undefined,
-            swipe: async (options: unknown) => void swipes.push(options)
-        } as unknown as Screen;
-        return { ctx: { screen }, swipes };
-    };
+    const phone = { viewportHeight: 874, bottomBandPx: 314 };
 
     it('leaves a node clear of the bottom band where it is', async () => {
-        const { ctx, swipes } = screenWith(locator([true], [{ x: 0, y: 500, width: 100, height: 40 }]));
-        await scrollToCentered(ctx, 'Card', { viewportHeight: 874, bottomBandPx: 314 });
+        const { ctx, swipes } = list({ y: 500 });
+        await scrollToCentered(ctx, 'Card', phone);
         assert.deepEqual(swipes, []);
     });
 
-    it('drags a node out of the bottom band to the middle of the viewport', async () => {
-        const { ctx, swipes } = screenWith(locator([true], [{ x: 0, y: 700, width: 100, height: 40 }, { x: 0, y: 417, width: 100, height: 40 }]));
-        await scrollToCentered(ctx, 'Card', { viewportHeight: 874, bottomBandPx: 314 });
-        assert.deepEqual(swipes, [{ from: { x: 50, y: 720 }, to: { x: 50, y: 437 }, duration: 600 }]);
+    it('drags from above the band, by the distance to the middle of the viewport', async () => {
+        const { ctx, swipes, y } = list({ y: 700 });
+        await scrollToCentered(ctx, 'Card', phone);
+        assert.deepEqual(swipes, [{ from: { x: 50, y: 520 }, to: { x: 50, y: 237 }, duration: 600 }]);
+        assert.equal(y(), 417);
+    });
+
+    it("moves a node under a tab bar: a drag from the node itself lands on the bar and moves nothing (budgie's y 869.8)", async () => {
+        const { ctx, y } = list({ y: 849.8, overlayTop: 780 });
+        await scrollToCentered(ctx, 'SettingsPage.Switch', phone);
+        assert.equal(Math.round(y() + 20), 437);
+    });
+
+    it("leaves a node at a list's end where it is: the drag moved nothing and that is no failure (budgie's y 665.3)", async () => {
+        const { ctx, swipes, y } = list({ y: 645.3, up: 0 });
+        await scrollToCentered(ctx, 'AccountCard.Deposit', phone);
+        assert.equal(y(), 645.3);
+        assert.equal(swipes.length, 1);
+    });
+
+    it('drags again while the list still moves, and stops at its end', async () => {
+        const { ctx, swipes, y } = list({ y: 780, up: 50 });
+        await scrollToCentered(ctx, 'Card', phone);
+        assert.equal(y(), 730);
+        assert.equal(swipes.length, 2);
+    });
+
+    it('takes the x to drag at, since a drag on a control in the node column would take the gesture', async () => {
+        const { ctx, swipes } = list({ y: 700 });
+        await scrollToCentered(ctx, 'Card', { ...phone, dragX: 200 });
+        assert.deepEqual([swipes[0]!.from.x, swipes[0]!.to.x], [200, 200]);
+    });
+
+    it('keeps the drag on screen, whatever the band', async () => {
+        const { ctx, swipes } = list({ y: 800, up: 0 });
+        await scrollToCentered(ctx, 'Card', { viewportHeight: 874, bottomBandPx: 700 });
+        assert.deepEqual([swipes[0]!.from.y, swipes[0]!.to.y], [134, 40]);
     });
 
     it('defaults the band to the bottom third of the viewport', async () => {
-        const { ctx, swipes } = screenWith(locator([true], [{ x: 0, y: 620, width: 100, height: 20 }, { x: 0, y: 290, width: 100, height: 20 }]));
+        const { ctx, swipes } = list({ y: 620, height: 20 });
         // 630 lies below 900 - 900 / 3 = 600.
         await scrollToCentered(ctx, 'Card', { viewportHeight: 900 });
         assert.equal(swipes.length, 1);
     });
 
-    it('fails closed when the node has no bounds, or cannot leave the band', async () => {
-        await assert.rejects(scrollToCentered(screenWith(locator([true], [null])).ctx, 'Card', { viewportHeight: 874 }), {
-            message: 'scrollToCentered: Card has no bounds'
-        });
-        await assert.rejects(scrollToCentered(screenWith(locator([true], [{ x: 0, y: 800, width: 100, height: 40 }])).ctx, 'Card', { viewportHeight: 874, bottomBandPx: 314 }), {
-            message: 'scrollToCentered: Card is still in the bottom 314 px band (centre y 820 of 874); the content did not scroll'
-        });
+    it('fails closed when the node has no bounds, or is still moving and in the band after three drags', async () => {
+        await assert.rejects(scrollToCentered(list({ y: 800, box: false }).ctx, 'Card', { viewportHeight: 874 }), { message: 'scrollToCentered: Card has no bounds' });
+        const creeping = list({ y: 800 });
+        creeping.node.boundingBox = async () => ({ x: 0, y: 800 + creeping.swipes.length, width: 100, height: 40 });
+        await assert.rejects(scrollToCentered(creeping.ctx, 'Card', phone), { message: 'scrollToCentered: Card is still out of place after 3 drags (centre y 823 of 874)' });
+        assert.equal(creeping.swipes.length, 3);
     });
 
     it('refuses a band that does not fit the viewport', async () => {
-        await assert.rejects(scrollToCentered(screenWith(locator()).ctx, 'Card', { viewportHeight: 0 }), {
+        await assert.rejects(scrollToCentered(list({ y: 0 }).ctx, 'Card', { viewportHeight: 0 }), {
             message: 'scrollToCentered: viewportHeight must be positive and bottomBandPx inside it; got 0 and 0'
         });
-        await assert.rejects(scrollToCentered(screenWith(locator()).ctx, 'Card', { viewportHeight: 800, bottomBandPx: 800 }), /bottomBandPx inside it; got 800 and 800/);
+        await assert.rejects(scrollToCentered(list({ y: 0 }).ctx, 'Card', { viewportHeight: 800, bottomBandPx: 800 }), /bottomBandPx inside it; got 800 and 800/);
+    });
+});
+
+describe('scrollToMiddle', () => {
+    const phone = { viewportHeight: 874 };
+
+    it('leaves a node within the tolerance of the middle where it is', async () => {
+        const { ctx, swipes } = list({ y: 540 });
+        await scrollToMiddle(ctx, 'Card', phone);
+        assert.deepEqual(swipes, []);
+    });
+
+    it('drags a node under a header down toward the middle: the bottom-band helper would leave it there', async () => {
+        const { ctx, swipes, y } = list({ y: 30 });
+        await scrollToMiddle(ctx, 'Card', phone);
+        assert.deepEqual(swipes[0], { from: { x: 50, y: 437 }, to: { x: 50, y: 737 }, duration: 600 });
+        assert.ok(Math.abs(y() + 20 - 437) < 150);
+    });
+
+    it('drags at most 300 at a time, up to three times', async () => {
+        const { ctx, swipes, y } = list({ y: 1000 });
+        await scrollToMiddle(ctx, 'Card', phone);
+        assert.deepEqual(swipes.map(swipe => swipe.from.y - swipe.to.y), [300, 283]);
+        assert.ok(Math.abs(y() + 20 - 437) < 150);
+    });
+
+    it('scrolls in the direction it is told, and stops when the list ends', async () => {
+        const { ctx, node, scrolled, swipes } = list({ y: 800, up: 0 });
+        node.isVisible = async () => false;
+        await scrollToMiddle(ctx, 'Card', { ...phone, direction: 'up' });
+        assert.deepEqual(scrolled, [{ direction: 'up', timeout: 20_000 }]);
+        assert.equal(swipes.length, 1);
+    });
+
+    it('takes the tolerance, the longest drag and the x to drag at', async () => {
+        const { ctx, swipes } = list({ y: 540, up: 0 });
+        await scrollToMiddle(ctx, 'Card', { ...phone, tolerancePx: 50, maxDragPx: 40, dragX: 200 });
+        assert.deepEqual(swipes[0], { from: { x: 200, y: 437 }, to: { x: 200, y: 397 }, duration: 600 });
+    });
+
+    it('fails closed when the node has no bounds', async () => {
+        await assert.rejects(scrollToMiddle(list({ y: 0, box: false }).ctx, 'Card', phone), { message: 'scrollToMiddle: Card has no bounds' });
+    });
+});
+
+describe('scrollAbove', () => {
+    const footerAt = (y: number | null) => ({ boundingBox: async () => (y === null ? null : { x: 0, y, width: 400, height: 60 }) }) as unknown as Locator;
+
+    it('leaves a node whose bottom edge is above the element where it is', async () => {
+        const { ctx, swipes } = list({ y: 700 });
+        await scrollAbove(ctx, 'Limit', footerAt(800));
+        assert.deepEqual(swipes, []);
+    });
+
+    it('drags from above the element, since a drag that starts on a fixed footer moves nothing, until the node clears it', async () => {
+        const { ctx, swipes, y } = list({ y: 790, overlayTop: 800 });
+        await scrollAbove(ctx, 'Limit', footerAt(800));
+        assert.deepEqual(swipes, [{ from: { x: 50, y: 650 }, to: { x: 50, y: 400 }, duration: 600 }]);
+        assert.equal(y(), 540);
+    });
+
+    it('stops when the content ends, and takes the margin, the drag length and the x', async () => {
+        const { ctx, swipes } = list({ y: 750, up: 0 });
+        await scrollAbove(ctx, 'Limit', footerAt(800), { marginPx: 20, dragPx: 100, dragX: 200 });
+        assert.deepEqual(swipes, [{ from: { x: 200, y: 650 }, to: { x: 200, y: 550 }, duration: 600 }]);
+    });
+
+    it('has nothing to clear when the element is not on screen', async () => {
+        const { ctx, swipes } = list({ y: 790 });
+        await scrollAbove(ctx, 'Limit', footerAt(null));
+        assert.deepEqual(swipes, []);
+    });
+
+    it('fails closed when the node has no bounds', async () => {
+        await assert.rejects(scrollAbove(list({ y: 0, box: false }).ctx, 'Limit', footerAt(800)), { message: 'scrollAbove: Limit has no bounds' });
+    });
+});
+
+describe('retry', () => {
+    it('runs the body once when it passes, handing it the attempt number', async () => {
+        const seen: number[] = [];
+        await retry(2, async attempt => void seen.push(attempt));
+        assert.deepEqual(seen, [1]);
+    });
+
+    it('runs the body up to 1 + retries times, logging each failure, and rethrows the last', async t => {
+        const log = t.mock.method(console, 'log', () => undefined);
+        const seen: number[] = [];
+        await assert.rejects(
+            retry(2, async attempt => {
+                seen.push(attempt);
+                throw new Error(`failed ${attempt}\nstack detail`);
+            }),
+            /^Error: failed 3/
+        );
+        assert.deepEqual(seen, [1, 2, 3]);
+        assert.deepEqual(log.mock.calls.map(call => call.arguments[0]), ['[retry] attempt 1 of 3 failed: failed 1', '[retry] attempt 2 of 3 failed: failed 2']);
+    });
+
+    it('stops at the first attempt that passes', async t => {
+        t.mock.method(console, 'log', () => undefined);
+        const seen: number[] = [];
+        await retry(3, async attempt => {
+            seen.push(attempt);
+            if (attempt < 2) throw new Error('not yet');
+        });
+        assert.deepEqual(seen, [1, 2]);
+    });
+
+    it('refuses a retry count that is not a whole number', async () => {
+        for (const retries of [-1, 1.5, Number.NaN]) {
+            await assert.rejects(retry(retries, async () => undefined), { message: `retry: retries must be a whole number; got ${String(retries)}` });
+        }
     });
 });
