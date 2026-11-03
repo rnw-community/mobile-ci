@@ -1347,8 +1347,8 @@ jobs:
                   echo "::group::Runner Node exec diagnostics"
                   sw_vers 2>&1; uname -a; uptime
                   probe "as installed"
-                  codesign -dvv "$node_bin" 2>&1 | head -12
-                  xattr -l "$node_bin" 2>&1 | head -12
+                  codesign -dvv "$node_bin" 2>&1 | sed -n 1,12p
+                  xattr -l "$node_bin" 2>&1 | sed -n 1,12p
                   copy="$RUNNER_TEMP/node-exec-diagnostic"
                   if cp "$node_bin" "$copy"; then
                       shasum -a 256 "$copy" 2>&1
@@ -1362,7 +1362,7 @@ jobs:
                       echo "purge unavailable without a password"
                   fi
                   sysctl vm.swapusage 2>&1
-                  vm_stat 2>&1 | head -12
+                  vm_stat 2>&1 | sed -n 1,12p
                   df -h / 2>&1
                   echo "::endgroup::"
                   echo "::group::Kernel and code-signing log, last 15 minutes"
@@ -1622,8 +1622,8 @@ jobs:
                   echo "::group::Runner Node exec diagnostics"
                   sw_vers 2>&1; uname -a; uptime
                   probe "as installed"
-                  codesign -dvv "$node_bin" 2>&1 | head -12
-                  xattr -l "$node_bin" 2>&1 | head -12
+                  codesign -dvv "$node_bin" 2>&1 | sed -n 1,12p
+                  xattr -l "$node_bin" 2>&1 | sed -n 1,12p
                   copy="$RUNNER_TEMP/node-exec-diagnostic"
                   if cp "$node_bin" "$copy"; then
                       shasum -a 256 "$copy" 2>&1
@@ -1637,7 +1637,7 @@ jobs:
                       echo "purge unavailable without a password"
                   fi
                   sysctl vm.swapusage 2>&1
-                  vm_stat 2>&1 | head -12
+                  vm_stat 2>&1 | sed -n 1,12p
                   df -h / 2>&1
                   echo "::endgroup::"
                   echo "::group::Kernel and code-signing log, last 15 minutes"
