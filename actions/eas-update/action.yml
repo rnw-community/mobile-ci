@@ -209,7 +209,9 @@ runs:
           exit 1
         }
         valid_name() {
-          printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
+          grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' <<EOF
+        $1
+        EOF
         }
         case "$PLATFORM" in
           all) platforms='ios android' ;;
@@ -232,7 +234,9 @@ runs:
         valid_name "$CHANNEL" || fail "channel must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$CHANNEL'."
         branch="${BRANCH:-$CHANNEL}"
         valid_name "$branch" || fail "branch must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$branch'."
-        printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' <<EOF || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        $EAS_CLI_VERSION
+        EOF
         export EXPO_TOKEN="${EXPO_TOKEN_INPUT:-${EXPO_TOKEN:-}}"
         [ -n "$EXPO_TOKEN" ] || fail "eas-update needs an Expo access token: set expo-token or EXPO_TOKEN."
 

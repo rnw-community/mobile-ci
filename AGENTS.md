@@ -109,6 +109,11 @@ the section that matches your task; skip the other.
 - No code comments in `action.yml` beyond what a descriptive step `name:`
   could not already convey — prefer renaming over explaining.
 - Keep `run:` blocks POSIX-shell-compatible and `shellcheck`-clean.
+- Never pipe into a grep that stops reading early (`-q`, `-l`, `-L`, `-m`).
+  Under the runner's `bash -eo pipefail` a producer still writing when grep
+  exits dies of SIGPIPE, and the match reads as a miss. Feed grep a heredoc
+  (`grep -q pat <<EOF` with `$var` or `$(cmd)` as the body), use `case`, or
+  test `[ -n "$(cmd)" ]`. `tests/pipe-early-exit_test.sh` enforces it.
 
 ### Required validation before claiming done
 

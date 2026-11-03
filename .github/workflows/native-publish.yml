@@ -655,7 +655,9 @@ jobs:
                   if [ -n "$RELEASE_TAG" ]; then
                     candidate="${RELEASE_TAG##*@}"
                     candidate="${candidate#v}"
-                    if printf '%s' "$candidate" | grep -Eq "$version_pattern"; then
+                    if grep -Eq "$version_pattern" <<EOF; then
+                  $candidate
+                  EOF
                       tag_version="$candidate"
                     fi
                   fi
@@ -676,7 +678,9 @@ jobs:
                       marketing_version="$tag_version"
                       ;;
                     *)
-                      if ! printf '%s' "$MARKETING_VERSION_INPUT" | grep -Eq "$version_pattern"; then
+                      if ! grep -Eq "$version_pattern" <<EOF; then
+                  $MARKETING_VERSION_INPUT
+                  EOF
                         echo "::error::marketing-version must be auto, tag, none, or X[.Y[.Z]]; got '$MARKETING_VERSION_INPUT'."
                         exit 1
                       fi

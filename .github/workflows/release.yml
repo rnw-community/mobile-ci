@@ -75,7 +75,7 @@ jobs:
                   TAG: ${{ steps.detect.outputs.tag }}
               run: |
                   set -euo pipefail
-                  if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+                  if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
                       echo "Tag ${TAG} already exists; nothing to do."
                       {
                           echo "exists=true"

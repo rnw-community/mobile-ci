@@ -566,7 +566,9 @@ jobs:
                   else
                     resolved="$((1000 + GITHUB_RUN_NUMBER))"
                   fi
-                  if ! printf '%s' "$resolved" | grep -qE '^[0-9]+$'; then
+                  if ! grep -qE '^[0-9]+$' <<EOF; then
+                  $resolved
+                  EOF
                     echo "::error::build-number '$resolved' must be a non-negative integer."
                     exit 1
                   fi

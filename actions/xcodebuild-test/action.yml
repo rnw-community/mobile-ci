@@ -195,7 +195,9 @@ runs:
           *) echo "::error::mode must be 'build', 'test' or 'build-and-test' (got '$MODE')."; exit 1 ;;
         esac
         if [ -n "$DESTINATION_ID" ]; then
-          if ! printf '%s' "$DESTINATION_ID" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+          if ! grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$' <<EOF; then
+        $DESTINATION_ID
+        EOF
             echo "::error::destination-id must be a simulator UDID (got '$DESTINATION_ID')."
             exit 1
           fi
@@ -412,7 +414,9 @@ runs:
         set -euo pipefail
         cd "$WORKING_DIRECTORY"
         for value in "$SHARD_INDEX" "$SHARD_COUNT"; do
-          if ! printf '%s' "$value" | grep -qE '^[0-9]+$'; then
+          if ! grep -qE '^[0-9]+$' <<EOF; then
+        $value
+        EOF
             echo "::error::shard-index and shard-count must be non-negative integers (got '$SHARD_INDEX'/'$SHARD_COUNT')."
             exit 1
           fi
@@ -559,11 +563,15 @@ runs:
         SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
       run: |
         set -euo pipefail
-        if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+        $SIMSLIM_VERSION
+        EOF
           echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
           exit 1
         fi
-        if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+        if [ -n "$SIMSLIM_SHA256" ] && ! grep -qE '^[0-9a-f]{64}$' <<EOF; then
+        $SIMSLIM_SHA256
+        EOF
           echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
           exit 1
         fi
@@ -748,7 +756,9 @@ runs:
         set -euo pipefail
         cd "$WORKING_DIRECTORY"
         if [ -n "$PARALLEL_TESTING_WORKER_COUNT" ] \
-          && ! printf '%s' "$PARALLEL_TESTING_WORKER_COUNT" | grep -qE '^[1-9][0-9]*$'; then
+          && ! grep -qE '^[1-9][0-9]*$' <<EOF; then
+        $PARALLEL_TESTING_WORKER_COUNT
+        EOF
           echo "::error::parallel-testing-worker-count '$PARALLEL_TESTING_WORKER_COUNT' must be a positive integer."
           exit 1
         fi
@@ -856,7 +866,9 @@ runs:
           return 1
         }
         exited_early=''
-        if printf '%s' "$pid" | grep -qE '^[1-9][0-9]*$' && is_our_watch "$pid"; then
+        if grep -qE '^[1-9][0-9]*$' <<EOF && is_our_watch "$pid"; then
+        $pid
+        EOF
           kill -INT "$pid" 2>/dev/null || true
           for _ in $(seq 1 60); do
             kill -0 "$pid" 2>/dev/null || break

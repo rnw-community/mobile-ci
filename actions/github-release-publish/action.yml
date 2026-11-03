@@ -222,7 +222,9 @@ runs:
               if [ "$asset_state" != 'uploaded' ]; then
                 echo "Asset '$asset_name' on release '$RELEASE_TAG' is stuck in a non-uploaded state; deleting it for re-upload."
                 gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
-              elif ! printf '%s\n' "$expected_names" | grep -qxF "$asset_name"; then
+              elif ! grep -qxF "$asset_name" <<EOF; then
+        $expected_names
+        EOF
                 echo "Asset '$asset_name' on release '$RELEASE_TAG' is not part of the current staged set; deleting it."
                 gh release delete-asset "$RELEASE_TAG" "$asset_name" --yes || exit 1
               fi
@@ -231,7 +233,9 @@ runs:
             uploaded_names="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
             missing_paths=()
             while IFS= read -r -d '' expected; do
-              if ! printf '%s\n' "$uploaded_names" | grep -qxF "$expected"; then
+              if ! grep -qxF "$expected" <<EOF; then
+        $uploaded_names
+        EOF
                 missing_paths+=("$staging/$expected")
               fi
             done < <(cat "$assets_file" "$manifests_file")
@@ -255,7 +259,9 @@ runs:
           release_assets="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)"
           missing_assets=''
           while IFS= read -r -d '' expected; do
-            if ! printf '%s\n' "$release_assets" | grep -qxF "$expected"; then
+            if ! grep -qxF "$expected" <<EOF; then
+        $release_assets
+        EOF
               missing_assets="${missing_assets} ${expected}"
             fi
           done < <(cat "$assets_file" "$manifests_file")

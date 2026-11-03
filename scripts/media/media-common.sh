@@ -50,7 +50,9 @@ media_require_positive_int() {
 }
 
 media_require_fraction() {
-    if ! printf '%s\n' "$2" | grep -Eq '^(0?\.[0-9]*[1-9][0-9]*|1(\.0*)?)$'; then
+    if ! grep -Eq '^(0?\.[0-9]*[1-9][0-9]*|1(\.0*)?)$' <<EOF; then
+$2
+EOF
         media_fail "$1 must be a number in (0, 1], got '$2'."
     fi
 }
@@ -84,7 +86,9 @@ media_check_scenes_found() {
     IFS=','
     for scene in $MEDIA_SCENES; do
         [ -n "$scene" ] || continue
-        if ! printf '%s\n' "$matched" | grep -Fxq "$scene"; then
+        if ! grep -Fxq "$scene" <<EOF; then
+$matched
+EOF
             missing="$missing $scene"
         fi
     done
@@ -136,7 +140,9 @@ media_render_template() {
 # renders the same path for two inputs, which would otherwise overwrite the
 # first output and publish fewer files than the manifest lists.
 media_claim_output() {
-    if printf '%s' "$MEDIA_CLAIMED" | grep -Fxq -- "$1"; then
+    if grep -Fxq -- "$1" <<EOF; then
+$MEDIA_CLAIMED
+EOF
         media_fail "--output-template renders '$1' for more than one input; add {dir}, {parent} or {grandparent} to tell them apart."
     fi
     MEDIA_CLAIMED="$MEDIA_CLAIMED$1

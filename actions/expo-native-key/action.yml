@@ -205,7 +205,9 @@ runs:
           fi
         }
 
-        if [ -n "$SECRETS_DIGEST" ] && ! printf '%s' "$SECRETS_DIGEST" | grep -qE '^[0-9a-f]{64}$'; then
+        if [ -n "$SECRETS_DIGEST" ] && ! grep -qE '^[0-9a-f]{64}$' <<EOF; then
+        $SECRETS_DIGEST
+        EOF
           echo "::error::secrets-digest must be a lowercase SHA-256 hex digest; anything else may be a secret value, which must never enter the key."
           exit 1
         fi

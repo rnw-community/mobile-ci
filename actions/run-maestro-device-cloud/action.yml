@@ -166,7 +166,9 @@ runs:
           echo "::error::The Device Cloud API key is empty. Pass it as the calling workflow's device-cloud-api-key secret; the device-cloud driver never runs unauthenticated."
           exit 1
         fi
-        if ! printf '%s' "$CLI_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+        $CLI_VERSION
+        EOF
           echo "::error::cli-version '$CLI_VERSION' must be an exact X.Y.Z version; a range would let the CLI change under a pinned workflow."
           exit 1
         fi

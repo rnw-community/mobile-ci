@@ -595,7 +595,7 @@ runs:
           set_config hw.cpu.ncore "$CORES"
 
           serial="emulator-$PORT"
-          if timeout 30 adb devices | awk 'NR > 1 { print $1 }' | grep -qxF "$serial"; then
+          if timeout 30 adb devices | awk -v serial="$serial" 'NR > 1 && $1 == serial { found = 1 } END { exit !found }'; then
             fail "$serial is already attached to adb on this runner, so another emulator owns console port $PORT. Pass a different port, or move the job to a runner that does not share its adb server."
           fi
 
