@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, limiter, pause, recordLease, type QueuedAllocation } from '../src/farm.ts';
+import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, pause, recordLease, type QueuedAllocation } from '../src/farm.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
 
@@ -200,30 +200,6 @@ describe('pause', () => {
         const waiting = pause(60_000, controller.signal);
         controller.abort(new Error('stop'));
         await assert.rejects(waiting, { message: 'stop' });
-    });
-});
-
-describe('limiter', () => {
-    it('runs at most `limit` calls at once, and frees a slot when one fails', async () => {
-        const run = limiter(2);
-        let active = 0;
-        let peak = 0;
-        const work = (fail: boolean) => async () => {
-            active += 1;
-            peak = Math.max(peak, active);
-            await new Promise(resolve => setTimeout(resolve, 5));
-            active -= 1;
-            if (fail) {
-                throw new Error('upload failed');
-            }
-            return 'ok';
-        };
-        const results = await Promise.allSettled([run(work(true)), run(work(false)), run(work(false)), run(work(false))]);
-        assert.equal(peak, 2);
-        assert.deepEqual(
-            results.map(r => r.status),
-            ['rejected', 'fulfilled', 'fulfilled', 'fulfilled']
-        );
     });
 });
 

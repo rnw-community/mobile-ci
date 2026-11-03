@@ -35,24 +35,6 @@ export const pause: Pause = (ms, signal) =>
         signal.addEventListener('abort', onAbort, { once: true });
     });
 
-/** A counting semaphore: the returned function runs `work` once fewer than `limit` calls are in flight. */
-export function limiter(limit: number): <T>(work: () => Promise<T>) => Promise<T> {
-    let active = 0;
-    const waiting: (() => void)[] = [];
-    return async work => {
-        while (active >= limit) {
-            await new Promise<void>(resolve => waiting.push(resolve));
-        }
-        active += 1;
-        try {
-            return await work();
-        } finally {
-            active -= 1;
-            waiting.shift()?.();
-        }
-    };
-}
-
 /**
  * The platform's free devices on the farm (`GET /v1/status`: limit minus devices leased, warm
  * ones counting as free), or undefined when the farm does not say. Never throws: an unknown

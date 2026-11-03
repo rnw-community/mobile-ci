@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 
-import { allocateQueued, FARM_DOWN, freeDevices, limiter, recordLease, type Platform } from './farm.ts';
+import { allocateQueued, FARM_DOWN, freeDevices, recordLease, type Platform } from './farm.ts';
 import { startBootRelay, type BootRelay, type DeviceMode } from './relay.ts';
+import { configureTransfers, transfer } from './transfers.ts';
 
 import type { DeviceLease, DeviceProvider, DeviceRequest } from '@e2e-dev/mobile';
 import type { createAgentDeviceClient } from 'agent-device';
@@ -34,7 +35,11 @@ export interface SimlockOptions {
     readonly extraApps?: readonly string[];
     /** Lease TTL, renewed every third of it. Short, so a run killed before it releases frees its device within one TTL. Default 3 min. */
     readonly ttlMs?: number;
-    /** App uploads in flight at once: each carries the app through the gateway, and a tunnel request past 100 s ends in a 524. Default 3. */
+    /**
+     * Big transfers in flight at once on this machine, across the runner and all its workers: app uploads and
+     * exec payloads over 1 MiB (E2EDrop files and archives). Each crosses the tunnel, where a request past 100 s
+     * ends in a 524. Default 3.
+     */
     readonly installConcurrency?: number;
     /** How long a slot may wait for the farm to have a device free before the run fails. Default 20 min. */
     readonly queueMs?: number;
@@ -123,7 +128,7 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
     const { platform, device, token } = options;
     const leaseBackend = `${platform}-instance` as const;
     const held = new Map<string, Held>();
-    const uploads = limiter(installConcurrency);
+    configureTransfers(options.url, installConcurrency);
     let relay: Promise<BootRelay> | undefined;
     let acquiring = 0;
 
@@ -216,7 +221,7 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
             const scoped = await client(session, scope);
             const install = async (appPath: string, app?: string): Promise<void> => {
                 try {
-                    await uploads(() => scoped.apps.install({ platform, ...selection, appPath, ...(app === undefined ? {} : { app }) }));
+                    await transfer(options.url, () => scoped.apps.install({ platform, ...selection, appPath, ...(app === undefined ? {} : { app }) }));
                 } catch (cause) {
                     throw new DeviceSetupFailed(`${cause instanceof Error ? cause.message : String(cause)} (${deviceId})`, { cause });
                 }

@@ -84,7 +84,7 @@ with several apps gives each its own target.
 | `deviceMode` | no | the farm's (`slim`) | `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on iOS. `'slim'` or `'full'`; anything else throws. |
 | `extraApps` | no | `[]` | `.app`/`.apk` paths installed on every device after the app under test. |
 | `ttlMs` | no | `180000` | Lease TTL, renewed every third of it. |
-| `installConcurrency` | no | `3` | App uploads in flight at once. |
+| `installConcurrency` | no | `3` | Big transfers in flight at once on this machine, across the runner and all its workers: app uploads and exec payloads over 1 MiB (E2EDrop files and archives). Each crosses the tunnel, where a request past 100 s ends in a 524. |
 | `queueMs` | no | `1200000` | How long a slot waits for a free device before the run fails. |
 | `tenant` | no | `'mobile-ci-e2e'` | simlock tenant the leases are filed under; name your project. |
 
@@ -98,7 +98,7 @@ What it does for each worker slot:
   fails at once, and so does `queueMs` running out or an interrupt.
 - **Pins and installs.** It leases one device (`ios-instance` or
   `android-instance`) and names it by simulator UDID or adb serial on every
-  command. It uploads the app (at most `installConcurrency` at once), then each
+  command. It uploads the app (at most `installConcurrency` big transfers at once, see below), then each
   of `extraApps`.
 - **Swaps once.** A failed install releases that device and leases one other.
   It never swaps when the farm itself is down.
@@ -166,6 +166,11 @@ for the leased simulator only: `simlockApiFromEnv()`, `leaseIdForUdid()`,
 simulator runtime has no shell, `cp` or `tar`. E2EDrop (`E2E_DROP_APP`, built
 from `e2e-drop/`) is a helper app that does the copying. To use it, pass it in
 `extraApps`. Nothing installs it by default.
+
+A payload over 1 MiB (`writeFile()`, `untar()`, `drop()`) waits for one of the
+machine-wide transfer slots app uploads use: lock files in the OS temp directory,
+one set per farm, `installConcurrency` of them. So ten workers dropping a large
+fixture send at most three at once; a slot whose holder died is reclaimed.
 
 `exec()` asks again, at most three times and 2 s × attempt apart, when the
 connection drops before or during the answer (`fetch failed`, `terminated`) or the

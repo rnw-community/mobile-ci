@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
+import { LARGE_PAYLOAD_BYTES, transfer } from './transfers.ts';
+
 /**
  * Host-side iOS simulator work over simlock's HTTP API, for test fixtures (iOS only:
  * every helper here runs `simctl`). `POST /v1/leases/<id>/exec` runs one `simctl` command
@@ -152,12 +154,10 @@ async function dropExecutable(api: SimlockApi, leaseId: string): Promise<string>
 /** Runs one E2EDrop command on the leased simulator; `payload` travels on stdin. */
 export async function drop(api: SimlockApi, leaseId: string, args: readonly string[], payload?: Buffer): Promise<ExecResult> {
     const executable = await dropExecutable(api, leaseId);
-    return exec(
-        api,
-        leaseId,
-        ['spawn', executable, ...args],
-        payload === undefined ? undefined : deflateRawSync(payload).toString('base64')
-    );
+    const stdin = payload === undefined ? undefined : deflateRawSync(payload).toString('base64');
+    const send = () => exec(api, leaseId, ['spawn', executable, ...args], stdin);
+    // A large payload takes one of the machine-wide transfer slots app uploads use (`installConcurrency`).
+    return stdin !== undefined && stdin.length > LARGE_PAYLOAD_BYTES ? transfer(api.url, send) : send();
 }
 
 export async function mustDrop(api: SimlockApi, leaseId: string, args: readonly string[], payload?: Buffer): Promise<string> {

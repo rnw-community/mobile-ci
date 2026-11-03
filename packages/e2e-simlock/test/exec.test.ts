@@ -4,7 +4,10 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-import { E2E_DROP_APP, exec, leaseIdForUdid, mustExec, simlockApiFromEnv } from '../src/exec.ts';
+import { randomBytes } from 'node:crypto';
+
+import { drop, E2E_DROP_APP, exec, leaseIdForUdid, mustExec, simlockApiFromEnv } from '../src/exec.ts';
+import { configureTransfers, transfer } from '../src/transfers.ts';
 
 import type { AddressInfo } from 'node:net';
 
@@ -137,6 +140,62 @@ describe('exec over a tunnel that drops connections', () => {
         try {
             await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), { message: 'simlock POST /v1/leases/lease/exec answered 403: {"error":"FORBIDDEN"}' });
             assert.equal(farm.requests(), 1);
+        } finally {
+            farm.close();
+        }
+    });
+});
+
+describe('drop', () => {
+    beforeEach(() => {
+        globalThis.fetch = realFetch;
+    });
+
+    /** Answers get_app_container with a path, every spawn with exit 0, and records each spawn's arrival time. */
+    async function dropGateway() {
+        const spawns: number[] = [];
+        const server = createServer(async (request, response) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(chunk as Buffer);
+            const args = (JSON.parse(Buffer.concat(chunks).toString('utf8')) as { args: string[] }).args;
+            if (args[0] === 'spawn') spawns.push(Date.now());
+            response.writeHead(200, { 'content-type': 'text/event-stream' });
+            response.end(args[0] === 'get_app_container' ? sse(['output', { stream: 'stdout', chunk: '/drop' }], ['exit', { exitCode: 0 }]) : sse(['exit', { exitCode: 0 }]));
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        return { api: { url, token: 't' }, spawns, close: () => server.close() };
+    }
+
+    it("sends a large payload only in a free transfer slot, shared with the farm's app uploads", async () => {
+        const farm = await dropGateway();
+        try {
+            configureTransfers(farm.api.url, 1);
+            let release!: () => void;
+            const holding = transfer(farm.api.url, () => new Promise<void>(resolve => (release = resolve)));
+            await new Promise(resolve => setTimeout(resolve, 20));
+            const big = drop(farm.api, 'lease-big', ['write', '/tmp/f'], randomBytes(1_200_000));
+            await new Promise(resolve => setTimeout(resolve, 400));
+            assert.equal(farm.spawns.length, 0, 'the large drop waits while the only slot is held');
+            const released = Date.now();
+            release();
+            await holding;
+            assert.equal((await big).exitCode, 0);
+            assert.ok(farm.spawns[0]! >= released);
+        } finally {
+            farm.close();
+        }
+    });
+
+    it('sends a small payload at once, without a slot', async () => {
+        const farm = await dropGateway();
+        try {
+            configureTransfers(farm.api.url, 1);
+            let release!: () => void;
+            const holding = transfer(farm.api.url, () => new Promise<void>(resolve => (release = resolve)));
+            assert.equal((await drop(farm.api, 'lease-small', ['write', '/tmp/f'], Buffer.from('small'))).exitCode, 0);
+            release();
+            await holding;
         } finally {
             farm.close();
         }

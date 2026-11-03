@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import { createProvider, simlockDevices, type SimlockOptions } from '../src/provider.ts';
+import { transfer } from '../src/transfers.ts';
 
 import type { DeviceLease, DeviceRequest } from '@e2e-dev/mobile';
 import type { AddressInfo } from 'node:net';
@@ -92,7 +93,7 @@ beforeEach(() => {
     realFetch = globalThis.fetch;
     // The farm reports no free count: every slot asks at once. The relay check above uses Node's own fetch.
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
-        String(input).startsWith('https://farm.test') ? new Response('', { status: 503 }) : realFetch(input, init)) as typeof fetch;
+        /^https:\/\/farm[-.]/.test(String(input)) ? new Response('', { status: 503 }) : realFetch(input, init)) as typeof fetch;
 });
 afterEach(() => {
     globalThis.fetch = realFetch;
@@ -247,6 +248,22 @@ describe('acquire and release', () => {
         const relayUrl = farm.calls.allocateUrls[0]!;
         assert.match(relayUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
         await assert.rejects(realFetch(`${relayUrl}/rpc`, { method: 'POST', body: '{}' }));
+    });
+
+    it("uploads the app only in a free transfer slot, shared machine-wide with every worker's large drops", async () => {
+        const farm = fakeFarm(['android:mobile:e-1']);
+        const url = `https://farm-${Date.now()}.test`;
+        const provider = createProvider({ ...android, url, installConcurrency: 1 }, farm.load);
+        let release!: () => void;
+        const holding = transfer(url, () => new Promise<void>(resolve => (release = resolve)));
+        const acquiring = provider.acquire(request('android').req);
+        await new Promise(resolve => setTimeout(resolve, 400));
+        assert.equal(farm.calls.install.length, 0, 'the install waits while the only slot is held');
+        release();
+        await holding;
+        const lease = await acquiring;
+        assert.equal(farm.calls.install.length, 1);
+        await provider.release(lease, releaseContext);
     });
 
     it('refuses a target of the other platform', async () => {
