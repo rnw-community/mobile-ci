@@ -202,4 +202,26 @@ for platform in ios android; do
     fi
 done
 
+for workflow in ios android; do
+    case_start "$workflow-maestro: the e2e-artifact-prefix output plus a target name is the uploaded report's name"
+    if problems="$(WORKFLOW="$REPO_ROOT/.github/workflows/$workflow-maestro.yml" python3 - <<'PYTHON'
+import os, yaml
+w = yaml.safe_load(open(os.environ['WORKFLOW']))
+prefix = w[True]['workflow_call'].get('outputs', {}).get('e2e-artifact-prefix', {}).get('value', '')
+uploads = [s['with']['name'] for job in w['jobs'].values() for s in job.get('steps', [])
+           if 'upload-artifact' in s.get('uses', '') and str(s['with'].get('name', '')).startswith('e2e-')]
+want = prefix.replace('jobs.detect', 'needs.detect') + '${{ matrix.target.name }}'
+if uploads != [want]:
+    print(f'output {prefix!r} does not name the uploads {uploads!r}')
+PYTHON
+)" && assert_equals '' "$problems" 'prefix'; then pass_case; fi
+
+    case_start "$workflow-maestro: with call-scope the prefix keeps its double dash, as every artifact name of the call does"
+    resolve_workflow="$REPO_ROOT/.github/workflows/$workflow-maestro.yml"
+    template="$(WORKFLOW="$resolve_workflow" python3 -c "import os, yaml; print(yaml.safe_load(open(os.environ['WORKFLOW']))[True]['workflow_call'].get('outputs', {}).get('e2e-artifact-prefix', {}).get('value', ''))")"
+    expected="e2e-$workflow-edge-fade--foo"
+    scope='-edge-fade-'
+    assert_equals "$expected" "${template/\$\{\{ jobs.detect.outputs.artifact-scope \}\}/$scope}foo" 'scoped name' && pass_case
+done
+
 finish_suite

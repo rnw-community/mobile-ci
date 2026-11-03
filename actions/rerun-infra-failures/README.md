@@ -6,12 +6,20 @@ check-run annotations by the same rules as
 [`scripts/ci-metrics.py`](../../scripts/ci-metrics.py), so the retry and the
 weekly report agree on what counts as infra:
 
-- **Infra:** a timeout, or a job whose failure annotations name a lost runner, an action's own `Infrastructure failure:` error (e.g. `run-maestro-android` losing its emulator), `Exec format error`, a job not started or not acquired, a shutdown signal, a full disk, network errors, an unresolvable action, or exit codes 127, 137 or 143, and nothing else except the runner's bare `Process completed with exit code N.` line. Warnings and notices do not count.
+- **Infra:** a timeout, or a job whose failure annotations name a lost runner, an action's own `Infrastructure failure:` error (e.g. `run-maestro-android` losing its emulator), `Exec format error`, a job not started or not acquired, a shutdown signal, a full disk, network errors (a `git fetch` cut off mid-pack included), an unresolvable action, or exit codes 127, 137 or 143, and nothing else except the runner's bare `Process completed with exit code N.` line. Warnings and notices do not count.
 - **Ignored:** roll-up jobs that report other jobs with an `::error::Required jobs did not succeed` annotation. A roll-up that only `echo`es its verdict leaves the bare exit-code line, so it reads as a test failure and blocks the retry.
 - **Test:** everything else, including a failure with no annotation.
 
 A single test failure means nothing is re-run, because GitHub's re-run of
 failed jobs would retry it too. Composite action; needs `python3` on the runner.
+
+A job past its `timeout-minutes` concludes `cancelled`, not `timed_out`, and its
+run concludes `cancelled` too. So the action also reads `cancelled` runs, counting
+a `cancelled` job only when it carries `exceeded the maximum execution time`, and
+classifying it by the rules above. A run with no such job was cancelled by a user
+or a concurrency group: `nothing-failed`, whatever else failed in it. Have the
+`workflow_run` job run for `cancelled` too, or a timed-out run never reaches the
+action.
 
 ## Inputs
 
@@ -42,7 +50,7 @@ permissions:
     contents: read
 jobs:
     retry:
-        if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out'
+        if: contains(fromJSON('["failure", "timed_out", "cancelled"]'), github.event.workflow_run.conclusion)
         runs-on: [self-hosted, trf-linux-amd64-2x4]
         timeout-minutes: 10
         permissions:

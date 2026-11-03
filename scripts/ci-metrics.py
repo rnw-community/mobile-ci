@@ -48,6 +48,7 @@ INFRA_PATTERNS = [
         r'no space left on device',
         r'the operation was canceled',
         r'could not resolve host|connection (reset|refused|timed out)',
+        r'fetch-pack: |^early eof$|rpc failed; curl|bytes of body are still expected',
         r'unable to resolve action',
         r'exceeded the maximum execution time',
         r'an error occurred trying to start process',
@@ -55,6 +56,7 @@ INFRA_PATTERNS = [
         r'^infrastructure failure:',
     )
 ]
+TIMED_OUT = re.compile(r'exceeded the maximum execution time', re.I)
 ROLLUP = re.compile(r'required jobs did not succeed', re.I)
 EXIT_LINE = re.compile(r'process completed with exit code [0-9]+\.?', re.I)
 POOL_LABEL = re.compile(r'^(trf-|linux-|macos-|ubuntu|windows)', re.I)

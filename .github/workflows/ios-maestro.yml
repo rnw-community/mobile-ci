@@ -768,6 +768,12 @@ on:
                     The status job's verdict: passed, failed, or skipped when no
                     target package was affected (a skip is a green check, not a pass).
                 value: ${{ jobs.status.outputs.result }}
+            e2e-artifact-prefix:
+                description: >-
+                    The e2e report artifact's name up to its target: the report of
+                    target foo is this plus foo. Pass it to download-artifact rather
+                    than rebuilding the name.
+                value: e2e-ios${{ jobs.detect.outputs.artifact-scope }}-
 
 concurrency:
     group: ios-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ inputs.call-scope }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}

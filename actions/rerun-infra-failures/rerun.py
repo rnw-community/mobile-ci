@@ -5,6 +5,11 @@ Classification is scripts/ci-metrics.py's, so the weekly report and the retry
 agree on what counts as infra. A failed job without a matching annotation is
 a test failure, and any test failure in the run means nothing is re-run:
 re-running failed jobs would retry it too.
+
+A job past its timeout-minutes concludes `cancelled`, and so does its run, like
+one a user or a concurrency group cancelled. Only the annotation tells them
+apart, so a `cancelled` job counts only when it names the timeout, and a
+`cancelled` run with no such job is left alone whatever else failed in it.
 """
 import importlib.util
 import os
@@ -41,14 +46,19 @@ def main():
     rows, infra, test = [], [], []
     if run.get('status') != 'completed':
         decision = 'not-finished'
-    elif run.get('conclusion') not in ('failure', 'timed_out'):
+    elif run.get('conclusion') not in ('failure', 'timed_out', 'cancelled'):
         decision = 'nothing-failed'
     else:
         jobs = api.pages(f'/repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs', 'jobs', False)
+        timed_out = False
         for job in jobs:
-            if job.get('conclusion') not in ('failure', 'timed_out'):
+            if job.get('conclusion') not in ('failure', 'timed_out', 'cancelled'):
                 continue
             annotations = api.get(f'/repos/{repository}/check-runs/{job["id"]}/annotations', False) or []
+            if job['conclusion'] == 'cancelled':
+                if not any(metrics.TIMED_OUT.search(a.get('message', '')) for a in annotations):
+                    continue
+                timed_out = True
             message = next((a.get('message', '') for a in annotations if a.get('message')), job.get('conclusion', ''))
             if any(metrics.ROLLUP.search(a.get('message', '')) for a in annotations):
                 kind = 'roll-up'
@@ -59,7 +69,9 @@ def main():
                 kind = 'test'
                 test.append(job['name'])
             rows.append((job['name'], kind, message.splitlines()[0][:160] if message else ''))
-        if test:
+        if run['conclusion'] == 'cancelled' and not timed_out:
+            decision = 'nothing-failed'
+        elif test:
             decision = 'test-failure'
         elif not infra:
             decision = 'unclassified'

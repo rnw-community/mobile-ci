@@ -107,6 +107,66 @@ classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
+CANCELLED='{"status":"completed","conclusion":"cancelled","run_attempt":1}'
+TIMEOUT='The job has exceeded the maximum execution time of 5m0s'
+USER_CANCEL='The operation was canceled.'
+
+# budgie-at/budgie run 41624461881: its annotations, verbatim.
+case_start 'a run a job timeout left cancelled is re-run: the lost checkout beside the timeout is infra too'
+scenario "$CANCELLED" "1|Lint workflows|cancelled|$TIMEOUT^^fetch-pack: invalid index-pack output^^early EOF^^6788 bytes of body are still expected^^RPC failed; curl 56 Recv failure: Connection reset by peer
+2|Required CI|failure|Process completed with exit code 1.^^Required jobs did not succeed: lint-workflows
+3|Unit tests|success|"
+classify
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
+    && assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 1 "$(step_output "$workspace" infra-jobs)" 'infra jobs' \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a run a user or concurrency cancelled is left alone'
+scenario "$CANCELLED" "1|Build (e2e)|cancelled|$USER_CANCEL
+2|Lint|cancelled|"
+classify
+if assert_equals nothing-failed "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a user-cancelled run is left alone even beside an infra failure or a roll-up: nobody asked to run it again'
+scenario "$CANCELLED" "1|Build (e2e)|cancelled|$USER_CANCEL
+2|Lint|failure|$LOST
+3|Required CI|failure|Required jobs did not succeed: lint"
+classify
+if assert_equals nothing-failed "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a timeout next to a test failure is a test failure, in another job or in its own annotations'
+scenario "$CANCELLED" "1|Lint|cancelled|$TIMEOUT
+2|Unit tests|failure|Assertion is false: \"Home\" is visible"
+classify
+other_job="$(step_output "$workspace" decision)"
+scenario "$CANCELLED" "1|Unit tests|cancelled|$TIMEOUT^^Assertion is false: \"Home\" is visible"
+classify
+if assert_equals test-failure "$other_job" 'test failure in another job' \
+    && assert_equals test-failure "$(step_output "$workspace" decision)" 'test failure in the same job' \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a failed run ignores the jobs its own failure cancelled, but counts one that timed out'
+scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
+2|Maestro shard 1 (e2e)|cancelled|$USER_CANCEL
+3|Maestro shard 2 (e2e)|cancelled|$TIMEOUT"
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 2 "$(step_output "$workspace" infra-jobs)" 'infra jobs'; then pass_case; fi
+
+case_start 'a timed-out run already retried is left alone'
+scenario '{"status":"completed","conclusion":"cancelled","run_attempt":2}' "1|Lint workflows|cancelled|$TIMEOUT"
+classify
+if assert_equals retries-exhausted "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start "build-ios-app's CocoaPods null-byte annotation is infra"
+scenario "$FAILED" "1|Build (e2e)|failure|Infrastructure failure: pod install failed twice with CocoaPods' intermittent 'path name contains null byte' (CocoaPods/CocoaPods#12798).^^Process completed with exit code 1."
+classify
+assert_equals rerun "$(step_output "$workspace" decision)" decision && pass_case
+
 case_start 'a run already retried is left alone'
 scenario '{"status":"completed","conclusion":"failure","run_attempt":2}' "1|Maestro shard 0 (e2e)|failure|$LOST"
 classify

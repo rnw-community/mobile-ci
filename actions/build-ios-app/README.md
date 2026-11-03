@@ -5,6 +5,12 @@ via `xcodebuild`, verifies the embedded `main.jsbundle` is present, and
 packages the result into `<output-dir>/Base.app`. Restores/saves a CocoaPods
 cache around `pod install --repo-update`.
 
+`pod install` is retried once when its output has `path name contains null byte`,
+an intermittent CocoaPods bug no input causes
+([CocoaPods#12798](https://github.com/CocoaPods/CocoaPods/issues/12798)). A second
+one fails as an `Infrastructure failure:`, which `rerun-infra-failures` retries.
+Any other `pod install` failure fails at once.
+
 **Why Release, never a dev-CLI launcher.** `expo run:ios` (and equivalent
 dev-client launchers) expect an attached Metro/dev server and crash headless
 on CI. This action always builds `Release` with the JS bundle embedded at

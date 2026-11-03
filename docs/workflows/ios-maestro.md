@@ -138,6 +138,7 @@ See [identity, test dependency and trust contracts](../e2e-result-cache.md).
 | Name | Description |
 | ---- | ----------- |
 | `result` | The `status` job's verdict: `passed`, `failed`, or `skipped` when no target package was affected. A skip is a green check, not a pass, so a notification job should not report it as one. |
+| `e2e-artifact-prefix` | The [e2e report artifact](#e2e-suite-on-simlock)'s name up to its target. Append the target's name instead of rebuilding it: `download-artifact` with a pattern that matches nothing does not fail. `e2e-ios-<call-scope>--`, or `e2e-ios-` without a `call-scope`. |
 
 Read it from a caller job that `needs:` this one. GitHub skips a dependent
 job when its need fails, so a notification job must opt in with `if:
@@ -263,9 +264,22 @@ key, and a workspace's `node_modules` links make that walk slow or circular. The
 default `e2e-install-command` is npm; set it for pnpm or yarn (corepack is not
 enabled for you).
 
-The report under `e2e-dir/.e2e` is uploaded as
-`e2e-ios<call-scope suffix>-<target>`, and its `summary.md` is added to the job
-summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
+The report under `e2e-dir/.e2e` is uploaded as `e2e-ios-<target>`, or with a
+`call-scope` as `e2e-ios-<call-scope>--<target>`, with two dashes: `call-scope:
+edge-fade` and target `foo` give `e2e-ios-edge-fade--foo`. Read the name from the
+`e2e-artifact-prefix` output rather than rebuilding it:
+
+```yaml
+    metrics:
+        needs: e2e
+        runs-on: [self-hosted, trf-linux-amd64-2x4]
+        steps:
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: ${{ needs.e2e.outputs.e2e-artifact-prefix }}foo
+```
+
+Its `summary.md` is added to the job summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
 the run, then requires the run's `.e2e/report.json` (tester-army's report) with
 `status: passed`, at least one executed test and none failed, every count a
 whole number. A command that exits 0 without that evidence (no report, nothing
@@ -686,7 +700,8 @@ One call runs every target when turbo reports any of them affected. To skip
 unaffected packages instead, call the workflow once per package — and then give
 each call a distinct `call-scope`. It is folded into every name a call owns:
 the app and plan artifacts (`ios-e2e-app-<call-scope>--<target>`,
-`ios-e2e-plan-<call-scope>--<target>`), the Maestro artifacts, the
+`ios-e2e-plan-<call-scope>--<target>`), the e2e report and Maestro artifacts
+(`maestro-ios-<call-scope>--<target>-shard-<n>`), the
 native build's concurrency group and the workflow's own concurrency group.
 Without it two calls in one run share those names: a duplicate artifact name
 fails the upload, and on a pull request the second call cancels the first. The
