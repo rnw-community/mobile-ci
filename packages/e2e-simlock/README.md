@@ -134,6 +134,29 @@ Set `deviceMode` per target: give the payments target its own `simlockDevices({
   it by default. That re-encode shifts colours (about 17 grey levels lighter on
   dark backgrounds, bt709 tags, constant fps) and breaks a pixel comparison.
 
+### `@mobile-ci/e2e-simlock/steps`
+
+Maestro-compatible steps every Maestro port needs, for any app on either
+platform. App-specific steps stay in your suite.
+
+| Helper | What it does |
+| --- | --- |
+| `byId(screen, id)` | `getByTestId(id).first()`: React Native reports a testID on the host view and its wrapper, and Maestro takes the first. |
+| `scrollTo(screen, target, direction?, timeoutMs?)` | Maestro's `scrollUntilVisible`. `direction` is where the content goes (default `'down'`, timeout 20 s); an already visible target does not scroll. |
+| `tapUntil(target, next, { attempts?, timeoutMs? })` | Maestro's `retryTapIfNoChange`. It taps `target`, then awaits `next` (the state the tap leads to). It taps again only while `target` is still visible, i.e. the tap was swallowed while a screen settled, up to `attempts` taps (default 2). A target that is gone took the tap, so `next`'s failure is thrown as is. `timeoutMs` bounds each wait. |
+| `done({ screen, device })` | Maestro's `tapOn: Done`. It taps the keyboard's own Done key (a `key` with id `Done`), else an accessory bar's Done button, else dismisses the keyboard. Looking for the button alone makes `dismissKeyboard` hang for 30 s on a keyboard whose Done key is the key itself. |
+| `scrollToCentered({ screen }, id, { viewportHeight, bottomBandPx? })` | Maestro's `centerElement`. It scrolls `id` into view and, if its centre is in the bottom band (default the bottom third), drags it to the middle of the viewport, where a tab bar or floating button can't take the tap. `viewportHeight` is the device's, in `boundingBox()` points. It fails closed when the node has no bounds or stays in the band. |
+
+```ts
+import { byId, done, scrollToCentered, tapUntil } from '@mobile-ci/e2e-simlock/steps';
+import { expect } from 'e2e';
+
+await scrollToCentered({ screen }, 'AccountCard.Cash', { viewportHeight: 874 });
+await tapUntil(byId(screen, 'BudgetWidget.EmptyState'), () => expect(byId(screen, 'BudgetCreate.Template.Empty')).toBeVisible({ timeout: 5_000 }));
+await byId(screen, 'Amount').fill('12.50');
+await done({ screen, device });
+```
+
 ### `@mobile-ci/e2e-simlock/exec` (iOS)
 
 Fixture helpers over simlock's `POST /v1/leases/<id>/exec`, which runs `simctl`

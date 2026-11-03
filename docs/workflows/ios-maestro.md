@@ -298,10 +298,12 @@ on that LAN, and the shared pools also schedule jobs on machines outside it.
 A repository that copied a simlock provider into its e2e project (budgie's
 `e2e/support/simlock/`) switches the same way:
 
-1. Delete the copied `provider.ts`, `relay.ts`, `exec.ts` and `e2e-drop/`.
-2. Import `simlockDevices` from `@mobile-ci/e2e-simlock` (and the fixture
-   helpers from `@mobile-ci/e2e-simlock/exec`), and pass `platform` and your own
-   `tenant`.
+1. Delete the copied `provider.ts`, `relay.ts`, `exec.ts` and `e2e-drop/`, and the
+   generic step helpers your suite copied (`byId`, `tapUntil`, `done`, centring
+   scrolls).
+2. Import `simlockDevices` from `@mobile-ci/e2e-simlock`, the steps from
+   `@mobile-ci/e2e-simlock/steps` and the fixture helpers from
+   `@mobile-ci/e2e-simlock/exec`, and pass `platform` and your own `tenant`.
 3. Pin every mobile-ci workflow call to the same `v4.9.0` or later tag: the
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
