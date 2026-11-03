@@ -230,7 +230,7 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | Workflow | Purpose | Calling job `permissions:` |
 | --- | --- | --- |
 | `ios-maestro.yml` | iOS Maestro e2e (`ios-driver: local` or `device-cloud`; `tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
-| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`) | `contents: read`, `packages: write`, `actions: read` |
+| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`; `test-framework` `e2e`/`both` runs a tester-army suite from Linux against Android devices leased from simlock) | `contents: read`, `packages: write`, `actions: read` |
 | `seed-native-cache.yml` | The warm-up: publishes the base binary pull requests repack. Default-branch push with a `paths:` filter | `contents: read`, `packages: write`, `actions: read` |
 | `store-screenshots.yml` | Store screenshot capture matrix (`test-framework: maestro` on macOS, or `e2e` on Linux against simlock) + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
 | `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
@@ -290,6 +290,9 @@ secret to a third-party workflow).
   digest enters the native key, so pass the warm-up the same secret) and
   `maestro-secrets-env` (e2e, screenshots); `device-cloud-api-key` for the
   `device-cloud` drivers.
+- `simlock-token` (`SIMLOCK_TOKEN`) for `ios-maestro.yml` and
+  `android-maestro.yml` with `test-framework` `e2e` or `both`, and for
+  `store-screenshots.yml`'s `e2e` driver.
 - `native-publish.yml`: `EXPO_TOKEN`; `ASC_API_KEY` + `ASC_KEY_ID` +
   `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), optional
   with `credentials-source: eas`; optional `EAS_EXTRA_ENV`.
