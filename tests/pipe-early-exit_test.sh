@@ -23,7 +23,7 @@ else
 fi
 
 case_start 'every early-exiting grep after a pipe is reported, multi-line pipes included'
-if assert_equals 12 "$(reported "$FIXTURES/unsafe.sh")" 'reported pipes'; then
+if assert_equals 15 "$(reported "$FIXTURES/unsafe.sh")" 'reported pipes'; then
     pass_case
 fi
 

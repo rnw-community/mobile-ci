@@ -1,6 +1,6 @@
 # Each command below pipes into a grep that can exit before its producer has
 # written everything; tests/pipe-early-exit_test.sh expects the lint to report
-# each of the 12 once.
+# each of the 15 once.
 if git ls-remote origin | grep -q .; then :; fi
 ! printf '%s\n' "$list" | grep -qxF -- "$name"
 printf '%s' "$v" | grep -Eq '^[0-9]+$' || exit 1
@@ -15,3 +15,6 @@ cmd |
     grep -q x
 cmd \
     | grep -qF -e x
+cmd | grep -e 'foo|bar' -q
+cmd | grep -eoff -q
+x="$(cmd | grep -m1 x)"

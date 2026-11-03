@@ -15,6 +15,7 @@ docs/examples/*/*.yml, and every *.sh under scripts/ and tests/.
 """
 import pathlib
 import re
+import shlex
 import sys
 
 import yaml
@@ -42,23 +43,51 @@ def violations(script):
     for line in joined.split('\n'):
         if line.lstrip().startswith('#'):
             continue
-        for match in PIPED_GREP.finditer(line):
-            if any(EARLY_EXIT.fullmatch(option) for option in grep_options(match.group(1).split())):
+        for match in PIPED_GREP.finditer(mask_quoted_operators(line)):
+            arguments = line[match.start(1):match.end(1)]
+            try:
+                words = shlex.split(arguments)
+            except ValueError:
+                words = arguments.split()
+            if any(EARLY_EXIT.fullmatch(option) for option in grep_options(words)):
                 yield line.strip()
 
 
+def mask_quoted_operators(line):
+    """Blank out |;&()<> inside quotes, but not inside a quoted $(...)."""
+    masked, stack, escaped = [], [], False
+    for index, char in enumerate(line):
+        context = stack[-1] if stack else None
+        if escaped:
+            escaped = False
+        elif char == '\\' and context != "'":
+            escaped = True
+        elif context in ("'", '"') and char == context:
+            stack.pop()
+        elif context == '"' and char == '$' and line[index + 1:index + 2] == '(':
+            stack.append('(')
+        elif context in ("'", '"'):
+            char = '_' if char in '|;&()<>' else char
+        elif char in '\'"(':
+            stack.append(char)
+        elif char == ')' and context == '(':
+            stack.pop()
+        masked.append(char)
+    return ''.join(masked)
+
+
 def grep_options(words):
-    takes_argument = False
+    words = iter(words)
     for word in words:
-        if takes_argument:
-            takes_argument = False
-        elif word == '--':
+        if word == '--':
             return
-        elif word.startswith('-') and not word.startswith('--'):
-            takes_argument = word[-1] in 'ef'
+        if word.startswith('--'):
             yield word
-        elif word.startswith('--'):
-            yield word
+        elif word.startswith('-'):
+            flags = re.match(r'-[^ef]*', word).group(0)
+            yield flags
+            if flags == word[:-1]:
+                next(words, None)
 
 
 def targets(argv):

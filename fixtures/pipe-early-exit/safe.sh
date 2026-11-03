@@ -12,3 +12,4 @@ cmd 2>&1 | tee log
 # cmd | grep -q x
 grep -rl pattern dir | sort
 [ -n "$(git ls-remote origin)" ]
+cmd | grep -equality
