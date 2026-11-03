@@ -246,26 +246,29 @@ belongs in [`native-publish.yml`](native-publish.md). The workflow does need a
 
 ## E2E suite on simlock
 
-`test-framework: e2e` replaces the Maestro shards with one Linux job per
-target that runs your [tester-army e2e](https://github.com/tester-army/e2e)
-suite against Android emulators leased from a
-[simlock](https://github.com/callstackincubator/simlock) gateway or worker
-(its `android-instance` lease backend), as
-[`ios-maestro.yml`](ios-maestro.md#e2e-suite-on-simlock) does with iOS
-simulators. The plan, build and repack legs are unchanged: the job downloads
-the same `android-e2e-app…` APK the Maestro shards use. It needs no KVM
-runner and boots no emulator itself, so the x86_64 KVM pool stays free for
-builds, and one job with `e2e-workers: N` balances the tests over N leased
-devices as each finishes, instead of a fixed shard split.
+`test-framework: e2e` replaces the Maestro shards with one Linux job per target
+that runs your [tester-army e2e](https://github.com/tester-army/e2e) suite
+against Android emulators leased from a
+[simlock](https://github.com/callstackincubator/simlock) gateway or worker. The
+plan, build and repack legs are unchanged: the job downloads the same `android-e2e-app…` APK
+the Maestro shards use. It needs no KVM runner and boots nothing itself, so the x86_64 KVM pool stays free for builds, and one job with `e2e-workers: N`
+balances the tests over N devices as each finishes, instead of a fixed shard
+split. `ios-maestro.yml` and `android-maestro.yml` run it through the same
+[`e2e-suite`](../../actions/e2e-suite/README.md) action, so both platforms
+behave alike.
 
 With `test-framework: e2e` the call needs no Maestro inputs: a target with no
 `flowsDir` and an empty `flows-dir` takes `e2e-dir` as its tests, which is also
 what the e2e result cache hashes.
 
-The job runs `e2e-install-command`, then `e2e-command`, in `e2e-dir`, with:
+The job runs `e2e-install-command`, installs
+[`@mobile-ci/e2e-simlock`](../../packages/e2e-simlock/README.md) from this
+workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
+`e2e-dir` with:
 
 | Variable | Value |
 | --- | --- |
+| `E2E_PLATFORM` | `android` |
 | `E2E_APP_PATH` | absolute path of the repacked or built `.apk` |
 | `E2E_APP_ID` | the target's `appId` |
 | `E2E_TARGET` | the target's `name` |
@@ -276,24 +279,37 @@ The job runs `e2e-install-command`, then `e2e-command`, in `e2e-dir`, with:
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test
 credentials. A target with `tolerateTestFailures` turns a failing suite into a
-warning, as with Maestro.
+warning, as with Maestro. The farm runs **arm64-v8a** emulators, so the APK must contain that ABI. `android-abis: auto` builds only the AVD's `x86_64`: set `android-abis: arm64-v8a` for `test-framework: e2e`, or `x86_64,arm64-v8a` to keep the `avd` Maestro suite beside it with `both`, and pass [`seed-native-cache.yml`](seed-native-cache.md) the same value (the ABIs are part of the native key). `detect` rejects a build that leaves arm64-v8a out; an empty `android-abis` builds every ABI the project declares and passes. `android-driver` applies only to the Maestro
+suite: `test-framework: e2e` with anything but `avd` fails in `detect`.
 
-The farm runs **arm64-v8a** emulators, so the APK must contain that ABI.
-`android-abis: auto` builds only the AVD's `x86_64`, so set `android-abis`
-explicitly: `arm64-v8a` for `test-framework: e2e`, or `x86_64,arm64-v8a` to keep
-the `avd` Maestro suite running beside it with `both`. `detect` rejects a build
-whose ABIs leave arm64-v8a out (an empty `android-abis` builds every ABI the
-project declares and is accepted). The ABIs are part of the native key, so pass
-[`seed-native-cache.yml`](seed-native-cache.md) the same `android-abis`, or the
-warm-up publishes under another key and every pull request builds natively.
-`android-driver` applies only to the Maestro suite: `test-framework: e2e` with
-anything but the default `avd` fails in `detect`.
+Your e2e config leases its devices with the package:
+
+```ts
+import { simlockDevices } from '@mobile-ci/e2e-simlock';
+
+// in the target's mobile({ platform: 'android', session: process.env.E2E_SESSION, device: … })
+device: simlockDevices({
+    url: process.env.SIMLOCK_URL!,
+    token: process.env.SIMLOCK_TOKEN!,
+    platform: 'android',
+    device: 'Pixel 6', osVersion: '34', imageTag: 'aosp_atd',
+    tenant: 'my-app'
+}),
+```
+
+It leases one device per worker and waits in a client-side queue while the
+farm is full. It installs the app, swaps a device whose install failed (once),
+renews each lease, lists the lease ids in `.e2e/simlock-leases.json` and
+releases every lease at the end. The package
+[README](../../packages/e2e-simlock/README.md) has every option, the
+iOS-only `@mobile-ci/e2e-simlock/exec` fixture helpers, and the local
+install. Nothing in it assumes a particular app: no bundle id, no fixture layout,
+no helper app unless you pass one in `extraApps`.
 
 A cancelled run (a newer push, with `cancel-in-progress`) is killed before the
-suite can release its devices. If the suite lists the lease ids it acquired
-in `.e2e/simlock-leases.json` (a JSON array of ids, or of objects with an `id`),
-the job releases them in an `if: always()` step, so a cancel frees the farm at
-once instead of at the lease TTL.
+suite can release its devices. The job then releases every lease listed in
+`.e2e/simlock-leases.json` in an `if: always()` step, so a cancel frees the
+farm at once instead of at the lease TTL.
 
 Keep `e2e-dir` a standalone project (its own `package.json` and lockfile, not a
 member of the repository's workspace): its tree is hashed into the result cache
@@ -301,19 +317,13 @@ key, and a workspace's `node_modules` links make that walk slow or circular. The
 default `e2e-install-command` is npm; set it for pnpm or yarn (corepack is not
 enabled for you).
 
-Your e2e config turns these into a `DeviceProvider` that leases from simlock:
-one `android-instance` lease per worker (`platform: 'android'`, a model from
-the farm's `GET /v1/catalog?platform=android`, e.g. `Pixel 6`), every command
-pinned to the leased emulator's adb serial (the last segment of the lease's
-`deviceKey`, `android:mobile:<serial>`), the APK uploaded and installed with
-agent-device's `apps.install({ platform: 'android', serial, appPath })`, and the
-lease released on every exit path. The report under `e2e-dir/.e2e` is uploaded
-as `e2e-android<call-scope suffix>-<target>`, and its `summary.md` is added to
-the job summary. An exit code of 0 is not enough to pass: the job clears `.e2e`
-before the run, then requires the run's `.e2e/report.json` (tester-army's
-report) with `status: passed`, at least one executed test and none failed,
-every count a whole number. A command that exits 0 without that evidence (no
-report, nothing selected, a swallowed exit code) fails the job.
+The report under `e2e-dir/.e2e` is uploaded as
+`e2e-android<call-scope suffix>-<target>`, and its `summary.md` is added to the job
+summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
+the run, then requires the run's `.e2e/report.json` (tester-army's report) with
+`status: passed`, at least one executed test and none failed, every count a
+whole number. A command that exits 0 without that evidence (no report, nothing
+selected, a swallowed exit code) fails the job.
 
 ```yaml
 jobs:
@@ -329,21 +339,34 @@ jobs:
             test-framework: e2e
             e2e-dir: e2e
             e2e-workers: '2'
-            simlock-url: http://simlock.example.internal:4700
+            simlock-url: https://simlock.vitaliiyehorov.dev
             android-abis: arm64-v8a
         secrets:
             simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
+Use the farm's public HTTPS address in CI. A LAN address reaches only the hosts
+on that LAN, and the shared pools also schedule jobs on machines outside it.
+
+### Migrating from a copied provider
+
+A repository that copied a simlock provider into its e2e project (budgie's
+`e2e/support/simlock/`) switches the same way:
+
+1. Delete the copied `provider.ts`, `relay.ts`, `exec.ts` and `e2e-drop/`.
+2. Import `simlockDevices` from `@mobile-ci/e2e-simlock` (and the fixture
+   helpers from `@mobile-ci/e2e-simlock/exec`), and pass `platform` and your own
+   `tenant`.
+3. Pin every mobile-ci workflow call to the same `v4.9.0` or later tag: the
+   workflow installs the package from that tag.
+
 ### Migrating gradually
 
-1. `test-framework: both` with `e2e-required: false` (and
-   `android-abis: x86_64,arm64-v8a`): Maestro still gates, and the e2e suite
-   runs beside it on the same app as a shadow. A failure there is a warning,
-   not a red check, and no pass is cached while a shadow runs.
+1. `test-framework: both` with `e2e-required: false` (and `android-abis: x86_64,arm64-v8a`): Maestro still gates, and
+   the e2e suite runs beside it on the same app as a shadow. A failure there
+   is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
-3. `test-framework: e2e` (and `android-abis: arm64-v8a`): the Maestro shards
-   stop, and with them the KVM test runners.
+3. `test-framework: e2e` (and `android-abis: arm64-v8a`): the Maestro shards stop, and with them the KVM test runners.
 
 ## Device Cloud driver
 

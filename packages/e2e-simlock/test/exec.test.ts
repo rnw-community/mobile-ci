@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+
+import { E2E_DROP_APP, exec, leaseIdForUdid, mustExec, simlockApiFromEnv } from '../src/exec.ts';
+
+const api = { url: 'https://farm.test/', token: 'tok' };
+const sse = (...events: [string, unknown][]) => events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n');
+
+let realFetch: typeof fetch;
+let answers: (() => Response)[];
+let requests: { url: string; init: RequestInit }[];
+beforeEach(() => {
+    realFetch = globalThis.fetch;
+    answers = [];
+    requests = [];
+    globalThis.fetch = (async (input: string | URL | Request, init: RequestInit = {}) => {
+        requests.push({ url: String(input), init });
+        const next = answers.shift();
+        assert.ok(next, `unexpected request to ${String(input)}`);
+        return next();
+    }) as typeof fetch;
+});
+afterEach(() => {
+    globalThis.fetch = realFetch;
+});
+
+describe('simlockApiFromEnv', () => {
+    it('reads SIMLOCK_URL and SIMLOCK_TOKEN, and fails closed without them', () => {
+        assert.deepEqual(simlockApiFromEnv({ SIMLOCK_URL: 'https://farm.test', SIMLOCK_TOKEN: 't' }), { url: 'https://farm.test', token: 't' });
+        assert.throws(() => simlockApiFromEnv({ SIMLOCK_URL: 'https://farm.test' }), { message: 'SIMLOCK_URL and SIMLOCK_TOKEN are required' });
+    });
+});
+
+describe('exec', () => {
+    it("runs simctl on the lease's simulator and collects its output and exit status", async () => {
+        answers.push(() => new Response(sse(['output', { stream: 'stdout', chunk: 'a' }], ['output', { stream: 'stderr', chunk: 'warn' }], ['output', { stream: 'stdout', chunk: 'b' }], ['exit', { exitCode: 3 }])));
+        assert.deepEqual(await exec(api, 'L1', ['listapps'], 'payload'), { exitCode: 3, stdout: 'ab', stderr: 'warn' });
+        assert.equal(requests[0]!.url, 'https://farm.test/v1/leases/L1/exec');
+        assert.deepEqual(JSON.parse(String(requests[0]!.init.body)), { tool: 'simctl', args: ['listapps'], stdin: 'payload' });
+        assert.equal(new Headers(requests[0]!.init.headers).get('authorization'), 'Bearer tok');
+    });
+
+    it('fails closed on a stream cut off before its exit status, and on an error event', async () => {
+        answers.push(() => new Response(sse(['output', { stream: 'stdout', chunk: 'partial' }])));
+        await assert.rejects(exec(api, 'L1', ['spawn', 'x']), { message: 'simlock exec spawn x ended without an exit status (stream cut off)' });
+        answers.push(() => new Response(sse(['error', { code: 'LEASE_EXPIRED', message: 'gone' }])));
+        await assert.rejects(exec(api, 'L1', ['spawn', 'x']), { message: 'simlock exec spawn x failed: LEASE_EXPIRED gone' });
+    });
+
+    it('retries only a worker that dropped its uplink, and reports any other HTTP failure', async () => {
+        answers.push(() => new Response('{"code":"WORKER_UNREACHABLE"}', { status: 503 }));
+        answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+        assert.equal((await exec(api, 'L1', ['getenv'])).exitCode, 0);
+        answers.push(() => new Response('nope', { status: 403 }));
+        await assert.rejects(exec(api, 'L1', ['getenv']), { message: 'simlock POST /v1/leases/L1/exec answered 403: nope' });
+    });
+
+    it('mustExec fails on a non-zero exit with the command and its stderr', async () => {
+        answers.push(() => new Response(sse(['output', { stream: 'stderr', chunk: ' no such app \n' }], ['exit', { exitCode: 2 }])));
+        await assert.rejects(mustExec(api, 'L1', ['get_app_container', 'x', 'app', 'extra']), { message: 'simctl get_app_container x app exited 2: no such app' });
+    });
+});
+
+describe('leaseIdForUdid', () => {
+    it('finds the lease holding the device, and fails closed when none does', async () => {
+        answers.push(() => new Response(JSON.stringify({ leases: [{ id: 'L1' }, { id: 'L2', deviceKey: 'android:mobile:emulator-5588' }] })));
+        answers.push(() => new Response('{"id":"L1","deviceKey":"android:mobile:emulator-5586"}'));
+        assert.equal(await leaseIdForUdid(api, 'emulator-5588'), 'L2');
+        answers.push(() => new Response(JSON.stringify({ leases: [] })));
+        await assert.rejects(leaseIdForUdid(api, 'U-1'), { message: 'no simlock lease of this token holds U-1 (0 leases)' });
+    });
+});
+
+describe('E2E_DROP_APP', () => {
+    it("names the package's prebuilt simulator helper", () => {
+        assert.ok(existsSync(fileURLToPath(new URL('Info.plist', `file://${E2E_DROP_APP}/`))));
+    });
+});

@@ -494,6 +494,7 @@ jobs:
                   echo "Android ABIs: ${built:-every ABI the project declares}"
                   {
                     echo "abis=$abis"
+                    echo "built=$built"
                     echo "key-segment=$key_segment"
                   } >> "$GITHUB_OUTPUT"
 

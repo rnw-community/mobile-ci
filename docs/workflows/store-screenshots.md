@@ -326,7 +326,10 @@ runs, and `raw-screenshots-ios-<device-slug>` is uploaded exactly as the
 macOS capture uploads it, so `apple-screenshot-slots`, `compose-command` and
 the upload see no difference. The e2e report is uploaded as
 `e2e-screenshots-ios-<device-slug>`, and leases a cancelled run left behind
-are released from `e2e-dir/.e2e/simlock-leases.json`.
+are released from `e2e-dir/.e2e/simlock-leases.json`. As in the e2e job,
+[`@mobile-ci/e2e-simlock`](../../packages/e2e-simlock/README.md) is installed
+into `e2e-dir` from this workflow's tag after `e2e-install-command`, so the
+same e2e project captures and tests.
 
 ```yaml
 jobs:
@@ -344,7 +347,7 @@ jobs:
             e2e-runner-labels: '["self-hosted","linux","4x8"]'
             e2e-command: npx e2e run --config media.config.ts --target ios
             e2e-workers: '4'
-            simlock-url: http://10.10.1.28:4700
+            simlock-url: https://simlock.vitaliiyehorov.dev
         secrets:
             simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```

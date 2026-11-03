@@ -43,6 +43,13 @@ the section that matches your task; skip the other.
   the shell it is testing and a renamed step fails rather than drifts.
   `self-test.yml`'s `unit-tests` job runs them and shellchecks every extracted
   step script.
+- `packages/e2e-simlock/` — `@mobile-ci/e2e-simlock`, the TypeScript
+  `DeviceProvider` that leases iOS simulators and Android emulators from a
+  simlock farm for tester-army e2e suites. It ships inside this repository, not
+  on npm: `actions/e2e-simlock-install` copies it from the action's own ref into
+  an e2e project, and `scripts/fetch-e2e-simlock.sh` does so from a pinned tag.
+  Its `node:test` suite runs from `tests/e2e-simlock-package_test.sh`
+  (Node 22.18+ type stripping); `self-test.yml` also typechecks it.
 - `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
   is slimmed against; the actions resolve `slim-profile: bundled` to it.
 - `scripts/ci-metrics.py` — the #272 report: PR feedback, queue time per
@@ -244,6 +251,13 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | `assert-distinct-fingerprints.yml` | Release pre-flight: two app ids must not share a native key | `contents: read` |
 | `swift-ios.yml` | Pure Swift/Xcode build, sharded tests, opt-in TestFlight publish | `contents: write` (always — its `publish` job requests it) |
 | `expo-base-plan.yml` | Shared repack decision the e2e/screenshot/warm-up workflows call; not called directly | — |
+
+**E2E suites on a simlock farm** — `test-framework: e2e|both` on
+`ios-maestro.yml` and `android-maestro.yml` runs a tester-army suite through
+the `e2e-suite` action; the suite's config imports `simlockDevices` from
+`@mobile-ci/e2e-simlock`, which the workflow installs from its own tag. Use the
+farm's public HTTPS URL, never a LAN address. See
+`docs/workflows/ios-maestro.md#e2e-suite-on-simlock`.
 
 **EAS Update outside these workflows** — compose the actions: `eas-update`
 publishes to a channel; `eas-channel-fingerprint` decides `ota|native` against

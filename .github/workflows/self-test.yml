@@ -82,6 +82,11 @@ jobs:
               shell: bash
               run: pip install --user 'PyYAML==6.0.2'
 
+            - name: Set up Node.js for packages/e2e-simlock
+              uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+              with:
+                  node-version: '24'
+
             - name: Install the compose-media toolchain
               shell: bash
               run: |
@@ -110,6 +115,11 @@ jobs:
                   COMPOSE_MEDIA_REQUIRE_TOOLS: '1'
                   MAESTRO_TAGS_REQUIRE_TOOLS: '1'
               run: tests/run-tests.sh
+
+            - name: Typecheck packages/e2e-simlock
+              shell: bash
+              working-directory: packages/e2e-simlock
+              run: npm ci --no-audit --no-fund && npx tsc -p .
 
             - name: Shellcheck the test harness and every extracted step script
               shell: bash

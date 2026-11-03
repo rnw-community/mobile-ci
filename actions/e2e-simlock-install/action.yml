@@ -1,0 +1,26 @@
+name: e2e-simlock-install
+description: >-
+    Installs @mobile-ci/e2e-simlock, the simlock DeviceProvider shipped in this
+    repository's packages/e2e-simlock, into an e2e project's node_modules, from
+    the same ref as this action. Run it after the project's own install.
+
+inputs:
+    e2e-dir:
+        description: >-
+            The e2e project's directory, relative to the working directory. Its
+            dependencies must already be installed: a missing node_modules fails
+            the step.
+        required: true
+
+runs:
+    using: composite
+    steps:
+        - name: Install @mobile-ci/e2e-simlock from this action's ref
+          shell: bash
+          env:
+              E2E_DIR: ${{ inputs.e2e-dir }}
+          run: |
+              set -euo pipefail
+              # shellcheck source=/dev/null
+              . "$GITHUB_ACTION_PATH/../../scripts/fetch-e2e-simlock.sh"
+              e2e_simlock_install "$GITHUB_ACTION_PATH/../../packages/e2e-simlock" "$E2E_DIR"

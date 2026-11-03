@@ -21,6 +21,7 @@ Markdown docs.
 | File | Trigger | What it does |
 | --- | --- | --- |
 | [`e2e.yml`](public-expo-app/e2e.yml) | pull request, push to `main` | `ios-maestro.yml` + `android-maestro.yml` on the repack path: no native compile on a pull request whose native key has a published base. |
+| [`e2e-simlock.yml`](public-expo-app/e2e-simlock.yml) | pull request, push to `main` | `e2e.yml` with `test-framework: e2e`: a tester-army suite in `e2e/` on iOS and Android devices leased from a simlock farm through `@mobile-ci/e2e-simlock`. |
 | [`warm-up.yml`](public-expo-app/warm-up.yml) | push to `main` (app paths), dispatch | `seed-native-cache.yml`: builds and publishes the base binary for every native key that has none. |
 | [`ota-preview.yml`](public-expo-app/ota-preview.yml) | pull request | `expo-ota-preview.yml` on the GitHub Release backend: tokenless, public repositories only, previews only. |
 | [`pr-closed.yml`](public-expo-app/pr-closed.yml) | PR closed, nightly | `pr-closed-cleanup-reusable.yml` (cancel runs, delete the PR's previews) and `preview-sweep-reusable.yml` (dry-run backstop). |

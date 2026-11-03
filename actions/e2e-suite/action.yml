@@ -1,0 +1,301 @@
+name: e2e-suite
+description: >-
+    Runs a tester-army e2e suite against iOS simulators or Android emulators leased
+    from a simlock farm, as the e2e job of ios-maestro.yml and android-maestro.yml
+    does: validates the call (mode validate), installs the e2e project and
+    @mobile-ci/e2e-simlock, runs the suite and gates on its report (mode run), and
+    releases the leases a killed run left behind (mode release).
+
+inputs:
+    mode:
+        description: validate, run or release.
+        required: true
+    platform:
+        description: ios or android.
+        required: true
+    test-framework:
+        description: The calling workflow's test-framework (validate).
+        required: false
+        default: e2e
+    driver:
+        description: The calling workflow's ios-driver or android-driver (validate).
+        required: false
+        default: ''
+    abis:
+        description: >-
+            Comma-separated ABIs the app is built for: ios-simulator-archs, or the
+            resolved android-abis; empty for every ABI the project declares (validate).
+        required: false
+        default: ''
+    e2e-dir:
+        description: The e2e project's directory (validate, run, release).
+        required: false
+        default: ''
+    install-command:
+        description: Installs the e2e project's dependencies, in e2e-dir (run).
+        required: false
+        default: npm ci --no-audit --no-fund
+    command:
+        description: Runs the suite, in e2e-dir; must write its report under e2e-dir/.e2e (run).
+        required: false
+        default: ''
+    app-path:
+        description: Absolute path of the .app (iOS) or .apk (Android) under test (run).
+        required: false
+        default: ''
+    app-id:
+        description: The app's bundle id or package (run).
+        required: false
+        default: ''
+    target:
+        description: The target's name (run).
+        required: false
+        default: ''
+    targets:
+        description: JSON array of this call's targets, which split the farm's free devices (run).
+        required: false
+        default: '[]'
+    workers:
+        description: Devices leased and tests run at once (validate, run).
+        required: false
+        default: '1'
+    retries:
+        description: Retries per failed test inside the run (validate, run).
+        required: false
+        default: '1'
+    session:
+        description: agent-device session name, unique per run, attempt and target (run).
+        required: false
+        default: ''
+    shadow:
+        description: true when the suite runs as a non-gating shadow (run).
+        required: false
+        default: 'false'
+    tolerated:
+        description: true when the target tolerates test failures (run).
+        required: false
+        default: 'false'
+    simlock-url:
+        description: Base URL of the simlock gateway or worker (validate, run, release).
+        required: false
+        default: ''
+    simlock-token:
+        description: simlock agent token (validate, run, release).
+        required: false
+        default: ''
+
+runs:
+    using: composite
+    steps:
+        - name: Validate the e2e call
+          if: inputs.mode == 'validate'
+          shell: bash
+          env:
+              PLATFORM: ${{ inputs.platform }}
+              TEST_FRAMEWORK: ${{ inputs.test-framework }}
+              DRIVER: ${{ inputs.driver }}
+              ABIS: ${{ inputs.abis }}
+              E2E_DIR: ${{ inputs.e2e-dir }}
+              E2E_WORKERS: ${{ inputs.workers }}
+              E2E_RETRIES: ${{ inputs.retries }}
+              SIMLOCK_URL: ${{ inputs.simlock-url }}
+              HAS_SIMLOCK_TOKEN: ${{ inputs.simlock-token != '' }}
+          run: |
+              set -euo pipefail
+              case "$PLATFORM" in
+                ios) farm_abi=arm64 devices=simulators abis_input=ios-simulator-archs local_driver=local driver_input=ios-driver ;;
+                android) farm_abi=arm64-v8a devices=emulators abis_input=android-abis local_driver=avd driver_input=android-driver ;;
+                *)
+                  echo "::error::e2e-suite platform must be 'ios' or 'android'; got '$PLATFORM'."
+                  exit 1
+                  ;;
+              esac
+              case "$TEST_FRAMEWORK" in
+                maestro) exit 0 ;;
+                e2e | both) ;;
+                *)
+                  echo "::error::test-framework must be 'maestro', 'e2e' or 'both'; got '$TEST_FRAMEWORK'."
+                  exit 1
+                  ;;
+              esac
+              fail=0
+              if [ -z "$E2E_DIR" ]; then
+                echo "::error::test-framework '$TEST_FRAMEWORK' needs e2e-dir: the directory of the e2e project."
+                fail=1
+              fi
+              case "$SIMLOCK_URL" in
+                http://* | https://*) ;;
+                *)
+                  echo "::error::test-framework '$TEST_FRAMEWORK' needs simlock-url, an http(s) URL of the simlock gateway or worker; got '$SIMLOCK_URL'."
+                  fail=1
+                  ;;
+              esac
+              if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
+                echo "::error::test-framework '$TEST_FRAMEWORK' needs the simlock-token secret: pass it by name from the calling workflow."
+                fail=1
+              fi
+              for pair in "e2e-workers=$E2E_WORKERS" "e2e-retries=$E2E_RETRIES"; do
+                case "${pair#*=}" in
+                  '' | *[!0-9]*)
+                    echo "::error::${pair%%=*} must be a whole number; got '${pair#*=}'."
+                    fail=1
+                    ;;
+                esac
+              done
+              case "$E2E_WORKERS" in
+                '' | *[!0-9]*) ;;
+                *)
+                  if [ "$((10#$E2E_WORKERS))" -lt 1 ]; then
+                    echo "::error::e2e-workers must be at least 1; got '$E2E_WORKERS'."
+                    fail=1
+                  fi
+                  ;;
+              esac
+              case ",$ABIS," in
+                ,, | *",$farm_abi,"*) ;;
+                *)
+                  echo "::error::test-framework '$TEST_FRAMEWORK' runs the app on the farm's $farm_abi $devices; $abis_input '$ABIS' builds no $farm_abi."
+                  fail=1
+                  ;;
+              esac
+              if [ "$TEST_FRAMEWORK" = e2e ] && [ "$DRIVER" != "$local_driver" ]; then
+                echo "::error::test-framework 'e2e' brings its own devices; $driver_input '$DRIVER' applies only to the Maestro suite."
+                fail=1
+              fi
+              exit "$fail"
+
+        - name: Install the e2e project
+          if: inputs.mode == 'run'
+          shell: bash
+          working-directory: ${{ inputs.e2e-dir }}
+          env:
+              INSTALL_COMMAND: ${{ inputs.install-command }}
+          run: bash -c "$INSTALL_COMMAND"
+
+        - name: Install @mobile-ci/e2e-simlock
+          if: inputs.mode == 'run'
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.9.0 # v4.9.0
+          with:
+              e2e-dir: ${{ inputs.e2e-dir }}
+
+        - name: Run the e2e suite
+          if: inputs.mode == 'run'
+          shell: bash
+          working-directory: ${{ inputs.e2e-dir }}
+          env:
+              E2E_PLATFORM: ${{ inputs.platform }}
+              E2E_COMMAND: ${{ inputs.command }}
+              E2E_APP_PATH: ${{ inputs.app-path }}
+              E2E_APP_ID: ${{ inputs.app-id }}
+              E2E_TARGET: ${{ inputs.target }}
+              E2E_WORKERS: ${{ inputs.workers }}
+              E2E_RETRIES: ${{ inputs.retries }}
+              E2E_SESSION: ${{ inputs.session }}
+              E2E_TELEMETRY_DISABLED: '1'
+              E2E_SHADOW: ${{ inputs.shadow }}
+              E2E_TOLERATED: ${{ inputs.tolerated }}
+              TEST_TARGETS: ${{ inputs.targets }}
+              SIMLOCK_URL: ${{ inputs.simlock-url }}
+              SIMLOCK_TOKEN: ${{ inputs.simlock-token }}
+          run: |
+              set -euo pipefail
+              case "$E2E_PLATFORM" in
+                ios) [ -d "$E2E_APP_PATH" ] || { echo "::error::The iOS app is not at $E2E_APP_PATH (expected a .app directory)."; exit 1; } ;;
+                android) [ -f "$E2E_APP_PATH" ] || { echo "::error::The Android app is not at $E2E_APP_PATH (expected an .apk file)."; exit 1; } ;;
+                *) echo "::error::e2e-suite platform must be 'ios' or 'android'; got '$E2E_PLATFORM'."; exit 1 ;;
+              esac
+              # One lease per worker, and a run aborts if a lease never comes: ask for no more devices
+              # than the farm has free now (limit minus devices leased by anyone), split across this
+              # call's targets, which all read it at the same moment. Best effort, not a reservation.
+              E2E_WORKERS=$((10#$E2E_WORKERS))
+              export E2E_WORKERS
+              targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
+              case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
+              free=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
+                | jq -r --arg platform "$E2E_PLATFORM" --argjson targets "$targets" '.capacity[$platform] | if .limit == null then empty else ([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor end' 2>/dev/null || true)
+              case "$free" in
+                '' | *[!0-9]*) echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked." ;;
+                *)
+                  if [ "$free" -lt "$E2E_WORKERS" ]; then
+                    if [ "$free" -lt 1 ]; then free=1; fi
+                    echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
+                    E2E_WORKERS=$free
+                    export E2E_WORKERS
+                  fi
+                  ;;
+              esac
+              # Only this run's report counts: a stale one must never vouch for a run that wrote none.
+              rm -rf .e2e
+              started=$(date +%s)
+              status=0
+              bash -c "$E2E_COMMAND" || status=$?
+              echo "E2E suite exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
+              if [ -f .e2e/summary.md ]; then
+                { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+              fi
+              # An exit code of 0 is not evidence that tests ran: the report must say so.
+              if [ "$status" = 0 ]; then
+                if [ ! -f .e2e/report.json ]; then
+                  echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran."
+                  status=1
+                elif ! counts=$(jq -er '.run | select(.status != null) | [.summary.executed // 0, .summary.failed // 0, .summary.flaky // 0] as $n | select(all($n[]; type == "number" and . == floor and . >= 0)) | "\(.status) \($n[0]) \($n[1]) \($n[2])"' .e2e/report.json 2>/dev/null); then
+                  echo "::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts."
+                  status=1
+                else
+                  read -r run_status executed failed flaky <<< "$counts"
+                  echo "E2E report: $run_status, $executed executed, $failed failed, $flaky flaky." | tee -a "$GITHUB_STEP_SUMMARY"
+                  if [ "$executed" -lt 1 ]; then
+                    echo "::error::The e2e suite exited 0 but executed no test."
+                    status=1
+                  elif [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; then
+                    echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
+                    status=1
+                  fi
+                fi
+              fi
+              if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
+                echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
+              elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ]; then
+                echo "::warning::E2E suite failed (exit $status) for a target with tolerateTestFailures; it does not gate this run."
+              fi
+              exit "$status"
+
+        - name: Release the devices the suite left leased
+          if: inputs.mode == 'release'
+          shell: bash
+          working-directory: ${{ inputs.e2e-dir }}
+          env:
+              SIMLOCK_URL: ${{ inputs.simlock-url }}
+              SIMLOCK_TOKEN: ${{ inputs.simlock-token }}
+          run: |
+              set -uo pipefail
+              # A cancelled run is killed before the suite releases its leases, which would then
+              # hold their devices until the lease TTL. @mobile-ci/e2e-simlock lists the ids it
+              # acquired in .e2e/simlock-leases.json; this mode runs on every exit path.
+              file=.e2e/simlock-leases.json
+              if [ ! -f "$file" ]; then
+                exit 0
+              fi
+              if ! ids=$(jq -r '.[] | (.id? // .) | select(type == "string" and test("^[A-Za-z0-9._:-]+$"))' "$file" 2>/dev/null); then
+                echo "::warning::$file is not a JSON array of lease ids; nothing released."
+                exit 0
+              fi
+              for id in $ids; do
+                code=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                  | curl -sS -m 15 -o /dev/null -w '%{http_code}' -X DELETE -H @- "${SIMLOCK_URL%/}/v1/leases/$id" 2>/dev/null || echo 000)
+                case "$code" in
+                  2??) echo "Released lease $id." ;;
+                  404) echo "Lease $id was already released." ;;
+                  *) echo "::warning::Could not release lease $id (HTTP $code); it expires at its TTL." ;;
+                esac
+              done
+
+        - name: Reject an unknown mode
+          if: inputs.mode != 'validate' && inputs.mode != 'run' && inputs.mode != 'release'
+          shell: bash
+          env:
+              MODE: ${{ inputs.mode }}
+          run: |
+              echo "::error::e2e-suite mode must be 'validate', 'run' or 'release'; got '$MODE'."
+              exit 1
