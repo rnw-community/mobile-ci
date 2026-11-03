@@ -165,7 +165,9 @@ again="$(step_output "$dir" digest)"
 dir="$(new_workspace "$ACTION" "$STEP")"
 apply "$dir" 'MAPS_KEY=rotated'
 after="$(step_output "$dir" digest)"
-if ! printf '%s' "$before" | grep -qE '^[0-9a-f]{64}$'; then
+if ! grep -qE '^[0-9a-f]{64}$' <<EOF; then
+$before
+EOF
     fail_case "digest '$before' is not a SHA-256"
 elif [ "$before" != "$again" ]; then
     fail_case "the same secret digested to '$before' and '$again', so a warm-up and a pull request never agree on a key"

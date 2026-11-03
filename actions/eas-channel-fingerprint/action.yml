@@ -99,7 +99,9 @@ runs:
           echo "::error::$*"
           exit 1
         }
-        printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' <<EOF || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+        $EAS_CLI_VERSION
+        EOF
         case "$BASELINE" in
           update-or-build|build) ;;
           *) fail "baseline must be update-or-build or build; got '$BASELINE'." ;;
@@ -124,7 +126,9 @@ runs:
           esac
           channel="${CHANNEL:-$PROFILE_CHANNEL}"
           [ -n "$channel" ] || fail "There is no channel to compare with: set channel, or an eas-profile whose eas.json build profile sets one."
-          printf '%s' "$channel" | grep -Eq "$name_pattern" || fail "channel must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$channel'."
+          grep -Eq "$name_pattern" <<EOF || fail "channel must start with a letter or digit and contain only [A-Za-z0-9._/-]; got '$channel'."
+        $channel
+        EOF
           targets="$(jq -c --arg channel "$channel" --arg env "$PROFILE_ENV" --arg profile "$EAS_PROFILE" \
             'map({name: ., platform: ., channel: $channel, envLines: $env, buildProfile: $profile})' <<< "$platforms")"
         fi

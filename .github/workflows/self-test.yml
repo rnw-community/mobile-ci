@@ -178,7 +178,9 @@ jobs:
                           ;;
                         *@*)
                           sha="${ref##*@}"
-                          if ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
+                          if ! grep -qE '^[0-9a-f]{40}$' <<EOF; then
+                  $sha
+                  EOF
                             echo "::error file=${file},line=${lineno}::Unpinned third-party 'uses:' ref '${ref}' - third-party actions must be pinned to a full 40-character commit SHA (got '@${sha}')."
                             violations=$((violations + 1))
                           fi
@@ -292,7 +294,9 @@ jobs:
                   if [ "$EVENT_NAME" = push ]; then
                       non_tag_form=0
                       while IFS= read -r ref; do
-                          if ! printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+                          if ! grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+                  $ref
+                  EOF
                               echo "::error::Self-reference '@${ref}' on main is not in vX.Y.Z tag form (commit-SHA and branch self-references must be restored to a tag before merge; see RELEASE.md's fleet-validation workaround step 3)."
                               non_tag_form=1
                           fi
@@ -319,7 +323,7 @@ jobs:
                               still_unresolved=""
                               while IFS= read -r ref; do
                                   [ -n "$ref" ] || continue
-                                  if ! git ls-remote --tags origin "refs/tags/${ref}" | grep -q .; then
+                                  if [ -z "$(git ls-remote --tags origin "refs/tags/${ref}")" ]; then
                                       still_unresolved="${still_unresolved}${ref}$(printf '\n')"
                                   fi
                               done <<< "$unresolved"
@@ -346,7 +350,9 @@ jobs:
                   while IFS= read -r target; do
                       ref="${target##*@}"
                       name="${target%@*}"
-                      printf '%s' "$ref" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || continue
+                      grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' <<EOF || continue
+                  $ref
+                  EOF
                       git rev-parse -q --verify "refs/tags/${ref}^{commit}" > /dev/null || continue
                       case "$name" in
                           actions/*) paths="${name}/action.yml ${name}/action.yaml" ;;

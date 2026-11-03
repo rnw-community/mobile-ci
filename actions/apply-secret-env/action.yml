@@ -164,7 +164,9 @@ runs:
               candidate_delimiter="${line#*<<}"
               if valid_name "$candidate_name" \
                 && [ -n "$candidate_delimiter" ] \
-                && ! printf '%s' "$candidate_delimiter" | grep -q '[^A-Za-z0-9_]'; then
+                && ! grep -q '[^A-Za-z0-9_]' <<EOF; then
+        $candidate_delimiter
+        EOF
                 if [ "$ALLOW_MULTILINE" != 'true' ]; then
                   echo "::error::${SECRET_LABEL} line ${line_number} starts a multi-line value, which this input cannot take; every value here has to fit on one KEY=VALUE line."
                   exit 1
@@ -206,7 +208,9 @@ runs:
         write_entry() {
           local file="$1" name="$2" value="$3" delimiter
           delimiter="$(random_delimiter)"
-          while printf '%s\n' "$value" | grep -qxF -- "$delimiter"; do
+          while grep -qxF -- "$delimiter" <<EOF; do
+        $value
+        EOF
             delimiter="$(random_delimiter)"
           done
           printf '%s<<%s\n%s\n%s\n' "$name" "$delimiter" "$value" "$delimiter" >> "$file"

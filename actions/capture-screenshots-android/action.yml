@@ -298,7 +298,9 @@ runs:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
           set -euo pipefail
-          if ! printf '%s' "$MAESTRO_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+          $MAESTRO_VERSION
+          EOF
             echo "::error::maestro-version '$MAESTRO_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
             exit 1
           fi
@@ -629,8 +631,11 @@ runs:
             local state attempt=0
             while [ "$attempt" -lt 10 ]; do
               state=$(adb -s "$ANDROID_SERIAL" shell dumpsys activity service com.android.systemui/.SystemUIService DemoModeController) || return 1
-              if printf '%s\n' "$state" | grep -q 'isDemoModeAllowed=true' \
-                && printf '%s\n' "$state" | grep -q 'isInDemoMode=true'; then
+              if grep -q 'isDemoModeAllowed=true' <<EOF && grep -q 'isInDemoMode=true' <<EOF; then
+          $state
+          EOF
+          $state
+          EOF
                 demo -e command clock -e hhmm 0941 || return 1
                 demo -e command network -e wifi show -e level 4 -e fully true || return 1
                 demo -e command network -e mobile show -e datatype none -e level 4 || return 1
@@ -657,7 +662,9 @@ runs:
               return 1
             fi
             printf '%s\n' "$launch_output"
-            if printf '%s\n' "$launch_output" | grep -qE '^(Error|Exception|java\.lang\.)'; then
+            if grep -qE '^(Error|Exception|java\.lang\.)' <<EOF; then
+          $launch_output
+          EOF
               echo "Deep-link launch for '$deep_link' reported an error."
               return 1
             fi

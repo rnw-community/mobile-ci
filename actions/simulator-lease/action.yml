@@ -156,11 +156,15 @@ runs:
         SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
       run: |
         set -euo pipefail
-        if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+        if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+        $SIMSLIM_VERSION
+        EOF
           echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
           exit 1
         fi
-        if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+        if [ -n "$SIMSLIM_SHA256" ] && ! grep -qE '^[0-9a-f]{64}$' <<EOF; then
+        $SIMSLIM_SHA256
+        EOF
           echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
           exit 1
         fi
@@ -309,7 +313,9 @@ runs:
           ''|*[!A-Za-z0-9._-]*) echo "::error::name-prefix '$NAME_PREFIX' must be non-empty and contain only letters, digits, '.', '_' or '-'."; exit 1 ;;
           mobile-ci-template-*) echo "::error::name-prefix '$NAME_PREFIX' is inside the reserved 'mobile-ci-template-' namespace, which 'mode: release' refuses to delete; a lease named from it would leak a simulator on this runner."; exit 1 ;;
         esac
-        if ! printf '%s' "$BOOT_TIMEOUT_SECONDS" | grep -qE '^[1-9][0-9]*$'; then
+        if ! grep -qE '^[1-9][0-9]*$' <<EOF; then
+        $BOOT_TIMEOUT_SECONDS
+        EOF
           echo "::error::boot-timeout-seconds '$BOOT_TIMEOUT_SECONDS' must be a positive integer."
           exit 1
         fi
@@ -368,7 +374,9 @@ runs:
         else
           udid=$(xcrun simctl create "$device_name" "$device_type_id" "$runtime_id")
         fi
-        if ! printf '%s' "$udid" | grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$'; then
+        if ! grep -qE '^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$' <<EOF; then
+        $udid
+        EOF
           echo "::error::The leased device for '$device_name' has no UDID; simctl create/clone did not produce one."
           exit 1
         fi

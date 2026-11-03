@@ -148,15 +148,19 @@ jobs:
                   case "$MAX_AGE_DAYS" in
                     ''|*[!0-9]*|0) fail "max-age-days must be a whole number of at least 1; got '$MAX_AGE_DAYS'." ;;
                   esac
-                  printf '%s' "$EAS_CLI_VERSION" | grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+                  grep -Eq '^[0-9A-Za-z][0-9A-Za-z.+-]*$' <<EOF || fail "eas-cli-version must be a pinned npm version; got '$EAS_CLI_VERSION'."
+                  $EAS_CLI_VERSION
+                  EOF
                   case "$PR_NUMBER" in
                     *[!0-9]*) fail "The pull request number must be digits; got '$PR_NUMBER'." ;;
                   esac
                   pr_channel=''
                   if [ -n "$CHANNEL_TEMPLATE" ] && [ -n "$PR_NUMBER" ]; then
                     pr_channel="${CHANNEL_TEMPLATE//\{number\}/$PR_NUMBER}"
-                    printf '%s' "$pr_channel" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' \
+                    grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]*$' <<EOF \
                       || fail "channel-template must resolve to a channel name of [A-Za-z0-9._/-] starting with a letter or digit; got '$pr_channel'."
+                  $pr_channel
+                  EOF
                   fi
 
                   protected=()
