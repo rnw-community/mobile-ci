@@ -82,4 +82,18 @@ assert_equals 0 "$STEP_STATUS" 'exit status' &&
     assert_contains "$log" 'HTTP 502' 'the reason' &&
     pass_case
 
+case_start 'an empty prune-prefix disables pruning, as documented, and a malformed one still fails'
+dir="$(new_workspace "$ACTION" 'Validate inputs')"
+mkdir -p "$dir/work/dist"
+validate() {
+    run_step "$dir" SOURCE_DIR=dist RELEASE_TAG=pfx-new PRUNE_KEEP=0 PRUNE_GRACE_MINUTES=10 "$@"
+}
+validate PRUNE_PREFIX=
+empty_status="$STEP_STATUS"
+validate 'PRUNE_PREFIX=a b'
+assert_equals 0 "$empty_status" 'empty prefix' &&
+    assert_equals 1 "$STEP_STATUS" 'malformed prefix' &&
+    assert_contains "$(cat "$dir/log")" "prune-prefix must be empty or only" 'error' &&
+    pass_case
+
 finish_suite

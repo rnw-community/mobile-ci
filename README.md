@@ -158,7 +158,8 @@ called workflow's jobs request — see the table in
 - **v4.9.1** — fixes `github-release-publish`, which failed every
   `ota-backend: github-release` preview on runners with bash 5.2 (Ubuntu 24.04)
   since v4.9.0, and makes `e2e-simlock-install` fail instead of installing an
-  empty package when `jq` is missing.
+  empty package when `jq` is missing. `github-release-publish` also accepts its
+  documented empty `prune-prefix` default again.
 - **v4.9.0** — one e2e job for iOS and Android on a simlock farm:
   `android-maestro.yml` takes `test-framework: maestro|e2e|both` like
   `ios-maestro.yml`, and both run the new `e2e-suite` action. The device
