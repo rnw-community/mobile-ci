@@ -2431,7 +2431,7 @@ jobs:
                   INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
               run: bash -c "$INSTALL_COMMAND"
             - name: Install @mobile-ci/e2e-simlock
-              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@bc86e569e5de213c7a58c2e917bd2451852cff4f # feat/android-e2e-simlock-farm fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@4913e17bdaa0a301a69016143670757be148a0d1 # feat/android-e2e-simlock-farm fleet-validation pin
               with:
                   e2e-dir: ${{ inputs.e2e-dir }}
             - name: Plan the e2e capture cells
@@ -2592,7 +2592,7 @@ jobs:
               run: eval "$POST_CAPTURE_COMMAND"
             - name: Release the simulators the capture left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@bc86e569e5de213c7a58c2e917bd2451852cff4f # feat/android-e2e-simlock-farm fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/e2e-suite@4913e17bdaa0a301a69016143670757be148a0d1 # feat/android-e2e-simlock-farm fleet-validation pin
               with:
                   mode: release
                   platform: ios

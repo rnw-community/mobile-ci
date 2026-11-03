@@ -1015,7 +1015,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Validate the e2e call
-              uses: rnw-community/mobile-ci/actions/e2e-suite@bc86e569e5de213c7a58c2e917bd2451852cff4f # feat/android-e2e-simlock-farm fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/e2e-suite@4913e17bdaa0a301a69016143670757be148a0d1 # feat/android-e2e-simlock-farm fleet-validation pin
               with:
                   mode: validate
                   platform: android
@@ -1726,7 +1726,7 @@ jobs:
             - name: Run the e2e suite
               id: run
               continue-on-error: ${{ (inputs.test-framework == 'both' && !inputs.e2e-required) || matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@bc86e569e5de213c7a58c2e917bd2451852cff4f # feat/android-e2e-simlock-farm fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/e2e-suite@4913e17bdaa0a301a69016143670757be148a0d1 # feat/android-e2e-simlock-farm fleet-validation pin
               with:
                   mode: run
                   platform: android
@@ -1746,7 +1746,7 @@ jobs:
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@bc86e569e5de213c7a58c2e917bd2451852cff4f # feat/android-e2e-simlock-farm fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/e2e-suite@4913e17bdaa0a301a69016143670757be148a0d1 # feat/android-e2e-simlock-farm fleet-validation pin
               with:
                   mode: release
                   platform: android
