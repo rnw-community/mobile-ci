@@ -4,8 +4,8 @@ import { join } from 'node:path';
 
 export type Platform = 'ios' | 'android';
 
-/** A lease request the public tunnel cut off while the farm was full: the slot releases it, waits for a device and asks again. */
-export const LEASE_CUT_OFF = /Invalid daemon response|error code: 524/i;
+/** A lease request the public tunnel cut off while the farm was full (a 524, or the connection dropped): the slot releases it, waits for a device and asks again. */
+export const LEASE_CUT_OFF = /Invalid daemon response|error code: 524|socket hang up|other side closed/i;
 
 /** Errors that mean the farm, not one device, failed (simlock's gateway and agent-device wording): never worth a device swap. */
 export const FARM_DOWN =

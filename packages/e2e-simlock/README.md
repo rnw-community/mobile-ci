@@ -94,7 +94,7 @@ What it does for each worker slot:
 
 - **Queues client-side.** Before it asks for a lease, it polls `/v1/status`
   until the farm has a device of the platform free. A request the public tunnel
-  cuts off (a 524) is released by its own id and asked again. Any other error
+  cuts off (a 524, or a dropped connection) is released by its own id and asked again. Any other error
   fails at once, and so does `queueMs` running out or an interrupt.
 - **Pins and installs.** It leases one device (`ios-instance` or
   `android-instance`) and names it by simulator UDID or adb serial on every
@@ -125,6 +125,15 @@ farm's agent-device must honour the flag.
 Set `deviceMode` per target: give the payments target its own `simlockDevices({
 …, deviceMode: 'full' })` and leave the others on the default.
 
+### Screenshots and recordings
+
+- iOS stills compared with Maestro-made baselines: set `iosScreenshotBackend:
+  'runner'` (no Dynamic Island in the frame).
+- Recordings compared with baselines: set `videoTouches: false` on the `mobile()`
+  engine. When a recording stops, agent-device redraws its touch indicator onto
+  it by default. That re-encode shifts colours (about 17 grey levels lighter on
+  dark backgrounds, bt709 tags, constant fps) and breaks a pixel comparison.
+
 ### `@mobile-ci/e2e-simlock/exec` (iOS)
 
 Fixture helpers over simlock's `POST /v1/leases/<id>/exec`, which runs `simctl`
@@ -134,3 +143,9 @@ for the leased simulator only: `simlockApiFromEnv()`, `leaseIdForUdid()`,
 simulator runtime has no shell, `cp` or `tar`. E2EDrop (`E2E_DROP_APP`, built
 from `e2e-drop/`) is a helper app that does the copying. To use it, pass it in
 `extraApps`. Nothing installs it by default.
+
+`exec()` asks again, at most three times and 2 s × attempt apart, when the
+connection drops before or during the answer (`fetch failed`, `terminated`) or the
+gateway lost its worker (`WORKER_UNREACHABLE`). Every command it sends must be
+idempotent. Any other error the gateway answers, and the 11-minute request
+timeout, fail at once.

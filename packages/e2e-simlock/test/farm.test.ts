@@ -9,10 +9,13 @@ import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, limiter, pause, 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
 
 describe('LEASE_CUT_OFF', () => {
-    it('matches only the tunnel cut-off of a blocked lease request', () => {
+    it('matches only the tunnel cutting off a blocked lease request', () => {
         assert.ok(LEASE_CUT_OFF.test('error code: 524'));
         assert.ok(LEASE_CUT_OFF.test('Invalid daemon response: <html>'));
-        for (const other of ['error code: 502', 'LEASE_NOT_FOUND', 'fetch failed', 'refused: name --platform ios or android']) {
+        // The tunnel dropping the blocked request itself (suuudokuuu#791).
+        assert.ok(LEASE_CUT_OFF.test('socket hang up'));
+        assert.ok(LEASE_CUT_OFF.test('other side closed'));
+        for (const other of ['error code: 502', 'error code: 522', 'LEASE_NOT_FOUND', 'fetch failed', 'refused: name --platform ios or android']) {
             assert.ok(!LEASE_CUT_OFF.test(other), other);
         }
     });

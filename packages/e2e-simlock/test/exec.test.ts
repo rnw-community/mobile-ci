@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
 import { E2E_DROP_APP, exec, leaseIdForUdid, mustExec, simlockApiFromEnv } from '../src/exec.ts';
+
+import type { AddressInfo } from 'node:net';
 
 const api = { url: 'https://farm.test/', token: 'tok' };
 const sse = (...events: [string, unknown][]) => events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n');
@@ -60,6 +63,83 @@ describe('exec', () => {
     it('mustExec fails on a non-zero exit with the command and its stderr', async () => {
         answers.push(() => new Response(sse(['output', { stream: 'stderr', chunk: ' no such app \n' }], ['exit', { exitCode: 2 }])));
         await assert.rejects(mustExec(api, 'L1', ['get_app_container', 'x', 'app', 'extra']), { message: 'simctl get_app_container x app exited 2: no such app' });
+    });
+});
+
+type Reply = (request: IncomingMessage, response: ServerResponse) => void;
+
+/** A stand-in gateway answering each request with the next reply (the last one repeats), and the requests it saw. */
+async function gateway(replies: readonly Reply[]): Promise<{ url: string; requests: () => number; close: () => void }> {
+    let seen = 0;
+    const server = createServer((request, response) => {
+        const reply = replies[Math.min(seen, replies.length - 1)]!;
+        seen += 1;
+        request.resume();
+        request.on('end', () => reply(request, response));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests: () => seen, close: () => server.close() };
+}
+
+const reset: Reply = request => request.socket.destroy();
+const cutMidStream: Reply = (_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write('event: output\n');
+    setImmediate(() => response.socket?.destroy());
+};
+const exitZero: Reply = (_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(sse(['output', { stream: 'stdout', chunk: 'ok' }], ['exit', { exitCode: 0 }]));
+};
+const forbidden: Reply = (_request, response) => {
+    response.writeHead(403);
+    response.end('{"error":"FORBIDDEN"}');
+};
+
+describe('exec over a tunnel that drops connections', () => {
+    // The real transport: the stand-in gateway, not the fetch stub.
+    beforeEach(() => {
+        globalThis.fetch = realFetch;
+    });
+
+    it('asks again when the connection is reset before the answer', async () => {
+        const farm = await gateway([reset, exitZero]);
+        try {
+            assert.deepEqual(await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), { exitCode: 0, stdout: 'ok', stderr: '' });
+            assert.equal(farm.requests(), 2);
+        } finally {
+            farm.close();
+        }
+    });
+
+    it('asks again when the answer is cut off mid-stream', async () => {
+        const farm = await gateway([cutMidStream, exitZero]);
+        try {
+            assert.equal((await exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true'])).exitCode, 0);
+            assert.equal(farm.requests(), 2);
+        } finally {
+            farm.close();
+        }
+    });
+
+    it('fails closed after exactly three attempts when the transport keeps failing', async () => {
+        const farm = await gateway([reset]);
+        try {
+            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), /fetch failed/);
+            assert.equal(farm.requests(), 3);
+        } finally {
+            farm.close();
+        }
+    });
+
+    it('never asks again after an error the gateway answered', async () => {
+        const farm = await gateway([forbidden, exitZero]);
+        try {
+            await assert.rejects(exec({ url: farm.url, token: 't' }, 'lease', ['spawn', 'true']), { message: 'simlock POST /v1/leases/lease/exec answered 403: {"error":"FORBIDDEN"}' });
+            assert.equal(farm.requests(), 1);
+        } finally {
+            farm.close();
+        }
     });
 });
 
