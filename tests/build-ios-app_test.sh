@@ -52,7 +52,7 @@ if assert_equals 7 "$STEP_STATUS" 'status' \
     && assert_contains "$(cat "$workspace/log")" '::error::Infrastructure failure: pod install failed twice' 'annotation'; then pass_case; fi
 
 case_start 'any other pod install failure fails at once'
-scenario '3|[!] Unable to find a specification for `Foo`'
+scenario '3|[!] Unable to find a specification for Foo'
 if assert_equals 3 "$STEP_STATUS" 'status' \
     && assert_equals 1 "$(calls)" 'pod calls' \
     && assert_not_contains "$(cat "$workspace/log")" '::warning::' 'warning' \
@@ -60,7 +60,7 @@ if assert_equals 3 "$STEP_STATUS" 'status' \
 
 case_start 'a failure after a retry that is not the null-byte error is not called infrastructure'
 scenario "1|$NULL_BYTE
-3|[!] Unable to find a specification for \`Foo\`"
+3|[!] Unable to find a specification for Foo"
 if assert_equals 3 "$STEP_STATUS" 'status' \
     && assert_equals 2 "$(calls)" 'pod calls' \
     && assert_not_contains "$(cat "$workspace/log")" 'Infrastructure failure' 'annotation'; then pass_case; fi
