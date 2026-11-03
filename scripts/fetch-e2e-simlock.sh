@@ -2,7 +2,7 @@
 # Installs @mobile-ci/e2e-simlock (packages/e2e-simlock) into an e2e project's
 # node_modules. Run it to fetch the package at a pinned mobile-ci tag or commit:
 #
-#   fetch-e2e-simlock.sh v4.9.0 e2e
+#   fetch-e2e-simlock.sh v4.9.1 e2e
 #
 # or source it for e2e_simlock_install, which the e2e-simlock-install action
 # calls with the package from its own ref. Run it after the project's own
@@ -10,13 +10,17 @@
 
 # e2e_simlock_install <package dir> <e2e dir>
 e2e_simlock_install() {
-    local package_dir="$1" e2e_dir="$2" dest entry
+    local package_dir="$1" e2e_dir="$2" dest entry entries
     if [ ! -f "$package_dir/package.json" ]; then
         echo "e2e-simlock: no package at '$package_dir' (expected packages/e2e-simlock of rnw-community/mobile-ci)." >&2
         return 1
     fi
     if [ ! -d "$e2e_dir/node_modules" ]; then
         echo "e2e-simlock: '$e2e_dir' has no node_modules; install the e2e project's dependencies first, or its install would wipe the package." >&2
+        return 1
+    fi
+    if ! entries="$(jq -er '.files[]' "$package_dir/package.json")"; then
+        echo "e2e-simlock: could not read the files '$package_dir/package.json' ships; is jq installed?" >&2
         return 1
     fi
     dest="$e2e_dir/node_modules/@mobile-ci/e2e-simlock"
@@ -29,7 +33,7 @@ e2e_simlock_install() {
             return 1
         fi
         cp -R "$package_dir/$entry" "$dest/"
-    done < <(jq -r '.files[]' "$package_dir/package.json")
+    done <<<"$entries"
     echo "Installed @mobile-ci/e2e-simlock into $dest."
 }
 

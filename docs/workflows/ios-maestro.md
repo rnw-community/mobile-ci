@@ -170,7 +170,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -278,7 +278,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -316,7 +316,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.9.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.9.0 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.9.1/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.9.1 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
@@ -367,7 +367,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -562,7 +562,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -761,7 +761,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
 ```
 
 - `contents: read` — checkout.
@@ -795,7 +795,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -824,7 +824,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -869,7 +869,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             force-label: e2e:force
 ```

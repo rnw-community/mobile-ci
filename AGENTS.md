@@ -114,6 +114,11 @@ the section that matches your task; skip the other.
   exits dies of SIGPIPE, and the match reads as a miss. Feed grep a heredoc
   (`grep -q pat <<EOF` with `$var` or `$(cmd)` as the body), use `case`, or
   test `[ -n "$(cmd)" ]`. `tests/pipe-early-exit_test.sh` enforces it.
+- Never put a heredoc with more shell after it on the line
+  (`if grep -q pat <<EOF; then`) inside `$(...)`. bash 5.2, on Ubuntu 24.04
+  runners, stops at a syntax error when it runs one, while `bash -n` and bash
+  5.3 accept it. Use a here-string (`grep -q pat <<<"$text"`). The same test
+  enforces it.
 
 ### Required validation before claiming done
 
@@ -337,7 +342,7 @@ moving with the latest release of that major; `@main` can change without a
 deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
 ```
 
 ### Self-hosted runner prerequisites
@@ -373,7 +378,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -383,7 +388,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.0 # v4.9.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]

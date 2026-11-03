@@ -9,6 +9,12 @@ the same way. Feed grep a heredoc instead (`grep -q pat <<EOF` / `$var` or
 `$(cmd)` / `EOF`), match with `case`, or test for output with
 `[ -n "$(cmd)" ]`.
 
+It also fails on a heredoc inside `$(...)` with more shell after it on the line
+(`if grep -q pat <<EOF; then`). bash 5.2, which Ubuntu 24.04 runners ship,
+re-parses the substitution when it runs it and stops at a syntax error, though
+`bash -n` and bash 5.3 accept the script (mobile-ci#315). Use a here-string
+there: `grep -q pat <<<"$text"`.
+
 Usage: pipe-early-exit.py [file ...]. Without arguments it scans every
 `run:` body in actions/*/action.yml, .github/workflows/*.yml and
 docs/examples/*/*.yml, and every *.sh under scripts/ and tests/.
@@ -22,6 +28,7 @@ import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PIPED_GREP = re.compile(r'(?<![|>])\|(?![|&])\s*(?:command\s+)?[ef]?grep\s+([^|;&)<>]*)')
+HEREDOC = re.compile(r"""<<-?\s*(['"]?)([A-Za-z_]\w*)\1(.*)""")
 EARLY_EXIT = re.compile(r'-[A-Za-z0-9]*[qlLm][A-Za-z0-9]*|--(?:quiet|silent|max-count|files-with(?:out)?-match(?:es)?)(?:=.*)?')
 
 
@@ -51,6 +58,45 @@ def violations(script):
                 words = arguments.split()
             if any(EARLY_EXIT.fullmatch(option) for option in grep_options(words)):
                 yield line.strip()
+
+
+def heredocs_followed_in_substitution(script):
+    """Yield each `<<WORD; ...`, `<<WORD && ...` or `<<WORD | ...` line inside a $(...)."""
+    stack, lines = [], iter(script.split('\n'))
+    for line in lines:
+        delimiters, index = [], 0
+        while index < len(line):
+            char, context = line[index], stack[-1] if stack else None
+            if context == "'":
+                if char == "'":
+                    stack.pop()
+            elif char == '\\':
+                index += 1
+            elif line.startswith('$(', index):
+                stack.append('$(')
+                index += 1
+            elif context == '"':
+                if char == '"':
+                    stack.pop()
+            elif char in '\'"(':
+                stack.append(char)
+            elif char == ')' and context in ('(', '$('):
+                stack.pop()
+            elif char == '#' and (index == 0 or line[index - 1] in ' \t;'):
+                break
+            elif line.startswith('<<<', index):
+                index += 2
+            elif (heredoc := HEREDOC.match(line, index)) and line.startswith('<<', index):
+                delimiters.append(heredoc.group(2))
+                if '$(' in stack and re.match(r'\s*(?:;|&&|\|)', heredoc.group(3)):
+                    yield line.strip()
+                index = heredoc.end(2) + len(heredoc.group(1))
+                continue
+            index += 1
+        for delimiter in delimiters:
+            for body in lines:
+                if body.strip() == delimiter:
+                    break
 
 
 def mask_quoted_operators(line):
@@ -99,7 +145,7 @@ def targets(argv):
 
 
 def main():
-    found = 0
+    found = misparsed = 0
     for path in targets(sys.argv[1:]):
         if path.suffix in ('.yml', '.yaml'):
             scripts = list(run_bodies(path))
@@ -110,13 +156,20 @@ def main():
                 found += 1
                 place = f'{path} ({where})' if where else str(path)
                 print(f'{place}: {line}')
+            for line in heredocs_followed_in_substitution(script):
+                misparsed += 1
+                place = f'{path} ({where})' if where else str(path)
+                print(f'{place}: {line}')
+    if misparsed:
+        print(f'::error::{misparsed} heredoc(s) inside $(...) with more shell on the line. bash 5.2 stops at '
+              'a syntax error when it runs them, though bash -n and bash 5.3 accept the script. '
+              'Use a here-string: grep -q pattern <<<"$text".')
     if found:
         print(f'::error::{found} pipe(s) into an early-exiting grep (-q/-l/-L/-m). Under pipefail a '
               'producer still writing when grep exits dies of SIGPIPE and the match reads as a miss. '
               'Use grep -q pattern <<EOF with the text or $(command) as the body, a case pattern, '
               'or [ -n "$(command)" ].')
-        return 1
-    return 0
+    return 1 if found or misparsed else 0
 
 
 if __name__ == '__main__':
