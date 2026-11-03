@@ -201,4 +201,45 @@ invoke_tagged() {
 run_maestro_tag_junit_cases
 run_shard_timings_cases
 
+# A step runs under bash -eo pipefail, where `listing | grep -q` turns a match
+# into a miss once grep exits before a large listing is written: the producer
+# dies of SIGPIPE (141) and pipefail reports the pipeline as failed. The
+# listing below is ~900 KiB with the app's label first.
+WARM_STEP='Warm app before first flow'
+
+prepare_warm() {
+    local dir
+    dir="$(new_workspace "$ACTION" "$WARM_STEP")"
+    stub "$dir" sleep 'exit 0'
+    # shellcheck disable=SC2016 # the stub body is expanded when the stub runs.
+    stub "$dir" xcrun 'case "$2" in
+  terminate) exit 1 ;;
+  spawn)
+    printf "PID\tStatus\tLabel\n1\t0\t%s\n" "$WARM_LABEL"
+    seq 1 30000 | sed "s/^/1\t0\tcom.apple.filler.service./" ;;
+esac'
+    printf '%s\n' "$dir"
+}
+
+invoke_warm() {
+    run_step "$1" WARM_LABEL="$2" APP_ID=com.example.app APP_WARM_SECONDS=1 \
+        SIMULATOR_UDID=AAAAAAAA-0000-0000-0000-000000000001
+}
+
+case_start 'an app that survives a failed terminate fails the warm-up even when launchctl list is large'
+dir="$(prepare_warm)"
+invoke_warm "$dir" 'UIKitApplication:com.example.app[a1b2][rb-legacy]'
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$dir/log")" 'and the app is still running' 'error message'; then
+    pass_case
+fi
+
+case_start 'an app absent from a large launchctl list only warns after a failed terminate'
+dir="$(prepare_warm)"
+invoke_warm "$dir" 'UIKitApplication:com.example.other[a1b2][rb-legacy]'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_contains "$(cat "$dir/log")" 'had already exited on its own' 'warning'; then
+    pass_case
+fi
+
 finish_suite

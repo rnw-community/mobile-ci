@@ -2,10 +2,10 @@
 
 Complete workflows for four app shapes, each a file you copy into the app
 repository's `.github/workflows/` and edit (paths, app ids, schemes, brands).
-Every file is pinned `@v4.8.0 # v4.8.0` and grants exactly the `permissions:`
+Every file is pinned `@v4.9.0 # v4.9.0` and grants exactly the `permissions:`
 its calls need. A repository whose policy (or `zizmor`'s `unpinned-uses`)
-requires commit-SHA pins swaps each for `@<sha> # v4.8.0`, where `<sha>` is
-what `git ls-remote https://github.com/rnw-community/mobile-ci 'refs/tags/v4.8.0^{}'`
+requires commit-SHA pins swaps each for `@<sha> # v4.9.0`, where `<sha>` is
+what `git ls-remote https://github.com/rnw-community/mobile-ci 'refs/tags/v4.9.0^{}'`
 prints.
 
 CI keeps them honest: `self-test.yml` runs `actionlint` on every file here, and
@@ -21,6 +21,7 @@ Markdown docs.
 | File | Trigger | What it does |
 | --- | --- | --- |
 | [`e2e.yml`](public-expo-app/e2e.yml) | pull request, push to `main` | `ios-maestro.yml` + `android-maestro.yml` on the repack path: no native compile on a pull request whose native key has a published base. |
+| [`e2e-simlock.yml`](public-expo-app/e2e-simlock.yml) | pull request, push to `main` | `e2e.yml` with `test-framework: e2e`: a tester-army suite in `e2e/` on iOS and Android devices leased from a simlock farm through `@mobile-ci/e2e-simlock`. |
 | [`warm-up.yml`](public-expo-app/warm-up.yml) | push to `main` (app paths), dispatch | `seed-native-cache.yml`: builds and publishes the base binary for every native key that has none. |
 | [`ota-preview.yml`](public-expo-app/ota-preview.yml) | pull request | `expo-ota-preview.yml` on the GitHub Release backend: tokenless, public repositories only, previews only. |
 | [`pr-closed.yml`](public-expo-app/pr-closed.yml) | PR closed, nightly | `pr-closed-cleanup-reusable.yml` (cancel runs, delete the PR's previews) and `preview-sweep-reusable.yml` (dry-run backstop). |

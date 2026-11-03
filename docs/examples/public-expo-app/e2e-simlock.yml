@@ -1,0 +1,69 @@
+# Public Expo app: a tester-army e2e suite on every pull request, iOS and
+# Android, on devices leased from a simlock farm instead of Maestro on local
+# simulators and emulators. Copy to .github/workflows/e2e.yml in the app
+# repository, in place of e2e.yml.
+#
+# The plan, build and repack legs are e2e.yml's. The suite lives in its own
+# project, e2e/ (package.json, lockfile, e2e.config.ts, tests), whose config
+# leases devices with @mobile-ci/e2e-simlock; each workflow installs that
+# package from its own tag (v4.9.0 or later). See
+# docs/workflows/ios-maestro.md#e2e-suite-on-simlock.
+#
+# GitHub withholds secrets from pull requests opened from forks, so those skip
+# the farm (the jobs' `if:`); a maintainer runs the suite on trusted code with
+# workflow_dispatch after reviewing it, or after merging.
+name: E2E
+
+on:
+    pull_request:
+    push:
+        branches: [main]
+    workflow_dispatch:
+
+permissions: {}
+
+jobs:
+    ios:
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p ios"}]
+            install-command: pnpm install --frozen-lockfile
+            fingerprint-config: fingerprint.config.js
+            # e2e/ is outside the app workspace, so turbo never sees a change there.
+            trigger-paths: e2e/**
+            test-framework: e2e
+            e2e-dir: e2e
+            e2e-workers: '4'
+            # The farm's public HTTPS address: a LAN address reaches only the
+            # runners on that LAN.
+            simlock-url: https://simlock.vitaliiyehorov.dev
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
+
+    android:
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.0 # v4.9.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p android"}]
+            install-command: pnpm install --frozen-lockfile
+            fingerprint-config: fingerprint.config.js
+            trigger-paths: e2e/**
+            test-framework: e2e
+            e2e-dir: e2e
+            e2e-workers: '2'
+            simlock-url: https://simlock.vitaliiyehorov.dev
+            # The farm's emulators are arm64-v8a; warm-up.yml must pass the same.
+            android-abis: arm64-v8a
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}

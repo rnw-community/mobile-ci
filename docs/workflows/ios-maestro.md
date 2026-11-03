@@ -170,7 +170,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -190,42 +190,72 @@ Expo/EAS token. It does need a **token permission** the caller grants; see
 
 ## E2E suite on simlock
 
-`test-framework: e2e` replaces the Maestro shards with one Linux job per
-target that runs your [tester-army e2e](https://github.com/tester-army/e2e)
-suite against iOS simulators leased from a
-[simlock](https://github.com/callstackincubator/simlock) gateway or worker.
-The plan, build and repack legs are unchanged: the job downloads the same
-`ios-e2e-app…` artifact the Maestro shards use. It needs no macOS runner, so a
-Mac's CPU goes to simulators instead of a VM per shard, and one job with
-`e2e-workers: N` balances the tests over N devices as each finishes, instead
-of a fixed shard split.
+`test-framework: e2e` replaces the Maestro shards with one Linux job per target
+that runs your [tester-army e2e](https://github.com/tester-army/e2e) suite
+against iOS simulators leased from a
+[simlock](https://github.com/callstackincubator/simlock) gateway or worker. The
+plan, build and repack legs are unchanged: the job downloads the same `ios-e2e-app…` artifact
+the Maestro shards use. It needs no macOS runner, so a Mac's CPU goes to simulators instead of a VM per shard, and one job with `e2e-workers: N`
+balances the tests over N devices as each finishes, instead of a fixed shard
+split. `ios-maestro.yml` and `android-maestro.yml` run it through the same
+[`e2e-suite`](../../actions/e2e-suite/README.md) action, so both platforms
+behave alike.
 
 With `test-framework: e2e` the call needs no Maestro inputs: a target with no
 `flowsDir` and an empty `flows-dir` takes `e2e-dir` as its tests, which is also
 what the e2e result cache hashes.
 
-The job runs `e2e-install-command`, then `e2e-command`, in `e2e-dir`, with:
+The job runs `e2e-install-command`, installs
+[`@mobile-ci/e2e-simlock`](../../packages/e2e-simlock/README.md) from this
+workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
+`e2e-dir` with:
 
 | Variable | Value |
 | --- | --- |
+| `E2E_PLATFORM` | `ios` |
 | `E2E_APP_PATH` | absolute path of the repacked or built `.app` |
 | `E2E_APP_ID` | the target's `appId` |
 | `E2E_TARGET` | the target's `name` |
-| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free simulators split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
+| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free iOS devices split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
 | `E2E_RETRIES` | `e2e-retries` |
 | `E2E_SESSION` | unique per run, attempt and target; give it to agent-device as the session name |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test
 credentials. A target with `tolerateTestFailures` turns a failing suite into a
-warning, as with Maestro. The farm runs arm64 simulators, so e2e needs
-`ios-simulator-archs: arm64`; `detect` rejects anything else.
+warning, as with Maestro. The farm runs arm64 simulators, so e2e needs `ios-simulator-archs: arm64`; `detect` rejects anything else. `ios-driver` applies only to the Maestro
+suite: `test-framework: e2e` with anything but `local` fails in `detect`.
+
+Your e2e config leases its devices with the package:
+
+```ts
+import { simlockDevices } from '@mobile-ci/e2e-simlock';
+
+// in the target's mobile({ platform: 'ios', session: process.env.E2E_SESSION, device: … })
+device: simlockDevices({
+    url: process.env.SIMLOCK_URL!,
+    token: process.env.SIMLOCK_TOKEN!,
+    platform: 'ios',
+    device: 'iPhone 17 Pro',
+    tenant: 'my-app'
+}),
+```
+
+It leases one device per worker and waits in a client-side queue while the
+farm is full. It installs the app, swaps a device whose install failed (once),
+renews each lease, lists the lease ids in `.e2e/simlock-leases.json` and
+releases every lease at the end. A target whose flows need an unslimmed device (Apple Pay and other
+PassKit/Wallet flows on iOS) adds `deviceMode: 'full'`; the others keep the
+farm's slim default. The package [README](../../packages/e2e-simlock/README.md)
+has every option, the
+iOS-only `@mobile-ci/e2e-simlock/exec` fixture helpers, and the local
+install. Nothing in it assumes a particular app: no bundle id, no fixture layout,
+no helper app unless you pass one in `extraApps`.
 
 A cancelled run (a newer push, with `cancel-in-progress`) is killed before the
-suite can release its simulators. If the suite lists the lease ids it acquired
-in `.e2e/simlock-leases.json` (a JSON array of ids, or of objects with an `id`),
-the job releases them in an `if: always()` step, so a cancel frees the farm at
-once instead of at the lease TTL.
+suite can release its devices. The job then releases every lease listed in
+`.e2e/simlock-leases.json` in an `if: always()` step, so a cancel frees the
+farm at once instead of at the lease TTL.
 
 Keep `e2e-dir` a standalone project (its own `package.json` and lockfile, not a
 member of the repository's workspace): its tree is hashed into the result cache
@@ -233,14 +263,61 @@ key, and a workspace's `node_modules` links make that walk slow or circular. The
 default `e2e-install-command` is npm; set it for pnpm or yarn (corepack is not
 enabled for you).
 
-Your e2e config turns these into a `DeviceProvider` that leases from simlock:
-one lease per worker, pinned to the leased UDID, released on every exit path.
-The report under `e2e-dir/.e2e` is uploaded as `e2e-ios<call-scope suffix>-<target>`, and its
-`summary.md` is added to the job summary. An exit code of 0 is not enough to
-pass: the job clears `.e2e` before the run, then requires the run's
-`.e2e/report.json` (tester-army's report) with `status: passed`, at least one
-executed test and none failed, every count a whole number. A command that exits 0 without that evidence
-(no report, nothing selected, a swallowed exit code) fails the job.
+The report under `e2e-dir/.e2e` is uploaded as
+`e2e-ios<call-scope suffix>-<target>`, and its `summary.md` is added to the job
+summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
+the run, then requires the run's `.e2e/report.json` (tester-army's report) with
+`status: passed`, at least one executed test and none failed, every count a
+whole number. A command that exits 0 without that evidence (no report, nothing
+selected, a swallowed exit code) fails the job.
+
+```yaml
+jobs:
+    e2e:
+        permissions:
+            contents: read
+            packages: write
+            actions: read
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
+        with:
+            targets: >-
+                [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
+            trigger-paths: e2e/**
+            test-framework: e2e
+            e2e-dir: e2e
+            e2e-workers: '2'
+            simlock-url: https://simlock.vitaliiyehorov.dev
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
+```
+
+A standalone `e2e/` sits outside the app workspace, so turbo never reports a
+change there as affecting the app: list it in `trigger-paths`. GitHub withholds
+secrets from pull requests opened from forks, so give the calling job
+`if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository`
+and run the suite on fork contributions with `workflow_dispatch` once reviewed;
+never hand the token to untrusted code.
+
+Use the farm's public HTTPS address in CI. A LAN address reaches only the hosts
+on that LAN, and the shared pools also schedule jobs on machines outside it.
+
+### Migrating from a copied provider
+
+A repository that copied a simlock provider into its e2e project (budgie's
+`e2e/support/simlock/`) switches the same way:
+
+1. Delete the copied `provider.ts`, `relay.ts`, `exec.ts` and `e2e-drop/`, and the
+   generic step helpers your suite copied (`byId`, `tapUntil`, `done`, centring
+   scrolls).
+2. Import `simlockDevices` from `@mobile-ci/e2e-simlock`, the steps from
+   `@mobile-ci/e2e-simlock/steps` and the fixture helpers from
+   `@mobile-ci/e2e-simlock/exec`, and pass `platform` and your own `tenant`.
+3. Pin every mobile-ci workflow call to the same `v4.9.0` or later tag: the
+   workflow installs the package from that tag.
+4. A job of your own that typechecks or runs the e2e project outside these
+   workflows (a `tsc` check on pull requests) installs the package first, after
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.9.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.9.0 e2e`, or the
+   [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
 
@@ -248,8 +325,7 @@ executed test and none failed, every count a whole number. A command that exits 
    the e2e suite runs beside it on the same app as a shadow. A failure there
    is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
-3. `test-framework: e2e`: the Maestro shards stop, and with them the macOS
-   test runners.
+3. `test-framework: e2e`: the Maestro shards stop, and with them the macOS test runners.
 
 ## Device Cloud driver
 
@@ -291,7 +367,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -486,7 +562,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -685,7 +761,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
 ```
 
 - `contents: read` — checkout.
@@ -719,7 +795,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -748,7 +824,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -793,7 +869,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             force-label: e2e:force
 ```

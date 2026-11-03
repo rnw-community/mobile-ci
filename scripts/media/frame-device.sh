@@ -73,7 +73,9 @@ EOF
 }
 
 frame_device_parse_cutout() {
-    if ! printf '%s\n' "$1" | grep -Eq '^[0-9]+,[0-9]+,[1-9][0-9]*,[1-9][0-9]*$'; then
+    if ! grep -Eq '^[0-9]+,[0-9]+,[1-9][0-9]*,[1-9][0-9]*$' <<EOF; then
+$1
+EOF
         media_fail "cutout '$1' must be X,Y,W,H in frame pixels."
     fi
 }
@@ -169,7 +171,9 @@ frame_device_validate_background() {
     case "$1" in
         transparent) return 0 ;;
     esac
-    if ! printf '%s\n' "$1" | grep -Eq '^#[0-9A-Fa-f]{6}(-#[0-9A-Fa-f]{6})?$'; then
+    if ! grep -Eq '^#[0-9A-Fa-f]{6}(-#[0-9A-Fa-f]{6})?$' <<EOF; then
+$1
+EOF
         media_fail "background '$1' is not 'transparent', '#RRGGBB' or a top-to-bottom '#RRGGBB-#RRGGBB' gradient."
     fi
 }

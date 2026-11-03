@@ -439,7 +439,7 @@ jobs:
             - name: Apply EAS_EXTRA_ENV
               id: eas-extra-env
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.9.0 # v4.9.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -574,7 +574,7 @@ jobs:
 
             - name: Resolve every target's eas.json build profile
               id: profile-env
-              uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.9.0 # v4.9.0
               with:
                   app-dir: ${{ inputs.app-dir }}
                   profiles: ${{ fromJSON(steps.targets.outputs.profiles) }}
@@ -655,7 +655,9 @@ jobs:
                   if [ -n "$RELEASE_TAG" ]; then
                     candidate="${RELEASE_TAG##*@}"
                     candidate="${candidate#v}"
-                    if printf '%s' "$candidate" | grep -Eq "$version_pattern"; then
+                    if grep -Eq "$version_pattern" <<EOF; then
+                  $candidate
+                  EOF
                       tag_version="$candidate"
                     fi
                   fi
@@ -676,7 +678,9 @@ jobs:
                       marketing_version="$tag_version"
                       ;;
                     *)
-                      if ! printf '%s' "$MARKETING_VERSION_INPUT" | grep -Eq "$version_pattern"; then
+                      if ! grep -Eq "$version_pattern" <<EOF; then
+                  $MARKETING_VERSION_INPUT
+                  EOF
                         echo "::error::marketing-version must be auto, tag, none, or X[.Y[.Z]]; got '$MARKETING_VERSION_INPUT'."
                         exit 1
                       fi
@@ -797,7 +801,7 @@ jobs:
             - name: Restore package manager cache
               id: pm-cache
               if: steps.targets.outputs.install == 'true'
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.9.0 # v4.9.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -827,7 +831,7 @@ jobs:
             - name: Resolve every target's runtime version under its build env
               if: steps.targets.outputs.record == 'true'
               id: fingerprints
-              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.9.0 # v4.9.0
               with:
                   app-dir: ${{ inputs.app-dir }}
                   targets: ${{ steps.resolved.outputs.targets }}
@@ -897,7 +901,7 @@ jobs:
             - name: Compare every target with its EAS channel
               if: steps.targets.outputs.eas-baseline == 'true'
               id: eas-baseline
-              uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.9.0 # v4.9.0
               with:
                   app-dir: ${{ inputs.app-dir }}
                   targets: ${{ steps.resolved.outputs.targets }}
@@ -1024,7 +1028,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.9.0 # v4.9.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
@@ -1148,7 +1152,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.9.0 # v4.9.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -1260,7 +1264,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.9.0 # v4.9.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1449,7 +1453,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.9.0 # v4.9.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1530,7 +1534,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.9.0 # v4.9.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -1642,7 +1646,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.9.0 # v4.9.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1677,7 +1681,7 @@ jobs:
 
             - name: Restore Gradle User Home cache keyed on the generated build files
               if: inputs.android-lint-gate-gradle-cache
-              uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+              uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
               with:
                   cache-provider: basic
 
@@ -1761,7 +1765,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.9.0 # v4.9.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required secrets
@@ -1881,7 +1885,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.9.0 # v4.9.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -1993,7 +1997,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.9.0 # v4.9.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -2331,7 +2335,7 @@ jobs:
         timeout-minutes: ${{ inputs.plan-timeout-minutes }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.9.0 # v4.9.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download the submitted-target markers
@@ -2417,7 +2421,7 @@ jobs:
         steps:
             - name: Apply RunsOn cache bypass
               if: needs.plan.outputs.decision == 'native'
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.8.0 # v4.8.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.9.0 # v4.9.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download the submitted-target markers

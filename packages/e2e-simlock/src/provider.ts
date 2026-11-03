@@ -1,0 +1,323 @@
+import { randomBytes } from 'node:crypto';
+
+import { allocateQueued, FARM_DOWN, freeDevices, recordLease, type Platform } from './farm.ts';
+import { startBootRelay, type BootRelay, type DeviceMode } from './relay.ts';
+import { configureTransfers, transfer } from './transfers.ts';
+
+import type { DeviceLease, DeviceProvider, DeviceRequest } from '@e2e-dev/mobile';
+import type { createAgentDeviceClient } from 'agent-device';
+
+/** Where the farm answers, what to lease from it, and how the run treats the lease. */
+export interface SimlockOptions {
+    /** The simlock gateway or worker, without `/v1`: `https://simlock.example.com`. */
+    readonly url: string;
+    /** The simlock agent token the run leases with. */
+    readonly token: string;
+    readonly platform: Platform;
+    /** A model the farm's catalog lists (`GET /v1/catalog?platform=…`): `iPhone 17 Pro`, `Pixel 6`. */
+    readonly device: string;
+    /** OS version (Android API level, iOS runtime) to lease; the farm's default for the model when omitted. */
+    readonly osVersion?: string;
+    /** Android system image tag, e.g. `aosp_atd` or `google_apis`; the farm's choice when omitted. */
+    readonly imageTag?: string;
+    /**
+     * `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on
+     * iOS. `'slim'` asks for a slimmed one. The farm's default (slim) when omitted.
+     */
+    readonly deviceMode?: DeviceMode;
+    /**
+     * iOS only. `'runner'` takes screenshots with the XCTest runner instead of simctl: its stills have
+     * no Dynamic Island, like Maestro's, so baselines made by Maestro still match. agent-device's
+     * default capture when omitted.
+     */
+    readonly iosScreenshotBackend?: 'runner';
+    /**
+     * Android only. `'off'` (default) sets the window, transition and animator scales to 0 once per lease, after the
+     * install, as mobile-ci's emulator action always did: a window still sliding in when a test starts reports a
+     * shifted viewport, and gestures fail as out of bounds. `'on'` keeps real animations, for lanes that record them.
+     */
+    readonly animations?: 'off' | 'on';
+    /** Apps (`.app` or `.apk`) installed on every leased device after the app under test. */
+    readonly extraApps?: readonly string[];
+    /** Lease TTL, renewed every third of it. Short, so a run killed before it releases frees its device within one TTL. Default 3 min. */
+    readonly ttlMs?: number;
+    /**
+     * Big transfers in flight at once on this machine, across the runner and all its workers: app uploads and
+     * exec payloads over 1 MiB (E2EDrop files and archives). Each crosses the tunnel, where a request past 100 s
+     * ends in a 524. Default 3.
+     */
+    readonly installConcurrency?: number;
+    /** How long a slot may wait for the farm to have a device free before the run fails. Default 20 min. */
+    readonly queueMs?: number;
+    /** simlock tenant the leases are filed under; name your project. Default `mobile-ci-e2e`. */
+    readonly tenant?: string;
+}
+
+type ClientFactory = typeof createAgentDeviceClient;
+type Client = ReturnType<ClientFactory>;
+
+interface Scope {
+    readonly tenant: string;
+    readonly runId: string;
+    readonly leaseId: string;
+    readonly leaseBackend: `${Platform}-instance`;
+    readonly leaseProvider: 'proxy';
+    readonly clientId: string;
+    readonly deviceKey?: string;
+}
+
+interface Held extends DeviceLease {
+    readonly stop: () => void;
+    readonly scope: Scope;
+}
+
+/** A leased device that could not be set up (an app install failed): another device may well succeed. */
+export class DeviceSetupFailed extends Error {}
+
+const positive = (name: string, value: number | undefined, fallback: number): number => {
+    if (value === undefined) {
+        return fallback;
+    }
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new Error(`simlockDevices: ${name} must be a positive number; got ${String(value)}`);
+    }
+    return value;
+};
+
+const whole = (name: string, value: number | undefined, fallback: number): number => {
+    if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+        throw new Error(`simlockDevices: ${name} must be a whole number of at least 1; got ${String(value)}`);
+    }
+    return value ?? fallback;
+};
+
+function validated(options: SimlockOptions) {
+    if (!/^https?:\/\/[^/]/.test(options.url ?? '')) {
+        throw new Error(`simlockDevices: url must be an http(s) URL of the simlock gateway or worker; got ${JSON.stringify(options.url)}`);
+    }
+    if (!options.token) {
+        throw new Error('simlockDevices: token is required (the simlock agent token, e.g. process.env.SIMLOCK_TOKEN)');
+    }
+    if (options.platform !== 'ios' && options.platform !== 'android') {
+        throw new Error(`simlockDevices: platform must be 'ios' or 'android'; got ${JSON.stringify(options.platform)}`);
+    }
+    if (!options.device) {
+        throw new Error('simlockDevices: device is required (a model from the farm catalog)');
+    }
+    if (options.deviceMode !== undefined && options.deviceMode !== 'slim' && options.deviceMode !== 'full') {
+        throw new Error(`simlockDevices: deviceMode must be 'slim' or 'full'; got ${JSON.stringify(options.deviceMode)}`);
+    }
+    if (options.animations !== undefined) {
+        if (options.animations !== 'off' && options.animations !== 'on') {
+            throw new Error(`simlockDevices: animations must be 'off' or 'on'; got ${JSON.stringify(options.animations)}`);
+        }
+        if (options.platform !== 'android') {
+            throw new Error(`simlockDevices: animations applies to Android only (agent-device has no iOS equivalent); this target's platform is '${options.platform}'`);
+        }
+    }
+    if (options.iosScreenshotBackend !== undefined) {
+        if (options.iosScreenshotBackend !== 'runner') {
+            throw new Error(`simlockDevices: iosScreenshotBackend must be 'runner'; got ${JSON.stringify(options.iosScreenshotBackend)}`);
+        }
+        if (options.platform !== 'ios') {
+            throw new Error(`simlockDevices: iosScreenshotBackend applies to iOS only; this target's platform is '${options.platform}'`);
+        }
+    }
+    return {
+        baseUrl: `${options.url.replace(/\/$/, '')}/v1/agent-device`,
+        ttlMs: positive('ttlMs', options.ttlMs, 3 * 60_000),
+        installConcurrency: whole('installConcurrency', options.installConcurrency, 3),
+        queueMs: positive('queueMs', options.queueMs, 20 * 60_000),
+        tenant: options.tenant || 'mobile-ci-e2e'
+    };
+}
+
+/**
+ * A `DeviceProvider` for `@e2e-dev/mobile` that leases one iOS simulator or Android emulator per
+ * worker slot from a simlock farm through its agent-device proxy (`/v1/agent-device`). The run
+ * drives the device from this machine, Linux included; the app is uploaded, not copied to the
+ * farm. Each slot holds its own short lease, renewed while held, recorded in
+ * `.e2e/simlock-leases.json`, and released at the end of the run, when simlock wipes the device.
+ */
+export function simlockDevices(options: SimlockOptions): DeviceProvider {
+    return createProvider(options, async () => (await import('agent-device')).createAgentDeviceClient);
+}
+
+/** `simlockDevices` with the agent-device client injected; for tests. */
+export function createProvider(options: SimlockOptions, loadClient: () => Promise<ClientFactory>): DeviceProvider {
+    const { baseUrl, ttlMs, installConcurrency, queueMs, tenant } = validated(options);
+    const { platform, device, token } = options;
+    const leaseBackend = `${platform}-instance` as const;
+    const held = new Map<string, Held>();
+    configureTransfers(options.url, installConcurrency);
+    let relay: Promise<BootRelay> | undefined;
+    let acquiring = 0;
+
+    const client = async (session: string, scope?: Scope, daemonBaseUrl = baseUrl): Promise<Client> =>
+        (await loadClient())({ daemonBaseUrl, daemonAuthToken: token, session, ...scope });
+
+    const startRelay = (): Promise<BootRelay> => {
+        relay ??= startBootRelay(baseUrl, {
+            ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
+            runnerScreenshots: options.iosScreenshotBackend === 'runner'
+        }).catch((cause: unknown) => {
+            relay = undefined;
+            throw cause;
+        });
+        return relay;
+    };
+
+    /** Closes the relay once no lease is held and none is being acquired; a later acquire starts a new one. */
+    const closeIdleRelay = async (): Promise<void> => {
+        if (held.size === 0 && acquiring === 0 && relay !== undefined) {
+            const closing = relay;
+            relay = undefined;
+            await (await closing).close().catch(() => undefined);
+        }
+    };
+
+    const leaseOnce = async (request: DeviceRequest, attempt: number): Promise<DeviceLease> => {
+        const session = `e2e-${request.runId.slice(0, 12)}-${request.slot}${attempt === 0 ? '' : `-r${attempt}`}`;
+        const started = Date.now();
+        const base = { tenant, runId: request.runId, leaseBackend, leaseProvider: 'proxy' as const, clientId: randomBytes(8).toString('hex') };
+        const c = await client(session);
+        // The allocate goes through the relay, which puts the target's deviceMode on the wire (`rewritten`).
+        const allocating = await client(session, undefined, (await startRelay()).baseUrl);
+        const lease = await allocateQueued({
+            platform,
+            allocate: leaseId =>
+                allocating.leases.allocate({
+                    ...base,
+                    leaseId,
+                    ttlMs,
+                    platform,
+                    target: 'mobile',
+                    device,
+                    ...(options.osVersion === undefined ? {} : { osVersion: options.osVersion }),
+                    ...(options.imageTag === undefined ? {} : { imageTag: options.imageTag })
+                }),
+            release: leaseId => c.leases.release({ ...base, leaseId }),
+            free: () => freeDevices(options.url, token, platform),
+            log: request.log,
+            signal: request.signal,
+            queueMs
+        });
+        const scope: Scope = {
+            ...base,
+            leaseId: lease.leaseId,
+            clientId: lease.clientId ?? base.clientId,
+            ...(lease.deviceKey === undefined ? {} : { deviceKey: lease.deviceKey })
+        };
+        // A simulator by UDID (`ios:mobile:<udid>`), an emulator by adb serial (`android:mobile:<serial>`):
+        // the proxy lists every device the token holds, so each command names the leased one.
+        const deviceId = lease.deviceKey?.split(':').pop() || undefined;
+        recordLease(request.projectRoot, lease.leaseId);
+        request.log(`simlock lease ${lease.leaseId} granted in ${Date.now() - started} ms (${device} ${deviceId ?? 'no device id'})`);
+        let missed = 0;
+        const timer = setInterval(
+            () => {
+                c.leases
+                    .heartbeat({ ...scope, ttlMs })
+                    .then(() => {
+                        missed = 0;
+                    })
+                    .catch((cause: unknown) => {
+                        missed += 1;
+                        request.log(
+                            missed >= 2
+                                ? `simlock lease ${lease.leaseId} missed ${missed} heartbeats: it may have expired, and failures on its device are infrastructure, not tests (${String(cause)})`
+                                : `simlock heartbeat failed: ${String(cause)}`
+                        );
+                    });
+            },
+            Math.max(10_000, Math.floor(ttlMs / 3))
+        );
+        timer.unref();
+        try {
+            if (deviceId === undefined) {
+                throw new Error(`simlock lease ${lease.leaseId} names no device (deviceKey ${String(lease.deviceKey)})`);
+            }
+            request.signal.throwIfAborted();
+            const selection = platform === 'android' ? { serial: deviceId } : { udid: deviceId };
+            const scoped = await client(session, scope);
+            const install = async (appPath: string, app?: string): Promise<void> => {
+                try {
+                    await transfer(options.url, () => scoped.apps.install({ platform, ...selection, appPath, ...(app === undefined ? {} : { app }) }));
+                } catch (cause) {
+                    throw new DeviceSetupFailed(`${cause instanceof Error ? cause.message : String(cause)} (${deviceId})`, { cause });
+                }
+            };
+            if (request.appPath !== undefined) {
+                const installStarted = Date.now();
+                await install(request.appPath, request.app);
+                request.log(`simlock uploaded and installed ${request.app ?? request.appPath} in ${Date.now() - installStarted} ms`);
+            }
+            for (const extra of options.extraApps ?? []) {
+                await install(extra);
+            }
+            if (platform === 'android' && options.animations !== 'on') {
+                try {
+                    await scoped.settings.update({ platform, serial: deviceId, setting: 'animations', state: 'off' });
+                } catch (cause) {
+                    throw new DeviceSetupFailed(`${cause instanceof Error ? cause.message : String(cause)} (${deviceId})`, { cause });
+                }
+            }
+            const entry: Held = {
+                id: lease.leaseId,
+                daemon: { baseUrl: (await startRelay()).baseUrl, authToken: token },
+                client: scope,
+                deviceId,
+                ...(request.appPath === undefined || request.app === undefined ? {} : { installedApp: request.app }),
+                stop: () => clearInterval(timer),
+                scope
+            };
+            held.set(entry.id, entry);
+            return entry;
+        } catch (cause) {
+            // The engine releases only leases acquire returned: hand this one back now, not one TTL later.
+            clearInterval(timer);
+            await c.leases.release(scope).catch((cleanup: unknown) => request.log(`simlock release after a failed acquire failed: ${String(cleanup)}`));
+            throw cause;
+        }
+    };
+
+    return {
+        name: 'simlock',
+        async acquire(request: DeviceRequest): Promise<DeviceLease> {
+            if (request.platform !== platform) {
+                throw new Error(`simlockDevices leases ${platform} devices; the target asked for ${request.platform}`);
+            }
+            acquiring += 1;
+            try {
+                return await leaseOnce(request, 0);
+            } catch (cause) {
+                // One bad device must not fail the run: its lease is already released, so lease another,
+                // once. A farm that is down fails every slot at once, and a swap would only add load.
+                if (!(cause instanceof DeviceSetupFailed) || FARM_DOWN.test(cause.message)) {
+                    throw cause;
+                }
+                request.signal.throwIfAborted();
+                request.log(`simlock: ${cause.message}; leasing another device`);
+                return await leaseOnce(request, 1);
+            } finally {
+                acquiring -= 1;
+                await closeIdleRelay();
+            }
+        },
+        async release(lease: DeviceLease, context): Promise<void> {
+            const entry = held.get(lease.id);
+            if (entry === undefined) {
+                return;
+            }
+            entry.stop();
+            try {
+                const c = await client(`release-${lease.id.slice(0, 8)}`);
+                await c.leases.release({ ...entry.scope, signal: context.signal });
+            } finally {
+                // A failed release still frees this process: the farm reclaims the lease after one TTL.
+                held.delete(lease.id);
+                await closeIdleRelay();
+            }
+        }
+    };
+}

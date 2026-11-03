@@ -43,6 +43,13 @@ the section that matches your task; skip the other.
   the shell it is testing and a renamed step fails rather than drifts.
   `self-test.yml`'s `unit-tests` job runs them and shellchecks every extracted
   step script.
+- `packages/e2e-simlock/` — `@mobile-ci/e2e-simlock`, the TypeScript
+  `DeviceProvider` that leases iOS simulators and Android emulators from a
+  simlock farm for tester-army e2e suites. It ships inside this repository, not
+  on npm: `actions/e2e-simlock-install` copies it from the action's own ref into
+  an e2e project, and `scripts/fetch-e2e-simlock.sh` does so from a pinned tag.
+  Its `node:test` suite runs from `tests/e2e-simlock-package_test.sh`
+  (Node 22.18+ type stripping); `self-test.yml` also typechecks it.
 - `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
   is slimmed against; the actions resolve `slim-profile: bundled` to it.
 - `scripts/ci-metrics.py` — the #272 report: PR feedback, queue time per
@@ -102,6 +109,11 @@ the section that matches your task; skip the other.
 - No code comments in `action.yml` beyond what a descriptive step `name:`
   could not already convey — prefer renaming over explaining.
 - Keep `run:` blocks POSIX-shell-compatible and `shellcheck`-clean.
+- Never pipe into a grep that stops reading early (`-q`, `-l`, `-L`, `-m`).
+  Under the runner's `bash -eo pipefail` a producer still writing when grep
+  exits dies of SIGPIPE, and the match reads as a miss. Feed grep a heredoc
+  (`grep -q pat <<EOF` with `$var` or `$(cmd)` as the body), use `case`, or
+  test `[ -n "$(cmd)" ]`. `tests/pipe-early-exit_test.sh` enforces it.
 
 ### Required validation before claiming done
 
@@ -230,7 +242,7 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | Workflow | Purpose | Calling job `permissions:` |
 | --- | --- | --- |
 | `ios-maestro.yml` | iOS Maestro e2e (`ios-driver: local` or `device-cloud`; `tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
-| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`) | `contents: read`, `packages: write`, `actions: read` |
+| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`; `test-framework` `e2e`/`both` runs a tester-army suite from Linux against Android devices leased from simlock) | `contents: read`, `packages: write`, `actions: read` |
 | `seed-native-cache.yml` | The warm-up: publishes the base binary pull requests repack. Default-branch push with a `paths:` filter | `contents: read`, `packages: write`, `actions: read` |
 | `store-screenshots.yml` | Store screenshot capture matrix (`test-framework: maestro` on macOS, or `e2e` on Linux against simlock) + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
 | `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
@@ -244,6 +256,13 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | `assert-distinct-fingerprints.yml` | Release pre-flight: two app ids must not share a native key | `contents: read` |
 | `swift-ios.yml` | Pure Swift/Xcode build, sharded tests, opt-in TestFlight publish | `contents: write` (always — its `publish` job requests it) |
 | `expo-base-plan.yml` | Shared repack decision the e2e/screenshot/warm-up workflows call; not called directly | — |
+
+**E2E suites on a simlock farm** — `test-framework: e2e|both` on
+`ios-maestro.yml` and `android-maestro.yml` runs a tester-army suite through
+the `e2e-suite` action; the suite's config imports `simlockDevices` from
+`@mobile-ci/e2e-simlock`, which the workflow installs from its own tag. Use the
+farm's public HTTPS URL, never a LAN address. See
+`docs/workflows/ios-maestro.md#e2e-suite-on-simlock`.
 
 **EAS Update outside these workflows** — compose the actions: `eas-update`
 publishes to a channel; `eas-channel-fingerprint` decides `ota|native` against
@@ -290,6 +309,9 @@ secret to a third-party workflow).
   digest enters the native key, so pass the warm-up the same secret) and
   `maestro-secrets-env` (e2e, screenshots); `device-cloud-api-key` for the
   `device-cloud` drivers.
+- `simlock-token` (`SIMLOCK_TOKEN`) for `ios-maestro.yml` and
+  `android-maestro.yml` with `test-framework` `e2e` or `both`, and for
+  `store-screenshots.yml`'s `e2e` driver.
 - `native-publish.yml`: `EXPO_TOKEN`; `ASC_API_KEY` + `ASC_KEY_ID` +
   `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), optional
   with `credentials-source: eas`; optional `EAS_EXTRA_ENV`.
@@ -315,7 +337,7 @@ moving with the latest release of that major; `@main` can change without a
 deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
 ```
 
 ### Self-hosted runner prerequisites
@@ -351,7 +373,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -361,7 +383,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]

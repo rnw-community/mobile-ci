@@ -256,7 +256,7 @@ runs:
   using: composite
   steps:
     - name: Start Redroid container
-      uses: rnw-community/mobile-ci/actions/redroid-container@v4.8.0 # v4.8.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v4.9.0 # v4.9.0
       with:
           mode: start
           container-name: ${{ inputs.container-name }}
@@ -272,7 +272,9 @@ runs:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
           set -euo pipefail
-          if ! printf '%s' "$MAESTRO_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+          $MAESTRO_VERSION
+          EOF
             echo "::error::maestro-version '$MAESTRO_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
             exit 1
           fi
@@ -1064,7 +1066,7 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      uses: rnw-community/mobile-ci/actions/redroid-container@v4.8.0 # v4.8.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@v4.9.0 # v4.9.0
       with:
           mode: teardown
           container-name: ${{ inputs.container-name }}

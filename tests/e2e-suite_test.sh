@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+# actions/e2e-suite is the e2e job of ios-maestro.yml and android-maestro.yml. It
+# validates the call, decides a run passed on the suite's report and not on its
+# exit code alone (a command that exits 0 without running a test, or a stale
+# report, fails closed), splits the farm's free devices of the run's platform
+# across its targets, and releases the leases a killed run left behind. Every
+# case runs for both platforms against the one action.
+set -euo pipefail
+
+# shellcheck source=tests/lib/harness.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
+
+ACTION="$REPO_ROOT/actions/e2e-suite/action.yml"
+FARM='{"capacity":{"ios":{"limit":12,"used":3,"warm":1},"android":{"limit":2,"used":1,"warm":0}}}'
+
+report() {
+    local status="$1" executed="$2" failed="$3"
+    printf '{"schemaVersion":"report-1","run":{"status":"%s","exitCode":0,"summary":{"discovered":%s,"selected":%s,"executed":%s,"passed":%s,"failed":%s,"flaky":0,"skipped":0}}}' \
+        "$status" "$executed" "$executed" "$executed" "$((executed - failed))" "$failed"
+}
+
+writes() {
+    printf "mkdir -p .e2e && printf '%%s' '%s' > .e2e/report.json" "$1"
+}
+
+# app <platform> <dir>: the platform's app under test, a .app directory or an .apk file.
+app() {
+    if [ "$1" = ios ]; then
+        mkdir -p "$2/work/Base.app" && printf '%s' "$2/work/Base.app"
+    else
+        : > "$2/work/app-release.apk" && printf '%s' "$2/work/app-release.apk"
+    fi
+}
+
+# run_suite <platform> <command> [VAR=value ...]: the run step, with a farm that does not answer.
+run_suite() {
+    local platform="$1" command="$2"
+    shift 2
+    dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
+    stub "$dir" curl 'exit 7'
+    run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND="$command" E2E_APP_PATH="$(app "$platform" "$dir")" \
+        E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
+        SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
+}
+
+for platform in ios android; do
+    case_start "$platform: a passing report with executed tests passes, and the suite gets E2E_PLATFORM"
+    run_suite "$platform" "printf '%s' \"\$E2E_PLATFORM\" > platform; $(writes "$(report passed 3 0)")"
+    if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+        && assert_equals "$platform" "$(cat "$dir/work/platform")" 'E2E_PLATFORM' \
+        && assert_contains "$(cat "$dir/summary")" 'E2E report: passed, 3 executed, 0 failed, 0 flaky.' 'summary'; then
+        pass_case
+    fi
+
+    case_start "$platform: exit 0 with no report fails closed"
+    run_suite "$platform" 'true'
+    if assert_equals 1 "$STEP_STATUS" 'status' \
+        && assert_contains "$(cat "$dir/log")" '::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran.' 'error'; then
+        pass_case
+    fi
+
+    case_start "$platform: exit 0 with a report that executed nothing fails closed"
+    run_suite "$platform" "$(writes "$(report passed 0 0)")"
+    if assert_equals 1 "$STEP_STATUS" 'status' \
+        && assert_contains "$(cat "$dir/log")" '::error::The e2e suite exited 0 but executed no test.' 'error'; then
+        pass_case
+    fi
+
+    case_start "$platform: exit 0 with a failing report fails closed"
+    run_suite "$platform" "$(writes "$(report failed 3 1)")"
+    if assert_equals 1 "$STEP_STATUS" 'status' \
+        && assert_contains "$(cat "$dir/log")" '::error::The e2e report did not pass (failed, 1 failed) although the command exited 0.' 'error'; then
+        pass_case
+    fi
+
+    case_start "$platform: a report whose counts are not whole numbers fails closed"
+    for summary in '"executed":3,"failed":0.5' '"executed":"x","failed":0' '"executed":3,"failed":"1"' '"executed":-1,"failed":0'; do
+        run_suite "$platform" "$(writes "{\"run\":{\"status\":\"passed\",\"summary\":{${summary}}}}")"
+        assert_equals 1 "$STEP_STATUS" "status for ${summary} ($(cat "$dir/log"))" || break
+    done
+    if [ "$STEP_STATUS" = 1 ] && assert_contains "$(cat "$dir/log")" '::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts.' 'error'; then
+        pass_case
+    fi
+
+    case_start "$platform: a stale report from an earlier run does not count"
+    dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
+    stub "$dir" curl 'exit 7'
+    mkdir -p "$dir/work/.e2e"
+    report passed 5 0 > "$dir/work/.e2e/report.json"
+    run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND='true' E2E_APP_PATH="$(app "$platform" "$dir")" E2E_APP_ID=a \
+        E2E_TARGET=app E2E_WORKERS=1 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+    if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'wrote no report' 'error'; then
+        pass_case
+    fi
+
+    case_start "$platform: a failing command keeps its own exit status, and a shadow or tolerated failure warns"
+    run_suite "$platform" 'exit 2'
+    plain="$STEP_STATUS"
+    run_suite "$platform" 'exit 2' E2E_SHADOW=true
+    shadow="$STEP_STATUS $(grep -c '::warning::E2E shadow suite failed (exit 2); it does not gate this run' "$dir/log")"
+    run_suite "$platform" 'exit 2' E2E_TOLERATED=true
+    tolerated="$STEP_STATUS $(grep -c '::warning::E2E suite failed (exit 2) for a target with tolerateTestFailures' "$dir/log")"
+    if assert_equals '2|2 1|2 1' "$plain|$shadow|$tolerated" 'status and warning'; then
+        pass_case
+    fi
+done
+
+case_start 'ios: a missing .app fails closed, and so does an .apk where a .app belongs'
+run_suite ios 'touch ran' E2E_APP_PATH=/nonexistent/Base.app
+missing="$STEP_STATUS $(cat "$dir/log")"
+dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
+: > "$dir/work/file.app"
+run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND='touch ran' E2E_APP_PATH="$dir/work/file.app" E2E_WORKERS=1 E2E_RETRIES=0 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+if assert_contains "$missing" '1 ::error::The iOS app is not at /nonexistent/Base.app (expected a .app directory).' 'missing' \
+    && assert_equals 1 "$STEP_STATUS" 'file status' \
+    && assert_equals no "$([ -e "$dir/work/ran" ] && echo yes || echo no)" 'suite ran'; then
+    pass_case
+fi
+
+case_start 'android: a missing .apk fails closed before the suite runs'
+run_suite android 'touch ran' E2E_APP_PATH=/nonexistent/app-release.apk
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" '::error::The Android app is not at /nonexistent/app-release.apk (expected an .apk file).' 'error' \
+    && assert_equals no "$([ -e "$dir/work/ran" ] && echo yes || echo no)" 'suite ran'; then
+    pass_case
+fi
+
+case_start 'an unknown platform fails closed'
+run_suite tvos 'touch ran' E2E_APP_PATH=/tmp
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" "::error::e2e-suite platform must be 'ios' or 'android'; got 'tvos'." 'error'; then
+    pass_case
+fi
+
+# capacity <platform> <workers> <targets>: runs the suite against a farm that reports $FARM.
+capacity() {
+    dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
+    # shellcheck disable=SC2016 # expanded when the stub runs.
+    stub "$dir" curl 'printf "%s\n" "$*" > "$(dirname "$0")/../curl-args"; cat > "$(dirname "$0")/../curl-stdin"; printf "%s" "$FARM"'
+    run_step "$dir" FARM="$FARM" E2E_PLATFORM="$1" E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
+        E2E_APP_PATH="$(app "$1" "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$2" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
+        TEST_TARGETS="$3" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
+}
+
+case_start "ios: the farm's free simulators are split across the targets, and the token never reaches argv"
+capacity ios 08 '[{"name":"a"},{"name":"b"}]'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm has 5 free ios devices; running 5 workers instead of 8.' 'notice' \
+    && assert_equals 5 "$(cat "$dir/work/workers")" 'E2E_WORKERS' \
+    && assert_contains "$(cat "$dir/curl-args")" 'https://farm.invalid/v1/status' 'url' \
+    && assert_not_contains "$(cat "$dir/curl-args")" 'secret-token' 'curl argv' \
+    && assert_equals 'Authorization: Bearer secret-token' "$(cat "$dir/curl-stdin")" 'header on stdin'; then
+    pass_case
+fi
+
+case_start "android: the farm's Android capacity, not iOS's, bounds the workers"
+capacity android 2 '[{"name":"a"}]'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm has 1 free android devices; running 1 workers instead of 2.' 'notice' \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'E2E_WORKERS'; then
+    pass_case
+fi
+
+case_start 'a full farm still runs one worker, and workers within capacity are kept'
+FARM='{"capacity":{"android":{"limit":2,"used":2}}}' capacity android 3 '[]'
+full="$(cat "$dir/work/workers")"
+capacity ios 2 '[]'
+if assert_equals '1 2' "$full $(cat "$dir/work/workers")" 'workers'; then pass_case; fi
+
+case_start 'a farm that does not report capacity leaves the workers as asked'
+run_suite android "printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" E2E_WORKERS=03
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_equals 3 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm did not report its free android capacity; running 3 workers as asked.' 'notice'; then
+    pass_case
+fi
+
+VALIDATE='Validate the e2e call'
+validate() {
+    dir="$(new_workspace "$ACTION" "$VALIDATE")"
+    run_step "$dir" PLATFORM=ios TEST_FRAMEWORK=e2e DRIVER=local ABIS=arm64 E2E_DIR=e2e E2E_WORKERS=2 E2E_RETRIES=1 \
+        SIMLOCK_URL=https://farm.invalid HAS_SIMLOCK_TOKEN=true "$@"
+}
+
+case_start 'validate accepts a complete e2e call on either platform, and skips a Maestro-only call'
+validate
+ios_status="$STEP_STATUS"
+validate PLATFORM=android DRIVER=avd ABIS=x86_64,arm64-v8a
+android_status="$STEP_STATUS"
+validate TEST_FRAMEWORK=maestro E2E_DIR='' SIMLOCK_URL='' HAS_SIMLOCK_TOKEN=false ABIS=x86_64 DRIVER=redroid
+if assert_equals '0 0 0' "$ios_status $android_status $STEP_STATUS" "status ($(cat "$dir/log"))"; then pass_case; fi
+
+case_start 'validate names every missing or malformed e2e input at once'
+validate E2E_DIR='' SIMLOCK_URL=farm.invalid HAS_SIMLOCK_TOKEN=false E2E_WORKERS=00 E2E_RETRIES=x
+log="$(cat "$dir/log")"
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_contains "$log" "::error::test-framework 'e2e' needs e2e-dir: the directory of the e2e project." 'e2e-dir' \
+    && assert_contains "$log" "::error::test-framework 'e2e' needs simlock-url, an http(s) URL of the simlock gateway or worker; got 'farm.invalid'." 'url' \
+    && assert_contains "$log" "::error::test-framework 'e2e' needs the simlock-token secret: pass it by name from the calling workflow." 'token' \
+    && assert_contains "$log" "::error::e2e-workers must be at least 1; got '00'." 'workers' \
+    && assert_contains "$log" "::error::e2e-retries must be a whole number; got 'x'." 'retries'; then
+    pass_case
+fi
+
+case_start "validate rejects an app the farm's arm64 devices cannot run, per platform"
+validate ABIS=x86_64
+ios_log="$STEP_STATUS $(cat "$dir/log")"
+validate PLATFORM=android DRIVER=avd ABIS=x86_64
+if assert_contains "$ios_log" "1 ::error::test-framework 'e2e' runs the app on the farm's arm64 simulators; ios-simulator-archs 'x86_64' builds no arm64." 'ios' \
+    && assert_equals 1 "$STEP_STATUS" 'android status' \
+    && assert_contains "$(cat "$dir/log")" "::error::test-framework 'e2e' runs the app on the farm's arm64-v8a emulators; android-abis 'x86_64' builds no arm64-v8a." 'android'; then
+    pass_case
+fi
+
+case_start 'validate accepts an empty ABI list (every ABI the project declares)'
+validate PLATFORM=android DRIVER=avd ABIS=''
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))"; then pass_case; fi
+
+case_start "validate rejects e2e with a Maestro-only driver, per platform, but not both"
+validate DRIVER=device-cloud
+ios_log="$STEP_STATUS $(cat "$dir/log")"
+validate PLATFORM=android DRIVER=redroid ABIS=arm64-v8a
+android_log="$STEP_STATUS $(cat "$dir/log")"
+validate PLATFORM=android TEST_FRAMEWORK=both DRIVER=redroid ABIS=arm64-v8a
+if assert_contains "$ios_log" "1 ::error::test-framework 'e2e' brings its own devices; ios-driver 'device-cloud' applies only to the Maestro suite." 'ios' \
+    && assert_contains "$android_log" "1 ::error::test-framework 'e2e' brings its own devices; android-driver 'redroid' applies only to the Maestro suite." 'android' \
+    && assert_equals 0 "$STEP_STATUS" 'both'; then
+    pass_case
+fi
+
+case_start 'validate rejects an unknown test-framework and an unknown platform'
+validate TEST_FRAMEWORK=detox
+framework="$STEP_STATUS $(cat "$dir/log")"
+validate PLATFORM=tvos
+if assert_contains "$framework" "1 ::error::test-framework must be 'maestro', 'e2e' or 'both'; got 'detox'." 'framework' \
+    && assert_equals 1 "$STEP_STATUS" 'platform status' \
+    && assert_contains "$(cat "$dir/log")" "::error::e2e-suite platform must be 'ios' or 'android'; got 'tvos'." 'platform'; then
+    pass_case
+fi
+
+case_start 'an unknown mode fails closed'
+dir="$(new_workspace "$ACTION" 'Reject an unknown mode')"
+run_step "$dir" MODE=start
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" "::error::e2e-suite mode must be 'validate', 'run' or 'release'; got 'start'." 'error'; then
+    pass_case
+fi
+
+case_start "the run step hands the suite its whole environment contract, each from the action's input"
+contract="$(ACTION="$ACTION" python3 -c '
+import os, yaml
+steps = yaml.safe_load(open(os.environ["ACTION"]))["runs"]["steps"]
+env = next(s for s in steps if s["name"] == "Run the e2e suite")["env"]
+print(" ".join(f"{k}={v}" for k, v in sorted(env.items())))')"
+# shellcheck disable=SC2016 # the literal expressions the action must carry.
+if assert_equals 'E2E_APP_ID=${{ inputs.app-id }} E2E_APP_PATH=${{ inputs.app-path }} E2E_COMMAND=${{ inputs.command }} E2E_PLATFORM=${{ inputs.platform }} E2E_RETRIES=${{ inputs.retries }} E2E_SESSION=${{ inputs.session }} E2E_SHADOW=${{ inputs.shadow }} E2E_TARGET=${{ inputs.target }} E2E_TELEMETRY_DISABLED=1 E2E_TOLERATED=${{ inputs.tolerated }} E2E_WORKERS=${{ inputs.workers }} SIMLOCK_TOKEN=${{ inputs.simlock-token }} SIMLOCK_URL=${{ inputs.simlock-url }} TEST_TARGETS=${{ inputs.targets }}' "$contract" 'env'; then
+    pass_case
+fi
+
+case_start 'each mode runs only its own steps'
+modes="$(ACTION="$ACTION" python3 -c '
+import os, yaml
+for step in yaml.safe_load(open(os.environ["ACTION"]))["runs"]["steps"]:
+    print(step["name"], "|", step["if"])')"
+if assert_equals "Validate the e2e call | inputs.mode == 'validate'
+Install the e2e project | inputs.mode == 'run'
+Install @mobile-ci/e2e-simlock | inputs.mode == 'run'
+Run the e2e suite | inputs.mode == 'run'
+Release the devices the suite left leased | inputs.mode == 'release'
+Reject an unknown mode | inputs.mode != 'validate' && inputs.mode != 'run' && inputs.mode != 'release'" "$modes" 'step conditions'; then
+    pass_case
+fi
+
+RELEASE='Release the devices the suite left leased'
+release() {
+    dir="$(new_workspace "$ACTION" "$RELEASE")"
+    mkdir -p "$dir/work/.e2e"
+    # shellcheck disable=SC2016 # expanded when the stub runs.
+    stub "$dir" curl 'printf "%s\n" "$*" >> "$(dirname "$0")/../curl-args"; cat > /dev/null; printf "${CODE:-204}"'
+    : > "$dir/curl-args"
+}
+
+case_start 'release with no lease list releases nothing'
+release
+run_step "$dir" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=secret-token
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals '' "$(cat "$dir/curl-args")" 'curl calls'; then pass_case; fi
+
+case_start 'release deletes every listed lease, with the token off argv, and skips a hostile id'
+release
+printf '%s' '["abc123",{"id":"def456"},"../x",42]' > "$dir/work/.e2e/simlock-leases.json"
+run_step "$dir" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/curl-args")" '-X DELETE -H @- https://farm.invalid/v1/leases/abc123' 'first lease' \
+    && assert_contains "$(cat "$dir/curl-args")" 'https://farm.invalid/v1/leases/def456' 'second lease' \
+    && assert_equals 2 "$(wc -l < "$dir/curl-args" | tr -d ' ')" 'only the two valid ids' \
+    && assert_not_contains "$(cat "$dir/curl-args")" 'secret-token' 'curl argv' \
+    && assert_contains "$(cat "$dir/log")" 'Released lease abc123.' 'log'; then
+    pass_case
+fi
+
+case_start 'release reports an already released lease and warns on any other failure, without failing'
+release
+printf '%s' '["gone","stuck"]' > "$dir/work/.e2e/simlock-leases.json"
+# shellcheck disable=SC2016 # expanded when the stub runs.
+stub "$dir" curl 'cat > /dev/null; case "$*" in *gone*) printf 404 ;; *) printf 500 ;; esac'
+run_step "$dir" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" 'Lease gone was already released.' '404' \
+    && assert_contains "$(cat "$dir/log")" '::warning::Could not release lease stuck (HTTP 500); it expires at its TTL.' '500'; then
+    pass_case
+fi
+
+case_start 'release warns on a malformed lease list and does not fail the job'
+release
+printf '%s' 'not json' > "$dir/work/.e2e/simlock-leases.json"
+run_step "$dir" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+if assert_equals 0 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" '::warning::.e2e/simlock-leases.json is not a JSON array of lease ids; nothing released.' 'warning'; then
+    pass_case
+fi
+
+finish_suite

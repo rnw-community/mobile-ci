@@ -76,25 +76,27 @@ for workflow in ios-maestro android-maestro; do
     fi
 done
 
-# ios-maestro's test-framework: e2e gates on the e2e job; both gates on Maestro,
-# plus the e2e job only with e2e-required.
-check_ios() {
-    label="$1" want_status="$2" want_result="$3"
-    shift 3
-    case_start "ios-maestro: $label"
-    report_maestro ios-maestro "$@"
-    if assert_equals "$want_status" "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
-        && assert_equals "$want_result" "$(step_output "$workspace" result)" 'result'; then
-        pass_case
-    fi
-}
-check_ios 'e2e: a passing e2e suite passes' 0 passed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=success
-check_ios 'e2e: a failed e2e suite fails' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=failure
-check_ios 'e2e: a skipped e2e job is not a pass' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=skipped
-check_ios 'both: a failed shadow e2e suite does not gate' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=false
-check_ios 'both: a failed required e2e suite fails' 1 failed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=true
-check_ios 'both: a failed Maestro suite fails even with e2e green' 1 failed TEST_FRAMEWORK=both TEST_RESULT=failure E2E_RESULT=success E2E_REQUIRED=true
-check_ios 'both: both green passes' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=success E2E_REQUIRED=true
+# test-framework: e2e gates on the e2e job; both gates on Maestro, plus the e2e
+# job only with e2e-required. ios-maestro and android-maestro alike.
+for workflow in ios-maestro android-maestro; do
+    check_framework() {
+        label="$1" want_status="$2" want_result="$3"
+        shift 3
+        case_start "$workflow: $label"
+        report_maestro "$workflow" "$@"
+        if assert_equals "$want_status" "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
+            && assert_equals "$want_result" "$(step_output "$workspace" result)" 'result'; then
+            pass_case
+        fi
+    }
+    check_framework 'e2e: a passing e2e suite passes' 0 passed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=success
+    check_framework 'e2e: a failed e2e suite fails' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=failure
+    check_framework 'e2e: a skipped e2e job is not a pass' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=skipped
+    check_framework 'both: a failed shadow e2e suite does not gate' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=false
+    check_framework 'both: a failed required e2e suite fails' 1 failed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=true
+    check_framework 'both: a failed Maestro suite fails even with e2e green' 1 failed TEST_FRAMEWORK=both TEST_RESULT=failure E2E_RESULT=success E2E_REQUIRED=true
+    check_framework 'both: both green passes' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=success E2E_REQUIRED=true
+done
 
 report_screenshots() {
     workspace="$(new_workflow_workspace "$REPO_ROOT/.github/workflows/store-screenshots.yml" status Report)"

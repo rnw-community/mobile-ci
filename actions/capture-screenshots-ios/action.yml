@@ -510,11 +510,15 @@ runs:
         SIMSLIM_SHA256: ${{ inputs.simslim-sha256 }}
       run: |
           set -euo pipefail
-          if ! printf '%s' "$SIMSLIM_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+          $SIMSLIM_VERSION
+          EOF
             echo "::error::simslim-version '$SIMSLIM_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
             exit 1
           fi
-          if [ -n "$SIMSLIM_SHA256" ] && ! printf '%s' "$SIMSLIM_SHA256" | grep -qE '^[0-9a-f]{64}$'; then
+          if [ -n "$SIMSLIM_SHA256" ] && ! grep -qE '^[0-9a-f]{64}$' <<EOF; then
+          $SIMSLIM_SHA256
+          EOF
             echo "::error::simslim-sha256 '$SIMSLIM_SHA256' must be empty or a 64-character lowercase hex SHA-256 digest."
             exit 1
           fi
@@ -651,7 +655,9 @@ runs:
               exit 1
               ;;
           esac
-          if [ -n "$SIMULATOR_REQUIRES" ] && ! printf '%s' "$SIMULATOR_REQUIRES" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+          if [ -n "$SIMULATOR_REQUIRES" ] && ! grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$' <<EOF; then
+          $SIMULATOR_REQUIRES
+          EOF
             echo "::error::simulator-requires '$SIMULATOR_REQUIRES' must be a comma-separated list of simslim feature IDs (letters, digits, '-', '_'); run 'simslim doctor --list' for the IDs."
             exit 1
           fi
@@ -736,7 +742,9 @@ runs:
         MAESTRO_VERSION: ${{ inputs.maestro-version }}
       run: |
           set -euo pipefail
-          if ! printf '%s' "$MAESTRO_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+          if ! grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' <<EOF; then
+          $MAESTRO_VERSION
+          EOF
             echo "::error::maestro-version '$MAESTRO_VERSION' must be a plain X.Y.Z version (digits and dots only) to be used safely in a local path and release URL."
             exit 1
           fi

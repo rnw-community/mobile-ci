@@ -326,7 +326,10 @@ runs, and `raw-screenshots-ios-<device-slug>` is uploaded exactly as the
 macOS capture uploads it, so `apple-screenshot-slots`, `compose-command` and
 the upload see no difference. The e2e report is uploaded as
 `e2e-screenshots-ios-<device-slug>`, and leases a cancelled run left behind
-are released from `e2e-dir/.e2e/simlock-leases.json`.
+are released from `e2e-dir/.e2e/simlock-leases.json`. As in the e2e job,
+[`@mobile-ci/e2e-simlock`](../../packages/e2e-simlock/README.md) is installed
+into `e2e-dir` from this workflow's tag after `e2e-install-command`, so the
+same e2e project captures and tests.
 
 ```yaml
 jobs:
@@ -335,7 +338,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             control-runner-labels: '["self-hosted","linux"]'
             config-path: .github/store-screenshots.config.json
@@ -344,7 +347,7 @@ jobs:
             e2e-runner-labels: '["self-hosted","linux","4x8"]'
             e2e-command: npx e2e run --config media.config.ts --target ios
             e2e-workers: '4'
-            simlock-url: http://10.10.1.28:4700
+            simlock-url: https://simlock.vitaliiyehorov.dev
         secrets:
             simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
@@ -593,7 +596,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -801,7 +804,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -818,7 +821,7 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -1089,7 +1092,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
 ```
 
 - `contents: read` — checkout.
@@ -1121,7 +1124,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             ios-target: >-
                 {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
@@ -1150,7 +1153,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.9.0 # v4.9.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}

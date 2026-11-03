@@ -177,7 +177,9 @@ runs:
         ORAS_CHECKSUMS: ${{ inputs.oras-checksums }}
       run: |
         set -euo pipefail
-        if command -v oras >/dev/null 2>&1 && oras version 2>/dev/null | grep -qE "^Version:[[:space:]]+${ORAS_VERSION}\$"; then
+        if command -v oras >/dev/null 2>&1 && grep -qE "^Version:[[:space:]]+${ORAS_VERSION}\$" <<EOF; then
+        $(oras version 2>/dev/null)
+        EOF
           echo "Reusing the oras ${ORAS_VERSION} already on PATH."
           exit 0
         fi

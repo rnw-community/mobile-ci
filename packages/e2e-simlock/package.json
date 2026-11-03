@@ -1,0 +1,36 @@
+{
+    "name": "@mobile-ci/e2e-simlock",
+    "version": "0.0.0",
+    "private": true,
+    "description": "A tester-army e2e DeviceProvider that leases iOS simulators and Android emulators from a simlock farm. Shipped inside rnw-community/mobile-ci, not on npm.",
+    "license": "MIT",
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts",
+        "./exec": "./src/exec.ts",
+        "./steps": "./src/steps.ts"
+    },
+    "files": [
+        "src",
+        "e2e-drop",
+        "README.md"
+    ],
+    "peerDependencies": {
+        "@e2e-dev/mobile": ">=0.12.5",
+        "agent-device": ">=0.21.35"
+    },
+    "engines": {
+        "node": "^22.22.3 || >=24.8.0"
+    },
+    "devDependencies": {
+        "@e2e-dev/mobile": "0.12.5",
+        "agent-device": "0.21.36",
+        "e2e": "0.22.0",
+        "@types/node": "^22.10.0",
+        "typescript": "~5.9.3"
+    },
+    "scripts": {
+        "test": "node --test --test-force-exit test/*.test.ts",
+        "typecheck": "tsc -p ."
+    }
+}

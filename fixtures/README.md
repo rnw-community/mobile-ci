@@ -11,6 +11,8 @@ without a consumer repository standing by.
 - `eas-cli/` — real `--json` output of the eas-cli commands the EAS Update
   actions parse, per eas-cli version, replayed by
   `tests/eas-cli-fixtures_test.sh` (see [its README](eas-cli/README.md)).
+- `pipe-early-exit/` — shell the `tests/pipe-early-exit_test.sh` lint must
+  report (`unsafe.sh`, one per command) and must accept (`safe.sh`).
 
 There is deliberately **no** `.xcodeproj` fixture: a checked-in `project.pbxproj`
 is a large, Xcode-version-sensitive artefact that drifts silently, so
