@@ -32,12 +32,12 @@ if assert_equals 0 "$(reported "$FIXTURES/safe.sh")" 'reported pipes'; then
     pass_case
 fi
 
-case_start 'a heredoc with more shell after it inside $(...) is reported'
+case_start 'a heredoc with more shell after it inside a command substitution is reported'
 if assert_equals 3 "$(reported "$FIXTURES/heredoc-unsafe.sh")" 'reported heredocs'; then
     pass_case
 fi
 
-case_start 'a heredoc alone in $(...), outside one, or a here-string is not reported'
+case_start 'a heredoc alone in a command substitution, outside one, or a here-string is not reported'
 if assert_equals 0 "$(reported "$FIXTURES/heredoc-safe.sh")" 'reported heredocs'; then
     pass_case
 fi
