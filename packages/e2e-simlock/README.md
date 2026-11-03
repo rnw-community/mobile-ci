@@ -128,6 +128,12 @@ Set `deviceMode` per target: give the payments target its own `simlockDevices({
 
 ### Screenshots and recordings
 
+- Android lanes that read pixels (screenshots, recordings, store or docs media,
+  visual gates) lease a `google_apis` image: `osVersion: '35', imageTag:
+  'google_apis'`. On the farm, the API 34 `aosp_atd` image returns all-black
+  screenshots (every pixel 0), and its recordings fail with "Android recording
+  artifact is not stable". Suites that read only the accessibility tree can keep
+  the cheaper `osVersion: '34', imageTag: 'aosp_atd'`.
 - iOS stills compared with Maestro-made baselines: set `iosScreenshotBackend:
   'runner'` (no Dynamic Island in the frame).
 - Recordings compared with baselines: set `videoTouches: false` on the `mobile()`
@@ -171,7 +177,10 @@ from `e2e-drop/`) is a helper app that does the copying. To use it, pass it in
 A payload over 1 MiB (`writeFile()`, `untar()`, `drop()`) waits for one of the
 machine-wide transfer slots app uploads use: lock files in the OS temp directory,
 one set per farm, `installConcurrency` of them. So ten workers dropping a large
-fixture send at most three at once; a slot whose holder died is reclaimed.
+fixture send at most three at once; a slot whose holder died is reclaimed. (If
+two processes reclaim the same dead holder's slot at the same moment, one extra
+transfer can run until either finishes.) A single payload still travels as one
+request; splitting drops into chunks is planned for v4.10.0.
 
 `exec()` asks again, at most three times and 2 s × attempt apart, when the
 connection drops before or during the answer (`fetch failed`, `terminated`) or the
