@@ -256,7 +256,7 @@ runs:
   using: composite
   steps:
     - name: Start Redroid container
-      uses: rnw-community/mobile-ci/actions/redroid-container@v4.8.0 # v4.8.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
       with:
           mode: start
           container-name: ${{ inputs.container-name }}
@@ -1066,7 +1066,7 @@ runs:
 
     - name: Teardown Redroid container
       if: always()
-      uses: rnw-community/mobile-ci/actions/redroid-container@v4.8.0 # v4.8.0
+      uses: rnw-community/mobile-ci/actions/redroid-container@e9fb12aad84a6956a4dd581c2920840d2711937c # fleet-validation pin
       with:
           mode: teardown
           container-name: ${{ inputs.container-name }}
