@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.8.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.9.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,15 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.9.0** — one e2e job for iOS and Android on a simlock farm:
+  `android-maestro.yml` takes `test-framework: maestro|e2e|both` like
+  `ios-maestro.yml`, and both run the new `e2e-suite` action. The device
+  provider ships in this repository as `@mobile-ci/e2e-simlock` (installed by
+  `e2e-simlock-install` from the workflow's own tag, no npm), with a farm lease
+  queue, machine-wide transfer slots, tunnel-reset retries and the `/steps`
+  helpers; consumers delete their copied provider and import it. Also: no
+  pipe into an early-exiting `grep` anywhere (a `pipefail` SIGPIPE read as a
+  miss), and `setup-gradle` 6.4.1.
 - **v4.8.0** — iOS e2e can run on a [simlock](https://github.com/callstack/simlock)
   simulator farm instead of Maestro: `test-framework: e2e|both` on
   `ios-maestro.yml` (default `maestro`) runs a tester-army `e2e` suite from Linux
@@ -433,7 +442,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.9.0 # v4.9.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -506,7 +515,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.8.0 # v4.8.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.9.0 # v4.9.0
 ```
 
 ## Scope
@@ -552,7 +561,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.8.0 # v4.8.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.9.0 # v4.9.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.
