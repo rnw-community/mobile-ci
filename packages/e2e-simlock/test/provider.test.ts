@@ -12,24 +12,28 @@ type Params = Record<string, unknown>;
 
 /** A fake agent-device client: each allocate grants the next device key, and installs fail as scripted. */
 function fakeFarm(deviceKeys: (string | undefined)[], installErrors: (string | undefined)[] = []) {
-    const calls = { allocate: [] as Params[], install: [] as Params[], release: [] as Params[], heartbeat: [] as Params[], sessions: [] as string[] };
+    const calls = { allocate: [] as Params[], install: [] as Params[], release: [] as Params[], heartbeat: [] as Params[], sessions: [] as string[], allocateUrls: [] as string[], otherUrls: [] as string[] };
     let releaseError: Error | undefined;
     let heartbeatError: Error | undefined;
     const factory = (config: Params) => {
         calls.sessions.push(String(config.session));
+        const url = String(config.daemonBaseUrl);
         return {
             leases: {
                 allocate: async (params: Params) => {
                     calls.allocate.push(params);
+                    calls.allocateUrls.push(url);
                     const deviceKey = deviceKeys.shift();
                     return { leaseId: params.leaseId, clientId: params.clientId, ...(deviceKey === undefined ? {} : { deviceKey }) };
                 },
                 heartbeat: async (params: Params) => {
                     calls.heartbeat.push(params);
+                    calls.otherUrls.push(url);
                     if (heartbeatError) throw heartbeatError;
                 },
                 release: async (params: Params) => {
                     calls.release.push(params);
+                    calls.otherUrls.push(url);
                     if (releaseError) throw releaseError;
                 }
             },
@@ -102,7 +106,8 @@ describe('simlockDevices options', () => {
             [{ device: '' }, 'simlockDevices: device is required (a model from the farm catalog)'],
             [{ ttlMs: 0 }, 'simlockDevices: ttlMs must be a positive number; got 0'],
             [{ queueMs: Number.NaN }, 'simlockDevices: queueMs must be a positive number; got NaN'],
-            [{ installConcurrency: -1 }, 'simlockDevices: installConcurrency must be a positive number; got -1']
+            [{ installConcurrency: -1 }, 'simlockDevices: installConcurrency must be a positive number; got -1'],
+            [{ deviceMode: 'mode-full' as never }, `simlockDevices: deviceMode must be 'slim' or 'full'; got "mode-full"`]
         ];
         for (const [override, message] of cases) {
             assert.throws(() => simlockDevices({ ...android, ...override }), { message });
@@ -193,6 +198,25 @@ describe('acquire and release', () => {
         });
         assert.deepEqual(asked, ['https://farm.test/v1/status']);
         assert.equal(farm.calls.allocate.length, 0);
+    });
+
+    it('sends only the allocate through the relay, which carries deviceMode; renewals and releases go to the farm', async () => {
+        const farm = fakeFarm(['ios:mobile:A1B2']);
+        const provider = createProvider({ ...ios, deviceMode: 'full' }, farm.load);
+        const lease = await provider.acquire(request('ios').req);
+        assert.deepEqual(farm.calls.allocateUrls, [lease.daemon!.baseUrl]);
+        assert.ok(!('deviceMode' in farm.calls.allocate[0]!), 'the client call itself never names it: the relay puts it on the wire');
+        await provider.release(lease, releaseContext);
+        assert.deepEqual(farm.calls.otherUrls, ['https://farm.test/v1/agent-device']);
+    });
+
+    it('closes the relay once every acquire has failed, so nothing keeps the run alive', async () => {
+        const farm = fakeFarm([undefined]);
+        const provider = createProvider(android, farm.load);
+        await assert.rejects(provider.acquire(request('android').req));
+        const relayUrl = farm.calls.allocateUrls[0]!;
+        assert.match(relayUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
+        await assert.rejects(realFetch(`${relayUrl}/rpc`, { method: 'POST', body: '{}' }));
     });
 
     it('refuses a target of the other platform', async () => {

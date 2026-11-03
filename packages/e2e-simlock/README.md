@@ -80,6 +80,7 @@ with several apps gives each its own target.
 | `device` | yes | | A model from the farm's catalog (`GET /v1/catalog?platform=…`). |
 | `osVersion` | no | the farm's default | iOS runtime or Android API level, e.g. `'34'`. |
 | `imageTag` | no | the farm's choice | Android system image tag, e.g. `'aosp_atd'`. |
+| `deviceMode` | no | the farm's (`slim`) | `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on iOS. `'slim'` or `'full'`; anything else throws. |
 | `extraApps` | no | `[]` | `.app`/`.apk` paths installed on every device after the app under test. |
 | `ttlMs` | no | `180000` | Lease TTL, renewed every third of it. |
 | `installConcurrency` | no | `3` | App uploads in flight at once. |
@@ -108,7 +109,15 @@ What it does for each worker slot:
 
 A loopback relay answers agent-device's `boot` (the farm grants booted devices)
 and a bare session `close` (which would end the lease mid-run). It forwards
-everything else to the configured gateway only.
+everything else to the configured gateway only. The lease allocate goes through
+it too, and gains the target's `deviceMode` on the wire as `params.deviceMode`:
+agent-device 0.21.36 and older drop the field from `leases.allocate`, and the
+relay rewrite goes away once it passes it (callstack/agent-device#4183). The
+farm must map `deviceMode` onto the lease's mode (callstackincubator/simlock#1225).
+
+Set `deviceMode` per target: give the payments target its own `simlockDevices({
+…, deviceMode: 'full' })` and leave the others on the default. The farm
+dedicates full devices separately, so ask for them only where a flow needs one.
 
 ### `@mobile-ci/e2e-simlock/exec` (iOS)
 

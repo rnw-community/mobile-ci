@@ -244,8 +244,10 @@ device: simlockDevices({
 It leases one device per worker and waits in a client-side queue while the
 farm is full. It installs the app, swaps a device whose install failed (once),
 renews each lease, lists the lease ids in `.e2e/simlock-leases.json` and
-releases every lease at the end. The package
-[README](../../packages/e2e-simlock/README.md) has every option, the
+releases every lease at the end. A target whose flows need an unslimmed device (Apple Pay and other
+PassKit/Wallet flows on iOS) adds `deviceMode: 'full'`; the others keep the
+farm's slim default. The package [README](../../packages/e2e-simlock/README.md)
+has every option, the
 iOS-only `@mobile-ci/e2e-simlock/exec` fixture helpers, and the local
 install. Nothing in it assumes a particular app: no bundle id, no fixture layout,
 no helper app unless you pass one in `extraApps`.

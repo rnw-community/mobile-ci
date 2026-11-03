@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, request, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 
-import { localReply, startBootRelay, upstreamPath, type BootRelay } from '../src/relay.ts';
+import { localReply, startBootRelay, upstreamPath, withDeviceMode, type BootRelay } from '../src/relay.ts';
 
 import type { AddressInfo } from 'node:net';
 
@@ -53,6 +53,23 @@ describe('localReply', () => {
         });
         assert.equal(localReply({ id: 5, params: { command: 'close', positionals: ['com.example'] } }), undefined);
         assert.equal(localReply({ id: 6, params: { command: 'snapshot' } }), undefined);
+    });
+});
+
+describe('withDeviceMode', () => {
+    const allocate = { jsonrpc: '2.0', id: 7, method: 'agent_device.lease.allocate', params: { platform: 'ios', device: 'iPhone 17 Pro' } };
+
+    it("puts the target's deviceMode on a lease allocate, either method spelling", () => {
+        assert.deepEqual(withDeviceMode(allocate, 'full'), { ...allocate, params: { platform: 'ios', device: 'iPhone 17 Pro', deviceMode: 'full' } });
+        assert.deepEqual(withDeviceMode({ ...allocate, method: 'agent-device.lease.allocate' }, 'slim')?.params?.deviceMode, 'slim');
+        assert.deepEqual(withDeviceMode({ id: 1, method: 'agent_device.lease.allocate' }, 'full')?.params, { deviceMode: 'full' });
+    });
+
+    it('leaves an allocate without a deviceMode, and every other call, as sent', () => {
+        assert.equal(withDeviceMode(allocate, undefined), undefined);
+        for (const method of ['agent_device.command', 'agent_device.lease.heartbeat', 'agent_device.lease.release', 'agent_device.lease.allocated', undefined]) {
+            assert.equal(withDeviceMode({ ...allocate, method }, 'full'), undefined, String(method));
+        }
     });
 });
 
@@ -116,6 +133,29 @@ describe('startBootRelay', () => {
         const reply = await send('GET', '//evil.test/x');
         assert.deepEqual(reply, { status: 400, body: 'simlock relay: refused request target //evil.test/x' });
         assert.equal(seen.length, 0);
+    });
+
+    it("rewrites a lease allocate with the relay's deviceMode, and forwards any other body byte for byte", async () => {
+        const full = await startBootRelay(`http://${gatewayHost}/v1/agent-device`, 'full');
+        try {
+            seen.length = 0;
+            const post = (body: string) =>
+                new Promise<number>((resolve, reject) => {
+                    const out = request(`${full.baseUrl}/rpc`, { method: 'POST' }, res => {
+                        res.resume();
+                        res.on('end', () => resolve(res.statusCode!));
+                    });
+                    out.on('error', reject);
+                    out.end(body);
+                });
+            await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent_device.lease.allocate', params: { platform: 'ios' } }));
+            const command = '{"jsonrpc":"2.0","id":2,"method":"agent_device.command","params":{"command":"snapshot"}}';
+            await post(command);
+            assert.deepEqual(JSON.parse(seen[0]!.body), { jsonrpc: '2.0', id: 1, method: 'agent_device.lease.allocate', params: { platform: 'ios', deviceMode: 'full' } });
+            assert.equal(seen[1]!.body, command);
+        } finally {
+            await full.close();
+        }
     });
 
     it('answers 502 when the gateway is unreachable', async () => {

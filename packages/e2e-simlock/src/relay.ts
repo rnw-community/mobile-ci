@@ -10,7 +10,8 @@ import type { AddressInfo } from 'node:net';
  * answers `boot` for the simulator UDID or emulator serial the engine names. A bare session
  * `close` would end the simlock lease and wipe the device mid-run (the engine closes a slot's
  * session on a worker respawn), so the relay answers that too; the provider releases the lease
- * at the end of the run. Every other request, uploads included, passes through untouched.
+ * at the end of the run. A lease allocate gains the target's `deviceMode`, if it has one. Every
+ * other request, uploads included, passes through untouched.
  */
 export interface BootRelay {
     readonly baseUrl: string;
@@ -53,13 +54,17 @@ export function upstreamPath(basePath: string, requestTarget: string): string | 
     return `${basePath.replace(/\/+$/, '')}${requestTarget}`;
 }
 
+export type DeviceMode = 'slim' | 'full';
+
+type Rpc = { id?: unknown; method?: unknown; params?: Record<string, unknown> };
+
 const rpcReply = (id: unknown, result: unknown): Buffer => Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }));
 
 const rpcError = (id: unknown, message: string): Buffer =>
     Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32000, message, data: { code: 'INVALID_ARGS', message } } }));
 
 /** The answer for an RPC the relay handles itself, or undefined to forward it. */
-export function localReply(rpc: { id?: unknown; params?: Record<string, unknown> }): Buffer | undefined {
+export function localReply(rpc: Rpc): Buffer | undefined {
     const params = rpc.params ?? {};
     const positionals = Array.isArray(params.positionals) ? params.positionals : [];
     if (params.command === 'close' && positionals.length === 0) {
@@ -79,7 +84,21 @@ export function localReply(rpc: { id?: unknown; params?: Record<string, unknown>
     return rpcError(rpc.id, 'simlock relay: boot names no udid or serial');
 }
 
-export async function startBootRelay(upstreamBaseUrl: string): Promise<BootRelay> {
+const LEASE_ALLOCATE = /^agent[_-]device\.lease\.allocate$/;
+
+/**
+ * The allocate with the target's `deviceMode` on the wire, or undefined to forward the RPC as sent.
+ * TODO(callstack/agent-device#4183): agent-device 0.21.36 and older drop `deviceMode` from
+ * `leases.allocate`; once it is released, pass it there and delete this rewrite.
+ */
+export function withDeviceMode(rpc: Rpc, deviceMode: DeviceMode | undefined): Rpc | undefined {
+    if (deviceMode === undefined || typeof rpc.method !== 'string' || !LEASE_ALLOCATE.test(rpc.method)) {
+        return undefined;
+    }
+    return { ...rpc, params: { ...rpc.params, deviceMode } };
+}
+
+export async function startBootRelay(upstreamBaseUrl: string, deviceMode?: DeviceMode): Promise<BootRelay> {
     const upstream = new URL(upstreamBaseUrl.endsWith('/') ? upstreamBaseUrl : `${upstreamBaseUrl}/`);
     const send = upstream.protocol === 'https:' ? httpsRequest : httpRequest;
 
@@ -138,7 +157,7 @@ export async function startBootRelay(upstreamBaseUrl: string): Promise<BootRelay
                 chunks.push(chunk as Buffer);
             }
             const raw = Buffer.concat(chunks);
-            const rpc = JSON.parse(raw.toString('utf8')) as { id?: unknown; params?: Record<string, unknown> };
+            const rpc = JSON.parse(raw.toString('utf8')) as Rpc;
             const local = localReply(rpc);
             if (DEBUG) {
                 console.error(`[relay] ${String(rpc.params?.command)} ${local === undefined ? 'forwarded' : 'answered locally'}`);
@@ -148,7 +167,8 @@ export async function startBootRelay(upstreamBaseUrl: string): Promise<BootRelay
                 outgoing.end(local);
                 return;
             }
-            const reply = await forward(incoming, path, raw);
+            const rewritten = withDeviceMode(rpc, deviceMode);
+            const reply = await forward(incoming, path, rewritten === undefined ? raw : Buffer.from(JSON.stringify(rewritten)));
             outgoing.writeHead(reply.status, endToEnd(reply.headers));
             outgoing.end(reply.body);
         } catch (cause) {

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { allocateQueued, FARM_DOWN, freeDevices, limiter, recordLease, type Platform } from './farm.ts';
-import { startBootRelay, type BootRelay } from './relay.ts';
+import { startBootRelay, type BootRelay, type DeviceMode } from './relay.ts';
 
 import type { DeviceLease, DeviceProvider, DeviceRequest } from '@e2e-dev/mobile';
 import type { createAgentDeviceClient } from 'agent-device';
@@ -19,6 +19,11 @@ export interface SimlockOptions {
     readonly osVersion?: string;
     /** Android system image tag, e.g. `aosp_atd` or `google_apis`; the farm's choice when omitted. */
     readonly imageTag?: string;
+    /**
+     * `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on
+     * iOS. `'slim'` asks for a slimmed one. The farm's default (slim) when omitted.
+     */
+    readonly deviceMode?: DeviceMode;
     /** Apps (`.app` or `.apk`) installed on every leased device after the app under test. */
     readonly extraApps?: readonly string[];
     /** Lease TTL, renewed every third of it. Short, so a run killed before it releases frees its device within one TTL. Default 3 min. */
@@ -75,6 +80,9 @@ function validated(options: SimlockOptions) {
     if (!options.device) {
         throw new Error('simlockDevices: device is required (a model from the farm catalog)');
     }
+    if (options.deviceMode !== undefined && options.deviceMode !== 'slim' && options.deviceMode !== 'full') {
+        throw new Error(`simlockDevices: deviceMode must be 'slim' or 'full'; got ${JSON.stringify(options.deviceMode)}`);
+    }
     return {
         baseUrl: `${options.url.replace(/\/$/, '')}/v1/agent-device`,
         ttlMs: positive('ttlMs', options.ttlMs, 3 * 60_000),
@@ -103,16 +111,26 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
     const held = new Map<string, Held>();
     const uploads = limiter(installConcurrency);
     let relay: Promise<BootRelay> | undefined;
+    let acquiring = 0;
 
-    const client = async (session: string, scope?: Scope): Promise<Client> =>
-        (await loadClient())({ daemonBaseUrl: baseUrl, daemonAuthToken: token, session, ...scope });
+    const client = async (session: string, scope?: Scope, daemonBaseUrl = baseUrl): Promise<Client> =>
+        (await loadClient())({ daemonBaseUrl, daemonAuthToken: token, session, ...scope });
 
     const startRelay = (): Promise<BootRelay> => {
-        relay ??= startBootRelay(baseUrl).catch((cause: unknown) => {
+        relay ??= startBootRelay(baseUrl, options.deviceMode).catch((cause: unknown) => {
             relay = undefined;
             throw cause;
         });
         return relay;
+    };
+
+    /** Closes the relay once no lease is held and none is being acquired; a later acquire starts a new one. */
+    const closeIdleRelay = async (): Promise<void> => {
+        if (held.size === 0 && acquiring === 0 && relay !== undefined) {
+            const closing = relay;
+            relay = undefined;
+            await (await closing).close().catch(() => undefined);
+        }
     };
 
     const leaseOnce = async (request: DeviceRequest, attempt: number): Promise<DeviceLease> => {
@@ -120,10 +138,12 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
         const started = Date.now();
         const base = { tenant, runId: request.runId, leaseBackend, leaseProvider: 'proxy' as const, clientId: randomBytes(8).toString('hex') };
         const c = await client(session);
+        // The allocate goes through the relay, which puts the target's deviceMode on the wire.
+        const allocating = await client(session, undefined, (await startRelay()).baseUrl);
         const lease = await allocateQueued({
             platform,
             allocate: leaseId =>
-                c.leases.allocate({
+                allocating.leases.allocate({
                     ...base,
                     leaseId,
                     ttlMs,
@@ -217,6 +237,7 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
             if (request.platform !== platform) {
                 throw new Error(`simlockDevices leases ${platform} devices; the target asked for ${request.platform}`);
             }
+            acquiring += 1;
             try {
                 return await leaseOnce(request, 0);
             } catch (cause) {
@@ -227,7 +248,10 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
                 }
                 request.signal.throwIfAborted();
                 request.log(`simlock: ${cause.message}; leasing another device`);
-                return leaseOnce(request, 1);
+                return await leaseOnce(request, 1);
+            } finally {
+                acquiring -= 1;
+                await closeIdleRelay();
             }
         },
         async release(lease: DeviceLease, context): Promise<void> {
@@ -242,11 +266,7 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
             } finally {
                 // A failed release still frees this process: the farm reclaims the lease after one TTL.
                 held.delete(lease.id);
-                if (held.size === 0 && relay !== undefined) {
-                    const closing = relay;
-                    relay = undefined;
-                    await (await closing).close();
-                }
+                await closeIdleRelay();
             }
         }
     };
