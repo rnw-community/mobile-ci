@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
 import { LARGE_PAYLOAD_BYTES, transfer } from './transfers.ts';
+import { acrossTunnel } from './tunnel.ts';
 
 /**
  * Host-side iOS simulator work over simlock's HTTP API, for test fixtures (iOS only:
@@ -68,22 +69,13 @@ const TRANSIENT = /WORKER_UNREACHABLE|fetch failed|terminated/;
 /** Runs one `simctl` command on the leased simulator. */
 export async function exec(api: SimlockApi, leaseId: string, args: readonly string[], stdin?: string): Promise<ExecResult> {
     const body = JSON.stringify({ tool: 'simctl', args, ...(stdin === undefined ? {} : { stdin }) });
-    let text: string;
-    for (let attempt = 1; ; attempt++) {
-        try {
-            // One attempt is the request and its whole answer: the tunnel can drop either.
-            text = await (await call(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body })).text();
-            break;
-        } catch (cause) {
-            // A gateway's worker uplink can drop and reconnect within a second, and the tunnel can reset a
-            // connection before or during the answer; every command the suite sends is idempotent. An error
-            // the gateway answered, or the request timeout, is not transient.
-            if (attempt === 3 || !TRANSIENT.test(String(cause))) {
-                throw cause;
-            }
-            await new Promise(resolve => setTimeout(resolve, 2_000 * attempt));
-        }
-    }
+    // One attempt is the request and its whole answer: the tunnel can drop either. A gateway's worker uplink can
+    // drop and reconnect within a second too; every command the suite sends is idempotent. An error the gateway
+    // answered, or the request timeout, is not transient.
+    const text = await acrossTunnel(
+        async () => (await call(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body })).text(),
+        cause => TRANSIENT.test(String(cause))
+    );
     let stdout = '';
     let stderr = '';
     let exitCode = -1;
