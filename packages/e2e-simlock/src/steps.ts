@@ -1,6 +1,8 @@
 import type { Device } from '@e2e-dev/mobile';
 import type { Locator, Screen } from 'e2e';
 
+export { measureRecording, type RecordingStats } from './recording.ts';
+
 /** A React Native testID shows up on the host view and its wrapper; Maestro takes the first, so does this. */
 export const byId = (screen: Screen, id: string): Locator => screen.getByTestId(id).first();
 
