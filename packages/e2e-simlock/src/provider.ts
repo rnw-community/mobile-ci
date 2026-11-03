@@ -24,6 +24,12 @@ export interface SimlockOptions {
      * iOS. `'slim'` asks for a slimmed one. The farm's default (slim) when omitted.
      */
     readonly deviceMode?: DeviceMode;
+    /**
+     * iOS only. `'runner'` takes screenshots with the XCTest runner instead of simctl: its stills have
+     * no Dynamic Island, like Maestro's, so baselines made by Maestro still match. agent-device's
+     * default capture when omitted.
+     */
+    readonly iosScreenshotBackend?: 'runner';
     /** Apps (`.app` or `.apk`) installed on every leased device after the app under test. */
     readonly extraApps?: readonly string[];
     /** Lease TTL, renewed every third of it. Short, so a run killed before it releases frees its device within one TTL. Default 3 min. */
@@ -83,6 +89,14 @@ function validated(options: SimlockOptions) {
     if (options.deviceMode !== undefined && options.deviceMode !== 'slim' && options.deviceMode !== 'full') {
         throw new Error(`simlockDevices: deviceMode must be 'slim' or 'full'; got ${JSON.stringify(options.deviceMode)}`);
     }
+    if (options.iosScreenshotBackend !== undefined) {
+        if (options.iosScreenshotBackend !== 'runner') {
+            throw new Error(`simlockDevices: iosScreenshotBackend must be 'runner'; got ${JSON.stringify(options.iosScreenshotBackend)}`);
+        }
+        if (options.platform !== 'ios') {
+            throw new Error(`simlockDevices: iosScreenshotBackend applies to iOS only; this target's platform is '${options.platform}'`);
+        }
+    }
     return {
         baseUrl: `${options.url.replace(/\/$/, '')}/v1/agent-device`,
         ttlMs: positive('ttlMs', options.ttlMs, 3 * 60_000),
@@ -117,7 +131,10 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
         (await loadClient())({ daemonBaseUrl, daemonAuthToken: token, session, ...scope });
 
     const startRelay = (): Promise<BootRelay> => {
-        relay ??= startBootRelay(baseUrl, options.deviceMode).catch((cause: unknown) => {
+        relay ??= startBootRelay(baseUrl, {
+            ...(options.deviceMode === undefined ? {} : { deviceMode: options.deviceMode }),
+            runnerScreenshots: options.iosScreenshotBackend === 'runner'
+        }).catch((cause: unknown) => {
             relay = undefined;
             throw cause;
         });
@@ -138,7 +155,7 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
         const started = Date.now();
         const base = { tenant, runId: request.runId, leaseBackend, leaseProvider: 'proxy' as const, clientId: randomBytes(8).toString('hex') };
         const c = await client(session);
-        // The allocate goes through the relay, which puts the target's deviceMode on the wire.
+        // The allocate goes through the relay, which puts the target's deviceMode on the wire (`rewritten`).
         const allocating = await client(session, undefined, (await startRelay()).baseUrl);
         const lease = await allocateQueued({
             platform,

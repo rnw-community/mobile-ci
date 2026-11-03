@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 
 import { createProvider, simlockDevices, type SimlockOptions } from '../src/provider.ts';
 
 import type { DeviceLease, DeviceRequest } from '@e2e-dev/mobile';
+import type { AddressInfo } from 'node:net';
 
 type Params = Record<string, unknown>;
 
@@ -107,7 +109,9 @@ describe('simlockDevices options', () => {
             [{ ttlMs: 0 }, 'simlockDevices: ttlMs must be a positive number; got 0'],
             [{ queueMs: Number.NaN }, 'simlockDevices: queueMs must be a positive number; got NaN'],
             [{ installConcurrency: -1 }, 'simlockDevices: installConcurrency must be a positive number; got -1'],
-            [{ deviceMode: 'mode-full' as never }, `simlockDevices: deviceMode must be 'slim' or 'full'; got "mode-full"`]
+            [{ deviceMode: 'mode-full' as never }, `simlockDevices: deviceMode must be 'slim' or 'full'; got "mode-full"`],
+            [{ platform: 'ios', iosScreenshotBackend: 'simctl' as never }, `simlockDevices: iosScreenshotBackend must be 'runner'; got "simctl"`],
+            [{ iosScreenshotBackend: 'runner' }, "simlockDevices: iosScreenshotBackend applies to iOS only; this target's platform is 'android'"]
         ];
         for (const [override, message] of cases) {
             assert.throws(() => simlockDevices({ ...android, ...override }), { message });
@@ -208,6 +212,32 @@ describe('acquire and release', () => {
         assert.ok(!('deviceMode' in farm.calls.allocate[0]!), 'the client call itself never names it: the relay puts it on the wire');
         await provider.release(lease, releaseContext);
         assert.deepEqual(farm.calls.otherUrls, ['https://farm.test/v1/agent-device']);
+    });
+
+    it("an iOS target with iosScreenshotBackend: 'runner' gets runner screenshots through its lease's relay", async () => {
+        const bodies: string[] = [];
+        const gateway = createServer(async (req, res) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            bodies.push(Buffer.concat(chunks).toString('utf8'));
+            res.writeHead(req.url === '/v1/status' ? 503 : 200, { connection: 'close' }).end('{}');
+        });
+        await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+        try {
+            const url = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;
+            globalThis.fetch = realFetch;
+            const farm = fakeFarm(['ios:mobile:A1B2']);
+            const provider = createProvider({ ...ios, url, iosScreenshotBackend: 'runner' }, farm.load);
+            const lease = await provider.acquire(request('ios').req);
+            await realFetch(`${lease.daemon!.baseUrl}/rpc`, {
+                method: 'POST',
+                body: JSON.stringify({ id: 1, method: 'agent_device.command', params: { command: 'screenshot', flags: { screenshotPixelDensity: 3 } } })
+            });
+            assert.deepEqual(JSON.parse(bodies.at(-1)!).params.flags, { screenshotCaptureBackend: 'runner' });
+            await provider.release(lease, releaseContext);
+        } finally {
+            await new Promise(resolve => gateway.close(resolve));
+        }
     });
 
     it('closes the relay once every acquire has failed, so nothing keeps the run alive', async () => {

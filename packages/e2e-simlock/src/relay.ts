@@ -10,8 +10,9 @@ import type { AddressInfo } from 'node:net';
  * answers `boot` for the simulator UDID or emulator serial the engine names. A bare session
  * `close` would end the simlock lease and wipe the device mid-run (the engine closes a slot's
  * session on a worker respawn), so the relay answers that too; the provider releases the lease
- * at the end of the run. A lease allocate gains the target's `deviceMode`, if it has one. Every
- * other request, uploads included, passes through untouched.
+ * at the end of the run. A lease allocate gains the target's `deviceMode`, and an iOS screenshot the
+ * runner capture backend, when the target asks for them (`rewritten`). Every other request, uploads
+ * included, passes through untouched.
  */
 export interface BootRelay {
     readonly baseUrl: string;
@@ -85,20 +86,38 @@ export function localReply(rpc: Rpc): Buffer | undefined {
 }
 
 const LEASE_ALLOCATE = /^agent[_-]device\.lease\.allocate$/;
+const COMMAND = /^agent[_-]device\.command$/;
 
-/**
- * The allocate with the target's `deviceMode` on the wire, or undefined to forward the RPC as sent.
- * TODO(callstack/agent-device#4183): agent-device 0.21.36 and older drop `deviceMode` from
- * `leases.allocate`; once it is released, pass it there and delete this rewrite.
- */
-export function withDeviceMode(rpc: Rpc, deviceMode: DeviceMode | undefined): Rpc | undefined {
-    if (deviceMode === undefined || typeof rpc.method !== 'string' || !LEASE_ALLOCATE.test(rpc.method)) {
-        return undefined;
-    }
-    return { ...rpc, params: { ...rpc.params, deviceMode } };
+/** What the relay adds to requests on their way to the farm: the one place either field reaches the wire. */
+export interface RelayRewrites {
+    /** Put on every lease allocate as `params.deviceMode`. */
+    readonly deviceMode?: DeviceMode;
+    /** iOS: take every `screenshot` from the XCTest runner, as Maestro's baselines were (no Dynamic Island). */
+    readonly runnerScreenshots?: boolean;
 }
 
-export async function startBootRelay(upstreamBaseUrl: string, deviceMode?: DeviceMode): Promise<BootRelay> {
+/**
+ * The request as the farm must see it, or undefined to forward it as sent. agent-device 0.21.36 and
+ * older have no field for either:
+ * - TODO(callstack/agent-device#4183): pass `deviceMode` to `leases.allocate` and drop this rule.
+ * - TODO(callstack/agent-device#4184): pass `captureBackend: 'runner'` to the screenshot call and
+ *   drop this rule. The runner already captures at device density, and the daemon refuses
+ *   `screenshotPixelDensity` beside it, so the rule removes that flag.
+ */
+export function rewritten(rpc: Rpc, rewrites: RelayRewrites): Rpc | undefined {
+    const method = typeof rpc.method === 'string' ? rpc.method : '';
+    if (rewrites.deviceMode !== undefined && LEASE_ALLOCATE.test(method)) {
+        return { ...rpc, params: { ...rpc.params, deviceMode: rewrites.deviceMode } };
+    }
+    if (rewrites.runnerScreenshots === true && COMMAND.test(method) && rpc.params?.command === 'screenshot') {
+        const flags: Record<string, unknown> = { ...(rpc.params.flags as Record<string, unknown> | undefined), screenshotCaptureBackend: 'runner' };
+        delete flags.screenshotPixelDensity;
+        return { ...rpc, params: { ...rpc.params, flags } };
+    }
+    return undefined;
+}
+
+export async function startBootRelay(upstreamBaseUrl: string, rewrites: RelayRewrites = {}): Promise<BootRelay> {
     const upstream = new URL(upstreamBaseUrl.endsWith('/') ? upstreamBaseUrl : `${upstreamBaseUrl}/`);
     const send = upstream.protocol === 'https:' ? httpsRequest : httpRequest;
 
@@ -167,8 +186,8 @@ export async function startBootRelay(upstreamBaseUrl: string, deviceMode?: Devic
                 outgoing.end(local);
                 return;
             }
-            const rewritten = withDeviceMode(rpc, deviceMode);
-            const reply = await forward(incoming, path, rewritten === undefined ? raw : Buffer.from(JSON.stringify(rewritten)));
+            const changed = rewritten(rpc, rewrites);
+            const reply = await forward(incoming, path, changed === undefined ? raw : Buffer.from(JSON.stringify(changed)));
             outgoing.writeHead(reply.status, endToEnd(reply.headers));
             outgoing.end(reply.body);
         } catch (cause) {

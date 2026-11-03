@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, request, type Server } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 
-import { localReply, startBootRelay, upstreamPath, withDeviceMode, type BootRelay } from '../src/relay.ts';
+import { localReply, rewritten, startBootRelay, upstreamPath, type BootRelay } from '../src/relay.ts';
 
 import type { AddressInfo } from 'node:net';
 
@@ -56,20 +56,39 @@ describe('localReply', () => {
     });
 });
 
-describe('withDeviceMode', () => {
+describe('rewritten', () => {
     const allocate = { jsonrpc: '2.0', id: 7, method: 'agent_device.lease.allocate', params: { platform: 'ios', device: 'iPhone 17 Pro' } };
+    const screenshot = { jsonrpc: '2.0', id: 8, method: 'agent_device.command', params: { command: 'screenshot', positionals: ['/tmp/a.png'], flags: { udid: 'U', screenshotPixelDensity: 3 } } };
 
     it("puts the target's deviceMode on a lease allocate, either method spelling", () => {
-        assert.deepEqual(withDeviceMode(allocate, 'full'), { ...allocate, params: { platform: 'ios', device: 'iPhone 17 Pro', deviceMode: 'full' } });
-        assert.deepEqual(withDeviceMode({ ...allocate, method: 'agent-device.lease.allocate' }, 'slim')?.params?.deviceMode, 'slim');
-        assert.deepEqual(withDeviceMode({ id: 1, method: 'agent_device.lease.allocate' }, 'full')?.params, { deviceMode: 'full' });
+        assert.deepEqual(rewritten(allocate, { deviceMode: 'full' }), { ...allocate, params: { platform: 'ios', device: 'iPhone 17 Pro', deviceMode: 'full' } });
+        assert.equal(rewritten({ ...allocate, method: 'agent-device.lease.allocate' }, { deviceMode: 'slim' })?.params?.deviceMode, 'slim');
+        assert.deepEqual(rewritten({ id: 1, method: 'agent_device.lease.allocate' }, { deviceMode: 'full' })?.params, { deviceMode: 'full' });
     });
 
-    it('leaves an allocate without a deviceMode, and every other call, as sent', () => {
-        assert.equal(withDeviceMode(allocate, undefined), undefined);
-        for (const method of ['agent_device.command', 'agent_device.lease.heartbeat', 'agent_device.lease.release', 'agent_device.lease.allocated', undefined]) {
-            assert.equal(withDeviceMode({ ...allocate, method }, 'full'), undefined, String(method));
+    it('takes an iOS screenshot from the runner, without the pixel density the daemon refuses beside it', () => {
+        assert.deepEqual(rewritten(screenshot, { runnerScreenshots: true }), {
+            ...screenshot,
+            params: { command: 'screenshot', positionals: ['/tmp/a.png'], flags: { udid: 'U', screenshotCaptureBackend: 'runner' } }
+        });
+        assert.deepEqual(rewritten({ ...screenshot, params: { command: 'screenshot' } }, { runnerScreenshots: true })?.params, {
+            command: 'screenshot',
+            flags: { screenshotCaptureBackend: 'runner' }
+        });
+        assert.equal(screenshot.params.flags.screenshotPixelDensity, 3, 'the original request is not mutated');
+    });
+
+    it('leaves everything else as sent: other commands, lease calls, and a target that asked for neither', () => {
+        const all = { deviceMode: 'full' as const, runnerScreenshots: true };
+        for (const command of ['click', 'snapshot', 'record']) {
+            assert.equal(rewritten({ ...screenshot, params: { ...screenshot.params, command } }, all), undefined, command);
         }
+        for (const method of ['agent_device.lease.heartbeat', 'agent_device.lease.release', 'agent_device.lease.allocated', undefined]) {
+            assert.equal(rewritten({ ...allocate, method }, all), undefined, String(method));
+        }
+        assert.equal(rewritten({ ...screenshot, method: 'agent_device.lease.allocate' }, { runnerScreenshots: true }), undefined);
+        assert.equal(rewritten(allocate, {}), undefined);
+        assert.equal(rewritten(screenshot, { deviceMode: 'full' }), undefined, 'a target without the runner option keeps the default capture (Android)');
     });
 });
 
@@ -135,8 +154,8 @@ describe('startBootRelay', () => {
         assert.equal(seen.length, 0);
     });
 
-    it("rewrites a lease allocate with the relay's deviceMode, and forwards any other body byte for byte", async () => {
-        const full = await startBootRelay(`http://${gatewayHost}/v1/agent-device`, 'full');
+    it("rewrites what the target asked for on the wire, and forwards any other body byte for byte", async () => {
+        const full = await startBootRelay(`http://${gatewayHost}/v1/agent-device`, { deviceMode: 'full', runnerScreenshots: true });
         try {
             seen.length = 0;
             const post = (body: string) =>
@@ -151,8 +170,10 @@ describe('startBootRelay', () => {
             await post(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent_device.lease.allocate', params: { platform: 'ios' } }));
             const command = '{"jsonrpc":"2.0","id":2,"method":"agent_device.command","params":{"command":"snapshot"}}';
             await post(command);
+            await post(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'agent_device.command', params: { command: 'screenshot', flags: { screenshotPixelDensity: 3 } } }));
             assert.deepEqual(JSON.parse(seen[0]!.body), { jsonrpc: '2.0', id: 1, method: 'agent_device.lease.allocate', params: { platform: 'ios', deviceMode: 'full' } });
             assert.equal(seen[1]!.body, command);
+            assert.deepEqual(JSON.parse(seen[2]!.body).params.flags, { screenshotCaptureBackend: 'runner' });
         } finally {
             await full.close();
         }

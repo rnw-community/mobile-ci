@@ -304,6 +304,10 @@ A repository that copied a simlock provider into its e2e project (budgie's
    `tenant`.
 3. Pin every mobile-ci workflow call to the same `v4.9.0` or later tag: the
    workflow installs the package from that tag.
+4. A job of your own that typechecks or runs the e2e project outside these
+   workflows (a `tsc` check on pull requests) installs the package first, after
+   its `npm ci`: `scripts/fetch-e2e-simlock.sh v4.9.0 e2e`, or the
+   [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
 
