@@ -75,6 +75,19 @@ if assert_equals 11 "$status" 'statuses' \
     pass_case
 fi
 
+case_start 'without a working jq the action fails closed and leaves an earlier copy alone, not an empty package'
+action_workspace
+mkdir -p "$dir/work/e2e/node_modules/@mobile-ci/e2e-simlock"
+: > "$dir/work/e2e/node_modules/@mobile-ci/e2e-simlock/earlier"
+stub "$dir" jq 'exit 127'
+install_with_action E2E_DIR=e2e
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" 'is jq installed?' 'log' \
+    && assert_not_contains "$(cat "$dir/log")" 'Installed @mobile-ci/e2e-simlock' 'log' \
+    && assert_equals earlier "$(ls "$dir/work/e2e/node_modules/@mobile-ci/e2e-simlock")" 'earlier copy'; then
+    pass_case
+fi
+
 # fetch <ref> [VAR=value ...]: runs the script with curl serving a tarball of this checkout.
 fetch() {
     local ref="$1"

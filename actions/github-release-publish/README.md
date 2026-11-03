@@ -81,7 +81,7 @@ The calling job needs `contents: write`.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/github-release-publish@v4.9.0 # v4.9.0
+- uses: rnw-community/mobile-ci/actions/github-release-publish@v4.9.1 # v4.9.1
   id: publish
   with:
       source-dir: packages/app/dist
