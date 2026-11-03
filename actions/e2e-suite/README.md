@@ -61,7 +61,7 @@ stdin, never on its command line.
 ```yaml
 - name: Run the e2e suite
   id: run
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.9.0 # v4.9.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@69b46b83105a68657aac5bd02b96e15c1ca55b45 # feat/android-e2e-simlock-farm fleet-validation pin
   with:
       mode: run
       platform: android
@@ -75,7 +75,7 @@ stdin, never on its command line.
       simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 - name: Release the devices the suite left leased
   if: ${{ always() && steps.run.outcome != 'skipped' }}
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.9.0 # v4.9.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@69b46b83105a68657aac5bd02b96e15c1ca55b45 # feat/android-e2e-simlock-farm fleet-validation pin
   with:
       mode: release
       platform: android
