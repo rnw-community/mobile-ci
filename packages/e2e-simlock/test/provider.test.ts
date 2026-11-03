@@ -14,8 +14,8 @@ import type { AddressInfo } from 'node:net';
 type Params = Record<string, unknown>;
 
 /** A fake agent-device client: each allocate grants the next device key, and installs fail as scripted. */
-function fakeFarm(deviceKeys: (string | undefined)[], installErrors: (string | undefined)[] = []) {
-    const calls = { allocate: [] as Params[], install: [] as Params[], release: [] as Params[], heartbeat: [] as Params[], sessions: [] as string[], allocateUrls: [] as string[], otherUrls: [] as string[] };
+function fakeFarm(deviceKeys: (string | undefined)[], installErrors: (string | undefined)[] = [], settingsErrors: (string | undefined)[] = []) {
+    const calls = { allocate: [] as Params[], install: [] as Params[], settings: [] as Params[], release: [] as Params[], heartbeat: [] as Params[], sessions: [] as string[], allocateUrls: [] as string[], otherUrls: [] as string[] };
     let releaseError: Error | undefined;
     let heartbeatError: Error | undefined;
     const factory = (config: Params) => {
@@ -38,6 +38,13 @@ function fakeFarm(deviceKeys: (string | undefined)[], installErrors: (string | u
                     calls.release.push(params);
                     calls.otherUrls.push(url);
                     if (releaseError) throw releaseError;
+                }
+            },
+            settings: {
+                update: async (params: Params) => {
+                    calls.settings.push(params);
+                    const error = settingsErrors.shift();
+                    if (error !== undefined) throw new Error(error);
                 }
             },
             apps: {
@@ -112,7 +119,9 @@ describe('simlockDevices options', () => {
             [{ installConcurrency: -1 }, 'simlockDevices: installConcurrency must be a positive number; got -1'],
             [{ deviceMode: 'mode-full' as never }, `simlockDevices: deviceMode must be 'slim' or 'full'; got "mode-full"`],
             [{ platform: 'ios', iosScreenshotBackend: 'simctl' as never }, `simlockDevices: iosScreenshotBackend must be 'runner'; got "simctl"`],
-            [{ iosScreenshotBackend: 'runner' }, "simlockDevices: iosScreenshotBackend applies to iOS only; this target's platform is 'android'"]
+            [{ iosScreenshotBackend: 'runner' }, "simlockDevices: iosScreenshotBackend applies to iOS only; this target's platform is 'android'"],
+            [{ animations: 'slow' as never }, `simlockDevices: animations must be 'off' or 'on'; got "slow"`],
+            [{ platform: 'ios', animations: 'off' }, "simlockDevices: animations applies to Android only (agent-device has no iOS equivalent); this target's platform is 'ios'"]
         ];
         for (const [override, message] of cases) {
             assert.throws(() => simlockDevices({ ...android, ...override }), { message });
@@ -264,6 +273,32 @@ describe('acquire and release', () => {
         const lease = await acquiring;
         assert.equal(farm.calls.install.length, 1);
         await provider.release(lease, releaseContext);
+    });
+
+    it("turns an Android lease's animations off once, after the app is installed", async () => {
+        const farm = fakeFarm(['android:mobile:emulator-5586']);
+        const provider = createProvider(android, farm.load);
+        const lease = await provider.acquire(request('android').req);
+        assert.deepEqual(farm.calls.settings, [{ platform: 'android', serial: 'emulator-5586', setting: 'animations', state: 'off' }]);
+        await provider.release(lease, releaseContext);
+        assert.equal(farm.calls.settings.length, 1);
+    });
+
+    it("leaves animations as they are with animations: 'on', and on iOS", async () => {
+        const farm = fakeFarm(['android:mobile:e-1', 'ios:mobile:U-1']);
+        const on = createProvider({ ...android, animations: 'on' }, farm.load);
+        const lease = await on.acquire(request('android').req);
+        const iosProvider = createProvider(ios, farm.load);
+        const iosLease = await iosProvider.acquire(request('ios').req);
+        assert.deepEqual(farm.calls.settings, []);
+        await on.release(lease, releaseContext);
+        await iosProvider.release(iosLease, releaseContext);
+    });
+
+    it('swaps a device whose animations cannot be turned off, and fails closed when the next one cannot either', async () => {
+        const farm = fakeFarm(['android:mobile:e-1', 'android:mobile:e-2'], [], ['settings put failed', 'settings put failed again']);
+        await assert.rejects(createProvider(android, farm.load).acquire(request('android').req), { message: 'settings put failed again (e-2)' });
+        assert.deepEqual([farm.calls.allocate.length, farm.calls.release.length, farm.calls.settings.length], [2, 2, 2]);
     });
 
     it('refuses a target of the other platform', async () => {

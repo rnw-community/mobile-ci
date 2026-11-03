@@ -31,6 +31,12 @@ export interface SimlockOptions {
      * default capture when omitted.
      */
     readonly iosScreenshotBackend?: 'runner';
+    /**
+     * Android only. `'off'` (default) sets the window, transition and animator scales to 0 once per lease, after the
+     * install, as mobile-ci's emulator action always did: a window still sliding in when a test starts reports a
+     * shifted viewport, and gestures fail as out of bounds. `'on'` keeps real animations, for lanes that record them.
+     */
+    readonly animations?: 'off' | 'on';
     /** Apps (`.app` or `.apk`) installed on every leased device after the app under test. */
     readonly extraApps?: readonly string[];
     /** Lease TTL, renewed every third of it. Short, so a run killed before it releases frees its device within one TTL. Default 3 min. */
@@ -93,6 +99,14 @@ function validated(options: SimlockOptions) {
     }
     if (options.deviceMode !== undefined && options.deviceMode !== 'slim' && options.deviceMode !== 'full') {
         throw new Error(`simlockDevices: deviceMode must be 'slim' or 'full'; got ${JSON.stringify(options.deviceMode)}`);
+    }
+    if (options.animations !== undefined) {
+        if (options.animations !== 'off' && options.animations !== 'on') {
+            throw new Error(`simlockDevices: animations must be 'off' or 'on'; got ${JSON.stringify(options.animations)}`);
+        }
+        if (options.platform !== 'android') {
+            throw new Error(`simlockDevices: animations applies to Android only (agent-device has no iOS equivalent); this target's platform is '${options.platform}'`);
+        }
     }
     if (options.iosScreenshotBackend !== undefined) {
         if (options.iosScreenshotBackend !== 'runner') {
@@ -233,6 +247,13 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
             }
             for (const extra of options.extraApps ?? []) {
                 await install(extra);
+            }
+            if (platform === 'android' && options.animations !== 'on') {
+                try {
+                    await scoped.settings.update({ platform, serial: deviceId, setting: 'animations', state: 'off' });
+                } catch (cause) {
+                    throw new DeviceSetupFailed(`${cause instanceof Error ? cause.message : String(cause)} (${deviceId})`, { cause });
+                }
             }
             const entry: Held = {
                 id: lease.leaseId,

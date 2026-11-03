@@ -80,6 +80,7 @@ with several apps gives each its own target.
 | `device` | yes | | A model from the farm's catalog (`GET /v1/catalog?platform=…`). |
 | `osVersion` | no | the farm's default | iOS runtime or Android API level, e.g. `'34'`. |
 | `imageTag` | no | the farm's choice | Android system image tag, e.g. `'aosp_atd'`. |
+| `animations` | no | `'off'` | Android only. `'off'` sets the window, transition and animator scales to 0 once per lease, after the install, as mobile-ci's emulator action did for Maestro. A window still sliding in when a test starts reports a shifted viewport, and gestures then fail with `GESTURE_TRAJECTORY_OUT_OF_BOUNDS`. `'on'` keeps real animations, for lanes that record them. A failed call is a failed device setup: one swap, then the run fails. agent-device 0.21.36 has no iOS equivalent (no simulator reduce-motion setting), so the option throws on an iOS target. |
 | `iosScreenshotBackend` | no | agent-device's (simctl) | iOS only: `'runner'` takes every screenshot with the XCTest runner. Its stills have no Dynamic Island, like Maestro's, so baselines Maestro made still match; simctl draws the island into the framebuffer. Any other value, or the option on an Android target, throws. |
 | `deviceMode` | no | the farm's (`slim`) | `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on iOS. `'slim'` or `'full'`; anything else throws. |
 | `extraApps` | no | `[]` | `.app`/`.apk` paths installed on every device after the app under test. |
