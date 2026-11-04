@@ -1691,7 +1691,7 @@ jobs:
                   allow-multiline: false
             - name: Run the e2e suite
               id: run
-              continue-on-error: ${{ (inputs.test-framework == 'both' && !inputs.e2e-required) || matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
               uses: rnw-community/mobile-ci/actions/e2e-suite@v4.10.0 # v4.10.0
               with:
                   mode: run

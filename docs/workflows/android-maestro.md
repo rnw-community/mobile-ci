@@ -279,8 +279,8 @@ workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test
-credentials. A target with `tolerateTestFailures` turns a failing suite into a
-warning, as with Maestro. The farm runs **arm64-v8a** emulators, so the APK must contain that ABI. `android-abis: auto` builds only the AVD's `x86_64`: set `android-abis: arm64-v8a` for `test-framework: e2e`, or `x86_64,arm64-v8a` to keep the `avd` Maestro suite beside it with `both`, and pass [`seed-native-cache.yml`](seed-native-cache.md) the same value (the ABIs are part of the native key). `detect` rejects a build that leaves arm64-v8a out; an empty `android-abis` builds every ABI the project declares and passes. `android-driver` applies only to the Maestro
+credentials. A target with `tolerateTestFailures` turns failing tests into a
+warning, as with Maestro, but not a run that tested nothing or hit an infrastructure error: no report, none executed or a run error fails the job with an `Infrastructure failure:` annotation, which [`rerun-infra-failures`](../../actions/rerun-infra-failures/README.md) retries once. The farm runs **arm64-v8a** emulators, so the APK must contain that ABI. `android-abis: auto` builds only the AVD's `x86_64`: set `android-abis: arm64-v8a` for `test-framework: e2e`, or `x86_64,arm64-v8a` to keep the `avd` Maestro suite beside it with `both`, and pass [`seed-native-cache.yml`](seed-native-cache.md) the same value (the ABIs are part of the native key). `detect` rejects a build that leaves arm64-v8a out; an empty `android-abis` builds every ABI the project declares and passes. `android-driver` applies only to the Maestro
 suite: `test-framework: e2e` with anything but `avd` fails in `detect`.
 
 Your e2e config leases its devices with the package:
@@ -392,7 +392,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
 ### Migrating gradually
 
 1. `test-framework: both` with `e2e-required: false` (and `android-abis: x86_64,arm64-v8a`): Maestro still gates, and
-   the e2e suite runs beside it on the same app as a shadow. A failure there
+   the e2e suite runs beside it on the same app as a shadow. A failure there, an infrastructure failure included,
    is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
 3. `test-framework: e2e` (and `android-abis: arm64-v8a`): the Maestro shards stop, and with them the KVM test runners.

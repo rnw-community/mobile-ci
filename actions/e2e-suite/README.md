@@ -21,8 +21,16 @@ action does the rest in three modes.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
-  - With `shadow` or `tolerated`, a failure is also reported as a warning; the
-    caller's `continue-on-error` keeps it from gating.
+  - A run that tested nothing, or that hit an infrastructure error, fails with an
+    `Infrastructure failure:` error, which
+    [`rerun-infra-failures`](../rerun-infra-failures/README.md) retries once: no
+    valid report, none executed, a run error in the report, or a report with
+    `status: error` or `interrupted`. Configuration errors exit this way too, so
+    they get that one retry.
+  - `tolerated` passes the step with a warning only when tests ran and failed. Every
+    other failure, including the ones above, still fails.
+  - `shadow` turns every failure into warnings; the caller's `continue-on-error`
+    keeps it from gating.
 - **`release`** (`if: always()`) releases every lease listed in
   `.e2e/simlock-leases.json`, so a cancelled run frees the farm at once. A lease
   that is already gone, or that fails to release, warns and never fails the job.

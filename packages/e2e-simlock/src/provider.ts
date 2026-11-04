@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 
-import { allocateQueued, FARM_DOWN, freeDevices, recordLease, type Platform } from './farm.ts';
+import { allocateQueued, FARM_DOWN, freeDevices, recordLease, UPLOAD_CUT, type Platform } from './farm.ts';
 import { startBootRelay, type BootRelay, type DeviceMode } from './relay.ts';
 import { configureTransfers, transfer } from './transfers.ts';
+import { acrossTunnel } from './tunnel.ts';
 
 import type { DeviceLease, DeviceProvider, DeviceRequest } from '@e2e-dev/mobile';
 import type { createAgentDeviceClient } from 'agent-device';
@@ -70,6 +71,9 @@ interface Held extends DeviceLease {
     readonly stop: () => void;
     readonly scope: Scope;
 }
+
+/** The wait before an upload the tunnel cut off is sent again, times the attempt: long enough for other uploads to finish. */
+const UPLOAD_BACKOFF_MS = 15_000;
 
 /** A leased device that could not be set up (an app install failed): another device may well succeed. */
 export class DeviceSetupFailed extends Error {}
@@ -144,7 +148,7 @@ export function simlockDevices(options: SimlockOptions): DeviceProvider {
 }
 
 /** `simlockDevices` with the agent-device client injected; for tests. */
-export function createProvider(options: SimlockOptions, loadClient: () => Promise<ClientFactory>): DeviceProvider {
+export function createProvider(options: SimlockOptions, loadClient: () => Promise<ClientFactory>, uploadBackoffMs = UPLOAD_BACKOFF_MS): DeviceProvider {
     const { baseUrl, ttlMs, installConcurrency, queueMs, tenant } = validated(options);
     const { platform, device, token } = options;
     const leaseBackend = `${platform}-instance` as const;
@@ -242,7 +246,21 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
             const scoped = await client(session, scope);
             const install = async (appPath: string, app?: string): Promise<void> => {
                 try {
-                    await transfer(options.url, () => scoped.apps.install({ platform, ...selection, appPath, ...(app === undefined ? {} : { app }) }));
+                    // Each attempt takes its own transfer slot, so other uploads run during the backoff.
+                    await acrossTunnel(
+                        () => {
+                            request.signal.throwIfAborted();
+                            return transfer(options.url, () => scoped.apps.install({ platform, ...selection, appPath, ...(app === undefined ? {} : { app }) }));
+                        },
+                        cause => {
+                            const cut = UPLOAD_CUT.test(String(cause));
+                            if (cut) {
+                                request.log(`simlock: the tunnel cut off the upload to ${deviceId} (${String(cause)}); sending it again`);
+                            }
+                            return cut;
+                        },
+                        uploadBackoffMs
+                    );
                 } catch (cause) {
                     throw new DeviceSetupFailed(`${cause instanceof Error ? cause.message : String(cause)} (${deviceId})`, { cause });
                 }
@@ -292,7 +310,8 @@ export function createProvider(options: SimlockOptions, loadClient: () => Promis
                 return await leaseOnce(request, 0);
             } catch (cause) {
                 // One bad device must not fail the run: its lease is already released, so lease another,
-                // once. A farm that is down fails every slot at once, and a swap would only add load.
+                // once. A farm that is down fails every slot at once, and a swap would only add load. A slot cannot
+                // be dropped instead: @e2e-dev/mobile fails the run when any acquire rejects.
                 if (!(cause instanceof DeviceSetupFailed) || FARM_DOWN.test(cause.message)) {
                     throw cause;
                 }

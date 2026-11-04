@@ -63,6 +63,20 @@ describe('exec', () => {
         await assert.rejects(exec(api, 'L1', ['getenv'], undefined, 'simctl'), { message: 'simlock POST /v1/leases/L1/exec answered 403: nope' });
     });
 
+    it('asks again when a tunnel cut drops the platform lookup before or during its answer', async () => {
+        answers.push(() => {
+            throw new TypeError('fetch failed');
+        });
+        answers.push(() => {
+            const body = new ReadableStream({ start: controller => controller.error(new TypeError('terminated')) });
+            return new Response(body);
+        });
+        answers.push(() => new Response(JSON.stringify({ lease: { platform: 'android' } })));
+        answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+        assert.equal((await exec(api, 'L-cut', ['shell', 'true'])).exitCode, 0);
+        assert.deepEqual(requests.map(({ url }) => url), [...Array(3).fill('https://farm.test/v1/leases/L-cut'), 'https://farm.test/v1/leases/L-cut/exec']);
+    });
+
     it('runs adb when asked, and keeps the stdin payload', async () => {
         answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
         await exec(api, 'L-adb', ['shell', 'cat'], 'payload', 'adb');
@@ -266,6 +280,22 @@ describe('leaseIdForUdid', () => {
         assert.equal(await leaseIdForUdid(api, 'emulator-5588'), 'L2');
         answers.push(() => new Response(JSON.stringify({ leases: [] })));
         await assert.rejects(leaseIdForUdid(api, 'U-1'), { message: 'no simlock lease of this token holds U-1 (0 leases)' });
+    });
+
+    it('asks again when a tunnel cut drops the lease list or a lease read, and not on an answered error', async () => {
+        answers.push(() => {
+            throw new TypeError('fetch failed');
+        });
+        answers.push(() => new Response(JSON.stringify({ leases: [{ id: 'L1' }] })));
+        answers.push(() => {
+            throw new TypeError('terminated');
+        });
+        answers.push(() => new Response('{"id":"L1","deviceKey":"ios:mobile:U-1"}'));
+        assert.equal(await leaseIdForUdid(api, 'U-1'), 'L1');
+        assert.equal(requests.length, 4);
+        answers.push(() => new Response('nope', { status: 403 }));
+        await assert.rejects(leaseIdForUdid(api, 'U-1'), { message: 'simlock GET /v1/leases answered 403: nope' });
+        assert.equal(requests.length, 5);
     });
 });
 

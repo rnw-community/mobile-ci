@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, pause, recordLease, type QueuedAllocation } from '../src/farm.ts';
+import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, pause, recordLease, UPLOAD_CUT, type QueuedAllocation } from '../src/farm.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
 
@@ -17,6 +17,17 @@ describe('LEASE_CUT_OFF', () => {
         assert.ok(LEASE_CUT_OFF.test('other side closed'));
         for (const other of ['error code: 502', 'error code: 522', 'LEASE_NOT_FOUND', 'fetch failed', 'refused: name --platform ios or android']) {
             assert.ok(!LEASE_CUT_OFF.test(other), other);
+        }
+    });
+});
+
+describe('UPLOAD_CUT', () => {
+    it("matches only the tunnel's own answer to an upload", () => {
+        for (const cut of ['Invalid upload response: error code: 524', 'Error: Invalid upload response: error code: 520']) {
+            assert.ok(UPLOAD_CUT.test(cut), cut);
+        }
+        for (const other of ['error code: 524', 'Invalid daemon response', 'Upload failed: {"ok":false}', 'Invalid upload response: <html>', 'adb: failed to install app.apk']) {
+            assert.ok(!UPLOAD_CUT.test(other), other);
         }
     });
 });

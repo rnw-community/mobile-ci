@@ -223,8 +223,8 @@ workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test
-credentials. A target with `tolerateTestFailures` turns a failing suite into a
-warning, as with Maestro. The farm runs arm64 simulators, so e2e needs `ios-simulator-archs: arm64`; `detect` rejects anything else. `ios-driver` applies only to the Maestro
+credentials. A target with `tolerateTestFailures` turns failing tests into a
+warning, as with Maestro, but not a run that tested nothing or hit an infrastructure error: no report, none executed or a run error fails the job with an `Infrastructure failure:` annotation, which [`rerun-infra-failures`](../../actions/rerun-infra-failures/README.md) retries once. The farm runs arm64 simulators, so e2e needs `ios-simulator-archs: arm64`; `detect` rejects anything else. `ios-driver` applies only to the Maestro
 suite: `test-framework: e2e` with anything but `local` fails in `detect`.
 
 Your e2e config leases its devices with the package:
@@ -335,7 +335,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
 ### Migrating gradually
 
 1. `test-framework: both` with `e2e-required: false`: Maestro still gates, and
-   the e2e suite runs beside it on the same app as a shadow. A failure there
+   the e2e suite runs beside it on the same app as a shadow. A failure there, an infrastructure failure included,
    is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
 3. `test-framework: e2e`: the Maestro shards stop, and with them the macOS test runners.

@@ -155,6 +155,13 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.10.1** — `tolerateTestFailures` on an e2e target tolerates only failing tests:
+  a run with no report, no test executed or a run error now fails, with an
+  `Infrastructure failure:` annotation that `rerun-infra-failures` retries once, on
+  every e2e target. The `@mobile-ci/e2e-simlock` provider sends an upload the tunnel cut
+  off (a 524) again with backoff, and `/exec`'s lease lookups survive a tunnel cut. In
+  `/steps`, a drag the node did not follow for a quarter of its length is a list's end,
+  so a bounce no longer throws `still out of place after 3 drags`.
 - **v4.10.0** — a tunnel blip no longer fails a suite: the `@mobile-ci/e2e-simlock`
   relay retries read-only agent-device commands (`snapshot`, `screenshot`, `get`,
   `is`, ...) cut off by the tunnel, never a mutating one. `rerun-infra-failures`

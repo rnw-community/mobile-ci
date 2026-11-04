@@ -43,6 +43,11 @@ run_suite() {
         SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
 }
 
+# log_count <pattern>: matching lines of the last run's log; none is a count, not a failure.
+log_count() {
+    grep -c "$1" "$dir/log" || true
+}
+
 for platform in ios android; do
     case_start "$platform: a passing report with executed tests passes, and the suite gets E2E_PLATFORM"
     run_suite "$platform" "printf '%s' \"\$E2E_PLATFORM\" > platform; $(writes "$(report passed 3 0)")"
@@ -55,14 +60,14 @@ for platform in ios android; do
     case_start "$platform: exit 0 with no report fails closed"
     run_suite "$platform" 'true'
     if assert_equals 1 "$STEP_STATUS" 'status' \
-        && assert_contains "$(cat "$dir/log")" '::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran.' 'error'; then
+        && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran.' 'error'; then
         pass_case
     fi
 
     case_start "$platform: exit 0 with a report that executed nothing fails closed"
     run_suite "$platform" "$(writes "$(report passed 0 0)")"
     if assert_equals 1 "$STEP_STATUS" 'status' \
-        && assert_contains "$(cat "$dir/log")" '::error::The e2e suite exited 0 but executed no test.' 'error'; then
+        && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e suite exited 0 but executed no test.' 'error'; then
         pass_case
     fi
 
@@ -78,7 +83,7 @@ for platform in ios android; do
         run_suite "$platform" "$(writes "{\"run\":{\"status\":\"passed\",\"summary\":{${summary}}}}")"
         assert_equals 1 "$STEP_STATUS" "status for ${summary} ($(cat "$dir/log"))" || break
     done
-    if [ "$STEP_STATUS" = 1 ] && assert_contains "$(cat "$dir/log")" '::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts.' 'error'; then
+    if [ "$STEP_STATUS" = 1 ] && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e report (.e2e/report.json) has no run status and summary with whole-number counts.' 'error'; then
         pass_case
     fi
 
@@ -93,14 +98,62 @@ for platform in ios android; do
         pass_case
     fi
 
-    case_start "$platform: a failing command keeps its own exit status, and a shadow or tolerated failure warns"
-    run_suite "$platform" 'exit 2'
-    plain="$STEP_STATUS"
-    run_suite "$platform" 'exit 2' E2E_SHADOW=true
-    shadow="$STEP_STATUS $(grep -c '::warning::E2E shadow suite failed (exit 2); it does not gate this run' "$dir/log")"
-    run_suite "$platform" 'exit 2' E2E_TOLERATED=true
-    tolerated="$STEP_STATUS $(grep -c '::warning::E2E suite failed (exit 2) for a target with tolerateTestFailures' "$dir/log")"
-    if assert_equals '2|2 1|2 1' "$plain|$shadow|$tolerated" 'status and warning'; then
+    FAILED_TESTS="$(writes "$(report failed 3 1)"); exit 1"
+
+    case_start "$platform: failing tests keep the command's exit status and are no infrastructure failure"
+    run_suite "$platform" "$FAILED_TESTS"
+    if assert_equals 1 "$STEP_STATUS" 'status' && assert_not_contains "$(cat "$dir/log")" '::error::Infrastructure failure' 'annotation'; then
+        pass_case
+    fi
+
+    case_start "$platform: a tolerated target with failing tests warns and passes"
+    run_suite "$platform" "$FAILED_TESTS" E2E_TOLERATED=true
+    if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+        && assert_contains "$(cat "$dir/log")" '::warning::E2E suite failed (exit 1) for a target with tolerateTestFailures; it does not gate this run.' 'warning'; then
+        pass_case
+    fi
+
+    # rnw-community/rnw-community#743: a lease that failed, no report, and a green check.
+    case_start "$platform: a tolerated target that tested nothing fails as infrastructure"
+    tested_nothing_held=true
+    for tested_nothing in 'exit 3' 'true' "$(writes '{}'); exit 1" "$(writes 'not json'); exit 1" "$(writes "$(report failed 0 0)"); exit 3"; do
+        run_suite "$platform" "$tested_nothing" E2E_TOLERATED=true
+        log="$(cat "$dir/log")"
+        if [ "$STEP_STATUS" = 0 ]; then
+            fail_case "${tested_nothing} passed: $log"
+            tested_nothing_held=false
+            break
+        fi
+        assert_contains "$log" '::error::Infrastructure failure: ' "annotation for ${tested_nothing}" || { tested_nothing_held=false; break; }
+        assert_not_contains "$log" 'tolerateTestFailures' "warning for ${tested_nothing}" || { tested_nothing_held=false; break; }
+    done
+    if [ "$tested_nothing_held" = true ]; then pass_case; fi
+
+    case_start "$platform: a report with a run error or an error status fails as infrastructure, tolerated or not"
+    ENGINE_FAILURE='{"run":{"status":"error","errors":[{"category":"infrastructure","code":"ENGINE_FAILURE","message":"lost"}],"summary":{"executed":3,"failed":1}}}'
+    run_suite "$platform" "$(writes "$ENGINE_FAILURE"); exit 3"
+    plain="$STEP_STATUS $(log_count '::error::Infrastructure failure: the e2e run reported 1 run error(s) (status error); read its report.')"
+    run_suite "$platform" "$(writes "$ENGINE_FAILURE"); exit 3" E2E_TOLERATED=true
+    tolerated="$STEP_STATUS $(log_count '::error::Infrastructure failure: ')"
+    run_suite "$platform" "$(writes '{"run":{"status":"error","summary":{"executed":3,"failed":1}}}'); exit 3" E2E_TOLERATED=true
+    status_only="$STEP_STATUS $(log_count '::error::Infrastructure failure: ')"
+    run_suite "$platform" "$(writes '{"run":{"status":"interrupted","summary":{"executed":3,"failed":1}}}'); exit 130" E2E_TOLERATED=true
+    if assert_equals '3 1|3 1|3 1|130' "$plain|$tolerated|$status_only|$STEP_STATUS" 'status and annotation'; then
+        pass_case
+    fi
+
+    case_start "$platform: a report whose run errors are not a list fails closed"
+    run_suite "$platform" "$(writes '{"run":{"status":"failed","errors":"lost","summary":{"executed":3,"failed":1}}}'); exit 1" E2E_TOLERATED=true
+    if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e report' 'annotation'; then
+        pass_case
+    fi
+
+    case_start "$platform: a shadow failure warns and never errors, naming a run that tested nothing"
+    run_suite "$platform" "$FAILED_TESTS" E2E_SHADOW=true
+    tests_failed="$STEP_STATUS $(log_count '::warning::E2E shadow suite failed (exit 1); it does not gate this run') $(log_count '^::error::')"
+    run_suite "$platform" 'exit 3' E2E_SHADOW=true
+    if assert_equals '1 1 0|3 1 0' "$tests_failed|$STEP_STATUS $(log_count '::warning::E2E shadow suite failed (exit 3); it does not gate this run') $(log_count '^::error::')" 'status, warning and errors' \
+        && assert_contains "$(cat "$dir/log")" '::warning::Infrastructure failure: the e2e command exited 3 but wrote no report (.e2e/report.json), so there is no evidence any test ran.' 'tested nothing'; then
         pass_case
     fi
 done

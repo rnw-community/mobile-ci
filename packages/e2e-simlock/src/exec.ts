@@ -47,23 +47,30 @@ async function call(api: SimlockApi, path: string, init: RequestInit = {}): Prom
     return response;
 }
 
+/** undici's wording for a connection lost before (`fetch failed`) or during (`terminated`) the answer, and simlock's for a lost worker. */
+const TRANSIENT = /WORKER_UNREACHABLE|fetch failed|terminated/;
+
+/** One request and its whole answer, which the tunnel can drop either way; only an idempotent request may come here. */
+const answered = (api: SimlockApi, path: string, init?: RequestInit): Promise<string> =>
+    acrossTunnel(
+        async () => (await call(api, path, init)).text(),
+        cause => TRANSIENT.test(String(cause))
+    );
+
 /** The simlock lease of this token that holds the device with this id (a simulator UDID or an emulator serial). */
 export async function leaseIdForUdid(api: SimlockApi, udid: string): Promise<string> {
-    const body = (await (await call(api, '/v1/leases')).json()) as { leases: Record<string, unknown>[] };
+    const body = JSON.parse(await answered(api, '/v1/leases')) as { leases: Record<string, unknown>[] };
     for (const lease of body.leases) {
         if (JSON.stringify(lease).includes(udid)) {
             return String(lease.id);
         }
-        const detail = await (await call(api, `/v1/leases/${String(lease.id)}`)).text();
+        const detail = await answered(api, `/v1/leases/${String(lease.id)}`);
         if (detail.includes(udid)) {
             return String(lease.id);
         }
     }
     throw new Error(`no simlock lease of this token holds ${udid} (${body.leases.length} leases)`);
 }
-
-/** undici's wording for a connection lost before (`fetch failed`) or during (`terminated`) the answer, and simlock's for a lost worker. */
-const TRANSIENT = /WORKER_UNREACHABLE|fetch failed|terminated/;
 
 export type ExecTool = 'simctl' | 'adb';
 
@@ -74,7 +81,7 @@ const leaseTools = new Map<string, Promise<ExecTool>>();
 /** The tool that serves this lease's platform, asked of the farm once per lease. */
 function leaseTool(api: SimlockApi, leaseId: string): Promise<ExecTool> {
     return remembered(leaseTools, leaseId, async () => {
-        const { lease } = (await (await call(api, `/v1/leases/${leaseId}`)).json()) as { lease?: { platform?: string } };
+        const { lease } = JSON.parse(await answered(api, `/v1/leases/${leaseId}`)) as { lease?: { platform?: string } };
         const platform = lease?.platform;
         const tool = PLATFORM_TOOLS[platform ?? ''];
         if (tool === undefined) {
@@ -105,14 +112,9 @@ export async function exec(api: SimlockApi, leaseId: string, args: readonly stri
     }
     const resolved = tool ?? (await leaseTool(api, leaseId));
     const body = JSON.stringify({ tool: resolved, args, ...(stdin === undefined ? {} : { stdin }) });
-    // One attempt is the request and its whole answer: the tunnel can drop either. A gateway's worker uplink can
-    // drop and reconnect within a second too; every command the suite sends is idempotent. An error the gateway
-    // answered, or the request timeout, is not transient.
-    const send = () =>
-        acrossTunnel(
-            async () => (await call(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body })).text(),
-            cause => TRANSIENT.test(String(cause))
-        );
+    // A gateway's worker uplink can drop and reconnect within a second too; every command the suite sends is
+    // idempotent. An error the gateway answered, or the request timeout, is not transient.
+    const send = () => answered(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body });
     const text = await (stdin !== undefined && stdin.length > LARGE_PAYLOAD_BYTES ? transfer(api.url, send) : send());
     let stdout = '';
     let stderr = '';

@@ -101,8 +101,16 @@ What it does for each worker slot:
   `android-instance`) and names it by simulator UDID or adb serial on every
   command. It uploads the app (at most `installConcurrency` big transfers at once, see below), then each
   of `extraApps`.
-- **Swaps once.** A failed install releases that device and leases one other.
-  It never swaps when the farm itself is down.
+- **Sends a cut-off upload again.** An upload the tunnel answers in the farm's place
+  (`Invalid upload response: error code: 52x`, a 524 past its 100 s limit) reached no
+  install, so it is sent again to the same device: at most three attempts, 15 s ×
+  attempt apart, each in its own transfer slot.
+- **Swaps once.** Any other failed install releases that device and leases one other.
+  It never swaps when the farm itself is down, which includes a tunnel that cut off all three uploads.
+- **Fails the run when a slot cannot be set up.** `@e2e-dev/mobile` calls `acquire` once
+  per slot and fails the run if any of them rejects, so the provider cannot drop a slot
+  and carry on with the rest. The other slots' devices are released, and
+  [`rerun-infra-failures`](../../actions/rerun-infra-failures/README.md) gets its one retry.
 - **Renews and records.** It renews the lease every `ttlMs / 3` and lists its
   id in `<project>/.e2e/simlock-leases.json`, which mobile-ci's e2e job releases
   on every exit path, a cancel included.
@@ -165,8 +173,9 @@ platform. App-specific steps stay in your suite.
 | `retry(retries, body)` | Maestro's `retry: { maxRetries }`. It runs `body(attempt)` up to `1 + retries` times, logs each failed attempt and rethrows the last failure. |
 | `measureRecording(file)` | How much of a recording repeats itself: `{ frames, durationMs, repeatedFrames, longestStallFrames, longestStallMs }`. See [below](#detecting-a-stalled-recording). Needs `ffmpeg` and `ffprobe` on PATH. |
 
-The three scroll helpers share one drag. A drag that moves nothing means the list
-is at its end, so the node stays where it is and the helper returns. A list still
+The three scroll helpers share one drag. A drag the node did not follow for a quarter
+of its length means the list is at its end, where it only bounces, so the node stays
+where it is and the helper returns. A list still
 moving after three drags, or a node with no bounds, fails. `dragX` is the x every
 drag runs along, by default the node's centre; set it when that column has switches
 or other controls that would take the gesture.
@@ -231,7 +240,7 @@ whose holder died is reclaimed. (If two processes reclaim the same dead holder's
 at the same moment, one extra transfer can run until either finishes.) A single
 payload still travels as one request.
 
-`exec()` asks again, at most three times and 2 s × attempt apart, when the
+`exec()`, `leaseIdForUdid()` and `exec()`'s platform lookup ask again, at most three times and 2 s × attempt apart, when the
 connection drops before or during the answer (`fetch failed`, `terminated`) or the
 gateway lost its worker (`WORKER_UNREACHABLE`). Every command it sends must be
 idempotent. Any other error the gateway answers, and the 11-minute request

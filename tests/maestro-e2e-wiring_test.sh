@@ -62,7 +62,7 @@ for platform in ios android; do
         {k: v for k, v in step('e2e', 'run')['with'].items() if k in ('mode', 'platform')} != {'mode': 'run', 'platform': '$platform'} and 'run mode',
         not step('e2e', 'run')['with']['app-path'].endswith('-\${{ matrix.target.name }}/$app') and step('e2e', 'run')['with']['app-path'],
         step('e2e', 'run')['with']['simlock-token'] != '\${{ secrets.simlock-token }}' and 'run token',
-        step('e2e', 'run')['continue-on-error'] != \"\${{ (inputs.test-framework == 'both' && !inputs.e2e-required) || matrix.target.tolerateTestFailures }}\" and 'continue-on-error',
+        step('e2e', 'run')['continue-on-error'] != \"\${{ inputs.test-framework == 'both' && !inputs.e2e-required }}\" and 'continue-on-error',
         step('e2e', 'Release the devices the suite left leased')['if'] != \"\${{ always() && steps.run.outcome != 'skipped' }}\" and 'release if',
         step('e2e', 'Release the devices the suite left leased')['with'].get('mode') != 'release' and 'release mode',
         step('e2e', 'Upload the e2e report')['with']['name'] != 'e2e-$platform\${{ needs.detect.outputs.artifact-scope }}-\${{ matrix.target.name }}' and 'artifact name',

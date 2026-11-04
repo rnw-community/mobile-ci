@@ -11,6 +11,9 @@ export const LEASE_CUT_OFF = /Invalid daemon response|error code: 524|socket han
 export const FARM_DOWN =
     /not connected to the gateway|no worker connected|Remote daemon is unavailable|ECONNREFUSED|ETIMEDOUT|fetch failed|error code: 52\d/i;
 
+/** The tunnel answering an upload in place of the farm (a 524 past its 100 s limit): no install was sent, so the upload can be sent again. */
+export const UPLOAD_CUT = /Invalid upload response: error code: 52\d/i;
+
 /** How often a queued slot asks the farm for its free count: 10 s plus up to 5 s of jitter. */
 const POLL_MS = 10_000;
 const POLL_JITTER_MS = 5_000;

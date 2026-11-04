@@ -336,6 +336,61 @@ describe('acquire and release', () => {
         assert.equal(farm.calls.release.length, 1);
     });
 
+    const UPLOAD_524 = 'Invalid upload response: error code: 524';
+
+    it('sends an upload the tunnel cut off again, to the same device (budgie-at/budgie run 41799163541)', async () => {
+        const farm = fakeFarm(['android:mobile:e-1', 'android:mobile:e-2'], [UPLOAD_524, UPLOAD_524]);
+        const provider = createProvider(android, farm.load, 1);
+        const { req, logs } = request('android');
+        const lease = await provider.acquire(req);
+        assert.equal(lease.deviceId, 'e-1');
+        assert.equal(farm.calls.install.length, 3);
+        assert.equal(farm.calls.allocate.length, 1, 'no swap: the device was fine');
+        assert.equal(logs.filter(line => line === `simlock: the tunnel cut off the upload to e-1 (Error: ${UPLOAD_524}); sending it again`).length, 2);
+        await provider.release(lease, releaseContext);
+    });
+
+    it('gives the transfer slot back while an upload waits to be sent again', async () => {
+        const farm = fakeFarm(['android:mobile:e-1'], [UPLOAD_524]);
+        const url = `https://farm-${Date.now()}-backoff.test`;
+        const provider = createProvider({ ...android, url, installConcurrency: 1 }, farm.load, 300);
+        const acquiring = provider.acquire(request('android').req);
+        while (farm.calls.install.length === 0) {
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        await transfer(url, async () => assert.equal(farm.calls.install.length, 1, 'another transfer runs during the backoff'));
+        await provider.release(await acquiring, releaseContext);
+        assert.equal(farm.calls.install.length, 2);
+    });
+
+    it('fails with no swap when every upload is cut off: the tunnel is down, not the device', async () => {
+        const farm = fakeFarm(['android:mobile:e-1', 'android:mobile:e-2'], [UPLOAD_524, UPLOAD_524, UPLOAD_524]);
+        await assert.rejects(createProvider(android, farm.load, 1).acquire(request('android').req), { message: `${UPLOAD_524} (e-1)` });
+        assert.equal(farm.calls.install.length, 3);
+        assert.equal(farm.calls.allocate.length, 1);
+        assert.equal(farm.calls.release.length, 1);
+    });
+
+    it('never sends an upload again once the run is interrupted', async () => {
+        const farm = fakeFarm(['android:mobile:e-1'], [UPLOAD_524]);
+        const abort = new AbortController();
+        const acquiring = createProvider(android, farm.load, 50).acquire(request('android', { signal: abort.signal }).req);
+        while (farm.calls.install.length === 0) {
+            await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        abort.abort(new Error('interrupted'));
+        await assert.rejects(acquiring, { message: 'interrupted' });
+        assert.equal(farm.calls.install.length, 1);
+        assert.equal(farm.calls.release.length, 1);
+    });
+
+    it('never sends an install again on any other error', async () => {
+        const farm = fakeFarm(['android:mobile:e-1', 'android:mobile:e-2'], ['Invalid daemon response']);
+        const lease = await createProvider(android, farm.load, 1).acquire(request('android').req);
+        assert.equal(lease.deviceId, 'e-2');
+        assert.equal(farm.calls.install.length, 2, 'one on each device');
+    });
+
     it('a grant that names no device is released at once, without a swap', async () => {
         const farm = fakeFarm([undefined]);
         await assert.rejects(createProvider(android, farm.load).acquire(request('android').req), { message: /^simlock lease [0-9a-f]{32} names no device \(deviceKey undefined\)$/ });
