@@ -277,7 +277,7 @@ jobs:
             targets: ${{ steps.caches.outputs.targets }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.0 # v4.10.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Mark the targets whose iOS compile caches are missing
@@ -366,7 +366,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.10.0 # v4.10.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -405,7 +405,7 @@ jobs:
             key-segment: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.0 # v4.10.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Resolve the Android ABIs
@@ -506,7 +506,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.10.0 # v4.10.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -559,7 +559,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.0 # v4.10.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -600,7 +600,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.10.0 # v4.10.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -712,7 +712,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.0 # v4.10.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -733,7 +733,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.10.0 # v4.10.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -747,7 +747,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.10.0 # v4.10.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -775,7 +775,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base && !matrix.target.forceNative'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.0 # v4.10.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -791,7 +791,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.10.0 # v4.10.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -804,7 +804,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.10.0 # v4.10.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -832,7 +832,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.10.0 # v4.10.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -840,7 +840,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.0 # v4.10.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -862,7 +862,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.10.0 # v4.10.0
               with:
                   mode: publish
                   platform: ios
@@ -901,7 +901,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.0 # v4.10.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -942,7 +942,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.10.0 # v4.10.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1054,7 +1054,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.0 # v4.10.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1091,7 +1091,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.0 # v4.10.0
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1108,7 +1108,7 @@ jobs:
             - name: build-android-app
               id: build
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/build-android-app@v4.10.0 # v4.10.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -1123,7 +1123,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.0 # v4.10.0
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1134,7 +1134,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.10.0 # v4.10.0
               with:
                   mode: publish
                   platform: android

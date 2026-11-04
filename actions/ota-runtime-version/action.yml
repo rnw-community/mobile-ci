@@ -51,7 +51,7 @@ runs:
     - name: Resolve the eas.json build profile
       id: profile
       if: inputs.eas-profile != '' && inputs.targets == ''
-      uses: rnw-community/mobile-ci/actions/eas-profile-env@40e725c1ce5cdf42b4e6875ba2a26ffbcec4adad # release/v4.10.0 fleet-validation pin
+      uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.10.0 # v4.10.0
       with:
         app-dir: ${{ inputs.app-dir }}
         profiles: ${{ inputs.eas-profile }}

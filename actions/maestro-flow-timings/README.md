@@ -47,7 +47,7 @@ shard left a record, rather than publishing timings nothing measured.
 
 ```yaml
 - id: timings
-  uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.9.1 # v4.9.1
+  uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.10.0 # v4.10.0
   with:
       mode: fetch
       artifact-name: maestro-flow-timings-ios
