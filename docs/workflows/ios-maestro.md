@@ -171,7 +171,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -219,12 +219,12 @@ workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
 | `E2E_TARGET` | the target's `name` |
 | `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free iOS devices split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
 | `E2E_RETRIES` | `e2e-retries` |
-| `E2E_SESSION` | unique per run, attempt and target; give it to agent-device as the session name |
+| `E2E_SESSION` | unique per platform, run, attempt and target; give it to agent-device as the session name |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test
-credentials. A target with `tolerateTestFailures` turns a failing suite into a
-warning, as with Maestro. The farm runs arm64 simulators, so e2e needs `ios-simulator-archs: arm64`; `detect` rejects anything else. `ios-driver` applies only to the Maestro
+credentials. A target with `tolerateTestFailures` turns failing tests into a
+warning, as with Maestro, but not a run that tested nothing or hit an infrastructure error: no report, none executed or a run error fails the job with an `Infrastructure failure:` annotation, which [`rerun-infra-failures`](../../actions/rerun-infra-failures/README.md) retries once. The farm runs arm64 simulators, so e2e needs `ios-simulator-archs: arm64`; `detect` rejects anything else. `ios-driver` applies only to the Maestro
 suite: `test-framework: e2e` with anything but `local` fails in `detect`.
 
 Your e2e config leases its devices with the package:
@@ -291,7 +291,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -329,13 +329,13 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.10.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.10.0 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.10.1/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.10.1 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
 
 1. `test-framework: both` with `e2e-required: false`: Maestro still gates, and
-   the e2e suite runs beside it on the same app as a shadow. A failure there
+   the e2e suite runs beside it on the same app as a shadow. A failure there, an infrastructure failure included,
    is a warning, not a red check, and no pass is cached while a shadow runs.
 2. `e2e-required: true` once the e2e suite is reliably green: both must pass.
 3. `test-framework: e2e`: the Maestro shards stop, and with them the macOS test runners.
@@ -380,7 +380,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -575,7 +575,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -775,7 +775,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
 ```
 
 - `contents: read` — checkout.
@@ -809,7 +809,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -838,7 +838,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -883,7 +883,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             force-label: e2e:force
 ```

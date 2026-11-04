@@ -188,9 +188,9 @@ describe('scrollToCentered', () => {
     });
 
     it('drags again while the list still moves, and stops at its end', async () => {
-        const { ctx, swipes, y } = list({ y: 780, up: 50 });
+        const { ctx, swipes, y } = list({ y: 780, up: 100 });
         await scrollToCentered(ctx, 'Card', phone);
-        assert.equal(y(), 730);
+        assert.equal(y(), 680);
         assert.equal(swipes.length, 2);
     });
 
@@ -216,8 +216,8 @@ describe('scrollToCentered', () => {
     it('fails closed when the node has no bounds, or is still moving and in the band after three drags', async () => {
         await assert.rejects(scrollToCentered(list({ y: 800, box: false }).ctx, 'Card', { viewportHeight: 874 }), { message: 'scrollToCentered: Card has no bounds' });
         const creeping = list({ y: 800 });
-        creeping.node.boundingBox = async () => ({ x: 0, y: 800 + creeping.swipes.length, width: 100, height: 40 });
-        await assert.rejects(scrollToCentered(creeping.ctx, 'Card', phone), { message: 'scrollToCentered: Card is still out of place after 3 drags (centre y 823 of 874)' });
+        creeping.node.boundingBox = async () => ({ x: 0, y: 1400 - 200 * creeping.swipes.length, width: 100, height: 40 });
+        await assert.rejects(scrollToCentered(creeping.ctx, 'Card', phone), { message: 'scrollToCentered: Card is still out of place after 3 drags (centre y 820 of 874)' });
         assert.equal(creeping.swipes.length, 3);
     });
 
@@ -258,6 +258,25 @@ describe('scrollToMiddle', () => {
         await scrollToMiddle(ctx, 'Card', { ...phone, direction: 'up' });
         assert.deepEqual(scrolled, [{ direction: 'up', timeout: 20_000 }]);
         assert.equal(swipes.length, 1);
+    });
+
+    // budgie-at/budgie run 41791370019: the last row of a list, its centre read at 613.8, 615.2 and 621.8 of 874.
+    it("leaves a node at a list's end where it is when the drag only made the list bounce", async () => {
+        const centres = [613.8, 615.2, 621.8];
+        const { ctx, node, swipes } = list({ y: 0 });
+        node.boundingBox = async () => ({ x: 0, y: centres[swipes.length]! - 20, width: 100, height: 40 });
+        await scrollToMiddle(ctx, 'Row', phone);
+        assert.equal(swipes.length, 1);
+    });
+
+    it('counts a bounce by its share of the drag, whichever way it moved the node', async () => {
+        for (const bounce of [-40, 40, -1, 60]) {
+            const { ctx, node, swipes } = list({ y: 0 });
+            // A 300 pt drag: a quarter of it is 75.
+            node.boundingBox = async () => ({ x: 0, y: 800 + (swipes.length === 0 ? 0 : bounce), width: 100, height: 40 });
+            await scrollToMiddle(ctx, 'Row', phone);
+            assert.equal(swipes.length, 1, `bounce ${bounce}`);
+        }
     });
 
     it('takes the tolerance, the longest drag and the x to drag at', async () => {

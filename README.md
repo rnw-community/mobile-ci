@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.10.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.10.1`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,16 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.10.1** — `tolerateTestFailures` on an e2e target tolerates only failing tests:
+  a run with no report, no test executed or a run error now fails, with an
+  `Infrastructure failure:` annotation that `rerun-infra-failures` retries once, on
+  every e2e target. The `@mobile-ci/e2e-simlock` provider sends an upload the tunnel cut
+  off (a 524) again with backoff, asks for another device when the farm grants an emulator
+  gone from adb, and `/exec`'s lease lookups survive a tunnel cut. E2E session names carry
+  the platform, so overlapping iOS and Android jobs of one run no longer refuse each
+  other's leases, and the infrastructure annotation quotes the run's error. In
+  `/steps`, a drag the node did not follow for a quarter of its length is a list's end,
+  so a bounce no longer throws `still out of place after 3 drags`.
 - **v4.10.0** — a tunnel blip no longer fails a suite: the `@mobile-ci/e2e-simlock`
   relay retries read-only agent-device commands (`snapshot`, `screenshot`, `get`,
   `is`, ...) cut off by the tunnel, never a mutating one. `rerun-infra-failures`
@@ -457,7 +467,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.1 # v4.10.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -530,7 +540,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.10.0 # v4.10.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.10.1 # v4.10.1
 ```
 
 ## Scope
@@ -576,7 +586,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.10.0 # v4.10.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.10.1 # v4.10.1`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

@@ -64,7 +64,7 @@ inputs:
         required: false
         default: '1'
     session:
-        description: agent-device session name, unique per run, attempt and target (run).
+        description: agent-device session name, unique per platform, run, attempt and target (run).
         required: false
         default: ''
     shadow:
@@ -174,7 +174,7 @@ runs:
 
         - name: Install @mobile-ci/e2e-simlock
           if: inputs.mode == 'run'
-          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.10.0 # v4.10.0
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.10.1 # v4.10.1
           with:
               e2e-dir: ${{ inputs.e2e-dir }}
 
@@ -225,34 +225,46 @@ runs:
               rm -rf .e2e
               started=$(date +%s)
               status=0
-              bash -c "$E2E_COMMAND" || status=$?
+              output=$(mktemp)
+              : > "$output.open"
+              bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
+              for _ in 1 2 3 4 5 6 7 8 9 10; do
+                [ -e "$output.open" ] || break
+                sleep 0.5
+              done
+              run_said=$(sed -n "s/$(printf '\033')\[[0-9;]*m//g; /^ *ERROR /{N; s/$(printf '\033')\[[0-9;]*m//g; s/\n */: /; s/^ *ERROR *//; p; q;}" "$output")
+              rm -f "$output" "$output.open"
               echo "E2E suite exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
               if [ -f .e2e/summary.md ]; then
                 { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
               fi
-              if [ "$status" = 0 ]; then
-                if [ ! -f .e2e/report.json ]; then
-                  echo "::error::The e2e command exited 0 but wrote no report (.e2e/report.json), so there is no evidence any test ran."
+              infrastructure=''
+              if [ ! -f .e2e/report.json ]; then
+                infrastructure="the e2e command exited $status but wrote no report (.e2e/report.json), so there is no evidence any test ran."
+              elif ! counts=$(jq -er '.run | select(.status != null) | [.summary.executed // 0, .summary.failed // 0, .summary.flaky // 0, (.errors // [] | if type == "array" then length else -1 end)] as $n | select(all($n[]; type == "number" and . == floor and . >= 0)) | "\(.status) \($n[0]) \($n[1]) \($n[2]) \($n[3])"' .e2e/report.json 2>/dev/null); then
+                infrastructure="the e2e report (.e2e/report.json) has no run status and summary with whole-number counts."
+              else
+                read -r run_status executed failed flaky run_errors <<< "$counts"
+                echo "E2E report: $run_status, $executed executed, $failed failed, $flaky flaky." | tee -a "$GITHUB_STEP_SUMMARY"
+                if [ "$executed" -lt 1 ]; then
+                  infrastructure="the e2e suite exited $status but executed no test."
+                elif [ "$run_errors" -gt 0 ] || [ "$run_status" = error ] || [ "$run_status" = interrupted ]; then
+                  infrastructure="the e2e run ended with status $run_status, $run_errors run error(s) and $failed of $executed tests failed; read its report."
+                elif [ "$status" = 0 ] && { [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; }; then
+                  echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
                   status=1
-                elif ! counts=$(jq -er '.run | select(.status != null) | [.summary.executed // 0, .summary.failed // 0, .summary.flaky // 0] as $n | select(all($n[]; type == "number" and . == floor and . >= 0)) | "\(.status) \($n[0]) \($n[1]) \($n[2])"' .e2e/report.json 2>/dev/null); then
-                  echo "::error::The e2e report (.e2e/report.json) has no run status and summary with whole-number counts."
-                  status=1
-                else
-                  read -r run_status executed failed flaky <<< "$counts"
-                  echo "E2E report: $run_status, $executed executed, $failed failed, $flaky flaky." | tee -a "$GITHUB_STEP_SUMMARY"
-                  if [ "$executed" -lt 1 ]; then
-                    echo "::error::The e2e suite exited 0 but executed no test."
-                    status=1
-                  elif [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; then
-                    echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
-                    status=1
-                  fi
                 fi
+              fi
+              if [ -n "$infrastructure" ]; then
+                if [ "$status" = 0 ]; then status=1; fi
+                if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
+                echo "::$level::Infrastructure failure: $infrastructure${run_said:+ The run said: ${run_said:0:500}}"
               fi
               if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
                 echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
-              elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ]; then
+              elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ] && [ -z "$infrastructure" ]; then
                 echo "::warning::E2E suite failed (exit $status) for a target with tolerateTestFailures; it does not gate this run."
+                status=0
               fi
               exit "$status"
 

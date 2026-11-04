@@ -167,6 +167,33 @@ scenario "$FAILED" "1|Build (e2e)|failure|Infrastructure failure: pod install fa
 classify
 assert_equals rerun "$(step_output "$workspace" decision)" decision && pass_case
 
+# budgie-at/budgie run 41799163541 (decided test-failure by retry run 41805197648): its annotations, with what
+# e2e-suite now says about that run: an exit 3, no report and no test executed.
+case_start 'an e2e run that ended in an infrastructure error, with no report and no tests, is re-run'
+suite="$(new_workspace "$REPO_ROOT/actions/e2e-suite/action.yml" 'Run the e2e suite')"
+stub "$suite" curl 'exit 7'
+mkdir -p "$suite/work/Base.app"
+run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND='exit 3' E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+e2e_annotations="$(sed -n 's/^::error:://p' "$suite/log")"
+scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|notice:The farm has 5 free ios devices; running 5 workers instead of 10.^^$e2e_annotations^^Process completed with exit code 3.
+2|iOS E2E / iOS Maestro E2E result|failure|Process completed with exit code 1.^^Required jobs did not succeed: e2e suite (result: failure).
+3|Required CI|failure|Process completed with exit code 1.^^Required jobs did not succeed: ios-maestro"
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 1 "$(step_output "$workspace" infra-jobs)" 'infra jobs' \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'an e2e run whose tests failed stays a test failure'
+suite="$(new_workspace "$REPO_ROOT/actions/e2e-suite/action.yml" 'Run the e2e suite')"
+stub "$suite" curl 'exit 7'
+mkdir -p "$suite/work/Base.app"
+run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND="mkdir -p .e2e; printf '%s' '{\"run\":{\"status\":\"failed\",\"errors\":[],\"summary\":{\"executed\":3,\"failed\":1}}}' > .e2e/report.json; exit 1" E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+e2e_annotations="$(sed -n 's/^::error:://p' "$suite/log")"
+scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|$e2e_annotations^^Process completed with exit code 1."
+classify
+if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
 case_start 'a run already retried is left alone'
 scenario '{"status":"completed","conclusion":"failure","run_attempt":2}' "1|Maestro shard 0 (e2e)|failure|$LOST"
 classify

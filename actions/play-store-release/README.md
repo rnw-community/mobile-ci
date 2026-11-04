@@ -61,7 +61,7 @@ Play App Signing" permission (or "Release apps to testing tracks" when
       printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > "$RUNNER_TEMP/google-service-account.json"
       chmod 600 "$RUNNER_TEMP/google-service-account.json"
 
-- uses: rnw-community/mobile-ci/actions/play-store-release@v4.10.0 # v4.10.0
+- uses: rnw-community/mobile-ci/actions/play-store-release@v4.10.1 # v4.10.1
   with:
       package-name: com.example.app
       rollout: '0.2'

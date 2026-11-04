@@ -88,6 +88,8 @@ export async function retry(retries: number, body: (attempt: number) => Promise<
 /** How long the list gets to come to rest after a drag before the node is measured again. */
 const SETTLE_MS = 600;
 const MAX_DRAGS = 3;
+/** The share of a drag the node must follow for the list to count as moving: a list at its end only bounces. */
+const MOVING_SHARE = 1 / 4;
 /** How far from the edge of the screen a drag stays, and from a band it must start clear of. */
 const EDGE_PX = 40;
 
@@ -100,19 +102,19 @@ const centreY = (box: Box): number => box.y + box.height / 2;
 
 /**
  * Drags the content until `placement` is satisfied. The drag starts where the placement says, never on the node,
- * which may be under the overlay it is being moved away from. A drag that moves nothing means the list is at its end,
- * and the node stays where it is. A list still moving after three drags fails.
+ * which may be under the overlay it is being moved away from. A drag the node did not follow for a quarter of its
+ * length means the list is at its end, and the node stays where it is. A list still moving after three drags fails.
  */
 async function dragInto(helper: string, screen: Screen, id: string, node: Locator, placement: Placement, viewportHeight: number, dragX: number | undefined): Promise<void> {
     const onScreen = (y: number): number => Math.max(EDGE_PX, Math.min(viewportHeight - EDGE_PX, y));
-    let previousY: number | undefined;
+    let previous: { readonly y: number; readonly askedUp: number } | undefined;
     for (let drags = 0; ; drags++) {
         const box = await node.boundingBox();
         if (box === null) {
             throw new Error(`${helper}: ${id} has no bounds`);
         }
         const drag = placement(box);
-        if (drag === undefined || (previousY !== undefined && Math.abs(box.y - previousY) < 1)) {
+        if (drag === undefined || (previous !== undefined && (previous.y - box.y) * Math.sign(previous.askedUp) < Math.max(1, Math.abs(previous.askedUp) * MOVING_SHARE))) {
             return;
         }
         if (drags === MAX_DRAGS) {
@@ -120,9 +122,10 @@ async function dragInto(helper: string, screen: Screen, id: string, node: Locato
         }
         const x = dragX ?? box.x + box.width / 2;
         const fromY = onScreen(drag.fromY);
-        await screen.swipe({ from: { x, y: fromY }, to: { x, y: onScreen(fromY - drag.upPx) }, duration: 600 });
+        const toY = onScreen(fromY - drag.upPx);
+        await screen.swipe({ from: { x, y: fromY }, to: { x, y: toY }, duration: 600 });
         await new Promise(resolve => setTimeout(resolve, SETTLE_MS));
-        previousY = box.y;
+        previous = { y: box.y, askedUp: fromY - toY };
     }
 }
 

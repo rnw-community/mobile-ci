@@ -21,8 +21,16 @@ action does the rest in three modes.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
-  - With `shadow` or `tolerated`, a failure is also reported as a warning; the
-    caller's `continue-on-error` keeps it from gating.
+  - A run that tested nothing, or that hit an infrastructure error, fails with an
+    `Infrastructure failure:` error quoting the `ERROR` the run printed, which
+    [`rerun-infra-failures`](../rerun-infra-failures/README.md) retries once: no
+    valid report, none executed, a run error in the report, or a report with
+    `status: error` or `interrupted`. Configuration errors exit this way too, so
+    they get that one retry.
+  - `tolerated` passes the step with a warning only when tests ran and failed. Every
+    other failure, including the ones above, still fails.
+  - `shadow` turns every failure into warnings; the caller's `continue-on-error`
+    keeps it from gating.
 - **`release`** (`if: always()`) releases every lease listed in
   `.e2e/simlock-leases.json`, so a cancelled run frees the farm at once. A lease
   that is already gone, or that fails to release, warns and never fails the job.
@@ -61,7 +69,7 @@ stdin, never on its command line.
 ```yaml
 - name: Run the e2e suite
   id: run
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.10.0 # v4.10.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.10.1 # v4.10.1
   with:
       mode: run
       platform: android
@@ -75,7 +83,7 @@ stdin, never on its command line.
       simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 - name: Release the devices the suite left leased
   if: ${{ always() && steps.run.outcome != 'skipped' }}
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.10.0 # v4.10.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.10.1 # v4.10.1
   with:
       mode: release
       platform: android
