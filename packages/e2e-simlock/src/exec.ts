@@ -74,7 +74,8 @@ const leaseTools = new Map<string, Promise<ExecTool>>();
 /** The tool that serves this lease's platform, asked of the farm once per lease. */
 function leaseTool(api: SimlockApi, leaseId: string): Promise<ExecTool> {
     return remembered(leaseTools, leaseId, async () => {
-        const { platform } = (await (await call(api, `/v1/leases/${leaseId}`)).json()) as { platform?: string };
+        const { lease } = (await (await call(api, `/v1/leases/${leaseId}`)).json()) as { lease?: { platform?: string } };
+        const platform = lease?.platform;
         const tool = PLATFORM_TOOLS[platform ?? ''];
         if (tool === undefined) {
             throw new Error(`simlock lease ${leaseId} is on platform '${platform}': exec needs a tool, 'simctl' or 'adb'`);

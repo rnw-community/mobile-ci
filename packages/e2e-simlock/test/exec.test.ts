@@ -73,7 +73,7 @@ describe('exec', () => {
     it('defaults to the tool of the lease platform, asking the farm once per lease', async () => {
         for (const [leaseId, platform, tool] of [['L-android', 'android', 'adb'], ['L-ios', 'ios', 'simctl']] as const) {
             requests.length = 0;
-            answers.push(() => new Response(JSON.stringify({ id: leaseId, platform })));
+            answers.push(() => new Response(JSON.stringify({ lease: { id: leaseId, platform, device: 'x', address: 'y' } })));
             answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
             answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
             await exec(api, leaseId, ['one']);
@@ -84,9 +84,9 @@ describe('exec', () => {
     });
 
     it('fails closed on a lease of no known platform, and asks again after a failed lookup', async () => {
-        answers.push(() => new Response(JSON.stringify({ id: 'L-odd', platform: 'tvos' })));
+        answers.push(() => new Response(JSON.stringify({ lease: { id: 'L-odd', platform: 'tvos' } })));
         await assert.rejects(exec(api, 'L-odd', ['one']), { message: "simlock lease L-odd is on platform 'tvos': exec needs a tool, 'simctl' or 'adb'" });
-        answers.push(() => new Response(JSON.stringify({ id: 'L-odd', platform: 'android' })));
+        answers.push(() => new Response(JSON.stringify({ lease: { id: 'L-odd', platform: 'android' } })));
         answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
         assert.equal((await exec(api, 'L-odd', ['one'])).exitCode, 0);
     });
