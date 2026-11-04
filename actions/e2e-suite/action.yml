@@ -249,7 +249,7 @@ runs:
                 if [ "$executed" -lt 1 ]; then
                   infrastructure="the e2e suite exited $status but executed no test."
                 elif [ "$run_errors" -gt 0 ] || [ "$run_status" = error ] || [ "$run_status" = interrupted ]; then
-                  infrastructure="the e2e run reported $run_errors run error(s) (status $run_status); read its report."
+                  infrastructure="the e2e run ended with status $run_status, $run_errors run error(s) and $failed of $executed tests failed; read its report."
                 elif [ "$status" = 0 ] && { [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; }; then
                   echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
                   status=1

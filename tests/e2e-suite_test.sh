@@ -132,7 +132,7 @@ for platform in ios android; do
     case_start "$platform: a report with a run error or an error status fails as infrastructure, tolerated or not"
     ENGINE_FAILURE='{"run":{"status":"error","errors":[{"category":"infrastructure","code":"ENGINE_FAILURE","message":"lost"}],"summary":{"executed":3,"failed":1}}}'
     run_suite "$platform" "$(writes "$ENGINE_FAILURE"); exit 3"
-    plain="$STEP_STATUS $(log_count '::error::Infrastructure failure: the e2e run reported 1 run error(s) (status error); read its report.')"
+    plain="$STEP_STATUS $(log_count '::error::Infrastructure failure: the e2e run ended with status error, 1 run error(s) and 1 of 3 tests failed; read its report.')"
     run_suite "$platform" "$(writes "$ENGINE_FAILURE"); exit 3" E2E_TOLERATED=true
     tolerated="$STEP_STATUS $(log_count '::error::Infrastructure failure: ')"
     run_suite "$platform" "$(writes '{"run":{"status":"error","summary":{"executed":3,"failed":1}}}'); exit 3" E2E_TOLERATED=true
