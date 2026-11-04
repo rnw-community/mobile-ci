@@ -392,7 +392,7 @@ on:
                 description: >-
                     Command run in e2e-dir to run the suite. It gets E2E_PLATFORM, E2E_APP_PATH
                     (the .app), E2E_APP_ID, E2E_TARGET, E2E_WORKERS, E2E_RETRIES,
-                    E2E_SESSION (unique per job attempt and target), SIMLOCK_URL and
+                    E2E_SESSION (unique per platform, job attempt and target), SIMLOCK_URL and
                     SIMLOCK_TOKEN in its environment, and must write its report under
                     e2e-dir/.e2e, which the job uploads.
                 type: string
@@ -1705,7 +1705,7 @@ jobs:
                   targets: ${{ needs.plan.outputs.test-targets }}
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
-                  session: e2e-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  session: e2e-ios-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
                   tolerated: ${{ matrix.target.tolerateTestFailures }}
                   simlock-url: ${{ inputs.simlock-url }}

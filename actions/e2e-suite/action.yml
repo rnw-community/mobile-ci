@@ -64,7 +64,7 @@ inputs:
         required: false
         default: '1'
     session:
-        description: agent-device session name, unique per run, attempt and target (run).
+        description: agent-device session name, unique per platform, run, attempt and target (run).
         required: false
         default: ''
     shadow:
@@ -225,7 +225,15 @@ runs:
               rm -rf .e2e
               started=$(date +%s)
               status=0
-              bash -c "$E2E_COMMAND" || status=$?
+              output=$(mktemp)
+              : > "$output.open"
+              bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
+              for _ in 1 2 3 4 5 6 7 8 9 10; do
+                [ -e "$output.open" ] || break
+                sleep 0.5
+              done
+              run_said=$(sed -n "s/$(printf '\033')\[[0-9;]*m//g; /^ *ERROR /{N; s/$(printf '\033')\[[0-9;]*m//g; s/\n */: /; s/^ *ERROR *//; p; q;}" "$output")
+              rm -f "$output" "$output.open"
               echo "E2E suite exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
               if [ -f .e2e/summary.md ]; then
                 { echo "### E2E suite (${E2E_TARGET})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
@@ -250,7 +258,7 @@ runs:
               if [ -n "$infrastructure" ]; then
                 if [ "$status" = 0 ]; then status=1; fi
                 if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
-                echo "::$level::Infrastructure failure: $infrastructure"
+                echo "::$level::Infrastructure failure: $infrastructure${run_said:+ The run said: ${run_said:0:500}}"
               fi
               if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
                 echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."

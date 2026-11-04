@@ -219,7 +219,7 @@ workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
 | `E2E_TARGET` | the target's `name` |
 | `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free iOS devices split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
 | `E2E_RETRIES` | `e2e-retries` |
-| `E2E_SESSION` | unique per run, attempt and target; give it to agent-device as the session name |
+| `E2E_SESSION` | unique per platform, run, attempt and target; give it to agent-device as the session name |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
 
 `maestro-secrets-env` entries are exported to the suite too (masked), for test

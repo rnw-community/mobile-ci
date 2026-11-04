@@ -158,6 +158,31 @@ for platform in ios android; do
     fi
 done
 
+# suuudokuuu job 126511875088, as the suite printed it: the error sat only in the step log.
+RUN_ERROR="printf '\\033[1m\\033[41m ERROR \\033[49m\\033[22m infrastructure error \\033[2mENGINE_FAILURE\\033[22m\\033[2m (launch)\\033[22m\\n\\033[31mdevice provider \"simlock\" could not lease a device: No Android device with serial emulator-5588\\033[39m\\n\\n      Tests  no tests executed\\n'; exit 3"
+
+case_start 'an infrastructure failure names the error the run printed, and the step log keeps its output'
+run_suite android "$RUN_ERROR"
+if assert_equals 3 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e command exited 3 but wrote no report (.e2e/report.json), so there is no evidence any test ran. The run said: infrastructure error ENGINE_FAILURE (launch): device provider "simlock" could not lease a device: No Android device with serial emulator-5588' 'annotation' \
+    && assert_contains "$(cat "$dir/log")" 'no tests executed' 'output'; then
+    pass_case
+fi
+
+case_start 'the annotation quotes at most 500 characters of that error'
+run_suite android "printf ' ERROR x\\n%0600d\\n' 0; exit 3"
+annotation="$(grep '^::error::' "$dir/log")"
+if assert_contains "$annotation" 'The run said: x: 000' 'quote' && assert_equals 'short' "$([ "${#annotation}" -lt 700 ] && echo short || echo "${#annotation}")" 'length'; then
+    pass_case
+fi
+
+case_start 'a process the command left running does not hold the step open'
+started="$SECONDS"
+run_suite android 'sleep 15 & exit 3'
+if assert_equals 3 "$STEP_STATUS" 'status' && assert_equals 'prompt' "$([ $((SECONDS - started)) -lt 12 ] && echo prompt || echo "$((SECONDS - started))s")" 'wait'; then
+    pass_case
+fi
+
 case_start 'ios: a missing .app fails closed, and so does an .apk where a .app belongs'
 run_suite ios 'touch ran' E2E_APP_PATH=/nonexistent/Base.app
 missing="$STEP_STATUS $(cat "$dir/log")"

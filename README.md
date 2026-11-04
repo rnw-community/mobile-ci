@@ -159,7 +159,10 @@ called workflow's jobs request — see the table in
   a run with no report, no test executed or a run error now fails, with an
   `Infrastructure failure:` annotation that `rerun-infra-failures` retries once, on
   every e2e target. The `@mobile-ci/e2e-simlock` provider sends an upload the tunnel cut
-  off (a 524) again with backoff, and `/exec`'s lease lookups survive a tunnel cut. In
+  off (a 524) again with backoff, asks for another device when the farm grants an emulator
+  gone from adb, and `/exec`'s lease lookups survive a tunnel cut. E2E session names carry
+  the platform, so overlapping iOS and Android jobs of one run no longer refuse each
+  other's leases, and the infrastructure annotation quotes the run's error. In
   `/steps`, a drag the node did not follow for a quarter of its length is a list's end,
   so a bounce no longer throws `still out of place after 3 drags`.
 - **v4.10.0** — a tunnel blip no longer fails a suite: the `@mobile-ci/e2e-simlock`

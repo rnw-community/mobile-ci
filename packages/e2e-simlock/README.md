@@ -95,7 +95,8 @@ What it does for each worker slot:
 
 - **Queues client-side.** Before it asks for a lease, it polls `/v1/status`
   until the farm has a device of the platform free. A request the public tunnel
-  cuts off (a 524, or a dropped connection) is released by its own id and asked again. Any other error
+  cuts off (a 524, or a dropped connection) is released by its own id and asked again, and so is one
+  the farm granted on a warm emulator gone from adb (`No Android device with serial`). Any other error
   fails at once, and so does `queueMs` running out or an interrupt.
 - **Pins and installs.** It leases one device (`ios-instance` or
   `android-instance`) and names it by simulator UDID or adb serial on every

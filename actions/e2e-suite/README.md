@@ -22,7 +22,7 @@ action does the rest in three modes.
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
   - A run that tested nothing, or that hit an infrastructure error, fails with an
-    `Infrastructure failure:` error, which
+    `Infrastructure failure:` error quoting the `ERROR` the run printed, which
     [`rerun-infra-failures`](../rerun-infra-failures/README.md) retries once: no
     valid report, none executed, a run error in the report, or a report with
     `status: error` or `interrupted`. Configuration errors exit this way too, so

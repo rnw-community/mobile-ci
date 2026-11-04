@@ -4,8 +4,12 @@ import { join } from 'node:path';
 
 export type Platform = 'ios' | 'android';
 
-/** A lease request the public tunnel cut off while the farm was full (a 524, or the connection dropped): the slot releases it, waits for a device and asks again. */
-export const LEASE_CUT_OFF = /Invalid daemon response|error code: 524|socket hang up|other side closed/i;
+/**
+ * A lease request the public tunnel cut off while the farm was full (a 524, or the connection dropped), or one the farm
+ * granted on a warm emulator that has left adb, which it reclaims within a minute: the slot releases it, waits for a
+ * device and asks again.
+ */
+export const LEASE_ASK_AGAIN = /Invalid daemon response|error code: 524|socket hang up|other side closed|No Android device with serial/i;
 
 /** Errors that mean the farm, not one device, failed (simlock's gateway and agent-device wording): never worth a device swap. */
 export const FARM_DOWN =
@@ -81,7 +85,7 @@ export interface QueuedAllocation<L> {
  * `allocate`, queued client-side. A lease request blocks while the farm is full, and through the
  * public Cloudflare tunnel one open past 100 s ends in a 524, so the slot first waits for the farm
  * to report a free device. A request cut off anyway is released by its own id (the farm may still
- * grant it) and asked again. Any other error fails at once; so does the queue deadline and an abort.
+ * grant it) and asked again, as is one naming an emulator gone from adb. Any other error fails at once; so does the queue deadline and an abort.
  */
 export async function allocateQueued<L>(queue: QueuedAllocation<L>): Promise<L> {
     const now = queue.now ?? Date.now;
@@ -107,14 +111,14 @@ export async function allocateQueued<L>(queue: QueuedAllocation<L>): Promise<L> 
             return await queue.allocate(leaseId);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
-            if (!LEASE_CUT_OFF.test(message)) {
+            if (!LEASE_ASK_AGAIN.test(message)) {
                 throw cause;
             }
             await queue.release(leaseId).catch(() => undefined);
             if (now() > deadline) {
                 throw cause;
             }
-            queue.log(`simlock: lease request cut off while the farm was full (${message}); waiting to ask again`);
+            queue.log(`simlock: lease request not served (${message}); waiting to ask again`);
             // A cut-off that comes back at once (a dropped socket) must not turn the queue into a busy loop.
             await wait(POLL_MS + Math.floor(Math.random() * POLL_JITTER_MS), queue.signal);
         }

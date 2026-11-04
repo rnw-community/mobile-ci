@@ -68,6 +68,13 @@ for platform in ios android; do
         step('e2e', 'Upload the e2e report')['with']['name'] != 'e2e-$platform\${{ needs.detect.outputs.artifact-scope }}-\${{ matrix.target.name }}' and 'artifact name',
     ] if p]")"; then pass_case; else fail_case "$out"; fi
 
+    # suuudokuuu run 41797995373: both workflows named their sessions alike, and the farm refused the second job's leases.
+    case_start "$platform-maestro: the e2e session name carries the platform, so overlapping jobs of one run never share one"
+    # shellcheck disable=SC2016
+    if out="$(check "$workflow" "[p for p in [
+        step('e2e', 'run')['with']['session'] != 'e2e-$platform-\${{ github.run_id }}-\${{ github.run_attempt }}\${{ needs.detect.outputs.artifact-scope }}-\${{ matrix.target.name }}' and step('e2e', 'run')['with']['session'],
+    ] if p]")"; then pass_case; else fail_case "$out"; fi
+
     case_start "$platform-maestro: Maestro stops with e2e, and no shadow e2e suite records a cached pass"
     # shellcheck disable=SC2016
     if out="$(check "$workflow" "[p for p in [

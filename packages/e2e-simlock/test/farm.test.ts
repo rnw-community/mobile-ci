@@ -4,19 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { allocateQueued, FARM_DOWN, freeDevices, LEASE_CUT_OFF, pause, recordLease, UPLOAD_CUT, type QueuedAllocation } from '../src/farm.ts';
+import { allocateQueued, FARM_DOWN, freeDevices, LEASE_ASK_AGAIN, pause, recordLease, UPLOAD_CUT, type QueuedAllocation } from '../src/farm.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
 
-describe('LEASE_CUT_OFF', () => {
-    it('matches only the tunnel cutting off a blocked lease request', () => {
-        assert.ok(LEASE_CUT_OFF.test('error code: 524'));
-        assert.ok(LEASE_CUT_OFF.test('Invalid daemon response: <html>'));
+describe('LEASE_ASK_AGAIN', () => {
+    it('matches only a lease request worth asking again', () => {
+        assert.ok(LEASE_ASK_AGAIN.test('error code: 524'));
+        assert.ok(LEASE_ASK_AGAIN.test('Invalid daemon response: <html>'));
         // The tunnel dropping the blocked request itself (suuudokuuu#791).
-        assert.ok(LEASE_CUT_OFF.test('socket hang up'));
-        assert.ok(LEASE_CUT_OFF.test('other side closed'));
+        assert.ok(LEASE_ASK_AGAIN.test('socket hang up'));
+        assert.ok(LEASE_ASK_AGAIN.test('other side closed'));
+        // A warm emulator that left adb (mobile-ci#333): the farm reclaims it within a minute.
+        assert.ok(LEASE_ASK_AGAIN.test('No Android device with serial emulator-5588'));
         for (const other of ['error code: 502', 'error code: 522', 'LEASE_NOT_FOUND', 'fetch failed', 'refused: name --platform ios or android']) {
-            assert.ok(!LEASE_CUT_OFF.test(other), other);
+            assert.ok(!LEASE_ASK_AGAIN.test(other), other);
         }
     });
 });
@@ -138,7 +140,7 @@ describe('allocateQueued', () => {
         assert.equal(pauses.length, 1, 'a fast, repeating cut-off must not spin');
         assert.notEqual(ids[0], ids[1]);
         assert.deepEqual(released, [ids[0]]);
-        assert.deepEqual(logs, ['simlock: lease request cut off while the farm was full (error code: 524); waiting to ask again']);
+        assert.deepEqual(logs, ['simlock: lease request not served (error code: 524); waiting to ask again']);
     });
 
     it('a cut-off whose release fails still asks again', async () => {
