@@ -43,6 +43,10 @@ pnpm's store is content-addressed, so x64 and arm64 jobs share one entry:
   saving a store that lacks an architecture. pnpm older than 10.14 cannot do
   this: it warns, and the other architecture's binaries are downloaded per job.
 
+This shares a store across architectures, not across caches. On a fleet where each
+node runs its own LAN cache, an entry reaches only the node whose job saved it, so a
+new lockfile misses on every node no trusted run has landed on yet.
+
 Call it before installing; the calling workflow saves after installing (see
 [Example](#example)).
 
@@ -67,7 +71,7 @@ Call it before installing; the calling workflow saves after installing (see
 - uses: actions/setup-node@... # no `cache:`
 - name: Restore package manager cache
   id: pm-cache
-  uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.1 # v4.10.1
+  uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.2 # v4.10.2
   with:
       package-manager: pnpm
 - run: pnpm install --frozen-lockfile

@@ -30,7 +30,7 @@ jobs:
     ios:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.1 # v4.10.1
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.2 # v4.10.2
         with:
             xcode-version: '26.4.1'
             xcode-build: '17E202'
@@ -196,7 +196,7 @@ jobs:
     ios:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.1 # v4.10.1
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.2 # v4.10.2
 ```
 
 ## Examples
@@ -212,7 +212,7 @@ jobs:
     ios:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.1 # v4.10.1
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.2 # v4.10.2
         with:
             xcode-version: '26.4.1'
             xcode-build: '17E202'
@@ -235,7 +235,7 @@ permissions:
 
 jobs:
     ios:
-        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.1 # v4.10.1
+        uses: rnw-community/mobile-ci/.github/workflows/swift-ios.yml@v4.10.2 # v4.10.2
         permissions:
             contents: write
         with:
