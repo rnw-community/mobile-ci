@@ -11,7 +11,6 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
 WORKFLOWS="$REPO_ROOT/.github/workflows"
-HOST_STEP='Assert this host can run the packaged simulator architecture'
 
 # query <workflow file> <python expression over `workflow`, `inputs`, `steps(job)`>
 query() {
