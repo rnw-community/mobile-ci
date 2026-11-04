@@ -92,7 +92,7 @@ jobs:
                 target: ${{ fromJSON(inputs.targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@d7ac1804284251f2ce4f559cae5c613e5878c118 # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
 
@@ -134,7 +134,7 @@ jobs:
 
             - name: expo-native-key
               id: native-key
-              uses: rnw-community/mobile-ci/actions/expo-native-key@d7ac1804284251f2ce4f559cae5c613e5878c118 # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/expo-native-key@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
               with:
                   platform: ${{ inputs.platform }}
                   working-directory: ${{ matrix.target.appDir }}
@@ -177,7 +177,7 @@ jobs:
         timeout-minutes: 10
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@d7ac1804284251f2ce4f559cae5c613e5878c118 # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
 
@@ -202,7 +202,7 @@ jobs:
                   echo "plans=$(jq -sc '.' "${keys[@]}")" >> "$GITHUB_OUTPUT"
 
             - name: assert-distinct-fingerprints
-              uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@d7ac1804284251f2ce4f559cae5c613e5878c118 # release/v4.10.0 fleet-validation pin
+              uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@6eddad0302ccd46a952101d88fe3e286c745699d # release/v4.10.0 fleet-validation pin
               with:
                   platform: ${{ inputs.platform }}
                   plans: ${{ steps.gather.outputs.plans }}
