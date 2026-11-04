@@ -105,6 +105,130 @@ else
     pass_case
 fi
 
+linux_pnpm_workspace() {
+    local dir
+    dir="$(cache_workspace)"
+    # shellcheck disable=SC2016
+    stub "$dir" pnpm 'echo "$HOME/setup-pnpm/store/v11"'
+    echo 'lockfileVersion: 9' > "$dir/work/pnpm-lock.yaml"
+    printf '%s\n' "$dir"
+}
+
+case_start 'Linux pnpm shares one key, prefix and cache path literal across architectures and home directories'
+x64="$(linux_pnpm_workspace)"
+arm64="$(linux_pnpm_workspace)"
+run_step "$x64" PACKAGE_MANAGER=pnpm WORKING_DIRECTORY=. RUNNER_ARCH_NAME=X64 RUNNER_OS_NAME=Linux HOME=/home/runner
+run_step "$arm64" PACKAGE_MANAGER=pnpm WORKING_DIRECTORY=. RUNNER_ARCH_NAME=ARM64 RUNNER_OS_NAME=Linux HOME=/home/admin
+expected="node-pm-v2-Linux-pnpm-$(lock_hash "$x64/work/pnpm-lock.yaml")"
+# shellcheck disable=SC2088
+assert_equals 0 "$STEP_STATUS" 'exit status' \
+    && assert_equals "$expected" "$(step_output "$x64" key)" 'x64 key' \
+    && assert_equals "$expected" "$(step_output "$arm64" key)" 'arm64 key' \
+    && assert_equals 'node-pm-v2-Linux-pnpm-' "$(step_output "$arm64" restore-prefix)" 'restore prefix' \
+    && assert_equals '~/setup-pnpm/store/v11' "$(step_output "$x64" path)" 'x64 path' \
+    && assert_equals '~/setup-pnpm/store/v11' "$(step_output "$arm64" path)" 'arm64 path' \
+    && pass_case
+
+case_start 'a Linux pnpm store outside the home directory keeps its absolute path'
+dir="$(linux_pnpm_workspace)"
+stub "$dir" pnpm 'echo /stores/pnpm'
+run_step "$dir" PACKAGE_MANAGER=pnpm WORKING_DIRECTORY=. RUNNER_ARCH_NAME=X64 RUNNER_OS_NAME=Linux HOME=/home/runner
+assert_equals /stores/pnpm "$(step_output "$dir" path)" 'path' && pass_case
+
+case_start 'Linux npm stays keyed by architecture, with its absolute path'
+dir="$(cache_workspace)"
+echo x > "$dir/work/package-lock.json"
+run_step "$dir" PACKAGE_MANAGER=npm WORKING_DIRECTORY=. RUNNER_ARCH_NAME=ARM64 RUNNER_OS_NAME=Linux
+assert_equals 'node-pm-v1-Linux-ARM64-npm-' "$(step_output "$dir" restore-prefix)" 'restore prefix' \
+    && assert_equals /stores/npm "$(step_output "$dir" path)" 'path' && pass_case
+
+SEED_STEP='Add every Linux architecture to the pnpm store being seeded'
+
+seed() {
+    local version="$1" fetch_status="${2:-0}" dir
+    dir="$(new_workspace "$ACTION" "$SEED_STEP")"
+    # shellcheck disable=SC2016
+    stub "$dir" pnpm 'case "$1" in
+--version) echo "$FAKE_PNPM_VERSION" ;;
+fetch)
+    printf "%s\n" "$*" >> "$FAKE_LOG"
+    printf "%s\n" "${pnpm_config_supported_architectures:-no-env}" >> "$FAKE_LOG"
+    printf "%s\n" "${pnpm_config_virtual_store_dir:-no-env}" >> "$FAKE_LOG"
+    mkdir -p node_modules
+    : > node_modules/.modules.yaml
+    : > node_modules/.pnpm-workspace-state-v1.json
+    exit "$FAKE_FETCH_STATUS"
+    ;;
+esac'
+    : > "$dir/fetch.log"
+    run_step "$dir" WORKING_DIRECTORY=. FAKE_PNPM_VERSION="$version" FAKE_FETCH_STATUS="$fetch_status" FAKE_LOG="$dir/fetch.log"
+    printf '%s\n' "$STEP_STATUS" > "$dir/status"
+    printf '%s\n' "$dir"
+}
+
+case_start 'pnpm 11 seeds both architectures through flags, outside the project'
+dir="$(seed 11.28.3)"
+log="$(cat "$dir/fetch.log")"
+assert_equals 0 "$(cat "$dir/status")" 'exit status' \
+    && assert_contains "$log" '--os=linux --cpu=x64 --cpu=arm64 --libc=glibc' 'architecture flags' \
+    && assert_contains "$log" "--modules-dir=$dir/runner-temp/" 'modules dir' \
+    && assert_contains "$log" "$dir/runner-temp/" 'virtual store dir' \
+    && pass_case
+
+case_start 'pnpm 12 rejects those flags on fetch, so it seeds both architectures through the environment'
+dir="$(seed 12.14.0)"
+log="$(cat "$dir/fetch.log")"
+case "$log" in
+    *--cpu*) fail_case "pnpm 12 fetch was given --cpu: $log" ;;
+    *)
+        assert_equals 0 "$(cat "$dir/status")" 'exit status' \
+            && assert_contains "$log" '"cpu":["x64","arm64"]' 'supported architectures' \
+            && assert_contains "$log" "$dir/runner-temp/" 'virtual store dir' \
+            && pass_case
+        ;;
+esac
+
+case_start 'the seed leaves no node_modules state and no scratch directory behind'
+dir="$(seed 12.14.0)"
+if [ -e "$dir/work/node_modules" ]; then
+    fail_case "left $(find "$dir/work/node_modules" | tr '\n' ' ')"
+elif [ -n "$(find "$dir/runner-temp" -mindepth 1 -print)" ]; then
+    fail_case 'left a scratch directory in RUNNER_TEMP'
+else
+    pass_case
+fi
+
+case_start 'pnpm older than 10.14 cannot fetch for another architecture: it warns and fetches nothing'
+dir="$(seed 9.15.9)"
+assert_equals 0 "$(cat "$dir/status")" 'exit status' \
+    && assert_equals '' "$(cat "$dir/fetch.log")" 'fetch calls' \
+    && assert_contains "$(cat "$dir/log")" '::warning::pnpm 9.15.9' 'warning' \
+    && pass_case
+
+case_start 'a failed seed fails the step instead of saving a store that lacks an architecture'
+dir="$(seed 11.28.3 1)"
+if [ "$(cat "$dir/status")" -eq 0 ]; then
+    fail_case 'a failed pnpm fetch reported success'
+else
+    pass_case
+fi
+
+case_start 'the seed runs only for Linux pnpm, off pull requests, after a non-exact restore'
+guard="$(ACTION_YML="$ACTION" SEED_STEP="$SEED_STEP" python3 - <<'PYTHON'
+import os
+
+import yaml
+
+steps = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))['runs']['steps']
+names = [s.get('id') or s.get('name') for s in steps]
+seed = next(s for s in steps if s.get('name') == os.environ['SEED_STEP'])
+if names.index('restore') > names.index(os.environ['SEED_STEP']):
+    print('seed runs before restore')
+print(seed['if'])
+PYTHON
+)"
+assert_equals "inputs.package-manager == 'pnpm' && runner.os == 'Linux' && github.event_name != 'pull_request' && steps.restore.outputs.cache-hit != 'true'" "$guard" 'if' && pass_case
+
 case_start 'the action only restores, on every event, with restore-keys, and exposes the path and key a workflow-level save needs'
 if ACTION_YML="$ACTION" python3 - <<'PYTHON'
 import os
