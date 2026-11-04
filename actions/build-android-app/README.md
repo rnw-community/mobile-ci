@@ -261,7 +261,7 @@ preinstalled here.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/build-android-app@v4.10.0 # v4.10.0
+- uses: rnw-community/mobile-ci/actions/build-android-app@v4.10.1 # v4.10.1
   id: build
   with:
       app-dir: apps/mobile
