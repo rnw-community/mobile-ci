@@ -174,7 +174,7 @@ runs:
 
         - name: Install @mobile-ci/e2e-simlock
           if: inputs.mode == 'run'
-          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@adb8933f0594ba46c604a41a8299ef304d08224e # release/v4.10.0 fleet-validation pin
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@40e725c1ce5cdf42b4e6875ba2a26ffbcec4adad # release/v4.10.0 fleet-validation pin
           with:
               e2e-dir: ${{ inputs.e2e-dir }}
 
