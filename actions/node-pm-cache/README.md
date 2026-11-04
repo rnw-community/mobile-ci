@@ -23,6 +23,26 @@ to the `node-pm-v1-<os>-<arch>-<pm>-` prefix. The lockfile must exist (fail
 closed). The package manager must already be on `PATH` (run `pnpm/action-setup`
 and `corepack enable` first).
 
+### One pnpm store for every Linux architecture
+
+pnpm's store is content-addressed, so x64 and arm64 jobs share one entry:
+`node-pm-v2-Linux-pnpm-<sha256 of the lockfile>`. Three things make that work:
+
+- **The key has no architecture.** macOS, npm and yarn keep the `v1` key above.
+- **`path` is `~/`-relative when the store is in the home directory.**
+  `actions/cache` hashes the literal path into the entry's version, and a
+  different version misses even on the same key, so `/home/runner/...` could
+  never restore on `/home/admin/...`. Archive members are relative to the
+  workspace, so this also needs `~/.../_work/<repo>/<repo>` at the same depth
+  on every runner sharing the cache. `path` is for `actions/cache` only: do not
+  read it as a shell path.
+- **A seed holds both architectures.** On a Linux run off a pull request with
+  no exact hit, the action runs `pnpm fetch` for x64 and arm64 (glibc) with a
+  throwaway virtual store. Only the store grows; your `pnpm install` still links
+  just the runner's own binaries. A failed fetch fails the step rather than
+  saving a store that lacks an architecture. pnpm older than 10.14 cannot do
+  this: it warns, and the other architecture's binaries are downloaded per job.
+
 Call it before installing; the calling workflow saves after installing (see
 [Example](#example)).
 
@@ -39,7 +59,7 @@ Call it before installing; the calling workflow saves after installing (see
 | ----------- | -------------------------------------------- |
 | `cache-hit` | `true` when an exact-key entry was restored. |
 | `cache-key` | The computed cache key.                      |
-| `path`      | The resolved store path.                     |
+| `path`      | The store path for `actions/cache/save`.     |
 
 ## Example
 

@@ -23,7 +23,9 @@ outputs:
     description: The computed cache key.
     value: ${{ steps.resolve.outputs.key }}
   path:
-    description: The resolved store path, for the calling workflow's `actions/cache/save` step.
+    description: >-
+      The store path for the calling workflow's `actions/cache/save` step, `~/`-relative for a Linux pnpm store in the
+      home directory. Not usable as a shell path.
     value: ${{ steps.resolve.outputs.path }}
 runs:
   using: composite
@@ -83,7 +85,14 @@ runs:
           hash="$(shasum -a 256 "$lockfile" | cut -d' ' -f1)"
         fi
         prefix="node-pm-v1-${RUNNER_OS_NAME}-${RUNNER_ARCH_NAME}-${PACKAGE_MANAGER}-"
-        echo "path=$store" >> "$GITHUB_OUTPUT"
+        cache_path="$store"
+        if [ "$PACKAGE_MANAGER" = pnpm ] && [ "$RUNNER_OS_NAME" = Linux ]; then
+          prefix='node-pm-v2-Linux-pnpm-'
+          case "$store" in
+            "$HOME"/*) cache_path='~'"${store#"$HOME"}" ;;
+          esac
+        fi
+        echo "path=$cache_path" >> "$GITHUB_OUTPUT"
         echo "key=${prefix}${hash}" >> "$GITHUB_OUTPUT"
         echo "restore-prefix=$prefix" >> "$GITHUB_OUTPUT"
 
@@ -95,3 +104,28 @@ runs:
         key: ${{ steps.resolve.outputs.key }}
         restore-keys: ${{ steps.resolve.outputs.restore-prefix }}
 
+    - name: Add every Linux architecture to the pnpm store being seeded
+      if: inputs.package-manager == 'pnpm' && runner.os == 'Linux' && github.event_name != 'pull_request' && steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        cd "$WORKING_DIRECTORY"
+        version="$(pnpm --version)"
+        version_at_least() { [ "$(printf '%s\n' "$1" "$version" | sort -V | head -n 1)" = "$1" ]; }
+        if ! version_at_least 10.14.0; then
+          echo "::warning::pnpm $version cannot fetch for another architecture (needs 10.14); this store holds this runner's architecture only."
+          exit 0
+        fi
+        scratch="$(mktemp -d "$RUNNER_TEMP/pnpm-store-seed.XXXXXX")"
+        trap 'rm -rf "$scratch"' EXIT
+        if version_at_least 12.0.0; then
+          pnpm_config_supported_architectures='{"os":["linux"],"cpu":["x64","arm64"],"libc":["glibc"]}' \
+            pnpm_config_virtual_store_dir="$scratch/virtual-store" pnpm fetch
+          rm -f node_modules/.modules.yaml node_modules/.pnpm-workspace-state-v1.json
+          rmdir node_modules 2>/dev/null || true
+        else
+          pnpm fetch --os=linux --cpu=x64 --cpu=arm64 --libc=glibc \
+            --modules-dir="$scratch/modules" --virtual-store-dir="$scratch/virtual-store"
+        fi
