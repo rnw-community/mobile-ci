@@ -94,7 +94,7 @@ const COMMAND = /^agent[_-]device\.command$/;
 export interface RelayRewrites {
     /** Put on every lease allocate as `params.deviceMode`. */
     readonly deviceMode?: DeviceMode;
-    /** iOS: take every `screenshot` from the XCTest runner, as Maestro's baselines were (no Dynamic Island). */
+    /** iOS: take every `screenshot` from the XCTest runner, (no Dynamic Island). */
     readonly runnerScreenshots?: boolean;
 }
 

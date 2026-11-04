@@ -6,7 +6,7 @@ check-run annotations by the same rules as
 [`scripts/ci-metrics.py`](../../scripts/ci-metrics.py), so the retry and the
 weekly report agree on what counts as infra:
 
-- **Infra:** a timeout, or a job whose failure annotations name a lost runner, an action's own `Infrastructure failure:` error (e.g. `run-maestro-android` losing its emulator, or `e2e-suite` on a run with no report, no test executed or a run error), `Exec format error`, a job not started or not acquired, a shutdown signal, a full disk, network errors (a `git fetch` cut off mid-pack included), an unresolvable action, or exit codes 127, 137 or 143, and nothing else except the runner's bare `Process completed with exit code N.` line. Warnings and notices do not count.
+- **Infra:** a timeout, or a job whose failure annotations name a lost runner, an action's own `Infrastructure failure:` error (e.g. `e2e-suite` on a run with no report, no test executed or a run error), `Exec format error`, a job not started or not acquired, a shutdown signal, a full disk, network errors (a `git fetch` cut off mid-pack included), an unresolvable action, or exit codes 127, 137 or 143, and nothing else except the runner's bare `Process completed with exit code N.` line. Warnings and notices do not count.
 - **Ignored:** roll-up jobs that report other jobs with an `::error::Required jobs did not succeed` annotation. A roll-up that only `echo`es its verdict leaves the bare exit-code line, so it reads as a test failure and blocks the retry.
 - **Test:** everything else, including a failure with no annotation.
 
@@ -57,7 +57,7 @@ jobs:
             actions: write
             checks: read
         steps:
-            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.10.2 # v4.10.2
+            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v5.0.0 # v5.0.0
               with:
                   run-id: ${{ github.event.workflow_run.id }}
 ```

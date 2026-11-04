@@ -4,10 +4,7 @@ Drives an **already-booted** Android device over adb — a Redroid container
 (pair with [`redroid-container`](../redroid-container/README.md)), an AVD
 (pair with [`android-emulator`](../android-emulator/README.md)), or a
 physical device — and captures one screenshot per `locale` x `appearance` x
-scene from a JSON scene manifest. Unlike
-[`capture-screenshots-ios`](../capture-screenshots-ios/README.md), there is
-no flow-discovery mode: Android capture is scene-manifest-driven (direct
-mode) only, and this action never manages the device lifecycle itself — it
+deep-link scene from a JSON scene manifest. This action never manages the device lifecycle itself — it
 takes the device's adb serial as an input and leaves start/teardown to the
 caller.
 
@@ -30,12 +27,10 @@ previous matrix.
   the action reads `ro.build.version.sdk` up front and fails closed below
   that. The default Redroid image (`redroid/redroid:15.0.0_64only-latest`, API 35) is fine.
 - **Appearance** is applied via `cmd uimode night yes|no` per appearance
-  value; `-e APPEARANCE=<value>` is additionally passed to flow-backed
-  scenes for apps with an in-app theme switch.
+  value.
 - **`status-bar-override: 'true'`** (default) enables SystemUI demo mode
   before capture: clock 09:41, full wifi, no mobile data type, battery 100%
-  unplugged, notifications hidden — the Android equivalent of
-  `capture-screenshots-ios`'s `simctl status_bar` override. Failure of the
+  unplugged, notifications hidden. Failure of the
   demo-mode broadcasts fails closed; set the input to `'false'` to skip.
 - **Landscape is not supported** — there is no `orientation` input. Rotating
   captured pixels the way the iOS action does relies on macOS-only `sips`,
@@ -55,20 +50,6 @@ one of
   `am start -W -a android.intent.action.VIEW -d <deepLink> <app-id>`,
   allowed `settle-seconds` (or the scene's `settleSeconds`) to settle, then
   captured with `adb exec-out screencap -p`.
-- `flow` — a Maestro flow path relative to `screenshots-dir`, run with
-  `ANDROID_SERIAL` set and expected to produce **exactly one**
-  `takeScreenshot` output (zero or more than one fails that cell closed).
-  Maestro is run from a fresh per-cell scratch working directory, because
-  it writes a relative `takeScreenshot` name into the process CWD (not
-  into `--test-output-dir`); the PNG is collected from the union of that
-  scratch CWD and `--test-output-dir`'s `takeScreenshot/` subdirectory.
-  Flow-internal `runFlow` references are unaffected — Maestro resolves
-  them against the flow file, not the CWD. Maestro itself is installed
-  lazily, only when at least one android-applicable scene declares a flow.
-  Flow scenes are validated against the default Maestro (2.8.x): older
-  2.6.x releases store `takeScreenshot` output in a layout the collector
-  does not search, so a downgraded `maestro-version` fails closed with the
-  zero-screenshot error rather than silently capturing nothing.
 
 Optional per-scene `platforms`/`locales`/`appearances` filters restrict
 where a scene is captured; scenes whose `platforms` excludes `android` are
@@ -90,39 +71,14 @@ that restarts adbd and drops a TCP serial's connection) retry
 `uid=0`. See the seed-hook contract in
 [docs/workflows/store-screenshots.md](../../docs/workflows/store-screenshots.md).
 
-## Maestro workspace config
-
-Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
-at a **directory**. This action passes the CLI one scene flow file per
-invocation, so a workspace config sitting next to those flows is never read
-and nothing warns about it. Point `maestro-config` at that file and it is
-passed as `--config` to **every** `maestro test` this action runs for a
-flow-backed scene.
-
-The case that motivated the input is iOS-specific, but the mechanism is not —
-any workspace-level `platform:` / `flows:` / tag setting is dropped the same
-way. An `@expo/ui` SwiftUI `.sheet()` modal renders its React Native content
-outside the app's main window, so the XCUITest hierarchy Maestro snapshots
-never contains it and every selector inside the sheet times out at its
-assertion budget. The fix lives entirely in the workspace config —
-
-```yaml
-platform:
-    ios:
-        snapshotKeyHonorModalViews: false
-```
-
-— and is inert unless `--config` actually reaches the CLI.
-
 ## Inputs
 
 | Name                   | Required | Default    | Description |
 | ----------------------- | -------- | ---------- | -------------- |
 | `android-serial`        | yes      | —          | adb serial of an already-booted API 33+ device this action drives. |
 | `apk-path`              | yes      | —          | Path to the packaged `.apk` to install (`adb install -r`). |
-| `app-id`                | yes      | —          | Application ID the scenes are captured from; passed to Maestro as `APP_ID`. |
+| `app-id`                | yes      | —          | Application ID the scenes are captured from. |
 | `scenes`                | yes      | —          | JSON array of scene objects; see [Scene manifest](#scene-manifest). |
-| `screenshots-dir`       | no       | `''`       | Directory flow-backed scenes' paths are resolved against; required only when an android-applicable scene declares a `flow`. |
 | `device-name`           | yes      | —          | Free-form label (`^[A-Za-z0-9 ._-]+$`) deriving the `raw/android/<device-slug>` path segment. |
 | `width`                 | yes      | —          | Emulated display width in px (`wm size`). |
 | `height`                | yes      | —          | Emulated display height in px (`wm size`). |
@@ -132,10 +88,6 @@ platform:
 | `seed-command`          | no       | `''`       | Consumer-owned per-cell seed hook; see [Seed hook](#seed-hook). Failure fails the cell closed (no capture, no retry). |
 | `settle-seconds`        | no       | `3`        | Seconds (integer 0–120) between a deep-link launch and its screenshot; a scene's `settleSeconds` overrides it. |
 | `status-bar-override`   | no       | `true`     | Reapply the SystemUI demo status bar per cell after seeding; wait up to 10 s for active demo mode and fail closed on unsupported devices or failed commands. |
-| `maestro-env`           | no       | `''`       | Newline-separated `KEY=VALUE` pairs passed as extra `-e` arguments to every `maestro test` (flow-backed scenes only). Fails closed on a malformed line, a reserved `APP_ID`/`LOCALE`/`APPEARANCE` override, or an invalid name. |
-| `locale-env`             | no       | `''`       | JSON object mapping a locale from `locales` to extra env pairs applied only to that locale's cells - e.g. `{"de": {"LOCALE_IDENTIFIER": "de-DE"}}`. Precedence: global `maestro-env`, then these (Maestro's last `-e` wins). Fails closed on invalid JSON, an unknown locale key, a reserved name, a non-string value, or a value containing a newline/tab. |
-| `maestro-config`         | no       | `''`       | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and this action always passes individual flow files, so without this input a workspace config is silently ignored — see [Maestro workspace config](#maestro-workspace-config). Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. |
-| `maestro-version`       | no       | `2.8.0`    | Pinned Maestro CLI version, installed lazily and the same way as `run-maestro-android-redroid`'s. |
 | `output-dir`            | yes      | —          | Root output directory; see the fixed layout above. |
 
 ## Outputs
@@ -150,12 +102,12 @@ platform:
 ```yaml
 - name: Start Redroid
   id: redroid
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
   with:
       mode: start
       container-name: redroid-screenshots-${{ strategy.job-index }}
 
-- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v5.0.0 # v5.0.0
   with:
       android-serial: ${{ steps.redroid.outputs.android-serial }}
       apk-path: .ci-artifacts/store-screenshots-apk-bare/app-release.apk
@@ -173,7 +125,7 @@ platform:
 
 - name: Teardown Redroid
   if: always()
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
   with:
       mode: teardown
       container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -187,20 +139,20 @@ leak into, or come from, another job's AVD on a persistent host:
 ```yaml
 - name: Start emulator
   id: emulator
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
   with:
       mode: start
       avd-name: mobile-ci-screenshots
       wipe-data: 'true'
 
-- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v5.0.0 # v5.0.0
   with:
       android-serial: ${{ steps.emulator.outputs.android-serial }}
       # ...the same inputs as above
 
 - name: Stop emulator
   if: always()
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
   with:
       mode: stop
 ```

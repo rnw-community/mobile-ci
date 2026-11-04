@@ -51,7 +51,7 @@ FAILED='{"status":"completed","conclusion":"failure","run_attempt":1,"html_url":
 LOST='The self-hosted runner lost communication with the server.'
 
 case_start 'a run whose only failures are infra is re-run once'
-scenario "$FAILED" "1|iOS Maestro E2E / Maestro shard 0 (e2e)|failure|$LOST
+scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|$LOST
 2|Build (e2e)|failure|Process completed with exit code 127.
 3|Lint|success|"
 classify
@@ -64,45 +64,45 @@ if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
 fi
 
 case_start 'a test failure anywhere in the run means nothing is re-run'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
-2|Maestro shard 1 (e2e)|failure|Assertion is false: \"Home\" is visible"
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST
+2|E2E suite (b)|failure|Assertion is false: \"Home\" is visible"
 classify
 if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a job whose infra-looking annotation sits beside a test failure is a test failure'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST
 2|Playwright web E2E|failure|Error: expect(received).toBe(200): request to http://localhost:3000 failed, connection refused^^1 failed^^Process completed with exit code 1."
 classify
 if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'warnings and the bare exit-code line beside an infra cause still allow the retry'
-scenario "$FAILED" "1|Build (e2e)|failure|warning:Maestro failed and tolerate-test-failures kept the job green^^No space left on device^^Process completed with exit code 1."
+scenario "$FAILED" "1|Build (e2e)|failure|warning:the suite failed and tolerate-test-failures kept the job green^^No space left on device^^Process completed with exit code 1."
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start "an action's own 'Infrastructure failure:' annotation is infra"
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|Infrastructure failure: emulator 'emulator-5554' is gone (adb get-state: 'no answer') after 'a.flow.yaml', so shard 0 stops; its 2 remaining flow(s) were not run.^^Process completed with exit code 1."
+scenario "$FAILED" "1|E2E suite (a)|failure|Infrastructure failure: emulator 'emulator-5554' is gone (adb get-state: 'no answer') after 'a.flow.yaml', so shard 0 stops; its 2 remaining flow(s) were not run.^^Process completed with exit code 1."
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision; then pass_case; fi
 
 case_start 'a failed job with no annotation counts as a test failure'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST
 2|Unit tests|failure|"
 classify
 assert_equals test-failure "$(step_output "$workspace" decision)" decision && pass_case
 
 case_start 'a roll-up job does not block the retry of the jobs it reports'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|timed_out|
-2|Required CI|failure|Required jobs did not succeed: ios-maestro"
+scenario "$FAILED" "1|E2E suite (a)|timed_out|
+2|Required CI|failure|Required jobs did not succeed: ios-e2e"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a run that concluded timed_out is classified like a failed one'
-scenario '{"status":"completed","conclusion":"timed_out","run_attempt":1}' "1|Maestro shard 0 (e2e)|timed_out|"
+scenario '{"status":"completed","conclusion":"timed_out","run_attempt":1}' "1|E2E suite (a)|timed_out|"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
@@ -149,9 +149,9 @@ if assert_equals test-failure "$other_job" 'test failure in another job' \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a failed run ignores the jobs its own failure cancelled, but counts one that timed out'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST
-2|Maestro shard 1 (e2e)|cancelled|$USER_CANCEL
-3|Maestro shard 2 (e2e)|cancelled|$TIMEOUT"
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST
+2|E2E suite (b)|cancelled|$USER_CANCEL
+3|E2E suite (c)|cancelled|$TIMEOUT"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 2 "$(step_output "$workspace" infra-jobs)" 'infra jobs'; then pass_case; fi
@@ -176,8 +176,8 @@ mkdir -p "$suite/work/Base.app"
 run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND='exit 3' E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 e2e_annotations="$(sed -n 's/^::error:://p' "$suite/log")"
 scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|notice:The farm has 5 free ios devices; running 5 workers instead of 10.^^$e2e_annotations^^Process completed with exit code 3.
-2|iOS E2E / iOS Maestro E2E result|failure|Process completed with exit code 1.^^Required jobs did not succeed: e2e suite (result: failure).
-3|Required CI|failure|Process completed with exit code 1.^^Required jobs did not succeed: ios-maestro"
+2|iOS E2E / iOS E2E result|failure|Process completed with exit code 1.^^Required jobs did not succeed: e2e suite (result: failure).
+3|Required CI|failure|Process completed with exit code 1.^^Required jobs did not succeed: ios-e2e"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 1 "$(step_output "$workspace" infra-jobs)" 'infra jobs' \
@@ -195,13 +195,13 @@ if assert_equals test-failure "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a run already retried is left alone'
-scenario '{"status":"completed","conclusion":"failure","run_attempt":2}' "1|Maestro shard 0 (e2e)|failure|$LOST"
+scenario '{"status":"completed","conclusion":"failure","run_attempt":2}' "1|E2E suite (a)|failure|$LOST"
 classify
 if assert_equals retries-exhausted "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a dry run decides but re-runs nothing'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST"
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST"
 classify DRY_RUN=true
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request' \
@@ -218,7 +218,7 @@ if assert_equals nothing-failed "$passed" 'successful run' \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'malformed inputs fail closed before any request'
-scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST"
+scenario "$FAILED" "1|E2E suite (a)|failure|$LOST"
 statuses=''
 for override in 'RUN_ID=abc' 'REPOSITORY=bad' 'MAX_ATTEMPTS=0' 'DRY_RUN=yes'; do
     classify "$override"

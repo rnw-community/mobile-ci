@@ -4,9 +4,9 @@ set -euo pipefail
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
-for job in build test; do
+for job in build; do
     case_start "$job diagnostics survive a broken Node under runner shell flags"
-    dir=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/ios-maestro.yml" "$job" "Diagnose the runner's bundled Node after a failure")
+    dir=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/ios-e2e.yml" "$job" "Diagnose the runner's bundled Node after a failure")
     mkdir -p "$dir/runner/externals/node24/bin" "$dir/runner/_work/_temp"
     printf '#!/bin/sh\nexit 126\n' > "$dir/runner/externals/node24/bin/node"
     chmod +x "$dir/runner/externals/node24/bin/node"

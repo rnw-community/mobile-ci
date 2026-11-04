@@ -23,7 +23,7 @@ problem, not something to swallow.
 ## Slim leases
 
 A **stock** simulator is expensive. Measured inside pony-labirinth's live
-UI-test VM (`maestro` profile, 7 GiB), the stock lease was running **272
+UI-test VM (`trf-macos-arm64-4x7`, 7 GiB), the stock lease was running **272
 RuntimeRoot processes** — Calendar, News and Maps widgets, a Safari extension,
 Spotlight — with roughly **2 GB sitting in the compressor and about 14 MB of
 free pages**. The UI-test step was not CPU-bound; it was memory-starved.
@@ -64,10 +64,9 @@ created one; `template-strategy: auto` is deprecated and leases exactly like
 slower than a stock one on an XCUITest subset (simslim 0.10.0). simslim 0.12.0
 keeps `gamed` enabled because disabling it added a ~10 s delay to every
 XCUITest app launch, which plausibly accounts for much of that; re-measure
-before choosing `slim-profile: ''` for an XCUITest lane, and keep `bundled` for
-Maestro lanes, where slimming was measured as a win.
+before choosing `slim-profile: ''` for an XCUITest lane.
 
-`simslim` itself is resolved exactly as `run-maestro-ios` resolves it: an
+`simslim` itself is resolved like this: an
 existing binary on PATH whose `simslim version` matches `simslim-version` is
 reused; otherwise the pinned release asset is downloaded, verified against
 `simslim-sha256`, and extracted into a job-private directory.
@@ -109,7 +108,7 @@ immediately instead of silently testing on something else.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v5.0.0 # v5.0.0
   id: simulator
   with:
       device-type: 'iPad Pro 11-inch (M4)'
@@ -120,7 +119,7 @@ immediately instead of silently testing on something else.
       xcodebuild test -project MyApp.xcodeproj -scheme MyApp \
         -destination "platform=iOS Simulator,id=${{ steps.simulator.outputs.udid }}"
 
-- uses: rnw-community/mobile-ci/actions/simulator-lease@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/simulator-lease@v5.0.0 # v5.0.0
   if: always()
   with:
       mode: release

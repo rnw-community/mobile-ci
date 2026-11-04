@@ -2,8 +2,7 @@
 
 Starts a headless Android emulator (AVD) for the rest of the job
 (`mode: start`) and shuts it down again (`mode: stop`). It is the one AVD
-implementation in this repo: [`run-maestro-android`](../run-maestro-android/README.md)
-boots its Maestro shard's device through it, and `store-screenshots.yml`'s
+implementation in this repo: `store-screenshots.yml`'s
 `android-driver: avd` capture leg boots the device
 [`capture-screenshots-android`](../capture-screenshots-android/README.md)
 drives through it.
@@ -156,7 +155,7 @@ slot, and a job-scoped teardown.
 ```yaml
 - name: Start emulator
   id: emulator
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
   with:
       mode: start
 
@@ -168,7 +167,7 @@ slot, and a job-scoped teardown.
 
 - name: Stop emulator
   if: always()
-  uses: rnw-community/mobile-ci/actions/android-emulator@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
   with:
       mode: stop
 ```

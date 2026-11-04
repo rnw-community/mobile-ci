@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Encode raw screen recordings (e.g. Maestro startRecording output) into web
+# Encode raw screen recordings (e.g. an e2e suite's recordings) into web
 # clips: WebM (AV1 via libsvtav1, VP9 when this ffmpeg lacks it) + H.264 MP4
 # with +faststart + a WebP poster, each held to a byte budget. Never a GIF.
 # Nothing is published unless every clip encoded and every file is within

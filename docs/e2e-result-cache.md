@@ -3,7 +3,7 @@
 A store description, screenshot output, documentation edit or unrelated workflow
 has no reason to rebuild or retest a byte-identical app. Opt-in
 `e2e-result-cache: true` moves that decision from a list of exempt source paths
-to the actual production app and test contract. Both Maestro workflows support
+to the actual production app and test contract. Both e2e workflows support
 it; existing callers retain today's behavior by default.
 
 ## Decision and identity
@@ -38,25 +38,22 @@ The key is SHA-256 of a recursively sorted JSON object containing:
 - Sorted export tree paths, file bytes, file/directory modes and empty directories,
   excluding `*.map` files; plus resolved public app config. Paths are relative to the fresh export root;
   timestamps and absolute export-directory names are not hashed.
-- Test dependency paths and content trees: resolved target's `flowsDir` by
-  default, explicit Maestro config, pre-run/recovery flows and shard manifests,
-  plus `e2e-cache-extra-paths`. Symlinks are followed and their content hashed;
+- Test dependency paths and content trees: `e2e-dir` by default, plus
+  `e2e-cache-extra-paths`. Symlinks are followed and their content hashed;
   cycles, special files, missing paths and unmatched patterns disable reuse.
 - All workflow inputs as canonical JSON and the resolved target. This includes
-  test selection, hooks, retries, shard count, Maestro version, build/repack
-  settings, driver, device profile, Android API/ABI/image settings, Xcode and
-  simulator settings. Changing inputs conservatively misses even if irrelevant.
-- The executing action ref, resolved Maestro/planner workflow refs and SHAs
+  retries, workers, build/repack settings, Android ABI, Xcode settings. Changing inputs conservatively misses even if irrelevant.
+- The executing action ref, resolved e2e/planner workflow refs and SHAs
   from GitHub's current run-attempt API, and the content of mobile-ci's actions
   and reusable workflows. Updating mobile-ci invalidates evidence from the old implementation.
-- Maestro secret digest (parsed/masked by `apply-secret-env` without exporting
+- e2e secret digest (parsed/masked by `apply-secret-env` without exporting
   it into the app build) and the optional state-command stdout digest. Values,
   bundles and resolved configs never enter the pass record or job outputs.
 
 Source revision, PR number, caller workflow file bytes and an unrelated file's
 path are deliberately absent. A CI-only edit which changes no passed lane input,
-app output or test dependency reuses a pass. A changed hook command, device or
-Maestro version does not. Native-only changes change the native key; JS, lazy
+app output or test dependency reuses a pass. A changed hook command or device
+does not. Native-only changes change the native key; JS, lazy
 chunks, bundled images and config changes change the export/config identity.
 
 The complete output hash is more reliable than a source-file/lockfile digest:
@@ -93,9 +90,8 @@ fingerprint requirements.
 
 Test dependency declarations are the equivalent of build inputs, not a list of
 app paths declared safe to ignore. `e2e-cache-test-paths` can replace the default
-flow tree when E2E and capture-only flows share a parent. Automatic config,
-pre-run/recovery and shard paths are still included. Extra paths must cover
-fixtures, script imports, `runScript`/`runFlow` dependencies outside those trees,
+`e2e-dir` tree when E2E and capture-only tests share a parent. Extra paths must cover
+fixtures and script imports outside those trees,
 shared test packages, generated inputs and hook dependencies. Patterns use Node's
 file glob syntax; every pattern must match. Changing the selected path set also
 changes the key. New files matching a glob are automatically included.
@@ -103,7 +99,7 @@ changes the key. New files matching a glob are automatically included.
 Avoid hashing an entire test package if it also holds store screenshots: declare
 the actual E2E trees/files and move shared dependencies into clearly owned
 directories over time. Under-declaring dependencies can produce stale evidence;
-over-declaring only costs runs. If a flow starts consuming another directory,
+over-declaring only costs runs. If a test starts consuming another directory,
 add that dependency in the same PR. Do not omit a runtime input just because it
 looks like documentation or a screenshot: imported content is app/test input.
 
@@ -152,13 +148,13 @@ Neither is needed for this opt-in.
 1. With caching enabled, package/path-based Turbo detection is bypassed so it
    cannot silently override the content decision. The force label still works.
 2. Each target independently computes and looks up a key before base fetch.
-   Validated hits skip base download, repack, native build and every Maestro
-   shard. Mixed hit/miss matrices run only the misses.
+   Validated hits skip base download, repack, native build and the e2e
+   suite. Mixed hit/miss matrices run only the misses.
 3. Native strategy, force-label runs, manual `workflow_dispatch` and quarantined
    targets bypass caching. A forced real run must really execute; a tolerated
    test failure can never become a cached pass.
-4. After **every** active test shard succeeds, a small control-runner matrix saves
-   records for eligible misses. A failed/cancelled/timed-out shard prevents all
+4. After the suite succeeds, a small control-runner matrix saves
+   records for eligible misses. A failed/cancelled/timed-out suite prevents all
    new publication in that call, even if some siblings passed. Cache save failures
    do not turn a real passing suite into a failing suite.
 5. The existing final result job reports `result=passed` on complete cached
@@ -172,7 +168,7 @@ native fingerprint computation, plan collection or app verification still fail
 normally; the cache does not hide a broken build. No negative/failure records
 are published. Delete `mobile-ci-e2e-v1-*` entries to invalidate stored evidence,
 use the force label/manual dispatch for a real run, or turn the input off.
-Cached hits intentionally produce no new app or Maestro artifacts: downstream
+Cached hits intentionally produce no new app or e2e artifacts: downstream
 capture jobs requiring those artifacts must use a non-cached/manual lane.
 
 ## Cost and rollout
@@ -186,7 +182,7 @@ for a medium Expo monorepo; large bundles may cost more. This is an estimate,
 not a fleet measurement. The identity step emits measured export/hash seconds
 on every run, so rollout can establish p50/p95. Plan with 4 vCPU/8 GiB when Metro
 exceeds the small pool's memory. A warm hit avoids the Mac/Gradle slot, repack,
-emulator/simulator startup and all shards (Budgie's reported 40+ minute lane).
+the e2e suite (Budgie's reported 40+ minute lane).
 
 1. Pin the new release/SHA after review. New self-references name upcoming
    `v4.5.0`; this PR does not create a tag. To fleet-test a prerelease SHA,
@@ -194,13 +190,13 @@ emulator/simulator startup and all shards (Budgie's reported 40+ minute lane).
    change. Do not call the branch with unresolved upcoming references.
 2. Define the complete test/export/device/state contract; enable on the default
    branch's **actual E2E run**, not `seed-native-cache.yml`. That warm-up builds
-   bases and runs no Maestro, so it cannot publish pass records. Use identical
+   bases and runs no e2e suite, so it cannot publish pass records. Use identical
    inputs on default-branch and PR calls. Manual dispatch deliberately runs but
    does not seed the content cache; a successful `push` run seeds it.
 3. Verify a production baseline, then a metadata-only change that reuses it.
    Check the producer links, empty build/test matrices and absence of app
-   artifacts. Verify JS/assets, native dependency, fixture/hook, Maestro/input,
-   device profile and state-version changes miss. Test failed/cancelled shards,
+   artifacts. Verify JS/assets, native dependency, fixture/hook, input,
+   device profile and state-version changes miss. Test failed/cancelled suites,
    malformed records and unavailable cache. Run one fleet lane at a time.
 4. Remove the consumer path exemption classifier. Until a shared default-branch
    record exists, the first PR runs normally and its later identical pushes can
@@ -216,12 +212,8 @@ Turbo gate. Keep the native variant's `fingerprint-env`, `build-env` and
 `repack-env` byte-identical (`APP_VARIANT=e2e`, AI/logging disabled). The existing
 GHCR `e2e-base` warm-up remains unchanged.
 
-The [exact proposed PR workflow patch](examples/budgie-e2e-result-cache.patch)
-removes the classifier and its dependencies, pins the upcoming version, enables
-the cache and declares E2E inputs separately from screenshot/media fixtures.
-It also includes the UTC date state command because
-`prepare-date-sensitive-fixtures.js` and the fixture installer read the clock.
-This is a proposed consumer change only; no consumer repository is modified.
+A caller enables the cache and declares E2E inputs separately from
+screenshot/media fixtures, with a date state command when fixtures read the clock.
 Pair it with a push-triggered default-branch E2E call passing the same inputs.
 Budgie's native warm-up alone is insufficient to seed successful test evidence.
 
@@ -255,5 +247,5 @@ PR copy checks should be cheap Linux jobs: validate supported locale folders,
 required localized fields, title/subtitle/promotional/description length limits,
 UTF-8, forbidden placeholders and screenshot image dimensions when present.
 Validate against current store requirements in the consumer's metadata tooling;
-none of these checks needs Xcode, Gradle or Maestro. A change to screenshot
+none of these checks needs Xcode, Gradle or a device. A change to screenshot
 capture code that is genuinely shared with E2E should still invalidate E2E.

@@ -71,7 +71,7 @@ if problems:
 PYTHON
 }
 
-for workflow in ios-maestro android-maestro store-screenshots; do
+for workflow in ios-e2e android-e2e store-screenshots; do
     case_start "$workflow: every app artifact is uploaded by whoever built it"
     if failure="$(check_workflow "$REPO_ROOT/.github/workflows/${workflow}.yml" 2>&1)"; then
         pass_case

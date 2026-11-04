@@ -12,7 +12,7 @@ Restore-only, like [`node-pm-cache`](../node-pm-cache/README.md). The calling
 workflow saves with its own bounded, non-fatal `actions/cache/save` step after
 the build, off pull requests and only on a miss. Restore before generating the
 native project: a `prebuildCommand` that runs `pod install` itself downloads the
-tarballs there. The `ios-maestro`,
+tarballs there. The `ios-e2e`,
 `store-screenshots` and `seed-native-cache` iOS build jobs already do this.
 
 | Input | Default | Description |
@@ -28,7 +28,7 @@ tarballs there. The `ios-maestro`,
 ```yaml
 - name: Restore the React Native prebuilt cache
   id: rn-prebuilts
-  uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v5.0.0 # v5.0.0
   with:
       app-dir: apps/mobile
 # ... pod install / build-ios-app ...

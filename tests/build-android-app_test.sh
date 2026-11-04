@@ -235,7 +235,7 @@ for needle in ("github.event_name != 'pull_request'", "steps.build.outcome == 's
 if save.get('continue-on-error') is not True:
     problems.append('build-android-app SDK save can fail the build')
 
-for name, job_id in (('android-maestro', 'build'), ('seed-native-cache', 'seed-android'), ('expo-base-plan', 'plan')):
+for name, job_id in (('android-e2e', 'build'), ('seed-native-cache', 'seed-android'), ('expo-base-plan', 'plan')):
     job = yaml.safe_load(open(os.path.join(root, '.github', 'workflows', f'{name}.yml'), encoding='utf-8'))['jobs'][job_id]
     names = [step.get('name') for step in job['steps']]
     saves = [step for step in job['steps'] if step.get('name') == 'Save the Android SDK']

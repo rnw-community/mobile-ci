@@ -2,7 +2,7 @@
 
 Complete workflows for four app shapes, each a file you copy into the app
 repository's `.github/workflows/` and edit (paths, app ids, schemes, brands).
-Every file is pinned `@v4.10.2 # v4.10.2` and grants exactly the `permissions:`
+Every file is pinned `@v5.0.0 # v5.0.0` and grants exactly the `permissions:`
 its calls need. A repository whose policy (or `zizmor`'s `unpinned-uses`)
 requires commit-SHA pins swaps each for `@<sha> # v4.10.2`, where `<sha>` is
 what `git ls-remote https://github.com/rnw-community/mobile-ci 'refs/tags/v4.10.2^{}'`
@@ -20,8 +20,7 @@ Markdown docs.
 
 | File | Trigger | What it does |
 | --- | --- | --- |
-| [`e2e.yml`](public-expo-app/e2e.yml) | pull request, push to `main` | `ios-maestro.yml` + `android-maestro.yml` on the repack path: no native compile on a pull request whose native key has a published base. |
-| [`e2e-simlock.yml`](public-expo-app/e2e-simlock.yml) | pull request, push to `main` | `e2e.yml` with `test-framework: e2e`: a tester-army suite in `e2e/` on iOS and Android devices leased from a simlock farm through `@mobile-ci/e2e-simlock`. |
+| [`e2e.yml`](public-expo-app/e2e.yml) | pull request, push to `main` | `ios-e2e.yml` + `android-e2e.yml` on the repack path: no native compile on a pull request whose native key has a published base. |
 | [`warm-up.yml`](public-expo-app/warm-up.yml) | push to `main` (app paths), dispatch | `seed-native-cache.yml`: builds and publishes the base binary for every native key that has none. |
 | [`ota-preview.yml`](public-expo-app/ota-preview.yml) | pull request | `expo-ota-preview.yml` on the GitHub Release backend: tokenless, public repositories only, previews only. |
 | [`pr-closed.yml`](public-expo-app/pr-closed.yml) | PR closed, nightly | `pr-closed-cleanup-reusable.yml` (cancel runs, delete the PR's previews) and `preview-sweep-reusable.yml` (dry-run backstop). |
@@ -46,14 +45,14 @@ Markdown docs.
 
 | File | Trigger | What it does |
 | --- | --- | --- |
-| [`e2e.yml`](rn-packages-monorepo/e2e.yml) | pull request, push, nightly | One `ios-maestro.yml` / `android-maestro.yml` call per platform for every package: per-target `flowsDir`, `buildStrategy: native` for the bare apps, one suite quarantined with `tolerateTestFailures`. |
+| [`e2e.yml`](rn-packages-monorepo/e2e.yml) | pull request, push, nightly | One `ios-e2e.yml` / `android-e2e.yml` call per platform for every package: `buildStrategy: native` for the bare apps, one suite quarantined with `tolerateTestFailures`. |
 | [`pr-closed.yml`](rn-packages-monorepo/pr-closed.yml) | PR closed | `pr-closed-cleanup-reusable.yml`: frees the shared fleet from a closed PR's runs. |
 
 ## Permissions at a glance
 
 | Workflow | Calling job grants |
 | --- | --- |
-| `ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`, `store-screenshots.yml` | `contents: read`, `packages: write`, `actions: read` |
+| `ios-e2e.yml`, `android-e2e.yml`, `seed-native-cache.yml`, `store-screenshots.yml` | `contents: read`, `packages: write`, `actions: read` |
 | `expo-ota-preview.yml` | `contents: write`, `pull-requests: write` |
 | `native-dev-release.yml` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
 | `native-publish.yml` | `contents: read` (+ `contents: write` for a store build record, + `actions: read` for `build-number: auto` in a private repository) |

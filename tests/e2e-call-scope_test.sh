@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Issue #252: a monorepo of packages, each with its own flows, quarantine and
-# build strategy, as one ios-maestro.yml / android-maestro.yml call per
+# build strategy, as one ios-e2e.yml / android-e2e.yml call per
 # platform, or as several calls in one run. The detect job resolves every
 # target's flowsDir, tolerateTestFailures and buildStrategy once, from the
 # target or else the call's input, and the later jobs read only the resolved
@@ -11,15 +11,15 @@ set -euo pipefail
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
-IOS_WORKFLOW="$REPO_ROOT/.github/workflows/ios-maestro.yml"
-ANDROID_WORKFLOW="$REPO_ROOT/.github/workflows/android-maestro.yml"
-STEP="Resolve each target's flows, quarantine and build strategy"
+IOS_WORKFLOW="$REPO_ROOT/.github/workflows/ios-e2e.yml"
+ANDROID_WORKFLOW="$REPO_ROOT/.github/workflows/android-e2e.yml"
+STEP="Resolve each target's quarantine and build strategy"
 LABEL='mobile: force native build'
 
 # resolve [VAR=value ...] - runs the step in a fresh workspace left in $dir.
 resolve() {
     dir="$(new_workflow_workspace "$IOS_WORKFLOW" detect "$STEP")"
-    run_step "$dir" FLOWS_DIR=e2e/flows TOLERATE_TEST_FAILURES=false REQUESTED_STRATEGY=auto \
+    run_step "$dir" TOLERATE_TEST_FAILURES=false REQUESTED_STRATEGY=auto \
         NATIVE_BUILD_LABEL="$LABEL" PULL_REQUEST_LABELS='[]' CALL_SCOPE='' "$@"
 }
 
@@ -36,7 +36,7 @@ expect_failure() {
     fi
 }
 
-case_start 'ios-maestro and android-maestro resolve targets with the same script'
+case_start 'ios-e2e and android-e2e resolve targets with the same script'
 if [ "$(extract_workflow_step_script "$IOS_WORKFLOW" detect "$STEP")" != "$(extract_workflow_step_script "$ANDROID_WORKFLOW" detect "$STEP")" ]; then
     fail_case 'the two platforms resolve a target differently'
 else
@@ -46,43 +46,22 @@ fi
 case_start 'a target without overrides takes every value from the call'
 resolve TARGETS='[{"name":"a","appDir":"apps/a"}]'
 assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
-    && assert_equals 'e2e/flows' "$(field "$dir" a flowsDir)" 'flowsDir' \
     && assert_equals 'false' "$(field "$dir" a tolerateTestFailures)" 'tolerateTestFailures' \
     && assert_equals 'auto' "$(field "$dir" a buildStrategy)" 'buildStrategy' \
     && assert_equals 'apps/a' "$(field "$dir" a appDir)" 'other fields pass through' \
     && assert_equals '' "$(step_output "$dir" artifact-scope)" 'no call-scope, no artifact scope' \
     && pass_case
 
-case_start 'each target overrides flows, quarantine and build strategy on its own'
+case_start 'each target overrides quarantine and build strategy on its own'
 resolve TOLERATE_TEST_FAILURES=true TARGETS='[
-  {"name":"bare","appDir":"p/bare","flowsDir":"p/e2e","tolerateTestFailures":false,"buildStrategy":"native"},
+  {"name":"bare","appDir":"p/bare","tolerateTestFailures":false,"buildStrategy":"native"},
   {"name":"expo","appDir":"p/expo"}]'
 assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
-    && assert_equals 'p/e2e' "$(field "$dir" bare flowsDir)" 'bare flowsDir' \
     && assert_equals 'false' "$(field "$dir" bare tolerateTestFailures)" 'an explicit false is not replaced by the input' \
     && assert_equals 'native' "$(field "$dir" bare buildStrategy)" 'bare buildStrategy' \
-    && assert_equals 'e2e/flows' "$(field "$dir" expo flowsDir)" 'expo flowsDir' \
     && assert_equals 'true' "$(field "$dir" expo tolerateTestFailures)" 'expo tolerateTestFailures' \
     && assert_equals 'auto' "$(field "$dir" expo buildStrategy)" 'expo buildStrategy' \
     && pass_case
-
-case_start 'flows-dir may be empty when every target names its own flowsDir'
-resolve FLOWS_DIR='' TARGETS='[{"name":"a","flowsDir":"a/e2e"}]'
-assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
-    && assert_equals 'a/e2e' "$(field "$dir" a flowsDir)" 'flowsDir' && pass_case
-
-case_start 'with test-framework e2e a target with no flowsDir takes e2e-dir'
-resolve FLOWS_DIR='' TEST_FRAMEWORK=e2e E2E_DIR=e2e TARGETS='[{"name":"a"}]'
-assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
-    && assert_equals 'e2e' "$(field "$dir" a flowsDir)" 'flowsDir' && pass_case
-
-case_start 'with test-framework e2e and no e2e-dir a target with no flowsDir still fails closed'
-resolve FLOWS_DIR='' TEST_FRAMEWORK=e2e E2E_DIR='' TARGETS='[{"name":"a"}]'
-expect_failure "$dir" 'flowsDir'
-
-case_start 'a target with no flowsDir and no flows-dir fails closed'
-resolve FLOWS_DIR='' TARGETS='[{"name":"a","flowsDir":"a/e2e"},{"name":"b"}]'
-expect_failure "$dir" 'flowsDir'
 
 case_start 'the force-native label makes every target native, whatever it asked for'
 resolve PULL_REQUEST_LABELS="[\"$LABEL\"]" TARGETS='[{"name":"a","buildStrategy":"auto"},{"name":"b"}]'
@@ -135,9 +114,6 @@ problems = []
 spec = inputs.get('call-scope') or {}
 if spec.get('type') != 'string' or spec.get('default') != '':
     problems.append(f'call-scope must be a string input defaulting to empty, got {spec!r}')
-flows = inputs.get('flows-dir') or {}
-if flows.get('required') is not False or flows.get('default') != '':
-    problems.append('flows-dir must be optional, defaulting to empty, once a target can name its own flowsDir')
 if 'inputs.call-scope' not in str(workflow['concurrency']['group']):
     problems.append('the workflow concurrency group ignores call-scope, so two calls in one run cancel each other')
 
@@ -152,7 +128,7 @@ for key in ('app-artifact-prefix', 'plan-artifact-prefix'):
     if plan.get(key) != f'{platform}-e2e-{key.split("-")[0]}{SCOPE}':
         problems.append(f'plan {key} is {plan.get(key)!r}, not scoped')
 
-test = jobs['test']
+test = jobs['e2e']
 if test['strategy']['matrix']['target'] != '${{ fromJSON(needs.plan.outputs.test-targets) }}':
     problems.append('the test matrix does not read the planner filtered resolved targets')
 
@@ -174,15 +150,6 @@ for job_id, job in jobs.items():
         if 'actions/upload-artifact' in uses or 'actions/download-artifact' in uses:
             if SCOPE not in str(given.get('name', given.get('pattern', ''))):
                 problems.append(f'{job_id} {name!r} artifact {given.get("name", given.get("pattern"))!r} is not scoped')
-        if '/actions/run-maestro-' in uses:
-            if given.get('flows-dir') != '${{ matrix.target.flowsDir }}':
-                problems.append(f'{name!r} flows-dir is {given.get("flows-dir")!r}')
-            if SCOPE not in str(given.get('artifact-name', '')):
-                problems.append(f'{name!r} artifact-name is not scoped')
-            if step.get('continue-on-error') != '${{ matrix.target.tolerateTestFailures }}':
-                problems.append(f'{name!r} continue-on-error is {step.get("continue-on-error")!r}')
-            if 'container-name' in given and SCOPE not in str(given['container-name']):
-                problems.append(f'{name!r} container-name is shared by every call on the host')
         for value in (step.get('env') or {}).values():
             if re.search(rf'{platform}-e2e-app-\$', str(value)):
                 problems.append(f'{job_id} {name!r} names the app artifact without the scope: {value!r}')
@@ -192,7 +159,7 @@ PYTHON
 }
 
 for platform in ios android; do
-    case_start "$platform-maestro.yml: every per-call name is scoped and every job reads the resolved target"
+    case_start "$platform-e2e.yml: every per-call name is scoped and every job reads the resolved target"
     workflow="$IOS_WORKFLOW"
     [ "$platform" = android ] && workflow="$ANDROID_WORKFLOW"
     if failure="$(check_wiring "$workflow" "$platform" 2>&1)"; then
@@ -203,8 +170,8 @@ for platform in ios android; do
 done
 
 for workflow in ios android; do
-    case_start "$workflow-maestro: the e2e-artifact-prefix output plus a target name is the uploaded report's name"
-    if problems="$(WORKFLOW="$REPO_ROOT/.github/workflows/$workflow-maestro.yml" python3 - <<'PYTHON'
+    case_start "$workflow-e2e: the e2e-artifact-prefix output plus a target name is the uploaded report's name"
+    if problems="$(WORKFLOW="$REPO_ROOT/.github/workflows/$workflow-e2e.yml" python3 - <<'PYTHON'
 import os, yaml
 w = yaml.safe_load(open(os.environ['WORKFLOW']))
 prefix = w[True]['workflow_call'].get('outputs', {}).get('e2e-artifact-prefix', {}).get('value', '')
@@ -216,8 +183,8 @@ if uploads != [want]:
 PYTHON
 )" && assert_equals '' "$problems" 'prefix'; then pass_case; fi
 
-    case_start "$workflow-maestro: with call-scope the prefix keeps its double dash, as every artifact name of the call does"
-    resolve_workflow="$REPO_ROOT/.github/workflows/$workflow-maestro.yml"
+    case_start "$workflow-e2e: with call-scope the prefix keeps its double dash, as every artifact name of the call does"
+    resolve_workflow="$REPO_ROOT/.github/workflows/$workflow-e2e.yml"
     template="$(WORKFLOW="$resolve_workflow" python3 -c "import os, yaml; print(yaml.safe_load(open(os.environ['WORKFLOW']))[True]['workflow_call'].get('outputs', {}).get('e2e-artifact-prefix', {}).get('value', ''))")"
     expected="e2e-$workflow-edge-fade--foo"
     scope='-edge-fade-'

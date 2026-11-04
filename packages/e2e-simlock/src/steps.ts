@@ -3,10 +3,10 @@ import type { Locator, Screen } from 'e2e';
 
 export { measureRecording, type RecordingStats } from './recording.ts';
 
-/** A React Native testID shows up on the host view and its wrapper; Maestro takes the first, so does this. */
+/** A React Native testID shows up on the host view and its wrapper; this takes the first. */
 export const byId = (screen: Screen, id: string): Locator => screen.getByTestId(id).first();
 
-/** Maestro's `scrollUntilVisible`: `direction` is where the content goes (`down` reveals what is below). A visible target does not scroll. */
+/** Scrolls until visible: `direction` is where the content goes (`down` reveals what is below). A visible target does not scroll. */
 export async function scrollTo(screen: Screen, target: Locator, direction: 'up' | 'down' = 'down', timeoutMs = 20_000): Promise<void> {
     if (!(await target.isVisible())) {
         await screen.scrollUntilVisible(target, { direction, timeout: timeoutMs });
@@ -14,14 +14,14 @@ export async function scrollTo(screen: Screen, target: Locator, direction: 'up' 
 }
 
 export interface TapUntilOptions {
-    /** Taps at most this many times. Default 2: Maestro's `retryTapIfNoChange` taps once more. */
+    /** Taps at most this many times. Default 2: one more tap. */
     readonly attempts?: number;
     /** How long each tap waits for `next`; omitted, `next` keeps its own timeout. */
     readonly timeoutMs?: number;
 }
 
 /**
- * Maestro's `retryTapIfNoChange`: taps `target`, then waits for `next` (the state the tap leads to). A tap a
+ * Taps `target`, then waits for `next` (the state the tap leads to). A tap a
  * screen swallows while it settles leaves `target` on screen, so while it is still visible the tap is made again,
  * up to `attempts` taps. A `target` that is gone took the tap: `next`'s failure is then the test's, and is thrown.
  */
@@ -51,7 +51,7 @@ function within<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Maestro's `tapOn: Done`: the keyboard's own Done key (a `key` whose id is `Done`), else an accessory bar's Done
+ * Taps Done: the keyboard's own Done key (a `key` whose id is `Done`), else an accessory bar's Done
  * button, else the keyboard is dismissed. Looking for the button alone leaves `dismissKeyboard` to time out (30 s)
  * on a keyboard whose Done key is the key itself.
  */
@@ -67,7 +67,7 @@ export async function done({ screen, device }: { readonly screen: Screen; readon
     }
 }
 
-/** Maestro's `retry: { maxRetries }`: runs `body` up to `1 + retries` times, logging each failure and rethrowing the last. */
+/** Runs `body` up to `1 + retries` times, logging each failure and rethrowing the last. */
 export async function retry(retries: number, body: (attempt: number) => Promise<void>): Promise<void> {
     if (!Number.isInteger(retries) || retries < 0) {
         throw new Error(`retry: retries must be a whole number; got ${String(retries)}`);
@@ -142,7 +142,7 @@ export interface ScrollToCenteredOptions extends DragOptions {
 }
 
 /**
- * Maestro's `centerElement`: scrolls `id` into view and, when its centre lies in the bottom band, where a tab bar
+ * Scrolls `id` into view and, when its centre lies in the bottom band, where a tab bar
  * or floating button would take the tap, drags the content from above the band to bring it to the middle of the viewport.
  */
 export async function scrollToCentered({ screen }: { readonly screen: Screen }, id: string, options: ScrollToCenteredOptions): Promise<void> {
@@ -169,7 +169,7 @@ export interface ScrollToMiddleOptions extends DragOptions {
 }
 
 /**
- * Maestro's `scrollUntilVisible … centerElement: true` when the node can sit under a header or a floating tab bar:
+ * Scrolls a node into the clear when it can sit under a header or a floating tab bar:
  * scrolls `id` into view in either direction, then drags the content until its centre is near the viewport's middle.
  */
 export async function scrollToMiddle({ screen }: { readonly screen: Screen }, id: string, options: ScrollToMiddleOptions): Promise<void> {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The reusable workflows take masked build and Maestro secrets through their
+# The reusable workflows take masked build and e2e secrets through their
 # secrets: block. A secret declared but never threaded to the job that needs it
 # is a build that silently runs without it; one threaded into a plain input, a
 # job output or an artifact is a secret on the page. This suite reads the
@@ -33,9 +33,9 @@ def call(workflow):
 
 
 EXPECTED = {
-    'ios-maestro.yml': {'build-secrets-env', 'maestro-secrets-env'},
-    'android-maestro.yml': {'build-secrets-env', 'maestro-secrets-env'},
-    'store-screenshots.yml': {'build-secrets-env', 'maestro-secrets-env'},
+    'ios-e2e.yml': {'build-secrets-env', 'e2e-secrets-env'},
+    'android-e2e.yml': {'build-secrets-env', 'e2e-secrets-env'},
+    'store-screenshots.yml': {'build-secrets-env', 'e2e-secrets-env'},
     'seed-native-cache.yml': {'build-secrets-env'},
     'expo-base-plan.yml': {'build-secrets-env'},
 }
@@ -83,28 +83,12 @@ elif mode == 'native-key':
     if 'build-secrets-env' in str(key.get('with', {}).get('extra-env', '')):
         problems.append('a build secret reaches extra-env, which exports its value into the fingerprint evaluation')
 
-elif mode == 'maestro-steps':
-    pattern = re.compile(r'rnw-community/mobile-ci/actions/(run-maestro-[a-z-]+|capture-screenshots-[a-z]+)@')
-    for name in ('ios-maestro.yml', 'android-maestro.yml', 'store-screenshots.yml'):
-        for job_id, job in load(name)['jobs'].items():
-            steps = job.get('steps') or []
-            secrets_index = next((i for i, s in enumerate(steps) if s.get('id') == 'maestro-secrets'), None)
-            for index, step in enumerate(steps):
-                match = pattern.search(str(step.get('uses', '')))
-                if not match:
-                    continue
-                inputs = step.get('with') or {}
-                if secrets_index is None or secrets_index > index:
-                    problems.append(f'{name}:{job_id}: {match.group(1)} runs before maestro-secrets-env is applied')
-                    continue
-                applied = steps[secrets_index].get('with') or {}
-                if applied.get('env') != '${{ secrets.maestro-secrets-env }}' or applied.get('allow-multiline') is not False:
-                    problems.append(f'{name}:{job_id}: maestro-secrets is not the single-line maestro-secrets-env')
-                if inputs.get('maestro-env') != '${{ steps.maestro-secrets.outputs.lines }}':
-                    problems.append(f'{name}:{job_id}: {match.group(1)} maestro-env is {inputs.get("maestro-env")!r}, not the merged lines')
-                if match.group(1).startswith('run-maestro-') \
-                        and inputs.get('redact-env-names') != '${{ steps.maestro-secrets.outputs.names }}':
-                    problems.append(f'{name}:{job_id}: {match.group(1)} uploads its artifacts without redacting the Maestro secrets')
+elif mode == 'capture-steps':
+    jobs = load('store-screenshots.yml')['jobs']
+    for job_id in ('capture-ios', 'capture-android'):
+        applied = [s.get('with') or {} for s in jobs[job_id]['steps'] if str(s.get('uses', '')).startswith(APPLY) and 'e2e-secrets-env' in str(s.get('with'))]
+        if len(applied) != 1 or applied[0].get('allow-multiline') is not False:
+            problems.append(f'store-screenshots.yml:{job_id}: e2e-secrets-env is not applied once, single-line')
 
 elif mode == 'containment':
     for name in sorted(os.listdir(root)):
@@ -121,13 +105,9 @@ elif mode == 'containment':
                     problems.append(f'{name}:{job_id}:{label} interpolates a secret into run:')
                 if 'upload-artifact' in str(step.get('uses', '')) and 'secrets.' in str(step.get('with', '')):
                     problems.append(f'{name}:{job_id}:{label} names a secret in an artifact upload')
-                if 'secrets.build-secrets-env' in str(step.get('with', '')) or 'secrets.maestro-secrets-env' in str(step.get('with', '')):
+                if 'secrets.build-secrets-env' in str(step.get('with', '')) or 'secrets.e2e-secrets-env' in str(step.get('with', '')):
                     if not str(step.get('uses', '')).startswith(APPLY):
                         problems.append(f'{name}:{job_id}:{label} hands a secret to something other than apply-secret-env')
-                if 'secrets.device-cloud-api-key' in str(step.get('with', '')):
-                    if not str(step.get('uses', '')).startswith('rnw-community/mobile-ci/actions/run-maestro-device-cloud@') \
-                            or (step.get('with') or {}).get('api-key') != '${{ secrets.device-cloud-api-key }}':
-                        problems.append(f'{name}:{job_id}:{label} hands the Device Cloud API key to something other than run-maestro-device-cloud')
 
 elif mode == 'eas-install':
     for name in ('native-publish.yml', 'native-dev-release.yml'):
@@ -169,7 +149,7 @@ run_case 'every workflow that builds or tests declares its secrets, all optional
 run_case 'every expo-base-plan call is handed build-secrets-env' plan-calls
 run_case 'every job that applies build-env applies build-secrets-env right after it' build-jobs
 run_case 'only the build secrets digest, never a value, reaches the native key' native-key
-run_case 'every Maestro step gets maestro-env merged with the secrets, and redacts its artifacts' maestro-steps
+run_case 'each capture job applies e2e-secrets-env once, single-line' capture-steps
 run_case 'no secret reaches a run: body, a job output, an artifact upload or a plain input' containment
 run_case 'EAS_EXTRA_ENV is parsed by the shared action, not a copy of it' eas-extra-env
 run_case 'every native-publish/dev-release job that installs (the plan job too) applies EAS_EXTRA_ENV first' eas-install

@@ -27,7 +27,7 @@ try {
         }
         fs.appendFileSync(environment.GITHUB_OUTPUT, `hit=true\nrun-url=${record.runUrl}\n`);
         fs.appendFileSync(environment.GITHUB_STEP_SUMMARY,
-            `### E2E cached pass\n[Successful producer run](${record.runUrl}) covers this native key, bundle and test contract. No build, repack or Maestro slot is needed.\n`);
+            `### E2E cached pass\n[Successful producer run](${record.runUrl}) covers this native key, bundle and test contract. No build, repack or e2e slot is needed.\n`);
     } else {
         throw new Error('Invalid record mode');
     }

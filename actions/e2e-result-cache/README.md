@@ -4,8 +4,8 @@ An exact successful verdict for a native surface, production JavaScript/assets,
 resolved app config, test dependency trees, and device/lane configuration.
 Composite action; Node 22.17+ is required for file-glob expansion. Install app
 dependencies and build workspace dependencies before lookup. Prefer the
-[`ios-maestro`](../../docs/workflows/ios-maestro.md) and
-[`android-maestro`](../../docs/workflows/android-maestro.md) integrations.
+[`ios-e2e`](../../docs/workflows/ios-e2e.md) and
+[`android-e2e`](../../docs/workflows/android-e2e.md) integrations.
 
 ## Inputs
 
@@ -23,7 +23,7 @@ dependencies and build workspace dependencies before lookup. Prefer the
 | `state-command` | empty | App-directory command whose nonempty stdout versions mutable state, e.g. `date -u +%F`; only its digest enters the key. Errors prevent reuse. |
 | `export-command` | empty | Custom exporter, run from app-dir. Write nonempty `bundle`, valid `config.json` and all assets under `$E2E_CACHE_EXPORT_DIR`; its output must be byte-identical across runs of one commit, so a Hermes exporter must emit source maps. `*.map` files are not hashed. Empty uses the installed Expo CLI with `--source-maps`. |
 | `repack-env` | empty | Same `KEY=VALUE` environment as the production repack; applied over the job's build environment. |
-| `secrets-digest` | empty | Maestro environment digest from `apply-secret-env` with `export: 'false'`. Raw secrets are rejected. |
+| `secrets-digest` | empty | e2e environment digest from `apply-secret-env` with `export: 'false'`. Raw secrets are rejected. |
 | `key` | empty | SHA-256 from an earlier lookup; required for publish. |
 
 ## Outputs
@@ -37,12 +37,12 @@ dependencies and build workspace dependencies before lookup. Prefer the
 ```yaml
 - name: Look for a previous pass
   id: verdict
-  uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/e2e-result-cache@v5.0.0 # v5.0.0
   with:
     platform: ios
     app-dir: apps/mobile
     native-key: ${{ steps.native.outputs.key }}
-    lane-inputs: '{"device":"iPhone 17 Pro","runtime":"iOS 26.4","maestro":"2.6.1"}'
+    lane-inputs: '{"device":"iPhone 17 Pro","runtime":"iOS 26.4"}'
     target: '{"name":"e2e","appId":"com.example.app"}'
     test-paths: tests/mobile
 ```

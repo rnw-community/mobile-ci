@@ -82,12 +82,11 @@ on:
             android-abis:
                 description: >-
                     Comma-separated ABIs the Android base compiles, passed to Gradle
-                    as -PreactNativeArchitectures. 'auto' (default) is x86_64, the
-                    ABI of android-maestro.yml's default avd driver, unless
-                    gradle-args or build-env already pins reactNativeArchitectures.
-                    Part of the native key: it must resolve to the same ABIs as the
-                    e2e workflow's android-abis, so a redroid e2e pipeline passes
-                    arm64-v8a here. Empty compiles every ABI the project declares.
+                    as -PreactNativeArchitectures. 'auto' (default) is arm64-v8a, the
+                    ABI of the farm's emulators, unless gradle-args or build-env
+                    already pins reactNativeArchitectures. Part of the native key: it
+                    must resolve to the same ABIs as android-e2e.yml's android-abis.
+                    Empty compiles every ABI the project declares.
                 type: string
                 required: false
                 default: auto
@@ -277,7 +276,7 @@ jobs:
             targets: ${{ steps.caches.outputs.targets }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Mark the targets whose iOS compile caches are missing
@@ -366,7 +365,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -405,7 +404,7 @@ jobs:
             key-segment: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Resolve the Android ABIs
@@ -413,8 +412,6 @@ jobs:
               shell: bash
               env:
                   ANDROID_ABIS: ${{ inputs.android-abis }}
-                  ANDROID_DRIVER: avd
-                  EMULATOR_ARCH: x86_64
                   GRADLE_ARGS: ${{ inputs.gradle-args }}
                   BUILD_ENV: ${{ inputs.build-env }}
               run: |
@@ -454,12 +451,7 @@ jobs:
                         abis=''
                         echo "android-abis is auto and $pinned_by already pins reactNativeArchitectures to '$pinned'; it is left to $pinned_by."
                       else
-                        case "$ANDROID_DRIVER" in
-                          avd) abis="$EMULATOR_ARCH" ;;
-                          redroid) abis=arm64-v8a ;;
-                          device-cloud) fail "android-abis is auto but android-driver is device-cloud, whose device architecture this workflow cannot see, so no ABI follows from it. Set android-abis explicitly to the ABIs Device Cloud's devices run (and pass seed-native-cache.yml the same value, or the warm-up publishes under another key)." ;;
-                          *) fail "android-abis is auto but android-driver '$ANDROID_DRIVER' is neither 'avd' nor 'redroid', so no ABI follows from it. Set android-abis explicitly." ;;
-                        esac
+                        abis=arm64-v8a
                       fi
                       ;;
                     '')
@@ -506,7 +498,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -559,7 +551,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -600,7 +592,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -712,7 +704,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v5.0.0 # v5.0.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -733,7 +725,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v5.0.0 # v5.0.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -747,7 +739,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -775,7 +767,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base && !matrix.target.forceNative'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -791,7 +783,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v5.0.0 # v5.0.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -804,7 +796,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -832,7 +824,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v5.0.0 # v5.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -840,7 +832,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -862,7 +854,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: ios
@@ -901,7 +893,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -942,7 +934,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1054,7 +1046,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v5.0.0 # v5.0.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1091,7 +1083,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1108,7 +1100,7 @@ jobs:
             - name: build-android-app
               id: build
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/build-android-app@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -1123,7 +1115,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1134,7 +1126,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.10.2 # v4.10.2
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: android

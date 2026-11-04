@@ -28,7 +28,7 @@ export interface SimlockOptions {
     readonly deviceMode?: DeviceMode;
     /**
      * iOS only. `'runner'` takes screenshots with the XCTest runner instead of simctl: its stills have
-     * no Dynamic Island, like Maestro's, so baselines made by Maestro still match. agent-device's
+     * no Dynamic Island. agent-device's
      * default capture when omitted.
      */
     readonly iosScreenshotBackend?: 'runner';

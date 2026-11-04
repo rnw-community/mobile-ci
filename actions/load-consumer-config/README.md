@@ -62,14 +62,14 @@ the object (types, precedence, defaults) is the calling workflow's job.
 
 - name: load-consumer-config
   id: load-config
-  uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/load-consumer-config@v5.0.0 # v5.0.0
   with:
       config-path: .github/store-screenshots.config.json
-      allowed-keys: '["capture-mode","screenshots-dir","settle-seconds"]'
+      allowed-keys: '["capture-scenes","settle-seconds"]'
 
 - name: Use a value
   shell: bash
   env:
-      CAPTURE_MODE: ${{ fromJSON(steps.load-config.outputs.json)['capture-mode'] }}
-  run: echo "$CAPTURE_MODE"
+      SETTLE_SECONDS: ${{ fromJSON(steps.load-config.outputs.json)['settle-seconds'] }}
+  run: echo "$SETTLE_SECONDS"
 ```

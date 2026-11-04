@@ -20,7 +20,7 @@ print(triggers['workflow_call']['inputs'][os.environ['INPUT']]['default'])
 PYTHON
 }
 
-for spec in ios-maestro:repack-runner-labels android-maestro:repack-runner-labels \
+for spec in ios-e2e:repack-runner-labels android-e2e:repack-runner-labels \
     store-screenshots:repack-runner-labels seed-native-cache:plan-runner-labels \
     expo-base-plan:runner-labels; do
     workflow="${spec%%:*}"
@@ -117,7 +117,7 @@ done
 
 case_start 'every reusable workflow with a control job declares control-runner-labels'
 missing=''
-for workflow in expo-base-plan ios-maestro android-maestro native-dev-release native-publish \
+for workflow in expo-base-plan ios-e2e android-e2e native-dev-release native-publish \
     store-screenshots store-release pr-closed-cleanup-reusable seed-native-cache; do
     default="$(input_default "$WORKFLOWS_DIR/$workflow.yml" control-runner-labels 2>/dev/null || true)"
     [ "$default" = '["ubuntu-latest"]' ] || missing="$missing $workflow"

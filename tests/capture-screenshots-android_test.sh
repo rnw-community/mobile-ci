@@ -32,9 +32,9 @@ invoke_capture() {
     local dir="$1"
     shift
     run_step "$dir" ANDROID_SERIAL=emulator-5554 APK_PATH=app.apk APP_ID=com.example \
-        SCENES_JSON='[{"name":"home","deepLink":"app://home"}]' SCREENSHOTS_DIR='' \
+        SCENES_JSON='[{"name":"home","deepLink":"app://home"}]' \
         CAPTURE_LOCALES=en CAPTURE_APPEARANCES='light,dark' SEED_COMMAND='' \
-        SETTLE_SECONDS=0 MAESTRO_ENV='' LOCALE_ENV_JSON='' MAESTRO_CONFIG='' \
+        SETTLE_SECONDS=0 \
         DEVICE_SLUG=phone OUTPUT_DIR="$dir/output" STATUS_BAR_OVERRIDE=true \
         ADB_CALLS="$dir/adb-calls" DEMO_READY="$dir/demo-ready" CLOCK_READY="$dir/clock-ready" "$@"
 }
@@ -70,6 +70,14 @@ workspace=$(prepare_capture)
 invoke_capture "$workspace" STATUS_BAR_OVERRIDE=false DEMO_UNAVAILABLE=true
 if assert_equals 0 "$STEP_STATUS" 'capture status' \
     && assert_not_contains "$(cat "$workspace/adb-calls")" 'sysui_tuner_demo_on' 'demo mode is not changed'; then
+    pass_case
+fi
+
+case_start 'a flow scene is rejected: capture is deep-link only'
+dir=$(new_workspace "$ACTION" 'Validate scene manifest')
+run_step "$dir" SCENES_JSON='[{"name":"home","flow":"home.yaml"}]' SETTLE_SECONDS=3
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/log")" 'non-empty' 'error'; then
     pass_case
 fi
 

@@ -17,7 +17,7 @@ inputs:
     description: JSON of resolved reusable workflow refs/SHAs from the run-attempt API. Passed by the shared planner.
     default: '[]'
   lane-inputs:
-    description: JSON of every resolved workflow input, including the device profile and Maestro version.
+    description: JSON of every resolved workflow input, including the device profile.
     default: '{}'
   target:
     description: JSON of the resolved target.
@@ -38,7 +38,7 @@ inputs:
     description: The same KEY=VALUE environment used by the production repack.
     default: ''
   secrets-digest:
-    description: SHA-256 of the Maestro environment from apply-secret-env with export false. Never pass raw secrets.
+    description: SHA-256 of the e2e environment from apply-secret-env with export false. Never pass raw secrets.
     default: ''
   key:
     description: Previously planned SHA-256 key, required in publish mode.

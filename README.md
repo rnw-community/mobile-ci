@@ -4,7 +4,7 @@
 # mobile-ci
 
 Reusable composite actions and `workflow_call` workflows for fleet-native
-React Native / Expo mobile CI: fingerprinted native-app caches, Maestro e2e,
+React Native / Expo mobile CI: fingerprinted native-app caches, e2e on a simlock farm,
 and simulator/emulator lifecycle management on self-hosted runners.
 
 **Zero EAS-cloud dependency for CI builds.** Every test pipeline here builds
@@ -13,8 +13,8 @@ self-hosted runners, no EAS cloud builds, no `eas-cli`. Native fingerprinting
 uses the standalone [`@expo/fingerprint`](https://www.npmjs.com/package/@expo/fingerprint)
 package tokenlessly.
 
-**Zero secret custody in the test pipelines.** `ios-maestro.yml`,
-`android-maestro.yml`, and `seed-native-cache.yml` need no secrets at all —
+**Zero secret custody in the test pipelines.** `ios-e2e.yml`,
+`android-e2e.yml`, and `seed-native-cache.yml` need no secrets at all —
 no `EXPO_TOKEN`, no signing credentials, nothing. Secrets only enter the
 picture in the opt-in distribution workflows — `native-publish.yml`,
 `native-dev-release.yml`, the EAS Update backend of `expo-ota-preview.yml`,
@@ -23,28 +23,27 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.10.2`; `v3` stays frozen at `v3.3.2`,
+per major (`v5` is current, at `v5.0.0`; `v4` stays frozen at `v4.10.2`, `v3` at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
-commit SHA for reproducibility, or `@v4` to float. See
+commit SHA for reproducibility, or `@v5` to float. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the versioning policy and
 [RELEASE.md](RELEASE.md) for the release procedure.
 
 Opt in to **[content-addressed E2E pass records](docs/e2e-result-cache.md)** with
-`e2e-result-cache: true` on either Maestro workflow. The Linux planner hashes the
+`e2e-result-cache: true` on either e2e workflow. The Linux planner hashes the
 production bundle/assets, resolved config, native key, complete test contract
 and device inputs. A validated prior pass skips base fetch/repack, native builds
-and all Maestro shards, with producer links on the successful required check.
+and the e2e suite, with producer links on the successful required check.
 Unrelated docs, store copy, screenshots and CI workflows need no app path
 exemption list. Cache errors run the suite; the default remains off. See the
-[Budgie caller patch](docs/examples/budgie-e2e-result-cache.patch) and rollout
-requirements before enabling it.
+rollout requirements before enabling it.
 
 ## A pull request no longer compiles native code
 
 **Since `v3.0.0`, and the default.** An Expo/React Native e2e or screenshot
 run used to build the app on a Mac (iOS) or through Gradle (Android) on every
-pull request. It no longer does. `ios-maestro.yml`, `android-maestro.yml` and
+pull request. It no longer does. `ios-e2e.yml`, `android-e2e.yml` and
 `store-screenshots.yml` now compute the **native fingerprint key** of the
 target's native surface on Linux, fetch the **base binary** published for that
 key, and **repack** it with this commit's JavaScript — on the x86_64 Linux
@@ -73,7 +72,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -92,11 +91,11 @@ is the old v2 behaviour and a regression). The host side is in
 
 ## Quick start
 
-Minimal iOS Maestro e2e pipeline for a single app:
+Minimal iOS e2e pipeline for a single app:
 
 ```yaml
-# .github/workflows/ios-maestro.yml
-name: iOS Maestro E2E
+# .github/workflows/ios-e2e.yml
+name: iOS E2E
 on:
     workflow_dispatch:
     pull_request:
@@ -109,16 +108,19 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
-See [docs/workflows/ios-maestro.md](docs/workflows/ios-maestro.md) for the
+See [docs/workflows/ios-e2e.md](docs/workflows/ios-e2e.md) for the
 full input reference, and the same doc's siblings under
-[docs/workflows/](docs/workflows/) for `android-maestro.yml` and the rest —
+[docs/workflows/](docs/workflows/) for `android-e2e.yml` and the rest —
 each has a **Minimal** and a **Full** example. Complete caller workflows for
 four app shapes are in [docs/examples/](docs/examples/README.md); CI lints them
 and checks every input, secret and permission against this commit.
@@ -138,7 +140,7 @@ and checks every input, secret and permission against this commit.
 
 | You want | Use | Choose |
 | --- | --- | --- |
-| Maestro e2e on pull requests | [`ios-maestro.yml`](docs/workflows/ios-maestro.md), [`android-maestro.yml`](docs/workflows/android-maestro.md) | iOS `ios-driver`: `local` (default, a simulator on your Mac pool) or `device-cloud` (devicecloud.dev from a Linux runner). Android `android-driver`: `avd` (default, x86_64 Linux with `/dev/kvm`), `redroid` (a `linux-aarch64` pool, privileged Docker + `binder_linux`) or `device-cloud`. Quarantine a broken suite for a while with `tolerate-test-failures`. One call can cover a monorepo: each `targets` entry may set its own `flowsDir`, `tolerateTestFailures` and `buildStrategy`; `call-scope` keeps several calls in one run apart. |
+| E2E on pull requests | [`ios-e2e.yml`](docs/workflows/ios-e2e.md), [`android-e2e.yml`](docs/workflows/android-e2e.md) | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `e2e-suite` \| no base found: `build-ios-app` → `e2e-suite`. |
 | Pull requests that do not compile native code | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md), the warm-up | Run it on a default-branch push with a `paths:` filter; it publishes the base binary every pull request repacks. Pass it the same `fingerprint-config` / `fingerprint-env` / `build-secrets-env` as the e2e callers. See [docs/repack.md](docs/repack.md). |
 | Development builds for testers | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | `distribution: github-release` (default; a public repository, or testers with repository access) or `eas` (an EAS install page; private repositories). `build-location: local` (default, your fleet) or `cloud` (EAS servers; needs `distribution: eas`). `call-scope`: one per brand when you call it once per brand. |
 | Store releases | [`native-publish.yml`](docs/workflows/native-publish.md) | `credentials-source`: `secrets` (default; ASC / Play keys as GitHub secrets) or `eas` (keys stored on EAS; one `EXPO_TOKEN` for every team). `record-scope`: one per brand when you call it once per brand. `mode: auto` + `ota-baseline`: `github-release` (the store build record on the tag's release) or `eas-channel` (what the EAS channel already serves) to skip the build when only JavaScript changed. |
@@ -146,12 +148,46 @@ and checks every input, secret and permission against this commit.
 | OTA previews on pull requests | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `ota-backend: github-release` (default; tokenless, **public repositories and previews only**) or `eas` (EAS Update; private repositories, and the only backend for production). See [Choosing an OTA backend](#choosing-an-ota-backend). |
 | Production OTA updates | the [`eas-update`](actions/eas-update/README.md) action, gated on `native-publish.yml`'s `decision` output | Run the job in a GitHub Environment with required reviewers. [`eas-channel-fingerprint`](actions/eas-channel-fingerprint/README.md) answers "can this commit ship as an OTA on channel X?" on its own. |
 | A gate against orphaning published OTAs | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | Fails a pull request that moves the native runtime fingerprint, unless labelled. |
-| Store screenshots | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `capture-mode: flows` (a Maestro flow per scene, iOS) or `direct` (a deep-link scene manifest, required for Android); iOS captured by Maestro on macOS or, with `test-framework: e2e`, by your tester-army e2e project from Linux against simlock; optional gated fastlane upload. |
+| Store screenshots | [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | A `capture-scenes` manifest: iOS through your e2e project on a simlock farm, Android over adb; optional gated store upload. |
 | Cleanup | [`pr-closed-cleanup-reusable.yml`](docs/workflows/pr-closed-cleanup-reusable.md) + [`preview-sweep-reusable.yml`](docs/workflows/preview-sweep-reusable.md) (GitHub Release previews); [`eas-channel-cleanup-reusable.yml`](docs/workflows/eas-channel-cleanup-reusable.md) (EAS channels) | The first cancels a closed pull request's runs on a shared fleet, whatever else you use. |
 
 Every calling job needs a `permissions:` block granting at least what the
 called workflow's jobs request — see the table in
 [docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
+
+## What changed in v5.0.0
+
+**Maestro is gone.** E2E tests and iOS store captures run one way: a tester-army
+suite from Linux against devices leased from a simlock farm. `v4` stays frozen at
+`v4.10.2`, so a caller on it keeps working until it moves.
+
+To move a caller to `@v5.0.0`:
+
+1. Rename the calls: `ios-maestro.yml` is `ios-e2e.yml`, `android-maestro.yml` is
+   `android-e2e.yml`. Their result jobs are now `iOS E2E result` and `Android E2E
+   result`, so update any required check, `needs` or `workflow_run` that names one.
+2. On both, delete `test-framework`, `flows-dir` and the other flow inputs,
+   `shard-count`, `balance-shards`, `junit-report`, `maestro-*`, `ios-driver`,
+   `android-driver`, `device-cloud-*`, `redroid-*`, `emulator-*`, `simulator-*`,
+   `simslim-*`, `test-runner-labels` and `e2e-required`. `e2e-dir`, `simlock-url` and
+   the `simlock-token` secret are now required. Rename `runner-labels` to
+   `build-runner-labels` and the `maestro-secrets-env` secret to `e2e-secrets-env`.
+   A target's `flowsDir` no longer means anything: remove it.
+3. `android-abis: auto` now means `arm64-v8a`, the ABI of the farm's emulators, on
+   `android-e2e.yml` and `seed-native-cache.yml` alike.
+4. On `store-screenshots.yml`, iOS entries are always captured by the e2e project.
+   Delete `test-framework`, `capture-mode`, `capture-runner-labels`, `screenshots-dir`,
+   `scenes-*-pattern`, `launch-settle-seconds`, `deeplink-confirm-*`, `maestro-*`,
+   `simslim-*` and `simulator-*`, in the config file too, where an unknown key fails
+   closed. Pass `e2e-dir`, `simlock-url` and `simlock-token`. A `flow` scene, a
+   `{"id", "env"}` locale object and a `seed-command` with iOS entries now fail closed,
+   as do iOS and Android entries in one call. An Android capture stays deep-link only.
+5. Runner label: pass `trf-macos-arm64-4x7` (the shape label) rather than
+   `macos-maestro` where a fleet advertises it.
+
+Removed actions: `run-maestro-ios`, `run-maestro-android`, `run-maestro-android-redroid`,
+`run-maestro-device-cloud`, `maestro-flow-timings`, `capture-screenshots-ios`, and
+`scripts/maestro/`. `redroid-container` stays for an Android store capture.
 
 ## What changed in v4.x
 
@@ -340,25 +376,19 @@ that relied on the old default.
 | [`expo-native-key`](actions/expo-native-key/README.md)           | The one key a base binary is published and looked up under: `@expo/fingerprint` of the native surface, folded with the build action, the pinned toolchain and the fingerprint config's hash. |
 | [`expo-base-binary`](actions/expo-base-binary/README.md)         | Fetch or publish the immutable base binary for a native key — GHCR OCI artifact (default) or default-branch workflow artifact. An unreadable store is never an absent base. |
 | [`expo-repack`](actions/expo-repack/README.md)                   | Turn a published base into this commit's binary without compiling native code: re-bundle the JS, rewrite the embedded Expo config, assert it, re-sign on Android. |
-| [`run-maestro-ios`](actions/run-maestro-ios/README.md)           | Simulator boot/bootstatus/install/test/capture/shutdown for a Maestro flow shard. |
-| [`run-maestro-android`](actions/run-maestro-android/README.md)   | Headless AVD emulator boot/install/test/capture/shutdown for a Maestro flow shard. |
-| [`android-emulator`](actions/android-emulator/README.md)         | Standalone headless AVD lifecycle (`mode: start` / `mode: stop`) — fail-closed `emulator -accel-check` preflight, guest RAM/cores sized from the container's cgroup limits, optional host-wide `flock` emulator slot, job-scoped teardown — shared by `run-maestro-android` and `store-screenshots.yml`'s `avd` capture leg. |
-| [`run-maestro-device-cloud`](actions/run-maestro-device-cloud/README.md) | Runs a Maestro flow selection on hosted devicecloud.dev devices from a plain Linux runner with a pinned `@devicecloud.dev/dcd`; downloads the run's artifacts and JUnit report under the caller's artifact name; a rejected submission or anything but an explicit pass fails with the reason (`ios-maestro.yml`'s `ios-driver` / `android-maestro.yml`'s `android-driver: device-cloud`). |
-| [`e2e-suite`](actions/e2e-suite/README.md) | The e2e job of `ios-maestro.yml` and `android-maestro.yml`: validates the call, runs a tester-army e2e suite against iOS simulators or Android emulators leased from a simlock farm (free devices split across targets; a run passes only when its command exits 0 and its report says it passed), and releases a killed run's leases. |
+| [`android-emulator`](actions/android-emulator/README.md)         | Standalone headless AVD lifecycle (`mode: start` / `mode: stop`) — fail-closed `emulator -accel-check` preflight, guest RAM/cores sized from the container's cgroup limits, optional host-wide `flock` emulator slot, job-scoped teardown — used by `store-screenshots.yml`'s `avd` capture leg. |
+| [`e2e-suite`](actions/e2e-suite/README.md) | The e2e job of `ios-e2e.yml` and `android-e2e.yml`: validates the call, runs a tester-army e2e suite against iOS simulators or Android emulators leased from a simlock farm (free devices split across targets; a run passes only when its command exits 0 and its report says it passed), and releases a killed run's leases. |
 | [`e2e-simlock-install`](actions/e2e-simlock-install/README.md) | Installs [`@mobile-ci/e2e-simlock`](packages/e2e-simlock/README.md), the simlock `DeviceProvider` shipped in this repository, into an e2e project from the action's own ref; fails closed before the project's own install. |
-| [`run-maestro-android-redroid`](actions/run-maestro-android-redroid/README.md) | Redroid (Android-in-container) boot/install/test/capture/teardown for a Maestro flow shard — the only Android driver that boots at all on `linux-aarch64` self-hosted runners (`android-maestro.yml`'s `android-driver: redroid`). |
 | [`redroid-container`](actions/redroid-container/README.md)       | Standalone Redroid container lifecycle (`mode: start` / `mode: teardown`) — run-scoped naming, prewarm manifest, kernel-assigned loopback adb port — for jobs that drive the booted device themselves. |
-| [`capture-screenshots-ios`](actions/capture-screenshots-ios/README.md) | Boots a pinned Simulator and captures one screenshot per locale x appearance x scene — discovered Maestro flows or a deep-link/flow scene manifest with a per-cell seed hook — into a fixed `raw/ios/<device-slug>/...` layout for store screenshot pipelines. |
 | [`capture-screenshots-android`](actions/capture-screenshots-android/README.md) | Drives an already-booted Android device (Redroid/AVD/physical) through a scene manifest — `wm size`/`wm density` device shaping, per-app locales, demo-mode status bar, per-cell seed hook — into a fixed `raw/android/<device-slug>/...` layout. |
 | [`compose-media`](actions/compose-media/README.md) | Frames raw captures in fastlane frameit's real device frames (iPhone 6.9", iPad 13"; transparent or plate background) and encodes web media: AVIF + WebP stills, and WebM (AV1, VP9 fallback) + faststart H.264 MP4 + WebP poster clips. Every file is held to a byte budget, and the action fails closed. Captions stay app-side. Also usable locally from `scripts/media/`. |
 | [`asc-dedupe-screenshots`](actions/asc-dedupe-screenshots/README.md) | Post-upload App Store Connect duplicate-screenshot verify/repair gate — self-signed ES256 JWT, `curl`/`jq`/`openssl` only; deletes all but the oldest copy of every `deliver` retry duplicate and fails closed so the flaky upload lane gets fixed. |
 | [`app-store-release`](actions/app-store-release/README.md) | Submits an uploaded iOS build for App Review through the App Store Connect API (Node, no fastlane): finds or creates the version, attaches the newest valid build, sets release type and phased release, submits; dry run by default, idempotent on a version already in review. |
 | [`play-store-release`](actions/play-store-release/README.md) | Promotes an uploaded Android build between Google Play tracks through the edits API (Node, no fastlane): highest version code on the source track, release notes copied, completed or staged rollout; dry run by default, idempotent. |
-| [`maestro-flow-timings`](actions/maestro-flow-timings/README.md) | Fetch, select and record the per-flow Maestro durations `balance-shards` packs shards on. |
 | [`rerun-infra-failures`](actions/rerun-infra-failures/README.md) | Re-run a failed run's failed jobs once when every failure is infrastructure (lost runner, exec format, timeout, ...); never retries a test failure. |
 | [`rn-prebuilt-cache`](actions/rn-prebuilt-cache/README.md) | Restore React Native's prebuilt iOS tarball cache for the installed `react-native` version; the calling job saves it off pull requests. |
 | [`runs-on-cache-bypass`](actions/runs-on-cache-bypass/README.md) | Opt-in: runs a SHA-pinned `runs-on/action` on a RunsOn `extras=s3-cache` runner so artifact upload/download work behind its cache proxy; a no-op elsewhere. |
-| [`apply-secret-env`](actions/apply-secret-env/README.md)         | Masks and exports a secret's `KEY=VALUE` entries (multi-line via `KEY<<DELIMITER`) with a collision-proof `$GITHUB_ENV` delimiter, fails closed without echoing a malformed line, and emits a SHA-256 digest of the values (plus, with `allow-multiline: false`, a job-local merged `lines` output that does carry them) — the one parser behind `build-secrets-env`, `maestro-secrets-env` and `EAS_EXTRA_ENV`. |
+| [`apply-secret-env`](actions/apply-secret-env/README.md)         | Masks and exports a secret's `KEY=VALUE` entries (multi-line via `KEY<<DELIMITER`) with a collision-proof `$GITHUB_ENV` delimiter, fails closed without echoing a malformed line, and emits a SHA-256 digest of the values (plus, with `allow-multiline: false`, a job-local merged `lines` output that does carry them) — the one parser behind `build-secrets-env`, `e2e-secrets-env` and `EAS_EXTRA_ENV`. |
 | [`turbo-affected`](actions/turbo-affected/README.md)             | Fail-closed `turbo ls --affected` detection gating a pipeline to touched packages. |
 | [`load-consumer-config`](actions/load-consumer-config/README.md) | Reads a consumer-owned JSON config file out of the checkout and validates it against an allowlist of keys, so a reusable workflow can resolve its inputs from a checked-in file instead of JSON-in-YAML `with:` blobs. |
 | [`expo-ota-manifest`](actions/expo-ota-manifest/README.md)       | Generate Expo Updates protocol v1 manifests per platform from an `expo export` output — EAS-free, tokenless OTA hosting. |
@@ -376,15 +406,15 @@ input/output table and a usage example.
 
 | Workflow                          | Composes                                                                          |
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| [`ios-maestro.yml`](docs/workflows/ios-maestro.md)           | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `run-maestro-ios` \| no base for the key: `setup-xcode-pinned` → `native-app-cache` → `setup-ccache-ios` → `build-ios-app` → `expo-base-binary` publish (default branch) → `run-maestro-ios` |
-| [`android-maestro.yml`](docs/workflows/android-maestro.md)   | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `run-maestro-android` (default, `avd`) or `run-maestro-android-redroid` (`android-driver: redroid`) \| no base for the key: `native-app-cache` → `build-android-app` → `expo-base-binary` publish (default branch) → the same Maestro step |
+| [`ios-e2e.yml`](docs/workflows/ios-e2e.md)           | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `e2e-suite` \| no base found: `build-ios-app` → `e2e-suite`. |
+| [`android-e2e.yml`](docs/workflows/android-e2e.md)   | `turbo-affected` → `expo-base-plan.yml` (`expo-native-key` → `expo-base-binary` fetch → `expo-repack`, on Linux) → `e2e-suite` \| no base found: `build-android-app` → `e2e-suite`. |
 | [`expo-base-plan.yml`](.github/workflows/expo-base-plan.yml)  | The shared decision the e2e and screenshot workflows call, not something a consumer normally calls directly: one leg per target on the Linux pool — `expo-native-key` → `expo-base-binary` fetch → `expo-repack` when a base exists, and a `native-targets` output naming the keys that still need a Mac or a Gradle build. |
 | [`seed-native-cache.yml`](docs/workflows/seed-native-cache.md) | The warm-up: builds natively for every key that has no base yet and **publishes the base binary** pull requests repack, on a schedule or dispatch. Run it on the default branch after a native change so the next pull request takes no Mac slot. |
 | [`swift-ios.yml`](docs/workflows/swift-ios.md)               | Native Swift / Xcode, no JS toolchain: `build` (`setup-xcode-pinned` → `xcode-cache` restore → `swift-test` → `xcodebuild-test` `mode: build` → `xcode-cache` save) → `test` (one matrix shard per `shards-json` entry: `xcode-cache` restore → `simulator-lease` → optional `xcodebuild-affected-tests` on a pull request → `xcodebuild-test` `mode: test`), both secretless, then an opt-in `publish` (`apple-signing` → `xcode-archive-upload` → optional tag + GitHub Release). N shards share one compile through the restored DerivedData cache. |
 | [`native-publish.yml`](docs/workflows/native-publish.md)     | `plan` (targets, `eas.json` profile env with `extends`, build number, optional OTA decision against the store build record or, with `ota-baseline: eas-channel`, the EAS channel) → per-target `eas build --local` → `eas submit`, with an Android Play-policy lint gate and 64-bit ABI verification, then an optional store build record on the release. Signing and store keys from GitHub secrets or EAS-stored credentials. |
 | [`store-release.yml`](docs/workflows/store-release.md) | The step after `native-publish.yml`: `app-store-release` (App Store version, build, review submission) and `play-store-release` (Play track promotion with a staged rollout) in one dry-run-by-default job on a Linux control runner, optionally behind a GitHub Environment's required reviewers. |
 | [`native-dev-release.yml`](docs/workflows/native-dev-release.md) | Per-platform `eas build --local` (or an EAS cloud build) of the development profile → publish to a pruned GitHub Release, or to EAS internal distribution with an install link. |
-| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → `capture-screenshots-ios` matrix and/or `build-android-app` → `android-emulator` (default, `avd`) or `redroid-container` (`android-driver: redroid`) + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes on one booted simulator/container; scenes discovered as Maestro flows or declared in a deep-link scene manifest) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
+| [`store-screenshots.yml`](docs/workflows/store-screenshots.md) | `build-ios-app` → an e2e capture matrix on a simlock farm, or `build-android-app` → `android-emulator` (default, `avd`) or `redroid-container` (`android-driver: redroid`) + `capture-screenshots-android` matrix (one job per `capture-manifest` device, looping locales x appearances x scenes) → optional gated `upload` (consumer's fastlane `deliver` lane, with an optional fail-closed App Store slot-resolution check and an optional App Store Connect duplicate-screenshot verify/repair gate). |
 | [`expo-ota-preview.yml`](docs/workflows/expo-ota-preview.md) | `ota-runtime-version` → `expo export` → `expo-ota-manifest` → `github-release-publish` → `pr-preview-comment` (deep link, QR, runtime version and the matching dev build in one sticky comment). EAS-free, tokenless OTA JS preview loaded by a development build through `expo-development-client`; `ota-backend: eas` publishes it with `eas-update` instead, for private repositories. |
 | [`expo-fingerprint-guard.yml`](docs/workflows/expo-fingerprint-guard.md) | `native-fingerprint` on the pull-request head → `native-fingerprint` on a merge-base `git worktree` → hash comparison + `fingerprint:diff`. Fails a pull request that silently moves the native runtime fingerprint out from under published OTA updates, unless an override label acknowledges it. |
 | [`assert-distinct-fingerprints.yml`](docs/workflows/assert-distinct-fingerprints.md) | Release-pipeline pre-flight: one `expo-native-key` per target, then `assert-distinct-fingerprints` fails when two targets with different `appId` share a native key. Runs before any build starts. |
@@ -402,18 +432,6 @@ read a file. See
 [docs/workflows/store-screenshots.md#config-file](docs/workflows/store-screenshots.md#config-file)
 and the schema at
 [`schemas/store-screenshots.schema.json`](schemas/store-screenshots.schema.json).
-
-Both `ios-maestro.yml` and `android-maestro.yml` split their runner pool into
-`build-runner-labels` + `test-runner-labels` (the second defaults to the
-first) so a consumer with a dedicated builder host separate from its Maestro
-test pool can preserve that split; a single-pool consumer sets only
-`build-runner-labels` and ignores `test-runner-labels` entirely. Flow
-discovery under both is bounded by default (`flows-max-depth: 1`, a
-`flows-name-pattern` glob, and an optional `flows-exclude-pattern`) so subflow
-and fixture directories under `flows-dir` are never swept into a shard; an
-optional `shard-manifest-dir` of hand-curated `shard-<index>.txt` files
-overrides the computed index-modulo split for consumers whose shard balance
-is hand-tuned, falling back to modulo when unset.
 
 ### Choosing an OTA backend
 
@@ -474,12 +492,15 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
             install-command: pnpm install --frozen-lockfile
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
 When the resolved manager is `pnpm`, pnpm is installed by `pnpm/action-setup`
@@ -490,37 +511,6 @@ and the `enable-corepack` step is skipped so pnpm is never provisioned twice.
 and **must** have `jq` on the runner — the resolve step verifies both up front
 and fails with an actionable message rather than letting
 `pnpm/action-setup` abort later with `No pnpm version is specified`.
-
-### Android driver: Redroid vs AVD
-
-`android-maestro.yml`'s `android-driver` input picks the Maestro-execution
-step's Android backend, `avd` by default:
-
-- **`avd`** (default) — a real Android emulator via
-  `run-maestro-android` (which boots it through `android-emulator`), on a host
-  with `/dev/kvm`. This is what the default `runner-labels`
-  (`["self-hosted","trf-linux-amd64-4x8"]`, an x86_64 Linux KVM pool) provide,
-  and it needs no privileged container, no Docker daemon, and no
-  `binder_linux`. A `google_apis` system image also carries real Google Play
-  Services. The guest is bounded on a memory-limited runner: an empty
-  `emulator-ram-size` (the default) is derived from the container's cgroup
-  memory limit, 2048 MB on the default 8 GiB pool.
-- **`redroid`** — Android as a privileged container over the `binder_linux`
-  kernel module (`run-maestro-android-redroid`). Needs no `sdkmanager`, NDK,
-  or emulator binary on the runner, so it is the only driver that works at
-  all on `linux-aarch64` self-hosted runners — select it together with
-  `runner-labels` pointing at such a pool, since it cannot run on the default
-  x86_64 one. Stock images ship no Google Play Services. See
-  [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for how to
-  provision a Redroid host, and
-  [which pool a job belongs on](docs/self-hosted-runners.md#which-pool-a-job-belongs-on)
-  for the fleet policy these defaults follow.
-
-`ios-maestro.yml` / `android-maestro.yml` also support splitting build and
-test onto separate runner pools via `build-runner-labels` /
-`test-runner-labels` (each falls back to `runner-labels` when left empty) —
-useful when your build hosts and Maestro-execution hosts are provisioned
-differently (see [docs/self-hosted-runners.md](docs/self-hosted-runners.md)).
 
 `seed-native-cache.yml` is meant to be called from a workflow that is itself
 `workflow_dispatch`-triggered (plus optionally `push`/`schedule`) in the
@@ -547,15 +537,15 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.10.2 # v4.10.2
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v5.0.0 # v5.0.0
 ```
 
 ## Scope
 
-In scope: the e2e pipelines (`ios-maestro.yml` / `android-maestro.yml` /
+In scope: the e2e pipelines (`ios-e2e.yml` / `android-e2e.yml` /
 `seed-native-cache.yml`) — ad-hoc-signed (entitlements preserved) iOS
 simulator / unsigned Android emulator builds, tokenless
-fingerprinting, Maestro; store publishing (`native-publish.yml`:
+fingerprinting, e2e; store publishing (`native-publish.yml`:
 `eas build --local` for fleet-compute signed builds + `eas submit` for store
 upload); development-build distribution (`native-dev-release.yml`:
 `eas build --local`, or an opt-in EAS cloud build, to a pruned GitHub Release
@@ -571,9 +561,10 @@ development build.
 ## Self-hosted runners
 
 Every action and reusable workflow here assumes a self-hosted fleet: macOS
-with Xcode installed (iOS), and x86_64 Linux with `/dev/kvm` (the default
-`avd` Android driver) or `linux-aarch64` with `binder_linux` and privileged
-Docker (the `redroid` driver).
+with Xcode installed for iOS native builds, x86_64 Linux for repacks, Android
+builds and e2e suites, and a simlock farm for devices. An Android store capture
+adds x86_64 Linux with `/dev/kvm` or `linux-aarch64` with `binder_linux` and
+privileged Docker.
 See [docs/self-hosted-runners.md](docs/self-hosted-runners.md) for host
 provisioning: the x86_64 Linux pool the repack path runs on, macOS Xcode
 pools, Linux `linux-aarch64` Redroid hosts, the Redroid prewarm manifest
@@ -593,7 +584,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.10.2 # v4.10.2`). A major tag such as `@v4` floats to the
+checked against (`@v5.0.0 # v5.0.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.
@@ -603,6 +594,6 @@ reproducibility.
 Real-world adopters — worth reading as usage examples, not as this repo's
 own documentation:
 
-- [vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu) — the fleet-validation consumer: iOS + Android (`avd`) Maestro e2e, warm-up, dev release, store publish and store screenshots.
-- [budgie-at/budgie](https://github.com/budgie-at/budgie) — iOS Maestro + native cache, à la carte tier.
+- [vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu) — the fleet-validation consumer: iOS + Android e2e on a simlock farm, warm-up, dev release, store publish and store screenshots.
+- [budgie-at/budgie](https://github.com/budgie-at/budgie) — iOS e2e + native cache, à la carte tier.
 - [rnw-community/rnw-community](https://github.com/rnw-community/rnw-community) — monorepo canary pipeline this catalog was extracted from.

@@ -32,7 +32,7 @@ any build starts and then runs this action. Both share
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/assert-distinct-fingerprints@v5.0.0 # v5.0.0
   with:
       platform: ios
       plans: >-

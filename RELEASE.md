@@ -16,7 +16,7 @@ being cut) that consumers pin to in practice. **No
    `@vX.Y.Z` — the tag you are about to cut — with a trailing `# vX.Y.Z`
    comment. Self-references live in **both** `.github/workflows/*.yml`
    (reusable workflow → action) and `actions/*/action.yml` (action → action,
-   e.g. `run-maestro-android-redroid` → `redroid-container`); a bump loop
+   e.g. `expo-native-key` → `native-fingerprint`); a bump loop
    that misses the `actions/` half ships a release whose composite actions
    still call the *previous* release's code. For example, releasing `v1.3.1`
    after `v1.3.0`:
@@ -119,15 +119,13 @@ being cut) that consumers pin to in practice. **No
 
 7. **Verify release self-consistency**: every self-reference-bearing file in
    the tagged commit must point at that same tag — the reusable workflows
-   (`ios-maestro.yml`, `android-maestro.yml`, `seed-native-cache.yml`,
+   (`ios-e2e.yml`, `android-e2e.yml`, `seed-native-cache.yml`,
    `store-screenshots.yml`, `expo-base-plan.yml`, `swift-ios.yml`,
    `expo-ota-preview.yml`, `expo-fingerprint-guard.yml`,
    `assert-distinct-fingerprints.yml`, `store-release.yml`, and `native-publish.yml` /
    `native-dev-release.yml` through `apply-secret-env`) **and** the
    composite actions that
-   call sibling actions (`run-maestro-android-redroid/action.yml` →
-   `redroid-container`, `run-maestro-android/action.yml` →
-   `android-emulator`, `expo-native-key/action.yml` → `native-fingerprint`,
+   call sibling actions (`expo-native-key/action.yml` → `native-fingerprint`,
    `eas-update/action.yml` → `apply-secret-env` / `eas-profile-env`,
    `eas-channel-fingerprint/action.yml` → `eas-profile-env` /
    `ota-runtime-version`, `ota-runtime-version/action.yml` → `eas-profile-env`).
@@ -140,8 +138,8 @@ being cut) that consumers pin to in practice. **No
    tag=v1.2.3
    tag_re=$(printf '%s' "$tag" | sed 's/[.[\*^$]/\\&/g')
    check_status=0
-   for path in .github/workflows/ios-maestro.yml \
-               .github/workflows/android-maestro.yml \
+   for path in .github/workflows/ios-e2e.yml \
+               .github/workflows/android-e2e.yml \
                .github/workflows/seed-native-cache.yml \
                .github/workflows/store-screenshots.yml \
                .github/workflows/expo-base-plan.yml \
@@ -155,9 +153,7 @@ being cut) that consumers pin to in practice. **No
                actions/expo-native-key/action.yml \
                actions/eas-update/action.yml \
                actions/eas-channel-fingerprint/action.yml \
-               actions/ota-runtime-version/action.yml \
-               actions/run-maestro-android-redroid/action.yml \
-               actions/run-maestro-android/action.yml; do
+               actions/ota-runtime-version/action.yml; do
      content="$(gh api "repos/rnw-community/mobile-ci/contents/${path}?ref=${tag}" \
        --jq '.content' | base64 -d)"
      if ! printf '%s\n' "$content" | grep -q 'uses: rnw-community/mobile-ci/'; then
@@ -196,7 +192,7 @@ being cut) that consumers pin to in practice. **No
    branch of one) at the new floating major tag (or the exact `@v1.2.3`) and
    confirm its next run is green. A green `self-test` on this repo proves the schemas are
    internally consistent; it does not prove a real consumer's `targets`/
-   `flows-dir`/secrets wiring still resolves against the new tag.
+   `e2e-dir`/secrets wiring still resolves against the new tag.
 
 ## Breaking vs. non-breaking
 

@@ -12,8 +12,8 @@ any earlier copy. Run it **after** the project's own install: `npm ci` and its
 equivalents replace `node_modules` wholesale, so the step fails closed when
 `e2e-dir` has no `node_modules` yet.
 
-`ios-maestro.yml`, `android-maestro.yml` (through
-[`e2e-suite`](../e2e-suite/README.md)) and `store-screenshots.yml`'s e2e driver
+`ios-e2e.yml`, `android-e2e.yml` (through
+[`e2e-suite`](../e2e-suite/README.md)) and `store-screenshots.yml`'s iOS capture
 run it for you. Add it to a pipeline of your own; for local runs,
 `scripts/fetch-e2e-simlock.sh <tag> <e2e-dir>` does the same from a pinned tag.
 
@@ -29,7 +29,7 @@ run it for you. Add it to a pipeline of your own; for local runs,
 - name: Install the e2e project
   working-directory: e2e
   run: npm ci --no-audit --no-fund
-- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.10.2 # v4.10.2
+- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v5.0.0 # v5.0.0
   with:
       e2e-dir: e2e
 ```

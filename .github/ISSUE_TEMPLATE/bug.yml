@@ -15,14 +15,11 @@ body:
               - actions/expo-native-key
               - actions/expo-base-binary
               - actions/expo-repack
-              - actions/run-maestro-android
-              - actions/run-maestro-android-redroid
-              - actions/run-maestro-ios
               - actions/setup-ccache-ios
               - actions/setup-xcode-pinned
               - actions/turbo-affected
-              - .github/workflows/ios-maestro.yml
-              - .github/workflows/android-maestro.yml
+              - .github/workflows/ios-e2e.yml
+              - .github/workflows/android-e2e.yml
               - .github/workflows/seed-native-cache.yml
               - .github/workflows/expo-base-plan.yml
               - .github/workflows/store-screenshots.yml

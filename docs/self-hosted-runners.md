@@ -33,7 +33,7 @@ Install `jq` on every host in every pool. The reusable workflows' package
 manager resolution reads `package.json`'s `devEngines.packageManager` /
 `packageManager` field with it (see
 [README.md#package-manager](../README.md#package-manager)), and several
-composite actions (`capture-screenshots-ios`, `capture-screenshots-android`,
+composite actions (`capture-screenshots-android`,
 `asc-dedupe-screenshots`) already require it outright. Without `jq` the
 resolve step warns and falls back to root-lockfile detection, which is enough
 for Yarn and npm but **fails closed for pnpm** — pnpm's version can only come
@@ -50,26 +50,17 @@ twice: once in its own runtime and once in the iOS build it displaced.
 
 | Job | Pool | Why |
 | --- | --- | --- |
-| `xcodebuild`, Simulators, iOS Maestro, `capture-screenshots-ios`, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
-| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`), Android Maestro and `store-screenshots.yml`'s Android capture on the `avd` driver (`android-emulator`) | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD plus Maestro |
-| Android Maestro/screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
+| `xcodebuild`, Simulators in the native Swift lane, Apple signing/upload | macOS | needs Xcode and CoreSimulator; nothing else can run it |
+| Android build (`build-android-app`, `seed-native-cache`'s `seed-android`) and `store-screenshots.yml`'s Android capture on the `avd` driver (`android-emulator`) | x86_64 Linux KVM | Google ships an x86_64 Linux NDK/cmake/emulator; a 4 vCPU / 8 GiB profile fits Gradle+D8, or a bounded AVD |
+| Screenshot capture on the `redroid` driver | `linux-aarch64` Redroid host | needs `binder_linux` + `docker run --privileged`; the Redroid shape for running Android on arm64 Linux (a macOS arm64 pool can run an arm64 AVD instead) |
 | `expo-base-plan.yml`'s plan/repack job (`expo-native-key`, `expo-base-binary`, `expo-repack`) | x86_64 Linux | re-bundles JavaScript and rewrites an archive: no Xcode, no simulator, no emulator, no KVM — see [The Linux repack pool](#the-linux-repack-pool-expo-e2e-and-screenshot-runs) |
+| An e2e suite (`e2e-suite`) | any Linux runner with Node that reaches the simlock farm | the devices live on the farm; no KVM, no Xcode |
 | Manifest/JSON/shell-only steps | the smallest Linux profile on the fleet (e.g. a 2 vCPU / 4 GiB profile) | no toolchain, no device |
 
-This repo's own defaults follow that rule: `android-maestro.yml`'s
-`runner-labels` and `seed-native-cache.yml`'s `android-runner-labels` default
-to `["self-hosted","trf-linux-amd64-4x8"]` — the x86_64 Linux KVM shape
-documented under [Linux x86_64 KVM hosts](#linux-x86_64-kvm-hosts-android-avd-driver)
-— and `android-maestro.yml`'s `android-driver` defaults to `avd` to match,
-since `redroid` cannot run on that shape. The one deliberate exception is
-`store-screenshots.yml`'s `android-capture-runner-labels`, which stays on a
-Redroid-capable Linux pool because its `android-driver` still defaults to
-`redroid`. The capture leg has an `avd` driver too — the same
-`android-emulator` action the Maestro shards boot with — so passing
-`android-driver: avd` with `android-capture-runner-labels:
-'["self-hosted","trf-linux-amd64-4x8"]'` moves it onto the KVM pool. Both
-defaults flip only after an `avd` capture run has been validated on the
-fleet.
+This repo's own defaults follow that rule: `android-e2e.yml`'s
+`build-runner-labels` and `seed-native-cache.yml`'s `android-runner-labels` default
+to `["self-hosted","trf-linux-amd64-4x8"]`, and `store-screenshots.yml`'s
+`android-driver` defaults to `avd` on that same KVM shape.
 
 Label names are a property of your fleet, not of this repo. The defaults name
 the labels of the fleet this repo is developed against; on another fleet,
@@ -79,7 +70,7 @@ override them to whatever labels carry the same host shape.
 
 A pull request does not compile native code for an Expo e2e or screenshot run
 any more. `expo-base-plan.yml`'s `plan` job — the shared decision
-`ios-maestro.yml`, `android-maestro.yml`, `store-screenshots.yml` and
+`ios-e2e.yml`, `android-e2e.yml`, `store-screenshots.yml` and
 `seed-native-cache.yml` all call — computes the native key with
 [`expo-native-key`](../actions/expo-native-key/README.md), fetches the base
 binary published for it with
@@ -93,7 +84,7 @@ Per [Which pool a job belongs on](#which-pool-a-job-belongs-on), that job
 belongs on the **x86_64 Linux pool without KVM**: it re-bundles JavaScript and
 rewrites an archive. `["self-hosted","trf-linux-amd64-2x4"]` (2 vCPU / 4 GiB, no
 `/dev/kvm`) is the default `repack-runner-labels` / `plan-runner-labels` value in
-every caller, so plan and repack jobs never queue behind Android emulator shards
+every caller, so plan and repack jobs never queue behind Android emulator jobs
 on the KVM pool ([#169](https://github.com/rnw-community/mobile-ci/issues/169)).
 Do not point them at a label also served by arm64 guests: Google publishes the
 Android build-tools for x86_64 Linux only.
@@ -151,9 +142,8 @@ The macOS pool does not go away; its role shrinks to two things:
   an Expo or React Native upgrade, a new native module, a changed
   `fingerprint.config.js` — the Mac compiles it, and a default-branch run then
   publishes that base so the next pull request repacks instead.
-- **the Maestro and screenshot-capture shards.** They install and drive an iOS
-  Simulator, and a Simulator only exists on macOS. Nothing about the repack
-  default changes that.
+- **the native Swift lane's simulators.** `swift-ios.yml` installs and drives an
+  iOS Simulator on the Mac it runs on.
 
 That second role is why the sizing advice above still applies to the macOS
 pool, and the first is why [`xcode-cache`](../actions/xcode-cache/README.md)
@@ -190,69 +180,12 @@ the job immediately with a clear message instead of silently building with
 the wrong compiler — the same reasoning `setup-xcode-pinned`'s own README
 documents.
 
-**Splitting build and test pools.** `ios-maestro.yml` (and
-`android-maestro.yml`) accept `build-runner-labels` and `test-runner-labels`
-in addition to the simpler `runner-labels`. Both fall back to `runner-labels`
-when left empty, so the common case (`runner-labels` only) needs no change.
-Split them when your build hosts and your Maestro-execution hosts are
-provisioned differently in practice — e.g. build machines sized for
-`xcodebuild`/Gradle parallelism and disk (DerivedData, ccache, Gradle cache)
-while test machines are sized for however many Simulators/emulators/Redroid
-containers you run concurrently, or when the two pools live in different
-labeled groups for capacity-management reasons on your fleet:
-
-```yaml
-with:
-    build-runner-labels: '["self-hosted","macos-builder"]'
-    test-runner-labels: '["self-hosted","macos-maestro"]'
-```
-
-**Rosetta 2 on arm64 test hosts for `ios-simulator-archs: x86_64`.** An app
-built as an x86_64 Simulator slice (because a native SDK ships no
-arm64-simulator slice) runs on an arm64 host's simulator only under Rosetta 2.
-Install it once per host with `softwareupdate --install-rosetta
---agree-to-license`. The test and capture jobs probe it with
-`arch -x86_64 /usr/bin/true` and fail closed, before any simulator boots,
-when it is missing; an x86_64 macOS host needs nothing extra.
-
-**Pin `simulator-device` once the pool has more than one host.** Left empty,
-`run-maestro-ios`/`ios-maestro.yml`'s `simulator-device` boots the last
-available iPhone-family device by `xcrun simctl list devices available`
-order — an order that depends on exactly which simulator runtimes and
-devices are provisioned on that specific host, so it can silently boot a
-different device than the last run, or a different device than a sibling
-host in the same pool, with no diff anywhere. Pin an exact device name (e.g.
-`iPhone 17 Pro`) once a flow's rendering is sensitive to device shape, and
-make sure every host in the pool has that exact device provisioned — a
-pinned name that only exists on some hosts turns an intermittent heuristic
-mismatch into a hard, host-dependent failure instead.
-
-**Pre-existing Homebrew-managed `maestro`: no host action needed.** The
-`Install Maestro` step in `run-maestro-ios`, `run-maestro-android-redroid`,
-and `run-maestro-android` prefers a `maestro` already on `PATH` when it
-exactly matches the pinned `maestro-version`, and otherwise downloads that
-exact `cli-<version>` release directly from
-`https://github.com/mobile-dev-inc/Maestro/releases` (verifying its
-published `checksums_sha256.txt` when present) and extracts it to
-`$HOME/.maestro-pinned/<version>`, which it puts ahead of `PATH` for the
-rest of the job. This sidesteps `~/.maestro` entirely, so it never invokes
-(and is never refused by) the official `get.maestro.mobile.dev` bootstrap
-script, which itself refuses to run at all if it detects an existing
-Homebrew-managed `maestro` (`Your maestro installation is already managed by
-a homebrew`). A Homebrew-installed `maestro` on a host is therefore
-harmless: the action either reuses it (exact version match) or ignores it in
-favor of its own pinned copy — no `brew uninstall`/`brew upgrade` is
-required, and a host is free to keep whatever Homebrew-managed `maestro` it
-already has.
-
 ### Every simulator runs slim
 
-Every iOS simulator mobile-ci touches — a leased device, a host device a
-Maestro shard boots, a capture job's device, or a developer's local simulator —
-runs slim. A stock simulator sits at roughly 4 GB of `phys_footprint` once
-booted, and that figure, not CPU, is what caps how many `run-maestro-ios`
-shards or `capture-screenshots-ios` jobs a macOS host can run at once before it
-starts swapping. [simslim](https://github.com/MobAI-App/simslim) (MIT, Go,
+Every iOS simulator mobile-ci touches — a leased device, a farm device or a
+developer's local simulator — runs slim. A stock simulator sits at roughly 4 GB of `phys_footprint` once
+booted, and that figure, not CPU, is what caps how many simulators a macOS host
+can run at once before it starts swapping. [simslim](https://github.com/MobAI-App/simslim) (MIT, Go,
 macOS only) disables ~170 launchd daemons a CI simulator never needs by writing
 persistent `launchctl disable` overrides into that one simulator's launchd
 database, cutting a booted simulator to roughly a quarter of the memory. The
@@ -269,10 +202,8 @@ other category `simslim profiles` lists — the set a UI-test or screenshot run
 actually depends on. It is the single source of truth for CI and local runs
 alike, so a consumer repo commits no profile of its own.
 
-**In CI, nothing calls simslim by hand.** `simulator-lease`,
-`run-maestro-ios` and `capture-screenshots-ios` resolve the special value
-`bundled` to that file, and the reusable workflows (`ios-maestro.yml`,
-`store-screenshots.yml`, `swift-ios.yml`) default `simulator-slim-profile` to
+**In CI, nothing calls simslim by hand.** `simulator-lease` resolves the special
+value `bundled` to that file, and `swift-ios.yml` defaults `simulator-slim-profile` to
 `bundled` and `simulator-slim-repair` to `'true'`, with `simslim-version` and
 `simslim-sha256` pinned here too. A caller passes none of them:
 
@@ -282,7 +213,7 @@ with:
     simulator-requires: push,universal-links
 ```
 
-`simulator-requires` stays per consumer — which features the flows depend on is
+`simulator-requires` stays per consumer — which features the tests depend on is
 a property of the app, not of the fleet. Override `simulator-slim-profile` with
 a repository-relative path to use a different profile, or set it to `''` to opt
 out of slimming entirely.
@@ -325,11 +256,9 @@ done
 
 Then set `simulator-slim-repair: 'false'` in the caller so a device that comes
 up stock fails the job as the provisioning defect it is, instead of paying for
-an in-job `simslim on` reboot on every shard.
+an in-job `simslim on` reboot on every job.
 
-**Leased simulators: slimmed before their first boot.** `run-maestro-ios` and
-`capture-screenshots-ios` boot a device the host already owns, so the loop
-above is the whole story for them. `simulator-lease` is different: it *creates*
+**Leased simulators: slimmed before their first boot.** `simulator-lease` *creates*
 the device it hands to `xcodebuild-test`, and a freshly created device is
 always stock. With `slim-profile` set (the default, `bundled`) and
 `slim-repair: 'true'` (the default), the lease is left shut down and
@@ -354,11 +283,10 @@ something other than slimming, and the clone is slimmed before first boot like
 a created one.
 
 **The fleet base image should still ship slim pool devices.** Measured inside
-pony-labirinth's live UI-test VM (`maestro` profile, 7 GiB), a stock leased
+pony-labirinth's live UI-test VM (`trf-macos-arm64-4x7`, 7 GiB), a stock leased
 simulator ran **272 RuntimeRoot processes** — Calendar, News and Maps widgets,
 a Safari extension, Spotlight — with about **2 GB in the compressor and ~14 MB
-of free pages**. The UI-test step there was memory-starved, not CPU-bound. The
-devices `run-maestro-ios` and `capture-screenshots-ios` boot by name keep their
+of free pages**. The UI-test step there was memory-starved, not CPU-bound. Devices keep their
 overrides across `simctl erase` (the store is keyed by UDID), so slimming them
 once in the image, with the loop above, holds for every job.
 
@@ -368,9 +296,9 @@ newly installed runtime — comes up stock with no error anywhere (`simctl
 erase` keeps the overrides, because simslim's store is keyed by UDID and lives
 outside the device) - the simulator just
 runs heavy again, and a pool that was sized for slim simulators starts
-swapping. `simslim verify` in the job catches exactly this and fails the shard
+swapping. `simslim verify` in the job catches exactly this and fails the job
 naming the drift; re-run the loop above on that host. `simulator-slim-repair`
-defaults to `'true'`, so the shard repairs itself in-job with `simslim on` (a
+defaults to `'true'`, so the job repairs itself in-job with `simslim on` (a
 shutdown and one boot) and the repair is paid once per device; set it to
 `'false'` on an image that ships slimmed devices to fail on drift instead.
 
@@ -379,7 +307,7 @@ push notifications (`apsd` in `store`), StoreKit testing (`storekitd`),
 universal links (`swcd` in `web`), and the Contacts/Photos/Calendar pickers
 stop working when their category is disabled. Keep a whole category with the
 profile's `except` array or one daemon with `keep`, and declare the features
-the flows depend on in `simulator-requires` (`simslim doctor --list` prints the
+the tests depend on in `simulator-requires` (`simslim doctor --list` prints the
 IDs) so a profile edit that drops one fails the job before the first flow
 instead of as a flaky assertion.
 
@@ -409,7 +337,7 @@ growth is a problem on a pool.
 Slimming the simulator is not the whole memory story on a 7 GiB guest. Xcode 26
 records a **video of every UI test** — `PreferredScreenCaptureFormat =
 screenRecording` in the generated `.xctestrun` — and the encoder that produces
-it, `VTEncoderXPCService`, was measured on a 4 CPU / 7 GiB `maestro` guest at
+it, `VTEncoderXPCService`, was measured on a 4 CPU / 7 GiB `trf-macos-arm64-4x7` guest at
 **~1 GB of RSS and a full core**: the single largest consumer in a run whose
 free memory never rose above ~50 MB, with 100+ attachments accumulated in the
 `.xcresult` after half an hour
@@ -461,12 +389,10 @@ with:
 ## Linux `linux-aarch64` Redroid hosts (Android)
 
 Google does not publish `linux-aarch64` builds of the Android emulator, NDK,
-or `cmake`, so `android-emulator` (`run-maestro-android` and the
-screenshot capture's `avd` driver; `android-maestro.yml`'s default) is
-structurally unusable on
-`linux-aarch64` self-hosted runners regardless of tuning.
-`run-maestro-android-redroid` (the `redroid` driver, selected explicitly
-together with `runner-labels` pointing at this shape) runs Android as a privileged Docker
+or `cmake`, so `android-emulator` (the screenshot capture's `avd` driver) is
+structurally unusable on `linux-aarch64` self-hosted runners regardless of tuning.
+`redroid-container` (the capture's `redroid` driver, selected explicitly
+together with `android-capture-runner-labels` pointing at this shape) runs Android as a privileged Docker
 container over the host's `binder_linux` kernel module instead, and needs
 none of the emulator's `linux-aarch64`-unavailable dependencies.
 
@@ -492,7 +418,7 @@ Host requirements:
   outright.
 - **`binder_linux` loadable.** The action itself runs
   `sudo modprobe binder_linux devices=binder,hwbinder,vndbinder` at the start
-  of every shard and treats a still-absent `/sys/module/binder_linux` after
+  of every job and treats a still-absent `/sys/module/binder_linux` after
   that as a hard failure — this is host-kernel provisioning a workflow run
   cannot safely self-heal, so provision it once per host instead:
 
@@ -511,18 +437,17 @@ Host requirements:
   should re-verify its own Redroid image tag before relying on this default.
 - **Privileged containers allowed.** Redroid requires `docker run
   --privileged`; this is a host-level Docker daemon policy decision, not
-  something either `android-maestro.yml` or `run-maestro-android-redroid`
-  can work around.
+  something `redroid-container` can work around.
 
 ### The Redroid prewarm manifest
 
-A cold shard pays for two slow things every time: a `docker pull` of the
+A cold capture job pays for two slow things every time: a `docker pull` of the
 Redroid image, and Android's own first-boot (which is much slower than a
 subsequent boot from an already-initialized `/data`). The prewarm manifest
-lets a host-side process pay for both once and hand every later shard a
+lets a host-side process pay for both once and hand every later job a
 warm starting point instead.
 
-`run-maestro-android-redroid`'s `prewarm-manifest-path` input (default
+`redroid-container`'s `prewarm-manifest-path` input (default
 `$HOME/.rnw-ci/android-emulator.json`, expanded against the runner's actual
 home directory) points at a JSON file with exactly two keys:
 
@@ -535,11 +460,11 @@ home directory) points at a JSON file with exactly two keys:
 
 - `image` — the Redroid image tag already pulled on this host.
 - `dataDir` — a `/data` volume that has already been booted once (with
-  animations disabled) and shut down cleanly, so a shard using it skips
+  animations disabled) and shut down cleanly, so a job using it skips
   first-boot entirely.
 
-When the manifest is present, the action copies `dataDir` into a per-shard
-directory under `RUNNER_TEMP` before mounting it (concurrent matrix shards
+When the manifest is present, the action copies `dataDir` into a per-job
+directory under `RUNNER_TEMP` before mounting it (concurrent matrix jobs
 must never share one live, writable `/data` — bind-mounting the same
 directory into more than one container at once corrupts it). When the
 manifest is absent or unreadable, the action falls back to an in-workflow
@@ -565,9 +490,9 @@ sudo docker pull "$image"
 sudo modprobe binder_linux devices=binder,hwbinder,vndbinder
 
 # Build the new data volume in a staging directory rather than data_dir
-# itself: a shard's cp -a reads dataDir from the manifest at any time,
+# itself: a job's cp -a reads dataDir from the manifest at any time,
 # including mid-refresh, so rm -rf'ing and re-booting data_dir in place would
-# hand a concurrent shard a partially-written or deleted tree. staging_dir is
+# hand a concurrent job a partially-written or deleted tree. staging_dir is
 # swapped into place atomically (same filesystem rename) only after a clean
 # boot and shutdown below.
 sudo rm -rf "$staging_dir"
@@ -589,7 +514,7 @@ port=$(sudo docker port redroid-prewarm 5555/tcp | head -n1 | sed -E 's/.*:([0-9
 # Tolerates failure: Redroid has not necessarily opened 5555 yet immediately
 # after `docker run -d` returns, and under set -e a hard failure here would
 # abort the script before the boot-wait loop below (which retries adb
-# connect every 5s) ever runs — the same race run-maestro-android-redroid's
+# connect every 5s) ever runs — the same race redroid-container's
 # own bring-up guards against.
 adb connect "localhost:$port" || true
 deadline=$((SECONDS + 600))
@@ -609,7 +534,7 @@ sudo docker stop redroid-prewarm
 
 # Atomically replace data_dir with the freshly booted-and-shut-down
 # staging_dir. Both directories are on the same filesystem, so each mv below
-# is a single rename syscall: a concurrent shard's cp -a either sees the
+# is a single rename syscall: a concurrent job's cp -a either sees the
 # complete old tree (via its already-open directory handle) or the complete
 # new one, never a half-written one.
 sudo rm -rf "$old_dir"
@@ -658,9 +583,9 @@ WantedBy=timers.target
 Set `User=` to the same account the GitHub Actions runner service runs as
 (replace `<runner-user>`). Without it, systemd runs the unit as root and
 writes the manifest to `/root/.rnw-ci/android-emulator.json` — a path
-`run-maestro-android-redroid`'s default `prewarm-manifest-path`
+`redroid-container`'s default `prewarm-manifest-path`
 (`$HOME/.rnw-ci/android-emulator.json`, expanded against the runner user's own
-home directory) never resolves to, so every shard would silently fall back to
+home directory) never resolves to, so every job would silently fall back to
 a cold `docker pull` and first boot instead of using the prewarmed data.
 
 Replace `<path-to-android-sdk>` in `Environment=PATH=` with the runner
@@ -670,7 +595,7 @@ user's actual Android SDK `platform-tools` directory (e.g.
 `HOME` set but does not inherit the runner user's login shell `PATH`, so
 `redroid-prewarm.sh`'s unqualified `adb` calls resolve to nothing and the
 timer unit fails outright — silently falling back to a cold `docker pull`
-and first boot on every subsequent shard, exactly the outcome prewarming
+and first boot on every subsequent job, exactly the outcome prewarming
 exists to avoid.
 
 ```bash
@@ -685,8 +610,8 @@ Wallet/Pay's `isReadyToPay()`, Maps, Firebase Cloud Messaging, Play
 Integrity attestation, Google Sign-In, and similar) will hang or fail on
 Redroid even though the container boots, `adb` connects, and the APK
 installs cleanly — the container-level plumbing this doc covers is not the
-problem. This was discovered against a real consumer app: every Maestro
-flow timed out at launch, blocked on the app's own
+problem. This was discovered against a real consumer app: every
+test timed out at launch, blocked on the app's own
 `Wallet.getPaymentsClient().isReadyToPay()` probe, which never resolves
 without GMS present in the image.
 
@@ -695,7 +620,7 @@ call can instead resolve immediately into Play Services' own fallback UI: a
 full-screen, unrecoverable system dialog ("… won't run without Google Play
 services, which are not supported by your device.") from a *different*
 package (`com.google.android.gms`), not the app under test. Because that
-dialog sits on top of and blocks the accessibility tree Maestro walks, every
+dialog sits on top of and blocks the accessibility tree a test walks, every
 subsequent assertion against the app's own elements times out — the
 observed symptom is `assertVisible` timing out on an app element that
 should obviously be rendered, which gives no hint that the real cause is a
@@ -708,7 +633,7 @@ first — see option 4 below for what that log line does and does not mean.
 Options for a consumer app that depends on GMS at runtime:
 
 1. **Provision a GMS-enabled Redroid image.** Layer `gapps`/`microG` into
-   the image and reference the resulting tag via `android-maestro.yml`'s
+   the image and reference the resulting tag via `store-screenshots.yml`'s
    `redroid-image` input. If a
    [prewarm manifest](#the-redroid-prewarm-manifest) is configured, note
    that `redroid-image` is only consulted on a manifest *miss* — on a hit,
@@ -723,7 +648,7 @@ Options for a consumer app that depends on GMS at runtime:
 2. **Switch to `android-driver: avd` with a `google_apis` system image**
    (`emulator-target: google_apis` is already the default for the `avd`
    driver), on a runner architecture Google actually ships an emulator for
-   — x86_64 Linux or macOS `arm64`. This is what `android-maestro.yml`
+   — x86_64 Linux or macOS `arm64`. This is what `store-screenshots.yml`
    defaults to; it is only unavailable if you have pointed the run at a
    `linux-aarch64` pool, where Google publishes no build of the Android
    emulator (see above) and `avd` cannot boot regardless of system image. See
@@ -731,12 +656,12 @@ Options for a consumer app that depends on GMS at runtime:
    for that host shape's requirements.
 3. **Gate GMS calls in the app's e2e build variant** (e.g. a build flavor
    or runtime flag that stubs `isReadyToPay()`-style calls under
-   Maestro/CI), so the flow under test never depends on GMS being present.
+   CI), so the test never depends on GMS being present.
 4. **Dismiss the "won't run without Google Play services" dialog at every
    entry point that invokes a GMS-dependent operation, not only the ones
-   a flow's own steps tap into.** A hang is not the only symptom: one
+   a test's own steps tap into.** A hang is not the only symptom: one
    consumer's own logcat showed, verbatim and reproducibly across every
-   shard, `GoogleApiAvailability: Google Play services is invalid.
+   run, `GoogleApiAvailability: Google Play services is invalid.
    Cannot recover.` — `ConnectionResult.SERVICE_INVALID`. Per Google's
    docs `SERVICE_INVALID` textbook-describes an *installed* package
    failing its own authenticity check, which is not literally what a
@@ -757,7 +682,7 @@ Options for a consumer app that depends on GMS at runtime:
    around — a client built in one place can invoke the actual
    GMS-dependent operation later or elsewhere, so place the dismissal
    after that invocation, not around wherever the client happens to be
-   constructed. Their flows guarded the one entry point a flow step
+   constructed. Their tests guarded the one entry point a test step
    drove directly (a button tap that shows the payment sheet, and
    invokes `loadPaymentData` right behind it) with a
    `tapOn: {text: "OK", optional: true}` right after the triggering step,
@@ -776,9 +701,8 @@ Options for a consumer app that depends on GMS at runtime:
 ## Linux x86_64 KVM hosts (Android, `avd` driver)
 
 The Redroid shape above is not the only supported Android host shape.
-The `avd` driver — `android-maestro.yml`'s default (`run-maestro-android`) and
-`store-screenshots.yml`'s `android-driver: avd` capture leg, both booting the
-emulator through the `android-emulator` action — is fully supported too, on
+The `avd` driver — `store-screenshots.yml`'s `android-driver: avd` capture leg,
+booting the emulator through the `android-emulator` action — is fully supported too, on
 an x86_64 Linux host with
 KVM — no `binder_linux`, no privileged container, no Docker daemon at all.
 This is the shape for a rootless-container runner pool (e.g. rootless
@@ -793,7 +717,7 @@ Host requirements:
   configuration is a prerequisite this doc cannot provision for you; verify
   it at the virtualization layer before touching the Android SDK.
 - **Android SDK with `emulator` plus a `google_apis` x86_64 system image**
-  matching `android-maestro.yml`'s `emulator-api-level`/`emulator-target`/
+  matching `store-screenshots.yml`'s `emulator-api-level`/`emulator-target`/
   `emulator-arch` inputs (e.g. `android-34`, `google_apis`, `x86_64`).
   Bake them into the runner image and point `ANDROID_SDK_ROOT`/`ANDROID_HOME`
   at that SDK: `android-emulator` then uses it as is, and adds only a missing
@@ -808,12 +732,8 @@ Host requirements:
   the emulator actually lives under, and exceeding it does not surface as an
   out-of-memory error: the kernel kills qemu — the largest RSS in the
   container — and the job continues against a device that has silently
-  vanished. Maestro then reports a refused adb connection and
-  `You have 0 devices connected, which is not enough to run 1 shards`, minutes
-  into a run whose earlier flows passed. Measured on a 4 vCPU / 8 GiB
-  container: the AVD alone sits near 4.2 GiB, and the emulator plus Maestro's
-  JVM plus the runner's own Node processes reached the 8 GiB ceiling partway
-  through a shard. `run-maestro-android` therefore sizes the guest from the
+  vanished, minutes into a run whose earlier cells passed. Measured on a 4 vCPU /
+  8 GiB container: the AVD alone sits near 4.2 GiB. `android-emulator` therefore sizes the guest from the
   container's own cgroup limit when `emulator-ram-size` is empty (the
   default): 256 MB of guest RAM per GiB of `memory.max`, clamped to
   1536–4096, and half the `cpu.max` quota as cores, clamped to 2–4 — 2048 MB
@@ -839,9 +759,8 @@ Host requirements:
   ```
 
   Then pass `emulator-slots-dir: /var/lib/mobile-ci/emulator-slots` to
-  `android-maestro.yml` (and to `store-screenshots.yml` when its capture leg
-  runs `android-driver: avd`, so screenshot emulators count against the same
-  cap). Each test shard holds an exclusive `flock` on one
+  `store-screenshots.yml` when its capture leg runs `android-driver: avd`. Each
+  capture job holds an exclusive `flock` on one
   slot from before the emulator boots until its shutdown step, so the number
   of `slot-*` files is the host's emulator cap across every job and
   repository. The lock lives in a detached `flock` holder process; if the job
@@ -868,33 +787,15 @@ guarantee):
 
 ### Choosing an Android driver
 
-`android-maestro.yml`'s `android-driver` input picks which of these two host
-shapes a run needs, and both are fully supported — the choice is per-fleet,
-not a migration from one to the other:
-
-- **`avd`** (default) needs the x86_64 KVM shape documented in this section,
-  which is also what `runner-labels` defaults to. A `google_apis` system image
-  carries real Google Play Services, at the cost of requiring the app under
-  test to build (or include) an x86_64 ABI.
-- **`redroid`** needs the `linux-aarch64` binder/privileged-docker shape
-  documented above, and runs Android natively on arm64 — required if your app
-  ships (or you must test) an arm64-only APK. Stock images carry no Google
-  Play Services (see [GMS](#google-play-services-gms) above). Selecting it
-  means overriding `runner-labels` too: it cannot run on the default pool.
-
-Set `android-driver` together with `runner-labels` (or the split
-`build-runner-labels`/`test-runner-labels`) from the consumer workflow to
-route a run at the host shape it needs — see
-[docs/workflows/android-maestro.md](workflows/android-maestro.md) for the
-full input reference.
-
-`store-screenshots.yml` has the same choice and default for its Android capture
-leg: `android-driver: avd` on the x86_64 KVM pool
-(`["self-hosted","trf-linux-amd64-4x8"]`). It uses the same `android-emulator`
-action as the Maestro shards. Redroid consumers must explicitly set both
-`android-driver: redroid` and `android-capture-runner-labels` naming the
-Redroid pool — see
+`store-screenshots.yml`'s `android-driver` input picks which of these two host
+shapes an Android capture needs: `avd` (the default) on the x86_64 KVM pool
+(`["self-hosted","trf-linux-amd64-4x8"]`), or `redroid` on the `linux-aarch64`
+binder/privileged-docker shape, which must also set
+`android-capture-runner-labels` to that pool. A `google_apis` system image carries
+real Google Play Services; stock Redroid images do not (see
+[GMS](#google-play-services-gms) above). See
 [docs/workflows/store-screenshots.md](workflows/store-screenshots.md#android-capture).
+`android-e2e.yml` boots nothing itself: its devices come from the simlock farm.
 
 ### EAS local builds (`native-publish`/`seed-native-cache`/`native-dev-release`)
 

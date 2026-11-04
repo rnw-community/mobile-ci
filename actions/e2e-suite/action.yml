@@ -1,7 +1,7 @@
 name: e2e-suite
 description: >-
     Runs a tester-army e2e suite against iOS simulators or Android emulators leased
-    from a simlock farm, as the e2e job of ios-maestro.yml and android-maestro.yml
+    from a simlock farm, as the e2e job of ios-e2e.yml and android-e2e.yml
     does: validates the call (mode validate), installs the e2e project and
     @mobile-ci/e2e-simlock, runs the suite and gates on its report (mode run), and
     releases the leases a killed run left behind (mode release).
@@ -13,14 +13,6 @@ inputs:
     platform:
         description: ios or android.
         required: true
-    test-framework:
-        description: The calling workflow's test-framework (validate).
-        required: false
-        default: e2e
-    driver:
-        description: The calling workflow's ios-driver or android-driver (validate).
-        required: false
-        default: ''
     abis:
         description: >-
             Comma-separated ABIs the app is built for: ios-simulator-archs, or the
@@ -67,10 +59,6 @@ inputs:
         description: agent-device session name, unique per platform, run, attempt and target (run).
         required: false
         default: ''
-    shadow:
-        description: true when the suite runs as a non-gating shadow (run).
-        required: false
-        default: 'false'
     tolerated:
         description: true when the target tolerates test failures (run).
         required: false
@@ -92,8 +80,6 @@ runs:
           shell: bash
           env:
               PLATFORM: ${{ inputs.platform }}
-              TEST_FRAMEWORK: ${{ inputs.test-framework }}
-              DRIVER: ${{ inputs.driver }}
               ABIS: ${{ inputs.abis }}
               E2E_DIR: ${{ inputs.e2e-dir }}
               E2E_WORKERS: ${{ inputs.workers }}
@@ -103,35 +89,27 @@ runs:
           run: |
               set -euo pipefail
               case "$PLATFORM" in
-                ios) farm_abi=arm64 devices=simulators abis_input=ios-simulator-archs local_driver=local driver_input=ios-driver ;;
-                android) farm_abi=arm64-v8a devices=emulators abis_input=android-abis local_driver=avd driver_input=android-driver ;;
+                ios) farm_abi=arm64 devices=simulators abis_input=ios-simulator-archs ;;
+                android) farm_abi=arm64-v8a devices=emulators abis_input=android-abis ;;
                 *)
                   echo "::error::e2e-suite platform must be 'ios' or 'android'; got '$PLATFORM'."
                   exit 1
                   ;;
               esac
-              case "$TEST_FRAMEWORK" in
-                maestro) exit 0 ;;
-                e2e | both) ;;
-                *)
-                  echo "::error::test-framework must be 'maestro', 'e2e' or 'both'; got '$TEST_FRAMEWORK'."
-                  exit 1
-                  ;;
-              esac
               fail=0
               if [ -z "$E2E_DIR" ]; then
-                echo "::error::test-framework '$TEST_FRAMEWORK' needs e2e-dir: the directory of the e2e project."
+                echo "::error::An e2e call needs e2e-dir: the directory of the e2e project."
                 fail=1
               fi
               case "$SIMLOCK_URL" in
                 http://* | https://*) ;;
                 *)
-                  echo "::error::test-framework '$TEST_FRAMEWORK' needs simlock-url, an http(s) URL of the simlock gateway or worker; got '$SIMLOCK_URL'."
+                  echo "::error::An e2e call needs simlock-url, an http(s) URL of the simlock gateway or worker; got '$SIMLOCK_URL'."
                   fail=1
                   ;;
               esac
               if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
-                echo "::error::test-framework '$TEST_FRAMEWORK' needs the simlock-token secret: pass it by name from the calling workflow."
+                echo "::error::An e2e call needs the simlock-token secret: pass it by name from the calling workflow."
                 fail=1
               fi
               for pair in "e2e-workers=$E2E_WORKERS" "e2e-retries=$E2E_RETRIES"; do
@@ -154,14 +132,10 @@ runs:
               case ",$ABIS," in
                 ,, | *",$farm_abi,"*) ;;
                 *)
-                  echo "::error::test-framework '$TEST_FRAMEWORK' runs the app on the farm's $farm_abi $devices; $abis_input '$ABIS' builds no $farm_abi."
+                  echo "::error::An e2e call runs the app on the farm's $farm_abi $devices; $abis_input '$ABIS' builds no $farm_abi."
                   fail=1
                   ;;
               esac
-              if [ "$TEST_FRAMEWORK" = e2e ] && [ "$DRIVER" != "$local_driver" ]; then
-                echo "::error::test-framework 'e2e' brings its own devices; $driver_input '$DRIVER' applies only to the Maestro suite."
-                fail=1
-              fi
               exit "$fail"
 
         - name: Install the e2e project
@@ -174,7 +148,7 @@ runs:
 
         - name: Install @mobile-ci/e2e-simlock
           if: inputs.mode == 'run'
-          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.10.2 # v4.10.2
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v5.0.0 # v5.0.0
           with:
               e2e-dir: ${{ inputs.e2e-dir }}
 
@@ -192,7 +166,6 @@ runs:
               E2E_RETRIES: ${{ inputs.retries }}
               E2E_SESSION: ${{ inputs.session }}
               E2E_TELEMETRY_DISABLED: '1'
-              E2E_SHADOW: ${{ inputs.shadow }}
               E2E_TOLERATED: ${{ inputs.tolerated }}
               TEST_TARGETS: ${{ inputs.targets }}
               SIMLOCK_URL: ${{ inputs.simlock-url }}
@@ -257,12 +230,9 @@ runs:
               fi
               if [ -n "$infrastructure" ]; then
                 if [ "$status" = 0 ]; then status=1; fi
-                if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
-                echo "::$level::Infrastructure failure: $infrastructure${run_said:+ The run said: ${run_said:0:500}}"
+                echo "::error::Infrastructure failure: $infrastructure${run_said:+ The run said: ${run_said:0:500}}"
               fi
-              if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
-                echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
-              elif [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ] && [ -z "$infrastructure" ]; then
+              if [ "$status" != 0 ] && [ "${E2E_TOLERATED:-false}" = true ] && [ -z "$infrastructure" ]; then
                 echo "::warning::E2E suite failed (exit $status) for a target with tolerateTestFailures; it does not gate this run."
                 status=0
               fi

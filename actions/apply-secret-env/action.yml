@@ -26,7 +26,7 @@ inputs:
   allow-multiline:
     description: >-
       Accept `KEY<<DELIMITER` entries. Set false where every value has to fit
-      on one line, such as a Maestro -e argument; `lines` is only written then.
+      on one line, such as a CLI argument; `lines` is only written then.
     required: false
     default: 'true'
   append-to:

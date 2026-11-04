@@ -10,8 +10,8 @@ mobile-ci's release tags.
 
 ## Install
 
-- **In CI** nothing to do: `ios-maestro.yml` and `android-maestro.yml`
-  (`test-framework: e2e|both`) and `store-screenshots.yml`'s e2e driver install it
+- **In CI** nothing to do: `ios-e2e.yml`, `android-e2e.yml` and `store-screenshots.yml`'s iOS capture
+  install it
   into `e2e-dir` after the project's own install, from the same tag as the
   workflow. A custom pipeline adds
   [`actions/e2e-simlock-install`](../../actions/e2e-simlock-install/README.md)
@@ -66,7 +66,7 @@ export default {
 The workflows set every variable above (`E2E_PLATFORM`, `E2E_SESSION`,
 `E2E_APP_ID`, `E2E_APP_PATH`, `E2E_WORKERS`, `E2E_RETRIES`, `SIMLOCK_URL`,
 `SIMLOCK_TOKEN`); see the workflow docs'
-[E2E suite on simlock](../../docs/workflows/ios-maestro.md#e2e-suite-on-simlock).
+[E2E suite on simlock](../../docs/workflows/ios-e2e.md#e2e-suite-on-simlock).
 An app with one platform names it instead of reading `E2E_PLATFORM`; a repository
 with several apps gives each its own target.
 
@@ -80,8 +80,8 @@ with several apps gives each its own target.
 | `device` | yes | | A model from the farm's catalog (`GET /v1/catalog?platform=…`). |
 | `osVersion` | no | the farm's default | iOS runtime or Android API level, e.g. `'34'`. |
 | `imageTag` | no | the farm's choice | Android system image tag, e.g. `'aosp_atd'`. |
-| `animations` | no | `'off'` | Android only. `'off'` sets the window, transition and animator scales to 0 once per lease, after the install, as mobile-ci's emulator action did for Maestro. A window still sliding in when a test starts reports a shifted viewport, and gestures then fail with `GESTURE_TRAJECTORY_OUT_OF_BOUNDS`. `'on'` keeps real animations, for lanes that record them. A failed call is a failed device setup: one swap, then the run fails. agent-device 0.21.36 has no iOS equivalent (no simulator reduce-motion setting), so the option throws on an iOS target. |
-| `iosScreenshotBackend` | no | agent-device's (simctl) | iOS only: `'runner'` takes every screenshot with the XCTest runner. Its stills have no Dynamic Island, like Maestro's, so baselines Maestro made still match; simctl draws the island into the framebuffer. Any other value, or the option on an Android target, throws. |
+| `animations` | no | `'off'` | Android only. `'off'` sets the window, transition and animator scales to 0 once per lease, after the install, A window still sliding in when a test starts reports a shifted viewport, and gestures then fail with `GESTURE_TRAJECTORY_OUT_OF_BOUNDS`. `'on'` keeps real animations, for lanes that record them. A failed call is a failed device setup: one swap, then the run fails. agent-device 0.21.36 has no iOS equivalent (no simulator reduce-motion setting), so the option throws on an iOS target. |
+| `iosScreenshotBackend` | no | agent-device's (simctl) | iOS only: `'runner'` takes every screenshot with the XCTest runner. Its stills have no Dynamic Island; simctl draws the island into the framebuffer. Any other value, or the option on an Android target, throws. |
 | `deviceMode` | no | the farm's (`slim`) | `'full'` leases an unslimmed device: Apple Pay and other PassKit/Wallet flows need one on iOS. `'slim'` or `'full'`; anything else throws. |
 | `extraApps` | no | `[]` | `.app`/`.apk` paths installed on every device after the app under test. |
 | `ttlMs` | no | `180000` | Lease TTL, renewed every third of it. |
@@ -150,7 +150,7 @@ Set `deviceMode` per target: give the payments target its own `simlockDevices({
   screenshots (every pixel 0), and its recordings fail with "Android recording
   artifact is not stable". Suites that read only the accessibility tree can keep
   the cheaper `osVersion: '34', imageTag: 'aosp_atd'`.
-- iOS stills compared with Maestro-made baselines: set `iosScreenshotBackend:
+- iOS stills compared with baselines without a Dynamic Island: set `iosScreenshotBackend:
   'runner'` (no Dynamic Island in the frame).
 - Recordings compared with baselines: set `videoTouches: false` on the `mobile()`
   engine. When a recording stops, agent-device redraws its touch indicator onto
@@ -159,19 +159,19 @@ Set `deviceMode` per target: give the payments target its own `simlockDevices({
 
 ### `@mobile-ci/e2e-simlock/steps`
 
-Maestro-compatible steps every Maestro port needs, for any app on either
+Steps a React Native suite keeps needing, for any app on either
 platform. App-specific steps stay in your suite.
 
 | Helper | What it does |
 | --- | --- |
-| `byId(screen, id)` | `getByTestId(id).first()`: React Native reports a testID on the host view and its wrapper, and Maestro takes the first. |
-| `scrollTo(screen, target, direction?, timeoutMs?)` | Maestro's `scrollUntilVisible`. `direction` is where the content goes (default `'down'`, timeout 20 s); an already visible target does not scroll. |
-| `tapUntil(target, next, { attempts?, timeoutMs? })` | Maestro's `retryTapIfNoChange`. It taps `target`, then awaits `next` (the state the tap leads to). It taps again only while `target` is still visible, i.e. the tap was swallowed while a screen settled, up to `attempts` taps (default 2). A target that is gone took the tap, so `next`'s failure is thrown as is. `timeoutMs` bounds each wait. |
-| `done({ screen, device })` | Maestro's `tapOn: Done`. It taps the keyboard's own Done key (a `key` with id `Done`), else an accessory bar's Done button, else dismisses the keyboard. Looking for the button alone makes `dismissKeyboard` hang for 30 s on a keyboard whose Done key is the key itself. |
-| `scrollToCentered({ screen }, id, { viewportHeight, bottomBandPx?, dragX? })` | Maestro's `centerElement`. It scrolls `id` into view and, if its centre is in the bottom band (default the bottom third), drags the content to bring it to the middle of the viewport, where a tab bar or floating button can't take the tap. The drag starts 40 pt above the band, never on the node, which may be under the overlay. `viewportHeight` is the device's, in `boundingBox()` points. |
+| `byId(screen, id)` | `getByTestId(id).first()`: React Native reports a testID on the host view and its wrapper, and this takes the first. |
+| `scrollTo(screen, target, direction?, timeoutMs?)` | Scrolls until visible. `direction` is where the content goes (default `'down'`, timeout 20 s); an already visible target does not scroll. |
+| `tapUntil(target, next, { attempts?, timeoutMs? })` | It taps `target`, then awaits `next` (the state the tap leads to). It taps again only while `target` is still visible, i.e. the tap was swallowed while a screen settled, up to `attempts` taps (default 2). A target that is gone took the tap, so `next`'s failure is thrown as is. `timeoutMs` bounds each wait. |
+| `done({ screen, device })` | It taps the keyboard's own Done key (a `key` with id `Done`), else an accessory bar's Done button, else dismisses the keyboard. Looking for the button alone makes `dismissKeyboard` hang for 30 s on a keyboard whose Done key is the key itself. |
+| `scrollToCentered({ screen }, id, { viewportHeight, bottomBandPx?, dragX? })` | It scrolls `id` into view and, if its centre is in the bottom band (default the bottom third), drags the content to bring it to the middle of the viewport, where a tab bar or floating button can't take the tap. The drag starts 40 pt above the band, never on the node, which may be under the overlay. `viewportHeight` is the device's, in `boundingBox()` points. |
 | `scrollToMiddle({ screen }, id, { viewportHeight, direction?, tolerancePx?, maxDragPx?, dragX? })` | The same when the node can sit under a header or a tab bar: it scrolls in either `direction` (default `'down'`), then drags at most `maxDragPx` (300) at a time from the middle of the viewport until the node's centre is within `tolerancePx` (150) of it. |
 | `scrollAbove({ screen }, id, element, { marginPx?, dragPx?, dragX? })` | Scrolls `id` into view, then drags `dragPx` (250) at a time, starting above `element` (a sticky footer), until the node's bottom edge is `marginPx` (8) above the element's top. An `element` not on screen has nothing to clear. |
-| `retry(retries, body)` | Maestro's `retry: { maxRetries }`. It runs `body(attempt)` up to `1 + retries` times, logs each failed attempt and rethrows the last failure. |
+| `retry(retries, body)` | It runs `body(attempt)` up to `1 + retries` times, logs each failed attempt and rethrows the last failure. |
 | `measureRecording(file)` | How much of a recording repeats itself: `{ frames, durationMs, repeatedFrames, longestStallFrames, longestStallMs }`. See [below](#detecting-a-stalled-recording). Needs `ffmpeg` and `ffprobe` on PATH. |
 
 The three scroll helpers share one drag. A drag the node did not follow for a quarter
