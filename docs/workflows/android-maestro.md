@@ -192,6 +192,7 @@ See [identity, test dependency and trust contracts](../e2e-result-cache.md).
 | Name | Description |
 | ---- | ----------- |
 | `result` | The `status` job's verdict: `passed`, `failed`, or `skipped` when no target package was affected. A skip is a green check, not a pass, so a notification job should not report it as one. |
+| `e2e-artifact-prefix` | The [e2e report artifact](#e2e-suite-on-simlock)'s name up to its target. Append the target's name instead of rebuilding it: `download-artifact` with a pattern that matches nothing does not fail. `e2e-android-<call-scope>--`, or `e2e-android-` without a `call-scope`. |
 
 Read it from a caller job that `needs:` this one. GitHub skips a dependent
 job when its need fails, so a notification job must opt in with `if:
@@ -224,7 +225,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -303,9 +304,8 @@ renews each lease, lists the lease ids in `.e2e/simlock-leases.json` and
 releases every lease at the end. A target whose flows need an unslimmed device (Apple Pay and other
 PassKit/Wallet flows on iOS) adds `deviceMode: 'full'`; the others keep the
 farm's slim default. The package [README](../../packages/e2e-simlock/README.md)
-has every option, the
-iOS-only `@mobile-ci/e2e-simlock/exec` fixture helpers, and the local
-install. Nothing in it assumes a particular app: no bundle id, no fixture layout,
+has every option, the `@mobile-ci/e2e-simlock/exec` fixture helpers (`simctl` on
+iOS, `adb` on Android), and the local install. Nothing in it assumes a particular app: no bundle id, no fixture layout,
 no helper app unless you pass one in `extraApps`.
 
 A cancelled run (a newer push, with `cancel-in-progress`) is killed before the
@@ -319,9 +319,22 @@ key, and a workspace's `node_modules` links make that walk slow or circular. The
 default `e2e-install-command` is npm; set it for pnpm or yarn (corepack is not
 enabled for you).
 
-The report under `e2e-dir/.e2e` is uploaded as
-`e2e-android<call-scope suffix>-<target>`, and its `summary.md` is added to the job
-summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
+The report under `e2e-dir/.e2e` is uploaded as `e2e-android-<target>`, or with a
+`call-scope` as `e2e-android-<call-scope>--<target>`, with two dashes: `call-scope:
+edge-fade` and target `foo` give `e2e-android-edge-fade--foo`. Read the name from the
+`e2e-artifact-prefix` output rather than rebuilding it:
+
+```yaml
+    metrics:
+        needs: e2e
+        runs-on: [self-hosted, trf-linux-amd64-2x4]
+        steps:
+            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: ${{ needs.e2e.outputs.e2e-artifact-prefix }}foo
+```
+
+Its `summary.md` is added to the job summary. An exit code of 0 is not enough to pass: the job clears `.e2e` before
 the run, then requires the run's `.e2e/report.json` (tester-army's report) with
 `status: passed`, at least one executed test and none failed, every count a
 whole number. A command that exits 0 without that evidence (no report, nothing
@@ -334,7 +347,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
@@ -373,7 +386,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.9.1/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.9.1 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.10.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.10.0 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
@@ -429,7 +442,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -675,7 +688,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -798,7 +811,8 @@ One call runs every target when turbo reports any of them affected. To skip
 unaffected packages instead, call the workflow once per package — and then give
 each call a distinct `call-scope`. It is folded into every name a call owns:
 the app and plan artifacts (`android-e2e-app-<call-scope>--<target>`,
-`android-e2e-plan-<call-scope>--<target>`), the Maestro artifacts, the
+`android-e2e-plan-<call-scope>--<target>`), the e2e report and Maestro artifacts
+(`maestro-android-<call-scope>--<target>-shard-<n>`), the
 native build's concurrency group and the workflow's own concurrency group, and the Redroid container name.
 Without it two calls in one run share those names: a duplicate artifact name
 fails the upload, and on a pull request the second call cancels the first. The
@@ -855,7 +869,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
 ```
 
 - `contents: read` — checkout.
@@ -889,7 +903,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
@@ -916,7 +930,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -960,7 +974,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.9.1 # v4.9.1
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.10.0 # v4.10.0
         with:
             force-label: e2e:force
 ```

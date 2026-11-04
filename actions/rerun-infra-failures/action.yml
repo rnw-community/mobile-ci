@@ -4,8 +4,9 @@ description: >-
   infrastructure (lost runner, exec format error, job not acquired, shutdown
   signal, disk full, network, timeout, missing command), classified from the
   jobs' annotations with the same rules as scripts/ci-metrics.py. A test
-  failure anywhere in the run means nothing is re-run. Call it from a
-  workflow_run job; it needs actions write and checks read.
+  failure anywhere in the run means nothing is re-run. A run a job timeout left
+  cancelled counts; one a user or concurrency cancelled does not. Call it from
+  a workflow_run job; it needs actions write and checks read.
 inputs:
   run-id:
     description: Workflow run id to inspect, e.g. github.event.workflow_run.id.

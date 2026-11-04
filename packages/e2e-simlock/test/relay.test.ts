@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { createServer, request, type Server } from 'node:http';
+import { createServer, request, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { after, before, describe, it } from 'node:test';
 
-import { localReply, rewritten, startBootRelay, upstreamPath, type BootRelay } from '../src/relay.ts';
+import { idempotentCommand, localReply, rewritten, startBootRelay, upstreamPath, type BootRelay } from '../src/relay.ts';
 
 import type { AddressInfo } from 'node:net';
 
@@ -92,6 +92,116 @@ describe('rewritten', () => {
     });
 });
 
+describe('idempotentCommand', () => {
+    const command = (name: string, positionals?: string[]) => ({ method: 'agent_device.command', params: { command: name, ...(positionals === undefined ? {} : { positionals }) } });
+
+    it('takes the commands that only read', () => {
+        for (const name of ['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps']) {
+            assert.equal(idempotentCommand(command(name)), true, name);
+        }
+        assert.equal(idempotentCommand({ ...command('snapshot'), method: 'agent-device.command' }), true);
+    });
+
+    it('never takes a command that changes app state, or anything that is not a command', () => {
+        for (const name of ['press', 'click', 'fill', 'type', 'swipe', 'scroll', 'open', 'close', 'record', 'install', 'batch', 'settings', 'devices', '']) {
+            assert.equal(idempotentCommand(command(name)), false, name);
+        }
+        assert.equal(idempotentCommand({ method: 'agent_device.lease.allocate', params: { command: 'snapshot' } }), false);
+        assert.equal(idempotentCommand({ params: { command: 'snapshot' } }), false);
+    });
+
+    it("takes a find only when its positionals can only name a read: find's default action is a click", () => {
+        for (const positionals of [['text', 'Welcome', 'exists'], ['text', 'Welcome', 'get', 'text'], ['Home', 'get', 'attrs'], ['label', 'Home', 'list'], ['id', 'Home', 'wait']]) {
+            assert.equal(idempotentCommand(command('find', positionals)), true, positionals.join(' '));
+        }
+        for (const positionals of [[], ['Home'], ['exists'], ['text', 'exists'], ['Home', 'exists'], ['text', 'Home'], ['text', 'Home', 'click'], ['Home', 'fill', 'exists'], ['text', 'Home', 'type', 'list'], ['text', 'tap', 'exists']]) {
+            assert.equal(idempotentCommand(command('find', positionals)), false, positionals.join(' '));
+        }
+    });
+});
+
+describe('a tunnel that cuts commands off', () => {
+    type Reply = (request: IncomingMessage, response: ServerResponse) => void;
+    const answer = (status: number, body: string): Reply => (_request, response) => {
+        response.writeHead(status, { 'content-type': 'text/plain' });
+        response.end(body);
+    };
+    const reset: Reply = request => request.socket.destroy();
+    const cutMidBody: Reply = (_request, response) => {
+        response.writeHead(200, { 'content-length': '500' });
+        response.write('{"jsonrpc":');
+        setImmediate(() => response.socket?.destroy());
+    };
+    const ok = answer(200, '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}');
+
+    /** Sends one command through a relay to a gateway answering with `replies` in order (the last repeats); returns the answer and the requests the gateway saw. */
+    async function command(name: string, replies: readonly Reply[], bodies: string[] = []) {
+        let seen = 0;
+        const gateway = createServer(async (request, response) => {
+            const reply = replies[Math.min(seen, replies.length - 1)]!;
+            seen += 1;
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) {
+                chunks.push(chunk as Buffer);
+            }
+            bodies.push(Buffer.concat(chunks).toString('utf8'));
+            reply(request, response);
+        });
+        await new Promise<void>(resolve => gateway.listen(0, '127.0.0.1', resolve));
+        const relay = await startBootRelay(`http://127.0.0.1:${(gateway.address() as AddressInfo).port}/v1/agent-device`);
+        try {
+            const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'agent_device.command', params: { command: name, meta: { requestId: 'req:1' } } });
+            const reply = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+                const out = request(`${relay.baseUrl}/rpc`, { method: 'POST' }, res => {
+                    const chunks: Buffer[] = [];
+                    res.on('data', (chunk: Buffer) => chunks.push(chunk));
+                    res.on('end', () => resolve({ status: res.statusCode!, body: Buffer.concat(chunks).toString('utf8') }));
+                });
+                out.on('error', reject);
+                out.end(body);
+            });
+            return { ...reply, requests: seen };
+        } finally {
+            await relay.close();
+            gateway.closeAllConnections();
+            await new Promise(resolve => gateway.close(resolve));
+        }
+    }
+
+    it('asks again for a read when the connection is reset, cut off mid-body, or answered by the tunnel instead of the farm', async () => {
+        for (const cut of [reset, cutMidBody, answer(524, 'error code: 524'), answer(502, '<html>Bad Gateway</html>'), answer(200, '<html>not json</html>')]) {
+            const reply = await command('snapshot', [cut, ok]);
+            assert.deepEqual([reply.status, reply.requests], [200, 2]);
+            assert.equal(JSON.parse(reply.body).result.ok, true);
+        }
+    });
+
+    it('names each attempt with its own request id: the daemon refuses an id still in flight, and the cut-off request may be', async () => {
+        const bodies: string[] = [];
+        await command('snapshot', [reset, reset, ok], bodies);
+        assert.deepEqual(bodies.map(body => JSON.parse(body).params.meta.requestId), ['req:1', 'req:1:r2', 'req:1:r3']);
+    });
+
+    it('fails closed after exactly three attempts', async () => {
+        const reply = await command('snapshot', [answer(524, 'error code: 524')]);
+        assert.equal(reply.requests, 3);
+        assert.equal(reply.status, 502);
+        assert.match(reply.body, /^simlock relay: .*snapshot.*524/);
+    });
+
+    it('never sends a mutating command twice', async () => {
+        for (const cut of [reset, answer(524, 'error code: 524')]) {
+            assert.equal((await command('press', [cut, ok])).requests, 1);
+        }
+    });
+
+    it("passes on what the farm itself answered: a JSON error, or an HTTP refusal", async () => {
+        const failed = '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"no such ref"}}';
+        assert.deepEqual(await command('snapshot', [answer(500, failed), ok]), { status: 500, body: failed, requests: 1 });
+        assert.deepEqual(await command('snapshot', [answer(401, 'unauthorized'), ok]), { status: 401, body: 'unauthorized', requests: 1 });
+    });
+});
+
 describe('startBootRelay', () => {
     let upstream: Server;
     let relay: BootRelay;
@@ -104,9 +214,10 @@ describe('startBootRelay', () => {
             for await (const chunk of req) {
                 chunks.push(chunk as Buffer);
             }
-            seen.push({ method: req.method!, url: req.url!, body: Buffer.concat(chunks).toString('utf8'), host: req.headers.host! });
+            const body = Buffer.concat(chunks).toString('utf8');
+            seen.push({ method: req.method!, url: req.url!, body, host: req.headers.host! });
             res.writeHead(200, { 'content-type': 'text/plain', connection: 'close' });
-            res.end(`upstream ${req.url}`);
+            res.end(body.includes('"method"') ? '{}' : `upstream ${req.url}`);
         });
         await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
         gatewayHost = `127.0.0.1:${(upstream.address() as AddressInfo).port}`;

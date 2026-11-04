@@ -2,6 +2,8 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { request as httpsRequest } from 'node:https';
 import { pipeline } from 'node:stream/promises';
 
+import { acrossTunnel } from './tunnel.ts';
+
 import type { AddressInfo } from 'node:net';
 
 /**
@@ -11,8 +13,8 @@ import type { AddressInfo } from 'node:net';
  * `close` would end the simlock lease and wipe the device mid-run (the engine closes a slot's
  * session on a worker respawn), so the relay answers that too; the provider releases the lease
  * at the end of the run. A lease allocate gains the target's `deviceMode`, and an iOS screenshot the
- * runner capture backend, when the target asks for them (`rewritten`). Every other request, uploads
- * included, passes through untouched.
+ * runner capture backend, when the target asks for them (`rewritten`). A read the tunnel cuts off is asked
+ * again (`idempotentCommand`). Every other request, uploads included, passes through untouched.
  */
 export interface BootRelay {
     readonly baseUrl: string;
@@ -117,6 +119,45 @@ export function rewritten(rpc: Rpc, rewrites: RelayRewrites): Rpc | undefined {
     return undefined;
 }
 
+const READS = new Set(['snapshot', 'screenshot', 'get', 'is', 'wait', 'appstate', 'apps']);
+const FIND_ACTS = new Set(['click', 'press', 'tap', 'focus', 'fill', 'type']);
+
+/**
+ * A command that only reads, so sending it twice changes nothing. `find` clicks unless a positional names another
+ * action, and which positional is the action depends on the locator form, so it counts only when three or more
+ * positionals end in a read action and none could be a mutating one; a read that looks otherwise is just not retried.
+ */
+export function idempotentCommand(rpc: Rpc): boolean {
+    const command = rpc.params?.command;
+    if (typeof rpc.method !== 'string' || !COMMAND.test(rpc.method) || typeof command !== 'string') {
+        return false;
+    }
+    if (command !== 'find') {
+        return READS.has(command);
+    }
+    const positionals: unknown[] = Array.isArray(rpc.params?.positionals) ? rpc.params.positionals : [];
+    return positionals.length >= 3 && /^(exists|list|wait|text|attrs)$/.test(String(positionals.at(-1))) && !positionals.some(word => FIND_ACTS.has(String(word)));
+}
+
+/** The tunnel's answer in place of the farm's: anything but JSON on a 200 or a 5xx. agent-device reports it as `Invalid daemon response`. */
+function cutOff(status: number, body: Buffer): boolean {
+    if (status !== 200 && status < 500) {
+        return false;
+    }
+    try {
+        JSON.parse(body.toString('utf8'));
+        return false;
+    } catch {
+        return true;
+    }
+}
+
+/** The daemon refuses a request id still in flight, and a request the tunnel cut off may still be running on the farm. */
+function withAttempt(rpc: Rpc, attempt: number): Rpc {
+    const meta = rpc.params?.meta as { requestId?: unknown } | undefined;
+    return typeof meta?.requestId === 'string' ? { ...rpc, params: { ...rpc.params, meta: { ...meta, requestId: `${meta.requestId}:r${attempt}` } } } : rpc;
+}
+
 export async function startBootRelay(upstreamBaseUrl: string, rewrites: RelayRewrites = {}): Promise<BootRelay> {
     const upstream = new URL(upstreamBaseUrl.endsWith('/') ? upstreamBaseUrl : `${upstreamBaseUrl}/`);
     const send = upstream.protocol === 'https:' ? httpsRequest : httpRequest;
@@ -187,7 +228,22 @@ export async function startBootRelay(upstreamBaseUrl: string, rewrites: RelayRew
                 return;
             }
             const changed = rewritten(rpc, rewrites);
-            const reply = await forward(incoming, path, changed === undefined ? raw : Buffer.from(JSON.stringify(changed)));
+            const sent = changed ?? rpc;
+            const body = changed === undefined ? raw : Buffer.from(JSON.stringify(changed));
+            const name = String(rpc.params?.command);
+            const answered = async (attempt: number) => {
+                const reply = await forward(incoming, path, attempt === 1 ? body : Buffer.from(JSON.stringify(withAttempt(sent, attempt))));
+                if (cutOff(reply.status, reply.body!)) {
+                    throw new Error(`${name} answered ${reply.status}: ${reply.body!.toString('utf8').slice(0, 200)}`);
+                }
+                return reply;
+            };
+            const reply = idempotentCommand(rpc)
+                ? await acrossTunnel(answered, cause => {
+                      console.error(`[relay] the tunnel cut off ${name}: ${String(cause)}`);
+                      return true;
+                  })
+                : await forward(incoming, path, body);
             outgoing.writeHead(reply.status, endToEnd(reply.headers));
             outgoing.end(reply.body);
         } catch (cause) {

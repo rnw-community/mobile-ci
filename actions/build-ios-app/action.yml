@@ -94,7 +94,23 @@ runs:
         if [ "$EXPO_USE_PRECOMPILED_MODULES_ENABLED" = 'true' ]; then
           export EXPO_USE_PRECOMPILED_MODULES=1
         fi
-        pod install --repo-update
+        pod_log="$(mktemp)"
+        trap 'rm -f "$pod_log"' EXIT
+        for attempt in 1 2; do
+          pod_status=0
+          pod install --repo-update 2>&1 | tee "$pod_log" || pod_status=$?
+          if [ "$pod_status" -eq 0 ]; then
+            exit 0
+          fi
+          if ! grep -q 'path name contains null byte' "$pod_log"; then
+            exit "$pod_status"
+          fi
+          if [ "$attempt" -eq 2 ]; then
+            echo "::error::Infrastructure failure: pod install failed twice with CocoaPods' intermittent 'path name contains null byte' (CocoaPods/CocoaPods#12798)."
+            exit "$pod_status"
+          fi
+          echo "::warning::pod install hit CocoaPods' intermittent 'path name contains null byte' (CocoaPods/CocoaPods#12798); retrying once."
+        done
 
     - name: Save CocoaPods cache
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
