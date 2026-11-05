@@ -203,6 +203,22 @@ else
     pass_case
 fi
 
+case_start 'a plan that will not repack asks only whether the base exists'
+if grep -qF 'metadata-only: ${{ !inputs.repack }}' "$REPO_ROOT/.github/workflows/expo-base-plan.yml"; then
+    pass_case
+else
+    fail_case 'the plan pulls a base it never reads'
+fi
+
+case_start 'a baked SDK skips the repack SDK restore, setup and save, and must carry the build-tools the repack needs'
+plan="$REPO_ROOT/.github/workflows/expo-base-plan.yml"
+if grep -qF 'REQUIRED_PACKAGES: build-tools;${{ inputs.android-build-tools-version }}' "$plan" \
+    && [ "$(grep -c "steps.sdk-baked.outputs.ready != 'true'" "$plan")" = 3 ]; then
+    pass_case
+else
+    fail_case 'the repack SDK path is not wired to the baked SDK'
+fi
+
 case_start 'the repack resolves the same build-tools version the plan job installs (#163)'
 problem="$(PLAN_WORKFLOW="$PLAN_WORKFLOW" python3 - <<'PYTHON'
 import os
