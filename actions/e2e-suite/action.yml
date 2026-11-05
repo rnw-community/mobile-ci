@@ -174,7 +174,7 @@ runs:
 
         - name: Install @mobile-ci/e2e-simlock
           if: inputs.mode == 'run'
-          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.11.0 # v4.11.0
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.11.1 # v4.11.1
           with:
               e2e-dir: ${{ inputs.e2e-dir }}
 
