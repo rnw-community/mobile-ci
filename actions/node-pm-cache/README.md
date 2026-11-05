@@ -71,7 +71,7 @@ Call it before installing; the calling workflow saves after installing (see
 - uses: actions/setup-node@... # no `cache:`
 - name: Restore package manager cache
   id: pm-cache
-  uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.10.2 # v4.10.2
+  uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.0 # v4.11.0
   with:
       package-manager: pnpm
 - run: pnpm install --frozen-lockfile
