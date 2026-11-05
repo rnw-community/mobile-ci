@@ -185,6 +185,10 @@ To move a caller to `@v5.0.0`:
 5. Runner label: pass `trf-macos-arm64-4x7` (the shape label) rather than
    `macos-maestro` where a fleet advertises it.
 
+6. The Android native key moves once, because `build-android-app` changed. Run the
+   warm-up on the default branch right after bumping the pin, or the first Android
+   run compiles natively.
+
 Removed actions: `run-maestro-ios`, `run-maestro-android`, `run-maestro-android-redroid`,
 `run-maestro-device-cloud`, `maestro-flow-timings`, `capture-screenshots-ios`, and
 `scripts/maestro/`. `redroid-container` stays for an Android store capture.
