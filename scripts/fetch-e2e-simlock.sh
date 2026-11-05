@@ -2,7 +2,7 @@
 # Installs @mobile-ci/e2e-simlock (packages/e2e-simlock) into an e2e project's
 # node_modules. Run it to fetch the package at a pinned mobile-ci tag or commit:
 #
-#   fetch-e2e-simlock.sh v4.11.0 e2e
+#   fetch-e2e-simlock.sh v4.11.1 e2e
 #
 # or source it for e2e_simlock_install, which the e2e-simlock-install action
 # calls with the package from its own ref. Run it after the project's own
