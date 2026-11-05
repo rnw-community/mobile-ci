@@ -61,11 +61,29 @@ on:
                 type: string
                 required: false
                 default: '20.5.1'
+            project-id:
+                description: >-
+                    EAS project id (UUID), with project-slug: eas-cli then runs against a generated minimal
+                    app.json holding only these two values, so the app's own app config is never evaluated and
+                    the job needs nothing but eas.json and eas-cli. For an app config that requires installed
+                    packages, in place of install-command. Empty (default) evaluates the app config in app-dir.
+                type: string
+                required: false
+                default: ''
+            project-slug:
+                description: >-
+                    Slug of the EAS project, which eas-cli compares with the project id's. Required with
+                    project-id.
+                type: string
+                required: false
+                default: ''
             install-command:
                 description: >-
                     Command run at the repository root before eas-cli, for an app config that requires
-                    installed packages (e.g. `corepack enable && pnpm install --frozen-lockfile`). Empty
-                    installs nothing, enough for app.json or a dependency-free app.config.js.
+                    installed packages and project-id is not set (e.g. `corepack enable && pnpm install
+                    --frozen-lockfile`). A non-empty command checks out the whole repository. Empty (default)
+                    installs nothing and checks out only eas.json and the app config files of app-dir, enough
+                    for app.json or a dependency-free app.config.js.
                 type: string
                 required: false
                 default: ''
@@ -102,10 +120,48 @@ jobs:
         permissions:
             contents: read
         steps:
+            - name: Resolve checkout paths
+              id: paths
+              shell: bash
+              env:
+                  APP_DIR: ${{ inputs.app-dir }}
+                  PROJECT_ID: ${{ inputs.project-id }}
+                  INSTALL_COMMAND: ${{ inputs.install-command }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$INSTALL_COMMAND" ]; then
+                    echo 'sparse=' >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  dir="${APP_DIR#./}"
+                  dir="${dir%/}"
+                  dir="${dir:-.}"
+                  case "/$dir/" in
+                    */../*|*[\\*?\[\]!#]*|//*)
+                      echo "::error::app-dir must be a plain repository-relative directory; got '$APP_DIR'."
+                      exit 1
+                      ;;
+                  esac
+                  prefix=''
+                  [ "$dir" = . ] || prefix="/$dir"
+                  {
+                    echo 'sparse<<EOF_SPARSE'
+                    echo "$prefix/eas.json"
+                    if [ -z "$PROJECT_ID" ]; then
+                      echo "$prefix/app.json"
+                      echo "$prefix/app.config.*"
+                      echo "$prefix/package.json"
+                    fi
+                    echo 'EOF_SPARSE'
+                  } >> "$GITHUB_OUTPUT"
+
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
                   persist-credentials: false
+                  filter: blob:none
+                  sparse-checkout: ${{ steps.paths.outputs.sparse }}
+                  sparse-checkout-cone-mode: false
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -132,6 +188,8 @@ jobs:
                   DRY_RUN: ${{ inputs.dry-run }}
                   DELETE_SUBSCRIBED_BUILDS: ${{ inputs.delete-subscribed-builds }}
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
+                  PROJECT_ID: ${{ inputs.project-id }}
+                  PROJECT_SLUG: ${{ inputs.project-slug }}
               run: |
                   set -euo pipefail
                   fail() {
@@ -161,6 +219,27 @@ jobs:
                       || fail "channel-template must resolve to a channel name of [A-Za-z0-9._/-] starting with a letter or digit; got '$pr_channel'."
                   $pr_channel
                   EOF
+                  fi
+
+                  if [ -n "$PROJECT_ID$PROJECT_SLUG" ]; then
+                    [ -n "$PROJECT_ID" ] || fail "project-id is required with project-slug."
+                    [ -n "$PROJECT_SLUG" ] || fail "project-slug is required with project-id."
+                    grep -Eq '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$' <<EOF || fail "project-id must be an EAS project id (a UUID); got '$PROJECT_ID'."
+                  $PROJECT_ID
+                  EOF
+                    grep -Eq '^[0-9A-Za-z_-]+$' <<EOF || fail "project-slug must be letters, digits, '-' or '_'; got '$PROJECT_SLUG'."
+                  $PROJECT_SLUG
+                  EOF
+                    project_dir="$RUNNER_TEMP/eas-project"
+                    rm -rf "$project_dir"
+                    mkdir -p "$project_dir"
+                    if [ -f eas.json ]; then
+                      cp eas.json "$project_dir/eas.json"
+                    fi
+                    jq -n --arg id "$PROJECT_ID" --arg slug "$PROJECT_SLUG" \
+                      '{expo: {name: $slug, slug: $slug, extra: {eas: {projectId: $id}}}}' > "$project_dir/app.json"
+                    jq -n --arg slug "$PROJECT_SLUG" '{name: $slug, version: "0.0.0", private: true}' > "$project_dir/package.json"
+                    cd "$project_dir"
                   fi
 
                   protected=()

@@ -102,7 +102,7 @@ for fx in "$FIXTURES"/*/; do
     ws="$(new_workflow_workspace "$CLEANUP_YML" cleanup 'Delete EAS channels')"
     fixture_stub "$ws" "$fx"
     run_step "$ws" EXPO_TOKEN=token CHANNEL_TEMPLATE="$channel-missing" PR_NUMBER=1 SWEEP_PATTERN='no-such-channel-*' \
-        MAX_AGE_DAYS=30 PROTECTED_CHANNELS=production DRY_RUN=false DELETE_SUBSCRIBED_BUILDS=false EAS_CLI_VERSION="$version"
+        MAX_AGE_DAYS=30 PROTECTED_CHANNELS=production DRY_RUN=false DELETE_SUBSCRIBED_BUILDS=false EAS_CLI_VERSION="$version" PROJECT_ID='' PROJECT_SLUG=''
     if assert_equals 0 "$STEP_STATUS" "status ($(tail -3 "$ws/log"))" \
         && assert_contains "$(cat "$ws/log")" "No channel $channel-missing" 'absent channel' \
         && assert_contains "$(cat "$ws/log")" "No branch $channel-missing" 'absent branch' \
