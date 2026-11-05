@@ -2,7 +2,7 @@
 
 Turns a secret holding newline-separated `KEY=VALUE` entries into masked job
 environment variables. It is the one parser behind every secret env this repo's
-workflows take — `build-secrets-env` and `maestro-secrets-env` on the e2e,
+workflows take — `build-secrets-env` and `e2e-secrets-env` on the e2e,
 warm-up and screenshot workflows, and `EAS_EXTRA_ENV` on `native-publish.yml`,
 `native-dev-release.yml` and `store-screenshots.yml`.
 
@@ -47,8 +47,7 @@ the job log; prefer a base64-encoded single line where you can.
 
 With `allow-multiline: false` a multi-line entry fails the step, and the
 `lines` output carries `append-to` followed by every entry as one `KEY=VALUE`
-line — that is how `maestro-secrets-env` is merged into `maestro-env`, whose
-values become Maestro `-e` arguments. The merged list carries secret values, so
+line. The merged list carries secret values, so
 it is only usable inside the same job: GitHub drops a job output that contains a
 masked value, and it must never be one.
 
@@ -68,7 +67,7 @@ masked value, and it must never be one.
 | -------- | ----------- |
 | `digest` | SHA-256 over each entry's name and the SHA-256 of its value, in order; empty when `env` is empty. Never a value. |
 | `lines`  | `append-to` followed by every entry as one `KEY=VALUE` line. Written only when `allow-multiline` is `false`. Carries secret values — use it inside this job only. |
-| `names`  | Newline-separated entry names, never values — for a step that scrubs the values out of files before an upload (`run-maestro-*`'s `redact-env-names`). |
+| `names`  | Newline-separated entry names, never values — for a step that scrubs the values out of files before an upload. |
 | `count`  | Number of entries parsed. |
 
 ## Example
@@ -76,7 +75,7 @@ masked value, and it must never be one.
 ```yaml
 - name: Apply build-secrets-env
   id: build-secrets
-  uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+  uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
   with:
       env: ${{ secrets.build-secrets-env }}
       label: build-secrets-env

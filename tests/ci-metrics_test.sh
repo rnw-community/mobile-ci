@@ -38,14 +38,14 @@ runs = [
 ]
 put('/repos/o/r/actions/runs?created=2026-10-01&per_page=100&page=1', {'workflow_runs': runs})
 put('/repos/o/r/actions/runs/1/attempts/1/jobs?per_page=100&page=1', {'jobs': [
-    job(11, 'iOS Maestro E2E / Plan the build strategy / Plan (e2e)', 'success', '10:00', '10:02', '10:05', 'trf-linux-amd64-2x4'),
-    job(12, 'iOS Maestro E2E / Build (e2e)', 'success', '10:05', '10:15', '10:35', 'macos-maestro'),
-    job(13, 'iOS Maestro E2E / Maestro shard 0 (e2e)', 'failure', '10:35', '10:40', '11:00', 'macos-maestro'),
+    job(11, 'iOS E2E / Plan the build strategy / Plan (e2e)', 'success', '10:00', '10:02', '10:05', 'trf-linux-amd64-2x4'),
+    job(12, 'iOS E2E / Build (e2e)', 'success', '10:05', '10:15', '10:35', 'trf-macos-arm64-4x7'),
+    job(13, 'iOS E2E / E2E suite (e2e)', 'failure', '10:35', '10:40', '11:00', 'trf-macos-arm64-4x7'),
 ]})
 put('/repos/o/r/actions/runs/2/attempts/1/jobs?per_page=100&page=1', {'jobs': [
-    job(21, 'iOS Maestro E2E / Plan the build strategy / Plan (e2e)', 'success', '12:00', '12:01', '12:03', 'trf-linux-amd64-2x4'),
-    job(22, 'iOS Maestro E2E / Build (e2e)', 'skipped', '12:03', None, '12:03', 'macos-maestro'),
-    job(23, 'iOS Maestro E2E / Maestro shard 0 (e2e)', 'failure', '12:03', '12:05', '12:15', 'macos-maestro'),
+    job(21, 'iOS E2E / Plan the build strategy / Plan (e2e)', 'success', '12:00', '12:01', '12:03', 'trf-linux-amd64-2x4'),
+    job(22, 'iOS E2E / Build (e2e)', 'skipped', '12:03', None, '12:03', 'trf-macos-arm64-4x7'),
+    job(23, 'iOS E2E / E2E suite (e2e)', 'failure', '12:03', '12:05', '12:15', 'trf-macos-arm64-4x7'),
 ]})
 put('/repos/o/r/actions/runs/3/attempts/1/jobs?per_page=100&page=1', {'jobs': [
     job(31, 'Seed', 'success', '13:00', '13:01', '13:02', 'trf-linux-amd64-2x4'),
@@ -55,7 +55,7 @@ put('/repos/o/r/actions/runs/5/attempts/1/jobs?per_page=100&page=1', {'jobs': [
     job(52, 'Required CI', 'failure', '09:00', '09:00', '09:01', 'ubuntu-latest'),
     job(53, 'Lint', 'failure', '09:00', '09:00', '09:02', 'ubuntu-latest'),
 ]})
-put('/repos/o/r/check-runs/52/annotations', [{'message': 'Required jobs did not succeed: ios-maestro', 'title': ''}])
+put('/repos/o/r/check-runs/52/annotations', [{'message': 'Required jobs did not succeed: ios-e2e', 'title': ''}])
 put('/repos/o/r/check-runs/53/annotations', [{'message': 'Process completed with exit code 127.', 'title': ''}])
 put('/repos/o/r/check-runs/13/annotations', [{'message': 'Assertion is false: "Home" is visible', 'title': ''}])
 put('/repos/o/r/check-runs/23/annotations', [{'message': 'The self-hosted runner lost communication with the server.', 'title': ''}])
@@ -81,14 +81,14 @@ fi
 
 case_start 'queue time is grouped by pool and counts only jobs a runner picked up'
 if assert_equals '3 1.0 2.0' "$(value '.results["o/r"].queue["trf-linux-amd64-2x4"] | "\(.jobs) \(.p50) \(.p90)"')" 'linux pool' \
-    && assert_equals '3 5.0 10.0' "$(value '.results["o/r"].queue["macos-maestro"] | "\(.jobs) \(.p50) \(.p90)"')" 'mac pool (skipped build excluded)'; then
+    && assert_equals '3 5.0 10.0' "$(value '.results["o/r"].queue["trf-macos-arm64-4x7"] | "\(.jobs) \(.p50) \(.p90)"')" 'mac pool (skipped build excluded)'; then
     pass_case
 fi
 
 case_start 'native share counts head commits whose lane ran a native build'
 assert_equals 0.5 "$(value '.results["o/r"].nativeShare')" 'native share' && pass_case
 
-case_start 'shard durations come from Maestro shard jobs'
+case_start 'suite durations come from E2E suite jobs'
 assert_equals '2 10.0 20.0 20.0' "$(value '.results["o/r"].shards | "\(.jobs) \(.p50) \(.p90) \(.max)"')" shards && pass_case
 
 case_start 'a lost runner and a missing command are infra, an assertion is a test failure, a roll-up is not counted'

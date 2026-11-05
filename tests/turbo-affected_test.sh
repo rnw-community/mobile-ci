@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# turbo-affected gates both Maestro workflows. Issue #186: an unset
+# turbo-affected gates both e2e workflows. Issue #186: an unset
 # target-packages used to make every pull request affected; the package names
 # are now read from each target's appDir, and every way that read can go wrong
 # still fails closed.
@@ -720,7 +720,7 @@ assert_equals 1 "$STEP_STATUS" 'detect exit status' \
     && assert_contains "$(cat "$dir/log")" '::error::' 'error' \
     && pass_case
 
-for workflow in ios-maestro android-maestro; do
+for workflow in ios-e2e android-e2e; do
     case_start "$workflow.yml passes force-label to turbo-affected and reports a forced run"
     if failure="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON' 2>&1
 import os
@@ -753,7 +753,7 @@ PYTHON
     fi
 done
 
-for workflow in ios-maestro android-maestro; do
+for workflow in ios-e2e android-e2e; do
     case_start "$workflow.yml hands its targets to turbo-affected and is always affected off pull requests or when the content cache owns detection"
     wiring="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON'
 import os

@@ -19,37 +19,37 @@ spec.loader.exec_module(metrics)
 print(sum(1 for line in sys.stdin if line.startswith("::error::") and metrics.ROLLUP.search(line)))' < "$1"
 }
 
-report_maestro() {
+report_e2e() {
     workspace="$(new_workflow_workspace "$REPO_ROOT/.github/workflows/$1.yml" status Report)"
     shift
     run_step "$workspace" DETECT_RESULT=success DETECT_AFFECTED=true DETECT_FORCED=false FORCE_LABEL=e2e \
         PLAN_RESULT=success NATIVE_TARGETS='[]' BUILD_RESULT=skipped TEST_RESULT=success "$@"
 }
 
-for workflow in ios-maestro android-maestro; do
+for workflow in ios-e2e android-e2e; do
     case_start "$workflow: a passing suite reports result=passed"
-    report_maestro "$workflow"
+    report_e2e "$workflow"
     if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
         && assert_equals passed "$(step_output "$workspace" result)" 'result'; then
         pass_case
     fi
 
     case_start "$workflow: a forced passing suite reports result=passed"
-    report_maestro "$workflow" DETECT_FORCED=true
+    report_e2e "$workflow" DETECT_FORCED=true
     if assert_equals 0 "$STEP_STATUS" 'status' \
         && assert_equals passed "$(step_output "$workspace" result)" 'result'; then
         pass_case
     fi
 
     case_start "$workflow: an unaffected run reports result=skipped, not passed"
-    report_maestro "$workflow" DETECT_AFFECTED=false TEST_RESULT=skipped
+    report_e2e "$workflow" DETECT_AFFECTED=false TEST_RESULT=skipped
     if assert_equals 0 "$STEP_STATUS" 'status' \
         && assert_equals skipped "$(step_output "$workspace" result)" 'result'; then
         pass_case
     fi
 
     case_start "$workflow: a failed suite reports result=failed"
-    report_maestro "$workflow" TEST_RESULT=failure
+    report_e2e "$workflow" TEST_RESULT=failure
     if assert_equals 1 "$STEP_STATUS" 'status' \
         && assert_equals failed "$(step_output "$workspace" result)" 'result'; then
         pass_case
@@ -58,10 +58,10 @@ for workflow in ios-maestro android-maestro; do
     case_start "$workflow: a failed job is reported as the roll-up annotation the infra retry skips"
     statuses=''
     for failed in DETECT_RESULT PLAN_RESULT BUILD_RESULT TEST_RESULT; do
-        report_maestro "$workflow" "$failed=failure"
+        report_e2e "$workflow" "$failed=failure"
         statuses="$statuses$STEP_STATUS$(rollup_lines "$workspace/log")"
     done
-    report_maestro "$workflow" NATIVE_TARGETS='["app"]'
+    report_e2e "$workflow" NATIVE_TARGETS='["app"]'
     own="$STEP_STATUS$(rollup_lines "$workspace/log")"
     if assert_equals 11111111 "$statuses" 'status and roll-up annotations per failed job' \
         && assert_equals 10 "$own" "the status job's own skipped-build verdict"; then
@@ -69,33 +69,21 @@ for workflow in ios-maestro android-maestro; do
     fi
 
     case_start "$workflow: a failed detection reports result=failed"
-    report_maestro "$workflow" DETECT_RESULT=failure
+    report_e2e "$workflow" DETECT_RESULT=failure
     if assert_equals 1 "$STEP_STATUS" 'status' \
         && assert_equals failed "$(step_output "$workspace" result)" 'result'; then
         pass_case
     fi
 done
 
-# test-framework: e2e gates on the e2e job; both gates on Maestro, plus the e2e
-# job only with e2e-required. ios-maestro and android-maestro alike.
-for workflow in ios-maestro android-maestro; do
-    check_framework() {
-        label="$1" want_status="$2" want_result="$3"
-        shift 3
-        case_start "$workflow: $label"
-        report_maestro "$workflow" "$@"
-        if assert_equals "$want_status" "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
-            && assert_equals "$want_result" "$(step_output "$workspace" result)" 'result'; then
-            pass_case
-        fi
-    }
-    check_framework 'e2e: a passing e2e suite passes' 0 passed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=success
-    check_framework 'e2e: a failed e2e suite fails' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=failure
-    check_framework 'e2e: a skipped e2e job is not a pass' 1 failed TEST_FRAMEWORK=e2e TEST_RESULT=skipped E2E_RESULT=skipped
-    check_framework 'both: a failed shadow e2e suite does not gate' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=false
-    check_framework 'both: a failed required e2e suite fails' 1 failed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=failure E2E_REQUIRED=true
-    check_framework 'both: a failed Maestro suite fails even with e2e green' 1 failed TEST_FRAMEWORK=both TEST_RESULT=failure E2E_RESULT=success E2E_REQUIRED=true
-    check_framework 'both: both green passes' 0 passed TEST_FRAMEWORK=both TEST_RESULT=success E2E_RESULT=success E2E_REQUIRED=true
+# The e2e job gates. ios-e2e and android-e2e alike.
+for workflow in ios-e2e android-e2e; do
+    case_start "$workflow: a skipped e2e job is not a pass"
+    report_e2e "$workflow" TEST_RESULT=skipped
+    if assert_equals 1 "$STEP_STATUS" "status ($(cat "$workspace/log"))" \
+        && assert_equals failed "$(step_output "$workspace" result)" 'result'; then
+        pass_case
+    fi
 done
 
 report_screenshots() {
@@ -134,7 +122,7 @@ import sys
 import yaml
 
 problems = []
-for name in ('ios-maestro', 'android-maestro', 'store-screenshots'):
+for name in ('ios-e2e', 'android-e2e', 'store-screenshots'):
     workflow = yaml.safe_load(open(f"{os.environ['REPO']}/.github/workflows/{name}.yml", encoding='utf-8'))
     output = workflow[True]['workflow_call'].get('outputs', {}).get('result', {})
     if 'jobs.status.outputs.result' not in str(output.get('value', '')):

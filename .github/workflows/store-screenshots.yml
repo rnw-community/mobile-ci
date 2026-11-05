@@ -53,24 +53,11 @@ on:
                 type: string
                 required: false
                 default: ''
-            capture-runner-labels:
-                description: >-
-                    JSON array of self-hosted runner labels for the iOS capture job
-                    only (the Android capture job uses
-                    android-capture-runner-labels instead - a deliberate asymmetry,
-                    since the two pools can never overlap). Falls back to
-                    runner-labels when empty. Must resolve to a macOS pool that can run
-                    the ios-simulator-archs slice regardless of the build pool's
-                    architecture, same constraint as ios-maestro.yml's
-                    test-runner-labels.
-                type: string
-                required: false
-                default: ''
             ios-simulator-archs:
                 description: >-
                     Architecture of the Simulator `.app` the build produces: `arm64`
                     (default) or `x86_64`, nothing else. Same contract as
-                    ios-maestro.yml's ios-simulator-archs: `x86_64` gets its own
+                    ios-e2e.yml's ios-simulator-archs: `x86_64` gets its own
                     native key and runs under Rosetta 2 on an arm64 capture host.
                 type: string
                 required: false
@@ -86,7 +73,7 @@ on:
                 description: >-
                     Single iOS build target JSON object: {name, appDir, workspace,
                     scheme, appId, prebuildCommand}. prebuildCommand may be an empty
-                    string. Singular (unlike ios-maestro.yml's targets array) - store
+                    string. Singular (unlike ios-e2e.yml's targets array) - store
                     screenshots are captured for one app configuration per run.
                     Required when capture-manifest has iOS entries (renamed from
                     'target' in v1.6.0).
@@ -97,7 +84,7 @@ on:
                 description: >-
                     Single Android build target JSON object: {name, appDir, appId,
                     prebuildCommand} - the same per-target shape as
-                    android-maestro.yml's targets entries. Required when
+                    android-e2e.yml's targets entries. Required when
                     capture-manifest has Android entries.
                 type: string
                 required: false
@@ -110,11 +97,7 @@ on:
                     take an exact simulator name as "device" plus an optional
                     "orientation"; Android entries take a free-form "device" label
                     (slug only) plus required integer "width"/"height"/"density" and
-                    must be portrait. A "locales" item may be a plain string or an
-                    object {"id": "<locale>", "env": {"KEY": "VALUE"}} whose env is
-                    passed as extra Maestro -e pairs to that locale's cells only
-                    (reserved names APP_ID/LOCALE/APPEARANCE fail closed). locales x
-                    appearances x scenes are looped inside each job, reusing one
+                    must be portrait. locales x appearances x scenes are looped inside each job, reusing one
                     booted simulator/container per entry. See
                     docs/workflows/store-screenshots.md for the full schema and
                     validation rules. Required, but loadable from config-path
@@ -122,28 +105,17 @@ on:
                 type: string
                 required: false
                 default: ''
-            capture-mode:
-                description: >-
-                    'flows' (default; legacy Maestro flow discovery under
-                    screenshots-dir, iOS-only) or 'direct' (scene-manifest-driven via
-                    capture-scenes, required for Android entries). Any other value
-                    fails closed. Empty resolves to the config-path value, else
-                    'flows'.
-                type: string
-                required: false
-                default: ''
             capture-scenes:
                 description: >-
                     JSON array of scene objects shared across all capture-manifest
-                    entries, each {"name", and exactly one of "deepLink" or "flow",
+                    entries, each {"name", and exactly one of "deepLink" or "test",
                     "readySelector" (required alongside "deepLink" for any scene that
-                    applies to ios, rejected alongside "flow"), optional
+                    applies to ios, rejected alongside "test"), optional
                     "settleSeconds", "platforms", "locales", "appearances"}.
-                    readySelector is a Maestro selector - a non-empty string matched
+                    readySelector is a selector - a non-empty string matched
                     as text/regex, or {"id": "<testID>"} - that must become visible
                     before a deep-link cell is captured, proving the app rather than
-                    SpringBoard owns the screen. Required when capture-mode is
-                    'direct'; fails closed if set in 'flows' mode.
+                    SpringBoard owns the screen. Required.
                 type: string
                 required: false
                 default: ''
@@ -152,7 +124,7 @@ on:
                     Optional consumer-owned shell command run once per
                     locale x appearance x scene cell, from the repo root, with the
                     app installed and terminated/force-stopped, before the scene's
-                    launch. Direct mode only; fails closed if set in 'flows' mode.
+                    launch. Android only; fails closed with iOS entries.
                     See docs/workflows/store-screenshots.md#seed-hook-contract for
                     the environment it runs with.
                 type: string
@@ -163,41 +135,6 @@ on:
                     Seconds (integer 0-120) between a deep-link launch and its
                     screenshot in direct mode; a scene's own settleSeconds overrides
                     it per scene. Empty resolves to the config-path value, else '3'.
-                type: string
-                required: false
-                default: ''
-            launch-settle-seconds:
-                description: >-
-                    iOS only. Seconds (integer 0-120) between simctl launch and the
-                    deep-link simctl openurl in direct mode, distinct from
-                    settle-seconds (the openurl-to-screenshot wait). Empty resolves
-                    to the config-path value, else '0'.
-                type: string
-                required: false
-                default: ''
-            deeplink-confirm-title:
-                description: >-
-                    iOS only, direct mode only. Maestro text pattern (regex)
-                    matching the title of the "Open in <app>?" confirmation sheet
-                    SpringBoard presents for a `simctl openurl` deep link. Every
-                    deep-link capture taps the sheet away when it is on screen and
-                    then asserts, fail-closed, that it is gone - a capture taken
-                    while it is up is a screenshot of SpringBoard, not of the app.
-                    The default matches an English-language simulator (the
-                    CoreSimulator default); a simulator whose own language is not
-                    English must set both this and deeplink-confirm-button, or
-                    the capture fails closed. The trailing '\?' keeps the default
-                    anchored to the sheet's own title rather than to app content
-                    that merely starts with 'Open in'. Empty resolves to the
-                    config-path value, else 'Open in .*\?'.
-                type: string
-                required: false
-                default: ''
-            deeplink-confirm-button:
-                description: >-
-                    iOS only, direct mode only. Label of the confirm button on the
-                    open-confirmation sheet matched by deeplink-confirm-title.
-                    Empty resolves to the config-path value, else 'Open'.
                 type: string
                 required: false
                 default: ''
@@ -222,81 +159,11 @@ on:
                 type: string
                 required: false
                 default: ''
-            screenshots-dir:
-                description: >-
-                    Directory (relative to repo root) whose top-level files are the
-                    runnable screenshot scenes in 'flows' mode (subdirectories -
-                    subflows, fixtures - are never searched), and the directory
-                    flow-backed capture-scenes entries resolve against in 'direct'
-                    mode. Required in 'flows' mode, and in 'direct' mode when any
-                    scene declares a flow.
-                type: string
-                required: false
-                default: ''
-            scenes-name-pattern:
-                type: string
-                required: false
-                default: '*.flow.yaml'
-            scenes-exclude-pattern:
-                description: >-
-                    Optional find ! -name globs excluding matched scenes by
-                    basename (flows mode only): a comma- and/or
-                    newline-separated list, entries trimmed and empty entries
-                    ignored; a glob containing a comma is not supported.
-                type: string
-                required: false
-                default: ''
-            maestro-env:
-                description: >-
-                    Newline-separated KEY=VALUE pairs, each passed as an additional
-                    -e KEY=VALUE argument to every `maestro test` invocation, on top
-                    of the always-passed APP_ID/LOCALE/APPEARANCE. Rejects (fails
-                    closed) any line without '=', any name not matching
-                    ^[A-Za-z_][A-Za-z0-9_]*$, and any reserved APP_ID/LOCALE/
-                    APPEARANCE override. Per-locale values belong in the manifest's
-                    {"id","env"} locale objects instead.
-                type: string
-                required: false
-                default: ''
-            maestro-config:
-                description: >-
-                    Path to the consumer's Maestro workspace config (config.yaml),
-                    passed as --config to every `maestro test` invocation. Maestro only
-                    auto-discovers a workspace config.yaml when it is pointed at a
-                    directory, and the actions below always pass individual flow files,
-                    so without this input a workspace config is silently ignored.
-                    Relative paths resolve against the job's working directory. Fails
-                    closed when set to a path that is not a file.
-                type: string
-                required: false
-                default: ''
-            maestro-version:
-                description: >-
-                    Pinned Maestro CLI version, still used by flow-backed scenes in
-                    either capture mode (and installed lazily in direct mode, only on
-                    capture jobs whose scene set contains a flow).
-                type: string
-                required: false
-                default: '2.8.0'
-            test-framework:
-                description: >-
-                    What drives the iOS capture. 'maestro' (default) captures on a
-                    macOS runner: deep-link scenes through simctl, flow scenes
-                    through Maestro. 'e2e' runs the consumer's tester-army e2e
-                    project from a Linux runner against simulators leased from
-                    simlock instead: it gets every cell of the device's locales x
-                    appearances x scenes as a plan file and writes each one to the
-                    same raw/ios/<device-slug>/<locale>/<appearance>/<scene>.png
-                    path (see docs/workflows/store-screenshots.md#e2e-capture).
-                    Needs capture-mode direct and no Android entries.
-                type: string
-                required: false
-                default: maestro
             e2e-dir:
                 description: >-
                     Directory, relative to the repository root, holding the e2e
                     project: its package.json, lockfile and e2e config. Required
-                    with test-framework e2e.
+                    with iOS entries.
                 type: string
                 required: false
                 default: ''
@@ -348,64 +215,7 @@ on:
             simlock-url:
                 description: >-
                     Base URL of the simlock gateway or worker the e2e capture leases
-                    simulators from (SIMLOCK_URL). Required with test-framework e2e.
-                type: string
-                required: false
-                default: ''
-            simslim-version:
-                description: >-
-                    Pinned simslim CLI version, consulted only when
-                    simulator-slim-profile or simulator-requires is set. A matching
-                    `simslim` already on PATH is reused; otherwise the macos-arm64
-                    release asset is downloaded from MobAI-App/simslim and checked
-                    against simslim-sha256 (preinstall on the host to avoid it).
-                type: string
-                required: false
-                default: '0.12.2'
-            simslim-sha256:
-                description: >-
-                    SHA-256 of the simslim-v<simslim-version>-macos-arm64.tar.gz release
-                    asset (upstream publishes no checksum file). The cached tarball is
-                    re-hashed against it on every job before the binary is extracted
-                    into a job-private directory. Empty refuses to download; only a
-                    preinstalled `simslim` of the exact version then satisfies the job.
-                    Bump together with simslim-version.
-                type: string
-                required: false
-                default: 'b47302da6fb83b8b4c21f4fdd61507469770c07b0ff07fd1f48207bda4270887'
-            simulator-slim-profile:
-                description: >-
-                    `bundled` (the default) uses mobile-ci's own `profiles/ci.json` -
-                    App Store, push and StoreKit plus Safari and universal-link
-                    services stay on, every other category is disabled - so a consumer
-                    commits no profile of its own; a repository-relative path uses that
-                    profile instead. Every booted capture simulator is checked with
-                    `simslim verify --profile` before the app is installed - an erased,
-                    recreated, or new-runtime device comes up stock and quietly heavy.
-                    Apply the profile on the host at provisioning time
-                    (`simslim on <udid> --profile <path>`, see
-                    docs/self-hosted-runners.md) so no capture job pays for a repair
-                    reboot. Empty opts out of slimming entirely.
-                type: string
-                required: false
-                default: bundled
-            simulator-slim-repair:
-                description: >-
-                    'true' (the default) re-applies the profile in-job with `simslim
-                    on` (reboots the simulator) when simulator-slim-profile reports
-                    drift, then verifies again. Set it to 'false' once the host image
-                    ships slimmed devices, so drift surfaces as a provisioning defect
-                    instead of being paid for on every capture job.
-                type: string
-                required: false
-                default: 'true'
-            simulator-requires:
-                description: >-
-                    Comma-separated simslim feature IDs the flows depend on (e.g.
-                    'push,universal-links'; `simslim doctor --list`). When set,
-                    `simslim doctor --requires` runs against the booted simulator and
-                    fails the capture job if slimming disabled a daemon behind any of them.
-                    Empty (default) skips the check.
+                    simulators from (SIMLOCK_URL). Required with iOS entries.
                 type: string
                 required: false
                 default: ''
@@ -759,7 +569,7 @@ on:
                     avd driver only. Host directory of fleet-provisioned slot-*
                     files capping how many emulators the capture runner's host
                     boots at once, across every job and repository - the same
-                    directory android-maestro.yml's emulator-slots-dir names.
+                    directory other emulator jobs on that host take.
                     Empty (default) takes no slot. A missing or empty directory
                     fails the capture job.
                 type: string
@@ -943,19 +753,17 @@ on:
                     native key, so rotating one moves the key, and the warm-up must
                     be passed the same secret or the two never agree on a key.
                 required: false
-            maestro-secrets-env:
+            e2e-secrets-env:
                 description: >-
-                    Masked newline-separated KEY=VALUE entries appended to
-                    maestro-env (one line each, no multi-line values) and exported
-                    to the capture job's environment for seed-command. Only
-                    screenshots are uploaded from a capture job. For test-user
-                    passwords and the credentials a seed hook uses to prepare the
-                    backend it captures against.
+                    Masked newline-separated KEY=VALUE entries (one line each, no
+                    multi-line values) exported to the capture jobs' environment.
+                    For test-user passwords and the credentials a capture uses to
+                    prepare the backend under test.
                 required: false
             simlock-token:
                 description: >-
                     simlock agent token (SIMLOCK_TOKEN) the e2e capture leases
-                    simulators with. Required with test-framework e2e; reaches only
+                    simulators with. Required with iOS entries; reaches only
                     the e2e capture job's run and lease-release steps.
                 required: false
         outputs:
@@ -965,7 +773,7 @@ on:
                 value: ${{ jobs.status.outputs.result }}
 
 concurrency:
-    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -983,16 +791,10 @@ jobs:
             ios-target: ${{ steps.resolve.outputs.ios-target }}
             android-target: ${{ steps.resolve.outputs.android-target }}
             capture-scenes: ${{ steps.resolve.outputs.capture-scenes }}
-            screenshots-dir: ${{ steps.resolve.outputs.screenshots-dir }}
             seed-command: ${{ steps.resolve.outputs.seed-command }}
             settle-seconds: ${{ steps.resolve.outputs.settle-seconds }}
-            launch-settle-seconds: ${{ steps.resolve.outputs.launch-settle-seconds }}
-            deeplink-confirm-title: ${{ steps.resolve.outputs.deeplink-confirm-title }}
-            deeplink-confirm-button: ${{ steps.resolve.outputs.deeplink-confirm-button }}
             status-bar-override: ${{ steps.resolve.outputs.status-bar-override }}
             apple-screenshot-slots: ${{ steps.resolve.outputs.apple-screenshot-slots }}
-            maestro-env: ${{ steps.resolve.outputs.maestro-env }}
-            maestro-config: ${{ steps.resolve.outputs.maestro-config }}
             build-env: ${{ steps.resolve.outputs.build-env }}
             install-command: ${{ steps.resolve.outputs.install-command }}
             build-command: ${{ steps.resolve.outputs.build-command }}
@@ -1021,15 +823,13 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v5.0.0 # v5.0.0
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
-                      ["ios-target","android-target","capture-manifest","capture-mode","capture-scenes",
-                      "screenshots-dir","seed-command","settle-seconds","launch-settle-seconds",
-                      "deeplink-confirm-title",
-                      "deeplink-confirm-button","status-bar-override",
-                      "apple-screenshot-slots","maestro-env","maestro-config","build-env",
+                      ["ios-target","android-target","capture-manifest","capture-scenes",
+                      "seed-command","settle-seconds","status-bar-override",
+                      "apple-screenshot-slots","build-env",
                       "install-command","build-command",
                       "android-gradle-task","android-gradle-args","build-strategy",
                       "rct-use-prebuilt-rncore","rct-use-rn-dep","upload-screenshots","upload-command",
@@ -1044,18 +844,11 @@ jobs:
                   IN_IOS_TARGET: ${{ inputs.ios-target }}
                   IN_ANDROID_TARGET: ${{ inputs.android-target }}
                   IN_CAPTURE_MANIFEST: ${{ inputs.capture-manifest }}
-                  IN_CAPTURE_MODE: ${{ inputs.capture-mode }}
                   IN_CAPTURE_SCENES: ${{ inputs.capture-scenes }}
-                  IN_SCREENSHOTS_DIR: ${{ inputs.screenshots-dir }}
                   IN_SEED_COMMAND: ${{ inputs.seed-command }}
                   IN_SETTLE_SECONDS: ${{ inputs.settle-seconds }}
-                  IN_LAUNCH_SETTLE_SECONDS: ${{ inputs.launch-settle-seconds }}
-                  IN_DEEPLINK_CONFIRM_TITLE: ${{ inputs.deeplink-confirm-title }}
-                  IN_DEEPLINK_CONFIRM_BUTTON: ${{ inputs.deeplink-confirm-button }}
                   IN_STATUS_BAR_OVERRIDE: ${{ inputs.status-bar-override }}
                   IN_APPLE_SCREENSHOT_SLOTS: ${{ inputs.apple-screenshot-slots }}
-                  IN_MAESTRO_ENV: ${{ inputs.maestro-env }}
-                  IN_MAESTRO_CONFIG: ${{ inputs.maestro-config }}
                   IN_BUILD_ENV: ${{ inputs.build-env }}
                   IN_INSTALL_COMMAND: ${{ inputs.install-command }}
                   IN_BUILD_COMMAND: ${{ inputs.build-command }}
@@ -1097,18 +890,11 @@ jobs:
                     'ios-target|json|' \
                     'android-target|json|' \
                     'capture-manifest|json|' \
-                    'capture-mode|string|flows' \
                     'capture-scenes|json|' \
-                    'screenshots-dir|string|' \
                     'seed-command|string|' \
                     'settle-seconds|string|3' \
-                    'launch-settle-seconds|string|0' \
-                    'deeplink-confirm-title|string|Open in .*\?' \
-                    'deeplink-confirm-button|string|Open' \
                     'status-bar-override|bool|true' \
                     'apple-screenshot-slots|json|' \
-                    'maestro-env|string|' \
-                    'maestro-config|string|' \
                     'build-env|string|' \
                     'install-command|string|yarn install --immutable' \
                     'build-command|string|' \
@@ -1197,15 +983,11 @@ jobs:
               shell: bash
               env:
                   CAPTURE_MANIFEST: ${{ steps.resolve.outputs.capture-manifest }}
-                  CAPTURE_MODE: ${{ steps.resolve.outputs.capture-mode }}
                   CAPTURE_SCENES: ${{ steps.resolve.outputs.capture-scenes }}
                   SEED_COMMAND: ${{ steps.resolve.outputs.seed-command }}
                   SETTLE_SECONDS: ${{ steps.resolve.outputs.settle-seconds }}
-                  LAUNCH_SETTLE_SECONDS: ${{ steps.resolve.outputs.launch-settle-seconds }}
-                  SCREENSHOTS_DIR: ${{ steps.resolve.outputs.screenshots-dir }}
                   IOS_TARGET: ${{ steps.resolve.outputs.ios-target }}
                   ANDROID_TARGET: ${{ steps.resolve.outputs.android-target }}
-                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
                   E2E_DIR: ${{ inputs.e2e-dir }}
                   SIMLOCK_URL: ${{ inputs.simlock-url }}
                   HAS_SIMLOCK_TOKEN: ${{ secrets.simlock-token != '' }}
@@ -1215,60 +997,9 @@ jobs:
                     echo "::error::capture-manifest is required; pass it as a workflow input or set it in the config-path file."
                     exit 1
                   fi
-                  case "$CAPTURE_MODE" in
-                    flows|direct) ;;
-                    *)
-                      echo "::error::capture-mode '$CAPTURE_MODE' must be 'flows' or 'direct'."
-                      exit 1
-                      ;;
-                  esac
-                  case "$TEST_FRAMEWORK" in
-                    maestro|e2e) ;;
-                    *)
-                      echo "::error::test-framework '$TEST_FRAMEWORK' must be 'maestro' or 'e2e'."
-                      exit 1
-                      ;;
-                  esac
-                  if [ "$TEST_FRAMEWORK" = 'e2e' ]; then
-                    if [ "$CAPTURE_MODE" != 'direct' ]; then
-                      echo "::error::test-framework 'e2e' needs capture-mode 'direct': the e2e project captures the capture-scenes cells, and flows mode discovers Maestro flows instead."
-                      exit 1
-                    fi
-                    if [ -z "$E2E_DIR" ]; then
-                      echo "::error::test-framework 'e2e' needs e2e-dir, the directory of the e2e project that captures the cells."
-                      exit 1
-                    fi
-                    if [ -z "$SIMLOCK_URL" ]; then
-                      echo "::error::test-framework 'e2e' needs simlock-url, the simlock gateway the capture leases simulators from."
-                      exit 1
-                    fi
-                    if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
-                      echo "::error::test-framework 'e2e' needs the simlock-token secret: pass it by name from the calling workflow."
-                      exit 1
-                    fi
-                    if [ -n "$SEED_COMMAND" ]; then
-                      echo "::error::seed-command is set but test-framework is 'e2e'; the seed hook runs on a macOS capture host, which an e2e capture has none of, so it would be silently ignored. Seed each cell from the e2e project instead."
-                      exit 1
-                    fi
-                  fi
-                  if [ "$CAPTURE_MODE" = 'flows' ]; then
-                    if [ -n "$CAPTURE_SCENES" ]; then
-                      echo "::error::capture-scenes is set but capture-mode is 'flows'; the scene manifest is only consumed in capture-mode: direct, so it would be silently ignored."
-                      exit 1
-                    fi
-                    if [ -n "$SEED_COMMAND" ]; then
-                      echo "::error::seed-command is set but capture-mode is 'flows'; the seed hook only runs in capture-mode: direct, so it would be silently ignored."
-                      exit 1
-                    fi
-                    if [ -z "$SCREENSHOTS_DIR" ]; then
-                      echo "::error::screenshots-dir is required when capture-mode is 'flows' (it is the scene-discovery root)."
-                      exit 1
-                    fi
-                  else
-                    if [ -z "$CAPTURE_SCENES" ]; then
-                      echo "::error::capture-scenes is required when capture-mode is 'direct'."
-                      exit 1
-                    fi
+                  if [ -z "$CAPTURE_SCENES" ]; then
+                    echo "::error::capture-scenes is required."
+                    exit 1
                   fi
                   case "$SETTLE_SECONDS" in
                     ''|*[!0-9]*)
@@ -1278,16 +1009,6 @@ jobs:
                   esac
                   if [ "$SETTLE_SECONDS" -gt 120 ]; then
                     echo "::error::settle-seconds '$SETTLE_SECONDS' must be at most 120."
-                    exit 1
-                  fi
-                  case "$LAUNCH_SETTLE_SECONDS" in
-                    ''|*[!0-9]*)
-                      echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be a non-negative integer."
-                      exit 1
-                      ;;
-                  esac
-                  if [ "$LAUNCH_SETTLE_SECONDS" -gt 120 ]; then
-                    echo "::error::launch-settle-seconds '$LAUNCH_SETTLE_SECONDS' must be at most 120."
                     exit 1
                   fi
                   if ! jq empty <<< "$CAPTURE_MANIFEST" 2>/dev/null; then
@@ -1313,48 +1034,6 @@ jobs:
                     echo "::error::capture-manifest has entries whose 'platform' is neither 'ios' nor 'android' (default when omitted: 'ios'): $invalid_platform"
                     exit 1
                   fi
-                  # A locale item may be a plain string or an {"id","env"}
-                  # object carrying per-locale Maestro env. Validate the
-                  # object shape and per-entry id uniqueness, then normalize
-                  # every entry to string locales plus a localeEnv map before
-                  # the platform split so the capture jobs can pass
-                  # join(matrix.entry.locales, ",") through unchanged.
-                  invalid_locale_objects=$(jq -c '
-                      [.[]
-                       | .device as $d
-                       | .locales
-                       | to_entries[]
-                       | select(
-                           (.value | type == "object") and
-                           (
-                             (((.value.id // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not))) or
-                             (.value | has("env") and (
-                               ((.env | type) != "object") or
-                               ([.env | keys[] | select((test("^[A-Za-z_][A-Za-z0-9_]*$") | not) or . == "APP_ID" or . == "LOCALE" or . == "APPEARANCE")] | length > 0) or
-                               ([.env[] | select(type != "string")] | length > 0)
-                             ))
-                           )
-                         )
-                       | {device: $d, localeIndex: .key}
-                      ]' <<< "$normalized")
-                  if [ "$invalid_locale_objects" != '[]' ]; then
-                    echo "::error::capture-manifest has invalid locale objects (each needs an 'id' matching ^[A-Za-z0-9_-]+\$ and an optional 'env' object whose keys match ^[A-Za-z_][A-Za-z0-9_]*\$, are not the reserved APP_ID/LOCALE/APPEARANCE, and map to string values): $invalid_locale_objects"
-                    exit 1
-                  fi
-                  duplicate_locales=$(jq -c '
-                      [.[]
-                       | .device as $d
-                       | ([.locales[] | if type == "object" then .id else . end]
-                          | group_by(.)
-                          | map(select(length > 1)[0])) as $dups
-                       | select(($dups | length) > 0)
-                       | {device: $d, duplicates: $dups}
-                      ]' <<< "$normalized")
-                  if [ "$duplicate_locales" != '[]' ]; then
-                    echo "::error::capture-manifest has entries listing the same locale more than once; give each locale one entry and put its env in the object form instead: $duplicate_locales"
-                    exit 1
-                  fi
-                  normalized=$(jq -c '[.[] | .localeEnv = (([.locales[] | if type == "object" then {(.id): (.env // {})} else {} end]) | add // {}) | .locales = [.locales[] | if type == "object" then .id else . end]]' <<< "$normalized")
                   ios_entries=$(jq -c '[.[] | select(.platform == "ios")]' <<< "$normalized")
                   android_entries=$(jq -c '[.[] | select(.platform == "android")]' <<< "$normalized")
                   ios_count=$(jq 'length' <<< "$ios_entries")
@@ -1393,17 +1072,31 @@ jobs:
                     exit 1
                   fi
                   landscape_ios=$(jq -r '[.[] | select((.orientation // "portrait") != "portrait") | .device] | join(", ")' <<< "$ios_entries")
-                  if [ -n "$landscape_ios" ] && [ "$TEST_FRAMEWORK" = 'e2e' ]; then
-                    echo "::error::capture-manifest entries $landscape_ios ask for landscape, which test-framework 'e2e' does not capture; use portrait or test-framework 'maestro'."
+                  if [ -n "$landscape_ios" ]; then
+                    echo "::error::capture-manifest entries $landscape_ios ask for landscape, which the iOS capture does not take; use portrait."
                     exit 1
                   fi
-                  if [ "$android_count" -gt 0 ] && [ "$TEST_FRAMEWORK" = 'e2e' ]; then
-                    echo "::error::capture-manifest has Android entries but test-framework is 'e2e', which captures iOS only (simlock leases iOS simulators); capture Android from a separate call with test-framework 'maestro'."
+                  if [ "$ios_count" -gt 0 ] && [ "$android_count" -gt 0 ]; then
+                    echo "::error::capture-manifest has iOS and Android entries; iOS scenes run through the e2e project and Android scenes over adb, so capture Android from a separate call."
                     exit 1
                   fi
-                  if [ "$android_count" -gt 0 ] && [ "$CAPTURE_MODE" != 'direct' ]; then
-                    echo "::error::capture-manifest has Android entries but capture-mode is 'flows'; Android capture requires capture-mode: direct."
-                    exit 1
+                  if [ "$ios_count" -gt 0 ]; then
+                    if [ -z "$E2E_DIR" ]; then
+                      echo "::error::An iOS capture needs e2e-dir, the directory of the e2e project that captures the cells."
+                      exit 1
+                    fi
+                    if [ -z "$SIMLOCK_URL" ]; then
+                      echo "::error::An iOS capture needs simlock-url, the simlock gateway the capture leases simulators from."
+                      exit 1
+                    fi
+                    if [ "$HAS_SIMLOCK_TOKEN" != true ]; then
+                      echo "::error::An iOS capture needs the simlock-token secret: pass it by name from the calling workflow."
+                      exit 1
+                    fi
+                    if [ -n "$SEED_COMMAND" ]; then
+                      echo "::error::seed-command is set but the capture has iOS entries; the seed hook needs a device host, which the iOS capture has none of, so it would be silently ignored. Seed from the e2e project instead."
+                      exit 1
+                    fi
                   fi
                   # Two entries that slugify to the same device slug (not just
                   # two byte-identical device strings) collide on the same
@@ -1465,84 +1158,71 @@ jobs:
                       exit 1
                     fi
                   fi
-                  if [ "$CAPTURE_MODE" = 'direct' ]; then
-                    if ! jq empty <<< "$CAPTURE_SCENES" 2>/dev/null; then
-                      echo "::error::capture-scenes is not valid JSON."
-                      exit 1
-                    fi
-                    if [ "$(jq 'type' <<< "$CAPTURE_SCENES")" != '"array"' ]; then
-                      echo "::error::capture-scenes must be a JSON array."
-                      exit 1
-                    fi
-                    if [ "$(jq 'length' <<< "$CAPTURE_SCENES")" -lt 1 ]; then
-                      echo "::error::capture-scenes must have at least one entry."
-                      exit 1
-                    fi
-                    non_object_scenes=$(jq -c '[.[] | select(type != "object")]' <<< "$CAPTURE_SCENES")
-                    if [ "$non_object_scenes" != '[]' ]; then
-                      echo "::error::capture-scenes has non-object entries: $non_object_scenes"
-                      exit 1
-                    fi
-                    invalid_scenes=$(jq -c '
-                        [.[] | select(
-                            ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
-                            (([has("deepLink"), has("flow"), has("test")] | map(select(.)) | length) != 1) or
-                            (has("test") and ((.test | type) != "string" or (.test | test("^[A-Za-z0-9_.-]+$") | not))) or
-                            (has("test") and has("readySelector")) or
-                            (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
-                            (has("flow") and ((.flow | type) != "string" or .flow == "" or (.flow | startswith("/")) or ((.flow | split("/")) | any(. == "..")))) or
-                            (has("flow") and has("readySelector")) or
-                            (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
-                            (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
-                            (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
-                            (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
-                            (has("appearances") and ((.appearances | type) != "array" or (.appearances | length) == 0 or any(.appearances[]; . != "light" and . != "dark")))
-                        )]
-                    ' <<< "$CAPTURE_SCENES")
-                    if [ "$invalid_scenes" != '[]' ]; then
-                      echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink', a screenshots-dir-relative 'flow' without '..' segments or an e2e 'test' name matching ^[A-Za-z0-9_.-]+\$, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
-                      exit 1
-                    fi
-                    if [ "$TEST_FRAMEWORK" = 'e2e' ]; then
-                      flow_scenes=$(jq -r '[.[] | select(has("flow")) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
-                      if [ -n "$flow_scenes" ]; then
-                        echo "::error::capture-scenes entries $flow_scenes declare a Maestro 'flow', but test-framework is 'e2e'; name the e2e project's scene with 'test' instead."
-                        exit 1
-                      fi
-                    else
-                      test_scenes=$(jq -r '[.[] | select(has("test")) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
-                      if [ -n "$test_scenes" ]; then
-                        echo "::error::capture-scenes entries $test_scenes declare an e2e 'test', which only test-framework 'e2e' runs; with '$TEST_FRAMEWORK' they would never be captured."
-                        exit 1
-                      fi
-                    fi
-                    duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
-                    if [ -n "$duplicate_scene_names" ]; then
-                      echo "::error::capture-scenes has duplicate scene names ($duplicate_scene_names); each name is an output path segment and must be unique."
-                      exit 1
-                    fi
-                    missing_ready_scenes=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not) and ((has("platforms") | not) or ((.platforms | index("ios")) != null))) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
-                    if [ -n "$missing_ready_scenes" ]; then
-                      echo "::error::deep-link capture-scenes entries that apply to ios ($missing_ready_scenes) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
-                      exit 1
-                    fi
-                    for pair in "ios:$ios_count" "android:$android_count"; do
-                      platform="${pair%%:*}"
-                      count="${pair#*:}"
-                      if [ "$count" -gt 0 ]; then
-                        covered=$(jq -r --arg p "$platform" 'any(.[]; (has("platforms") | not) or ((.platforms | index($p)) != null))' <<< "$CAPTURE_SCENES")
-                        if [ "$covered" != 'true' ]; then
-                          echo "::error::capture-manifest has $platform entries but no scene in capture-scenes applies to platform '$platform' - every scene's platforms filter excludes it."
-                          exit 1
-                        fi
-                      fi
-                    done
-                    has_flow_scene=$(jq -r 'any(.[]; has("flow"))' <<< "$CAPTURE_SCENES")
-                    if [ "$has_flow_scene" = 'true' ] && [ -z "$SCREENSHOTS_DIR" ]; then
-                      echo "::error::screenshots-dir is required because at least one capture-scenes entry declares a flow."
+                  if ! jq empty <<< "$CAPTURE_SCENES" 2>/dev/null; then
+                    echo "::error::capture-scenes is not valid JSON."
+                    exit 1
+                  fi
+                  if [ "$(jq 'type' <<< "$CAPTURE_SCENES")" != '"array"' ]; then
+                    echo "::error::capture-scenes must be a JSON array."
+                    exit 1
+                  fi
+                  if [ "$(jq 'length' <<< "$CAPTURE_SCENES")" -lt 1 ]; then
+                    echo "::error::capture-scenes must have at least one entry."
+                    exit 1
+                  fi
+                  non_object_scenes=$(jq -c '[.[] | select(type != "object")]' <<< "$CAPTURE_SCENES")
+                  if [ "$non_object_scenes" != '[]' ]; then
+                    echo "::error::capture-scenes has non-object entries: $non_object_scenes"
+                    exit 1
+                  fi
+                  invalid_scenes=$(jq -c '
+                      [.[] | select(
+                          ((.name // "") | (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)) or
+                          (has("flow")) or
+                      (([has("deepLink"), has("test")] | map(select(.)) | length) != 1) or
+                          (has("test") and ((.test | type) != "string" or (.test | test("^[A-Za-z0-9_.-]+$") | not))) or
+                          (has("test") and has("readySelector")) or
+                          (has("deepLink") and ((.deepLink | type) != "string" or .deepLink == "")) or
+                                  (has("readySelector") and ((.readySelector | ((type == "string" and . != "") or (type == "object" and (keys == ["id"]) and ((.id | type) == "string") and (.id != "")))) | not)) or
+                          (has("settleSeconds") and ((.settleSeconds | type) != "number" or (.settleSeconds | floor) != .settleSeconds or .settleSeconds < 0 or .settleSeconds > 120)) or
+                          (has("platforms") and ((.platforms | type) != "array" or (.platforms | length) == 0 or any(.platforms[]; . != "ios" and . != "android"))) or
+                          (has("locales") and ((.locales | type) != "array" or (.locales | length) == 0 or any(.locales[]; (type != "string") or (test("^[A-Za-z0-9_-]+$") | not)))) or
+                          (has("appearances") and ((.appearances | type) != "array" or (.appearances | length) == 0 or any(.appearances[]; . != "light" and . != "dark")))
+                      )]
+                  ' <<< "$CAPTURE_SCENES")
+                  if [ "$invalid_scenes" != '[]' ]; then
+                    echo "::error::capture-scenes has invalid entries (each needs a unique 'name' matching ^[A-Za-z0-9_-]+\$, exactly one of a non-empty 'deepLink' or an e2e 'test' name matching ^[A-Za-z0-9_.-]+\$, a 'readySelector' that is a non-empty string or a {\"id\": \"<testID>\"} object and is set only alongside 'deepLink', optional integer 'settleSeconds' 0-120, optional non-empty 'platforms' subset of [\"ios\",\"android\"], optional non-empty 'locales' of ^[A-Za-z0-9_-]+\$ strings, optional non-empty 'appearances' subset of [\"light\",\"dark\"]): $invalid_scenes"
+                    exit 1
+                  fi
+                  if [ "$android_count" -gt 0 ]; then
+                    test_scenes=$(jq -r '[.[] | select(has("test")) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                    if [ -n "$test_scenes" ]; then
+                      echo "::error::capture-scenes entries $test_scenes declare an e2e 'test', which the Android capture never runs."
                       exit 1
                     fi
                   fi
+                  duplicate_scene_names=$(jq -r '[.[].name] | group_by(.) | map(select(length > 1)[0]) | join(", ")' <<< "$CAPTURE_SCENES")
+                  if [ -n "$duplicate_scene_names" ]; then
+                    echo "::error::capture-scenes has duplicate scene names ($duplicate_scene_names); each name is an output path segment and must be unique."
+                    exit 1
+                  fi
+                  missing_ready_scenes=''
+                  [ "$ios_count" -eq 0 ] || missing_ready_scenes=$(jq -r '[.[] | select(has("deepLink") and (has("readySelector") | not) and ((has("platforms") | not) or ((.platforms | index("ios")) != null))) | .name] | join(", ")' <<< "$CAPTURE_SCENES")
+                  if [ -n "$missing_ready_scenes" ]; then
+                    echo "::error::deep-link capture-scenes entries that apply to ios ($missing_ready_scenes) declare no 'readySelector'. A deep link only asks SpringBoard to hand the screen to the app; nothing in simctl reports whether it did, so without a selector that must be visible before the screencap a cell that never left the home screen is captured and reported as a pass. Add a readySelector naming an element the scene always renders - a string matched as text/regex, or {\"id\": \"<testID>\"}."
+                    exit 1
+                  fi
+                  for pair in "ios:$ios_count" "android:$android_count"; do
+                    platform="${pair%%:*}"
+                    count="${pair#*:}"
+                    if [ "$count" -gt 0 ]; then
+                      covered=$(jq -r --arg p "$platform" 'any(.[]; (has("platforms") | not) or ((.platforms | index($p)) != null))' <<< "$CAPTURE_SCENES")
+                      if [ "$covered" != 'true' ]; then
+                        echo "::error::capture-manifest has $platform entries but no scene in capture-scenes applies to platform '$platform' - every scene's platforms filter excludes it."
+                        exit 1
+                      fi
+                    fi
+                  done
                   has_ios=false
                   if [ "$ios_count" -gt 0 ]; then
                     has_ios=true
@@ -1557,7 +1237,7 @@ jobs:
                     echo "ios-entries=$ios_entries"
                     echo "android-entries=$android_entries"
                   } >> "$GITHUB_OUTPUT"
-                  echo "capture-manifest OK: $ios_count iOS + $android_count Android entries, capture-mode=$CAPTURE_MODE."
+                  echo "capture-manifest OK: $ios_count iOS + $android_count Android entries."
 
             - name: Resolve the build strategy
               id: build-strategy
@@ -1606,7 +1286,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1660,7 +1340,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1701,7 +1381,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1813,7 +1493,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v5.0.0 # v5.0.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1834,7 +1514,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v5.0.0 # v5.0.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1848,7 +1528,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -1874,7 +1554,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v5.0.0 # v5.0.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1886,7 +1566,7 @@ jobs:
                       ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1913,7 +1593,7 @@ jobs:
                   key: ${{ steps.rn-prebuilts.outputs.cache-key }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v5.0.0 # v5.0.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1936,7 +1616,7 @@ jobs:
                   retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: ios
@@ -1963,7 +1643,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -2021,7 +1701,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2062,7 +1742,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -2174,7 +1854,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v5.0.0 # v5.0.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -2209,7 +1889,7 @@ jobs:
               run: eval "$PREBUILD_COMMAND"
 
             - name: build-android-app
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
@@ -2230,7 +1910,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: android
@@ -2252,145 +1932,7 @@ jobs:
     capture-ios:
         name: Capture iOS (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-ios, build-ios]
-        if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
-        runs-on: ${{ fromJSON(inputs.capture-runner-labels != '' && inputs.capture-runner-labels || inputs.runner-labels) }}
-        timeout-minutes: ${{ inputs.capture-timeout-minutes }}
-        strategy:
-            fail-fast: false
-            matrix:
-                entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
-
-        steps:
-            - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
-              with:
-                  enabled: ${{ inputs.runs-on-cache-bypass }}
-            - name: Checkout repository
-              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-              with:
-                  persist-credentials: false
-
-            # Its own step so a driver that runs the app off this host
-            # (device-cloud, #216) can skip it with a single `if:`.
-            - name: Assert this host can run the packaged simulator architecture
-              shell: bash
-              env:
-                  IOS_SIMULATOR_ARCHS: ${{ inputs.ios-simulator-archs }}
-                  RUNNER_LABELS_INPUT: capture-runner-labels
-              run: |
-                  set -euo pipefail
-                  host=$(uname -m)
-                  case "$IOS_SIMULATOR_ARCHS" in
-                    arm64)
-                      if [ "$host" != arm64 ]; then
-                        echo "::error::This runner is '$host', but the packaged Simulator app is arm64-only (ios-simulator-archs: arm64). Point $RUNNER_LABELS_INPUT at an arm64 macOS pool, or build an x86_64 slice with ios-simulator-archs: x86_64."
-                        exit 1
-                      fi
-                      echo "Host $host runs the arm64 Simulator app natively."
-                      ;;
-                    x86_64)
-                      case "$host" in
-                        x86_64)
-                          echo "Host $host runs the x86_64 Simulator app natively."
-                          ;;
-                        arm64)
-                          if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
-                            echo "::error::The packaged Simulator app is x86_64 (ios-simulator-archs: x86_64) and this arm64 runner cannot execute x86_64 code: Rosetta 2 is not installed. Install it on the host with 'softwareupdate --install-rosetta --agree-to-license', or point $RUNNER_LABELS_INPUT at a pool that has it."
-                            exit 1
-                          fi
-                          echo "Host $host runs the x86_64 Simulator app under Rosetta 2."
-                          ;;
-                        *)
-                          echo "::error::This runner is '$host'. The x86_64 Simulator app ios-simulator-archs asks for runs only on an x86_64 macOS host, or an arm64 one with Rosetta 2. Point $RUNNER_LABELS_INPUT at such a pool."
-                          exit 1
-                          ;;
-                      esac
-                      ;;
-                    *)
-                      echo "::error::ios-simulator-archs must be 'arm64' or 'x86_64'; got '$IOS_SIMULATOR_ARCHS'."
-                      exit 1
-                      ;;
-                  esac
-
-            - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.11.0 # v4.11.0
-              with:
-                  version: ${{ inputs.xcode-version }}
-                  build: ${{ inputs.xcode-build }}
-
-            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-              with:
-                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-
-            - name: Unpack app
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-              run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
-
-            - name: Apply maestro-secrets-env
-              id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
-              with:
-                  env: ${{ secrets.maestro-secrets-env }}
-                  label: maestro-secrets-env
-                  allow-multiline: false
-                  append-to: ${{ needs.validate-manifest.outputs.maestro-env }}
-
-            - name: capture-screenshots-ios
-              id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.11.0 # v4.11.0
-              with:
-                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
-                  app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
-                  scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
-                  seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
-                  settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
-                  launch-settle-seconds: ${{ needs.validate-manifest.outputs.launch-settle-seconds }}
-                  deeplink-confirm-title: ${{ needs.validate-manifest.outputs.deeplink-confirm-title }}
-                  deeplink-confirm-button: ${{ needs.validate-manifest.outputs.deeplink-confirm-button }}
-                  status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
-                  screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
-                  scenes-name-pattern: ${{ inputs.scenes-name-pattern }}
-                  scenes-exclude-pattern: ${{ inputs.scenes-exclude-pattern }}
-                  simulator-device: ${{ matrix.entry.device }}
-                  simslim-version: ${{ inputs.simslim-version }}
-                  simslim-sha256: ${{ inputs.simslim-sha256 }}
-                  simulator-slim-profile: ${{ inputs.simulator-slim-profile }}
-                  simulator-slim-repair: ${{ inputs.simulator-slim-repair }}
-                  simulator-requires: ${{ inputs.simulator-requires }}
-                  locales: ${{ join(matrix.entry.locales, ',') }}
-                  appearances: ${{ join(matrix.entry.appearances, ',') }}
-                  orientation: ${{ matrix.entry.orientation || 'portrait' }}
-                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
-                  locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
-                  maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
-                  maestro-version: ${{ inputs.maestro-version }}
-                  output-dir: ${{ github.workspace }}/screenshots-output
-
-            - name: Run post-capture-command
-              if: inputs.post-capture-command != ''
-              shell: bash
-              env:
-                  SCREENSHOTS_OUTPUT_DIR: ${{ github.workspace }}/screenshots-output
-                  DEVICE_SLUG: ${{ steps.capture.outputs.device-slug }}
-                  POST_CAPTURE_COMMAND: ${{ inputs.post-capture-command }}
-              run: eval "$POST_CAPTURE_COMMAND"
-
-            - name: Upload raw screenshots (including partial results from a failed capture)
-              if: always() && steps.capture.outputs.device-slug != ''
-              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-              with:
-                  name: raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}
-                  path: screenshots-output/raw/**
-                  if-no-files-found: warn
-                  retention-days: 14
-
-    capture-ios-e2e:
-        name: Capture iOS with e2e (${{ matrix.entry.device }})
-        needs: [validate-manifest, plan-ios, build-ios]
-        if: ${{ !cancelled() && inputs.test-framework == 'e2e' && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
+        if: ${{ !cancelled() && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.control-runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:
@@ -2399,7 +1941,7 @@ jobs:
                 entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2418,11 +1960,11 @@ jobs:
               env:
                   TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
-            - name: Apply maestro-secrets-env to the e2e capture
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+            - name: Apply e2e-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
-                  env: ${{ secrets.maestro-secrets-env }}
-                  label: maestro-secrets-env
+                  env: ${{ secrets.e2e-secrets-env }}
+                  label: e2e-secrets-env
                   allow-multiline: false
             - name: Install the e2e project
               shell: bash
@@ -2431,7 +1973,7 @@ jobs:
                   INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
               run: bash -c "$INSTALL_COMMAND"
             - name: Install @mobile-ci/e2e-simlock
-              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v5.0.0 # v5.0.0
               with:
                   e2e-dir: ${{ inputs.e2e-dir }}
             - name: Plan the e2e capture cells
@@ -2464,7 +2006,7 @@ jobs:
                   mkdir -p "$root"
                   plan="$RUNNER_TEMP/screenshot-plan-$slug.json"
                   # One cell per locale x appearance x scene, with the per-scene platforms,
-                  # locales and appearances filters the macOS capture applies.
+                  # locales and appearances filters.
                   jq -n \
                     --argjson scenes "$CAPTURE_SCENES" \
                     --argjson locales "$LOCALES" \
@@ -2592,7 +2134,7 @@ jobs:
               run: eval "$POST_CAPTURE_COMMAND"
             - name: Release the simulators the capture left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
               with:
                   mode: release
                   platform: ios
@@ -2630,7 +2172,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2663,19 +2205,17 @@ jobs:
                     exit 1
                   fi
 
-            - name: Apply maestro-secrets-env
-              id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+            - name: Apply e2e-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
-                  env: ${{ secrets.maestro-secrets-env }}
-                  label: maestro-secrets-env
+                  env: ${{ secrets.e2e-secrets-env }}
+                  label: e2e-secrets-env
                   allow-multiline: false
-                  append-to: ${{ needs.validate-manifest.outputs.maestro-env }}
 
             - name: redroid-container (start)
               id: redroid
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/redroid-container@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
               with:
                   mode: start
                   container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -2688,7 +2228,7 @@ jobs:
             - name: android-emulator (start)
               id: emulator
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
               with:
                   mode: start
                   avd-name: mobile-ci-screenshots
@@ -2705,13 +2245,12 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v5.0.0 # v5.0.0
               with:
                   android-serial: ${{ inputs.android-driver == 'avd' && steps.emulator.outputs.android-serial || steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
-                  screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
                   device-name: ${{ matrix.entry.device }}
                   width: ${{ matrix.entry.width }}
                   height: ${{ matrix.entry.height }}
@@ -2721,10 +2260,6 @@ jobs:
                   seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
                   settle-seconds: ${{ needs.validate-manifest.outputs.settle-seconds }}
                   status-bar-override: ${{ needs.validate-manifest.outputs.status-bar-override }}
-                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
-                  locale-env: ${{ toJSON(matrix.entry.localeEnv) }}
-                  maestro-config: ${{ needs.validate-manifest.outputs.maestro-config }}
-                  maestro-version: ${{ inputs.maestro-version }}
                   output-dir: ${{ github.workspace }}/screenshots-output
 
             - name: Run post-capture-command
@@ -2747,24 +2282,24 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always() && inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/redroid-container@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
               with:
                   mode: teardown
                   container-name: redroid-screenshots-${{ strategy.job-index }}
 
             - name: android-emulator (stop)
               if: always() && inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/android-emulator@v5.0.0 # v5.0.0
               with:
                   mode: stop
 
     upload:
         name: Upload screenshots
-        needs: [validate-manifest, capture-ios, capture-ios-e2e, capture-android]
+        needs: [validate-manifest, capture-ios, capture-android]
         if: >-
             always() && needs.validate-manifest.outputs.upload-screenshots == 'true' &&
             needs.validate-manifest.result == 'success' &&
-            ((inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result) == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
+            (needs.capture-ios.result == 'success' || needs.validate-manifest.outputs.has-ios != 'true') &&
             (needs.capture-android.result == 'success' || needs.validate-manifest.outputs.has-android != 'true')
         runs-on: ${{ fromJSON(inputs.upload-runner-labels != '' && inputs.upload-runner-labels || inputs.runner-labels) }}
         env:
@@ -2776,14 +2311,14 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required inputs and capture results
               shell: bash
               env:
                   UPLOAD_COMMAND: ${{ needs.validate-manifest.outputs.upload-command }}
-                  CAPTURE_IOS_RESULT: ${{ inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result }}
+                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
                   ASC_DEDUPE: ${{ needs.validate-manifest.outputs.asc-dedupe-screenshots }}
                   IOS_TARGET: ${{ needs.validate-manifest.outputs.ios-target }}
@@ -2847,7 +2382,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -3081,7 +2616,7 @@ jobs:
               # against 'true' here - unlike a raw boolean input, whose
               # `== 'true'` comparison is always false and needs truthiness.
               if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
-              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v5.0.0 # v5.0.0
               with:
                   app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}
@@ -3099,7 +2634,7 @@ jobs:
 
     status:
         name: Store screenshots result
-        needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-ios-e2e, capture-android, upload]
+        needs: [validate-manifest, plan-ios, build-ios, plan-android, build-android, capture-ios, capture-android, upload]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
@@ -3118,7 +2653,7 @@ jobs:
                   PLAN_ANDROID_RESULT: ${{ needs.plan-android.result }}
                   NATIVE_TARGETS_ANDROID: ${{ needs.plan-android.outputs.native-targets }}
                   BUILD_ANDROID_RESULT: ${{ needs.build-android.result }}
-                  CAPTURE_IOS_RESULT: ${{ inputs.test-framework == 'e2e' && needs.capture-ios-e2e.result || needs.capture-ios.result }}
+                  CAPTURE_IOS_RESULT: ${{ needs.capture-ios.result }}
                   CAPTURE_ANDROID_RESULT: ${{ needs.capture-android.result }}
                   UPLOAD_ENABLED: ${{ needs.validate-manifest.outputs.upload-screenshots }}
                   UPLOAD_RESULT: ${{ needs.upload.result }}

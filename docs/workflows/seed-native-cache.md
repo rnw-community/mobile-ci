@@ -2,7 +2,7 @@
 
 `workflow_call` reusable workflow: **the warm-up.** It publishes the base
 binary every pull request repacks, and warms the native-app cache on the host
-that built it, so a later `ios-maestro.yml` / `android-maestro.yml` /
+that built it, so a later `ios-e2e.yml` / `android-e2e.yml` /
 `store-screenshots.yml` run repacks a published base instead of compiling
 native code. Read [docs/repack.md](../repack.md) first — this page is the input
 reference.
@@ -16,7 +16,7 @@ the pinned Xcode (`ccache-ios-<name>-macOS-xcode-<xcode-version>-` and
 `pods-<name>-macOS-xcode-<xcode-version>-`, on this run's ref or the default
 branch), and marks a target whose caches were evicted `forceNative` (see
 [Refilling evicted iOS compile caches](#refilling-evicted-ios-compile-caches)).
-`android-abis` resolves `android-abis` the same way `android-maestro.yml`
+`android-abis` resolves `android-abis` the same way `android-e2e.yml`
 does, so the Android base is built for, and keyed on, the ABI the e2e device
 runs.
 
@@ -73,7 +73,7 @@ the two things a fingerprint cannot see (see
 | `cmdline-tools-version`           | no       | `12266719`                                         | `android-actions/setup-android` cmdline-tools-version — pin explicitly, do not trust upstream defaults. |
 | `gradle-task`                     | no       | `assembleRelease`                                  | `gradlew` task to build, e.g. `:app:assembleRelease` to scope to one module (see `build-android-app` README). |
 | `gradle-args`                     | no       | `''`                                                | Extra whitespace-split arguments appended after `gradle-task`, e.g. `-x lint -x lintVitalAnalyzeRelease` (see `build-android-app` README). |
-| `android-abis`                    | no       | `auto`                                             | Comma-separated ABIs the Android base compiles, passed to Gradle as `-PreactNativeArchitectures`. `auto` is `x86_64` — the ABI of `android-maestro.yml`'s default `avd` driver — unless `gradle-args` or `build-env` already pins `reactNativeArchitectures`, which then wins. Empty compiles every ABI the project declares. Part of the native key, so it must resolve to the **same** ABIs as the e2e workflow's `android-abis`: a `redroid` e2e pipeline passes `arm64-v8a` here, or the warm-up publishes a base no pull request ever looks up. |
+| `android-abis`                    | no       | `auto`                                             | Comma-separated ABIs the Android base compiles, passed to Gradle as `-PreactNativeArchitectures`. `auto` is `arm64-v8a` — the ABI of the farm's emulators — unless `gradle-args` or `build-env` already pins `reactNativeArchitectures`, which then wins. Empty compiles every ABI the project declares. Part of the native key, so it must resolve to the **same** ABIs as the e2e workflow's `android-abis`: a `redroid` e2e pipeline passes `arm64-v8a` here, or the warm-up publishes a base no pull request ever looks up. |
 | `ios-cache-profile`               | no       | `ios-native-v1`                                    | Cache-key prefix for the iOS native-app cache. |
 | `android-cache-profile`           | no       | `android-native-v1`                                | Cache-key prefix for the Android native-app cache. |
 | `expo-fingerprint-version`        | no       | `0.20.6`                                           | Pinned `@expo/fingerprint` npm version. |
@@ -151,7 +151,7 @@ the warm-up still costs only the Linux plan jobs.
 
 ## Android ABIs and the SDK cache
 
-`seed-android` compiles only the ABIs `android-abis` resolves to (`x86_64` by
+`seed-android` compiles only the ABIs `android-abis` resolves to (`arm64-v8a` by
 default) instead of every ABI the project declares, and folds them into the
 native key. **This changes every Android native key**: the first warm-up after
 upgrading publishes new bases, and until it has run every Android pull request
@@ -211,7 +211,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v5.0.0 # v5.0.0
         with:
             ios-targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -242,7 +242,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v5.0.0 # v5.0.0
         with:
             ios-targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]

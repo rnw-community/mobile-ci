@@ -149,8 +149,8 @@ of them. `android-abis` passes `-PreactNativeArchitectures=<value>` to Gradle;
 it fails the step before Gradle runs when the value is not a comma-separated
 list of those four names, or when `gradle-args` (`-PreactNativeArchitectures=`)
 or the environment (`ORG_GRADLE_PROJECT_reactNativeArchitectures`) pins a
-different value. A matching pin is not repeated. `android-maestro.yml` and
-`seed-native-cache.yml` resolve the value from the driver and fold it into the
+different value. A matching pin is not repeated. `android-e2e.yml` and
+`seed-native-cache.yml` resolve the value and fold it into the
 native key; see [docs/repack.md](../../docs/repack.md#the-native-key-is-the-correctness-boundary).
 
 **Why the Gradle cache is saved after a failed or timed-out build.** A cold
@@ -261,7 +261,7 @@ preinstalled here.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.0 # v4.11.0
+- uses: rnw-community/mobile-ci/actions/build-android-app@v5.0.0 # v5.0.0
   id: build
   with:
       app-dir: apps/mobile

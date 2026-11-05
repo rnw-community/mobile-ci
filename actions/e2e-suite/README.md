@@ -1,18 +1,16 @@
 # e2e-suite
 
-The e2e job of `ios-maestro.yml` and `android-maestro.yml`: one implementation of
+The e2e job of `ios-e2e.yml` and `android-e2e.yml`: one implementation of
 a tester-army e2e suite run against devices leased from a simlock farm, for both
 platforms. The calling job checks out, sets up Node and downloads the app; this
 action does the rest in three modes.
 
-- **`validate`** (the workflows' `detect` job) does nothing for
-  `test-framework: maestro`. Otherwise it fails closed, naming every problem at
-  once, on any of these:
+- **`validate`** (the workflows' `detect` job) fails closed, naming every problem at once, on any of
+  these:
   - a missing `e2e-dir`, `simlock-url` or `simlock-token`;
   - a non-numeric `workers` or `retries`, or fewer than 1 worker;
   - an app built without the farm's ABI (`arm64` on iOS, `arm64-v8a` on
-    Android);
-  - `test-framework: e2e` with a Maestro-only driver.
+    Android).
 - **`run`** installs the e2e project (`install-command`) and
   [`@mobile-ci/e2e-simlock`](../e2e-simlock-install/README.md), then runs
   `command` with the suite's environment.
@@ -29,8 +27,6 @@ action does the rest in three modes.
     they get that one retry.
   - `tolerated` passes the step with a warning only when tests ran and failed. Every
     other failure, including the ones above, still fails.
-  - `shadow` turns every failure into warnings; the caller's `continue-on-error`
-    keeps it from gating.
 - **`release`** (`if: always()`) releases every lease listed in
   `.e2e/simlock-leases.json`, so a cancelled run frees the farm at once. A lease
   that is already gone, or that fails to release, warns and never fails the job.
@@ -46,8 +42,6 @@ stdin, never on its command line.
 | --- | --- | --- | --- |
 | `mode` | all | — (required) | `validate`, `run` or `release`; anything else fails. |
 | `platform` | all | — (required) | `ios` or `android`. |
-| `test-framework` | validate | `e2e` | The caller's `test-framework`: `maestro`, `e2e` or `both`. |
-| `driver` | validate | `''` | The caller's `ios-driver` or `android-driver`. |
 | `abis` | validate | `''` | Comma-separated ABIs the app is built for (`ios-simulator-archs`, or the resolved `android-abis`); empty for every ABI the project declares. |
 | `e2e-dir` | all | `''` | The e2e project's directory. |
 | `install-command` | run | `npm ci --no-audit --no-fund` | Installs the e2e project, in `e2e-dir`. |
@@ -59,7 +53,6 @@ stdin, never on its command line.
 | `workers` | validate, run | `'1'` | Devices leased and tests run at once (`E2E_WORKERS`). |
 | `retries` | validate, run | `'1'` | Retries per failed test (`E2E_RETRIES`). |
 | `session` | run | `''` | agent-device session name (`E2E_SESSION`). |
-| `shadow` | run | `'false'` | `true` when the suite runs as a non-gating shadow. |
 | `tolerated` | run | `'false'` | `true` when the target tolerates test failures. |
 | `simlock-url` | all | `''` | The simlock gateway or worker. |
 | `simlock-token` | all | `''` | The simlock agent token. |
@@ -69,7 +62,7 @@ stdin, never on its command line.
 ```yaml
 - name: Run the e2e suite
   id: run
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
   with:
       mode: run
       platform: android
@@ -83,7 +76,7 @@ stdin, never on its command line.
       simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 - name: Release the devices the suite left leased
   if: ${{ always() && steps.run.outcome != 'skipped' }}
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
   with:
       mode: release
       platform: android

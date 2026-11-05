@@ -66,7 +66,7 @@ inputs:
     default: bundled
   slim-repair:
     description: >-
-      When 'true' (the default here, unlike run-maestro-ios) the lease is left
+      When 'true' (the default) the lease is left
       shut down by the acquire step and `simslim on --profile` writes its
       disable overrides offline and boots it once, already slim; it is then
       verified, and a mismatch fails. The default differs because this action

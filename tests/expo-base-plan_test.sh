@@ -8,8 +8,8 @@ set -euo pipefail
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
-IOS_WORKFLOW="$REPO_ROOT/.github/workflows/ios-maestro.yml"
-ANDROID_WORKFLOW="$REPO_ROOT/.github/workflows/android-maestro.yml"
+IOS_WORKFLOW="$REPO_ROOT/.github/workflows/ios-e2e.yml"
+ANDROID_WORKFLOW="$REPO_ROOT/.github/workflows/android-e2e.yml"
 SCREENSHOTS_WORKFLOW="$REPO_ROOT/.github/workflows/store-screenshots.yml"
 PLAN_WORKFLOW="$REPO_ROOT/.github/workflows/expo-base-plan.yml"
 STRATEGY_STEP='Resolve the build strategy'
@@ -33,7 +33,7 @@ ios_script="$(extract_workflow_step_script "$IOS_WORKFLOW" detect "$STRATEGY_STE
 android_script="$(extract_workflow_step_script "$ANDROID_WORKFLOW" detect "$STRATEGY_STEP")"
 screenshots_script="$(extract_workflow_step_script "$SCREENSHOTS_WORKFLOW" validate-manifest "$STRATEGY_STEP")"
 if [ "$ios_script" != "$android_script" ]; then
-    fail_case 'ios-maestro and android-maestro state the strategy rule differently, so a label can mean one thing on one platform and another on the other'
+    fail_case 'ios-e2e and android-e2e state the strategy rule differently, so a label can mean one thing on one platform and another on the other'
 elif [ "$ios_script" != "$screenshots_script" ]; then
     fail_case 'store-screenshots states the strategy rule differently from the e2e workflows'
 else
@@ -250,7 +250,7 @@ import yaml
 
 problems = []
 checked = 0
-for name in ('ios-maestro', 'android-maestro', 'store-screenshots', 'seed-native-cache'):
+for name in ('ios-e2e', 'android-e2e', 'store-screenshots', 'seed-native-cache'):
     path = os.path.join(os.environ['REPO_ROOT'], '.github', 'workflows', f'{name}.yml')
     for job_id, job in yaml.safe_load(open(path, encoding='utf-8'))['jobs'].items():
         publish = [step for step in job.get('steps', []) if step.get('name') == 'expo-base-binary (publish)']

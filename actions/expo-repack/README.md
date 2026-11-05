@@ -21,7 +21,7 @@ Three things it refuses rather than works around:
 - any assertion that does not hold.
 
 There is no fallback to the base's own JavaScript. A broken repack fails the
-build, which is the only way the artifact a Maestro shard installs can be
+build, which is the only way the artifact an e2e suite installs can be
 trusted to be this commit's app.
 
 ## Running on Linux
@@ -72,7 +72,7 @@ provided rather than assumed:
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-repack@v4.11.0 # v4.11.0
+- uses: rnw-community/mobile-ci/actions/expo-repack@v5.0.0 # v5.0.0
   with:
       platform: ios
       base-path: ${{ steps.base.outputs.path }}

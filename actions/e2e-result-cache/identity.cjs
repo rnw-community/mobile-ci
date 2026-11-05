@@ -113,13 +113,13 @@ try {
         mobileCiWorkflows: tree(path.resolve(environment.ACTION_PATH, '../../.github/workflows')),
         inputs: JSON.parse(environment.LANE_INPUTS),
         target: JSON.parse(environment.TARGET),
-        maestroSecrets: environment.SECRETS_DIGEST || ''
+        e2eSecrets: environment.SECRETS_DIGEST || ''
     })));
     fs.rmSync(path.join('.ci-cache/e2e-result', key), { recursive: true, force: true });
     fs.appendFileSync(environment.GITHUB_OUTPUT, `key=${key}\n`);
     fs.appendFileSync(environment.GITHUB_STEP_SUMMARY, `E2E result identity: \`${key}\` (export and hash: ${((Date.now() - started) / 1000).toFixed(1)}s).\n`);
 } catch {
-    process.stdout.write('::warning::E2E identity unavailable; full build/repack and Maestro remain required.\n');
+    process.stdout.write('::warning::E2E identity unavailable; full build/repack and e2e suite remain required.\n');
     process.exitCode = 1;
 } finally {
     if (outputDirectory) fs.rmSync(outputDirectory, { recursive: true, force: true });

@@ -34,9 +34,9 @@ else
     fail_case "$output"
 fi
 
-sed 's/^            flows-dir: apps\/mobile\/e2e\/flows$/&\n            flows-directory: apps\/mobile\/e2e\/flows/' "$EXAMPLE" > "$scratch/unknown-input.yml"
+sed 's/^            e2e-dir: e2e$/&\n            e2e-directory: e2e/' "$EXAMPLE" > "$scratch/unknown-input.yml"
 expect_rejected 'an example passing an input the workflow does not declare is rejected' \
-    "$scratch/unknown-input.yml" "has no input 'flows-directory'"
+    "$scratch/unknown-input.yml" "has no input 'e2e-directory'"
 
 sed '/^            targets: >-$/,+1d' "$EXAMPLE" > "$scratch/missing-required.yml"
 expect_rejected 'an example omitting a required input is rejected' \
@@ -70,7 +70,7 @@ cat > "$scratch/doc.md" <<'MARKDOWN'
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.2.0 # v4.2.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-e2e.yml@v4.2.0 # v4.2.0
         with:
             android-driver: redroid
             emulator-flavour: google_apis

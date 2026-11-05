@@ -2,7 +2,7 @@
 # shellcheck disable=SC2016 # the expected values are literal ${{ }} expressions and shell text.
 # store-screenshots' capture-android job drives one of two device backends
 # (issues #96, #149): a Redroid container (android-driver: redroid, unchanged) or an AVD booted through android-emulator, the same
-# action run-maestro-android uses (android-driver: avd, the default). The device steps are
+# action (android-driver: avd, the default). The device steps are
 # `uses:` steps, so most cases check the wiring in the parsed workflow; the
 # driver validation step is shell and runs for real.
 set -euo pipefail
@@ -11,17 +11,14 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
 WORKFLOW="$REPO_ROOT/.github/workflows/store-screenshots.yml"
-ANDROID_MAESTRO="$REPO_ROOT/.github/workflows/android-maestro.yml"
 VALIDATE_STEP='Validate android-driver against this runner'
 
-# query <python expression over `steps`, `inputs`, `maestro_inputs`>
+# query <python expression over `steps`, `inputs`>
 query() {
-    WORKFLOW_YML="$WORKFLOW" MAESTRO_YML="$ANDROID_MAESTRO" EXPRESSION="$1" python3 -c '
+    WORKFLOW_YML="$WORKFLOW" EXPRESSION="$1" python3 -c '
 import json, os, yaml
 workflow = yaml.safe_load(open(os.environ["WORKFLOW_YML"], encoding="utf-8"))
-maestro = yaml.safe_load(open(os.environ["MAESTRO_YML"], encoding="utf-8"))
 inputs = workflow[True]["workflow_call"]["inputs"]
-maestro_inputs = maestro[True]["workflow_call"]["inputs"]
 steps = workflow["jobs"]["capture-android"]["steps"]
 def by_uses(fragment):
     return [s for s in steps if fragment in s.get("uses", "")]
@@ -33,12 +30,6 @@ print(result if isinstance(result, str) else json.dumps(result, sort_keys=True),
 case_start 'Android screenshots default to the AVD driver on the x86_64 Linux pool'
 if assert_equals avd "$(query 'inputs["android-driver"]["default"]')" 'android-driver default' \
     && assert_equals '["self-hosted","trf-linux-amd64-4x8"]' "$(query 'inputs["android-capture-runner-labels"]["default"]')" 'android-capture-runner-labels default'; then
-    pass_case
-fi
-
-case_start 'the emulator inputs mirror android-maestro.yml names and defaults'
-mismatched="$(query '[n for n in ["emulator-api-level","emulator-target","emulator-arch","emulator-profile","emulator-ram-size","emulator-heap-size","emulator-cores","emulator-slots-dir","emulator-slot-timeout-minutes"] if n not in inputs or inputs[n].get("default") != maestro_inputs[n].get("default") or inputs[n].get("type") != maestro_inputs[n].get("type")]')"
-if assert_equals '[]' "$mismatched" 'inputs differing from android-maestro.yml'; then
     pass_case
 fi
 
@@ -70,7 +61,7 @@ for pair in api-level:emulator-api-level target:emulator-target arch:emulator-ar
 done
 if assert_equals '' "$unwired" "inputs not passed through ($start_with)" \
     && assert_contains "$start_with" '"wipe-data": "true"' 'wiped userdata' \
-    && assert_contains "$start_with" '"avd-name": "mobile-ci-screenshots"' 'AVD separate from the Maestro AVD'; then
+    && assert_contains "$start_with" '"avd-name": "mobile-ci-screenshots"' 'AVD name'; then
     pass_case
 fi
 

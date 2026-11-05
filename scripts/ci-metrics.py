@@ -19,7 +19,7 @@ Definitions:
                 grouped by the job's most specific runner label.
   Native share  head commits whose iOS/Android lane ran a native Build job,
                 over head commits whose lane ran a Plan job.
-  Shards        duration of jobs named "Maestro shard ...".
+  Shards        duration of jobs named "E2E suite ...".
   Failures      failed or timed-out jobs, except roll-up jobs that only
                 report other jobs' results; infra when the job timed out or
                 its failure annotations name an INFRA_PATTERNS cause and
@@ -215,7 +215,7 @@ def summarize(pairs, annotations):
         for job in jobs:
             if job.get('runner_name') and job.get('started_at') and job.get('conclusion') != 'skipped':
                 queue.setdefault(pool_of(job), []).append(minutes(parse_time(job['created_at']), parse_time(job['started_at'])))
-            if re.search(r'Maestro shard', job['name']) and job.get('conclusion') in ('success', 'failure') and job.get('completed_at'):
+            if re.search(r'E2E suite', job['name']) and job.get('conclusion') in ('success', 'failure') and job.get('completed_at'):
                 shards.append(minutes(parse_time(job['started_at']), parse_time(job['completed_at'])))
             if job['id'] in annotations and not any(ROLLUP.search(a.get('message', '')) for a in annotations[job['id']]):
                 if is_infra(job, annotations[job['id']]):

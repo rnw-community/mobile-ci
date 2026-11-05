@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# android-emulator, the one AVD implementation run-maestro-android and
-# store-screenshots' avd capture leg share (issues #169, #96). On a shared
+# android-emulator, the AVD implementation of store-screenshots' avd capture
+# leg (issues #169, #96). On a shared
 # x86_64 KVM host the emulator is sized from the container's cgroup limits
 # rather than the host's, a fleet-owned directory of slot files caps how many
 # emulators a host boots at once, the boot fails closed without hardware
@@ -12,7 +12,7 @@ set -euo pipefail
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 
 ACTION="$REPO_ROOT/actions/android-emulator/action.yml"
-WORKFLOW="$REPO_ROOT/.github/workflows/android-maestro.yml"
+WORKFLOW="$REPO_ROOT/.github/workflows/store-screenshots.yml"
 VALIDATE_STEP='Validate emulator inputs'
 ACCEL_STEP='Check hardware acceleration'
 SIZE_STEP='Size emulator from container limits'
@@ -173,7 +173,7 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
-case_start 'android-maestro.yml derives the emulator RAM instead of hand-setting 2048'
+case_start 'store-screenshots.yml derives the emulator RAM instead of hand-setting 2048'
 default_ram="$(WORKFLOW_YML="$WORKFLOW" python3 -c '
 import os, yaml
 w = yaml.safe_load(open(os.environ["WORKFLOW_YML"], encoding="utf-8"))

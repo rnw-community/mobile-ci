@@ -113,7 +113,6 @@ jobs:
               shell: bash
               env:
                   COMPOSE_MEDIA_REQUIRE_TOOLS: '1'
-                  MAESTRO_TAGS_REQUIRE_TOOLS: '1'
               run: tests/run-tests.sh
 
             - name: Typecheck packages/e2e-simlock
@@ -127,7 +126,7 @@ jobs:
                   set -euo pipefail
                   sudo apt-get update && sudo apt-get install -y shellcheck
                   shellcheck -s bash tests/run-tests.sh tests/lib/*.sh tests/*_test.sh
-                  shellcheck -x scripts/*.sh scripts/media/*.sh scripts/maestro/*.sh
+                  shellcheck -x scripts/*.sh scripts/media/*.sh
                   scratch="$RUNNER_TEMP/extracted-steps"
                   rm -rf "$scratch"
                   mkdir -p "$scratch"
@@ -239,12 +238,12 @@ jobs:
                   rm -rf "$scratch"
                   mkdir -p "$scratch/.github/workflows"
                   cp -r actions "$scratch/actions"
-                  for workflow in ios-maestro android-maestro seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard expo-base-plan swift-ios assert-distinct-fingerprints store-release; do
+                  for workflow in ios-e2e android-e2e seed-native-cache native-publish native-dev-release store-screenshots expo-ota-preview expo-fingerprint-guard expo-base-plan swift-ios assert-distinct-fingerprints store-release; do
                     sed -E -e "$self_ref_rewrite" -e "$workflow_ref_rewrite" \
                       ".github/workflows/${workflow}.yml" > "$scratch/.github/workflows/${workflow}.yml"
                   done
                   # Composite actions self-reference each other too (action ->
-                  # action, e.g. run-maestro-android-redroid -> redroid-container),
+                  # action, e.g. expo-native-key -> native-fingerprint),
                   # pinned to the release tag being cut, which does not exist yet on
                   # the release PR. Apply the identical rewrite to the scratch
                   # actions so no linted file carries a ref nothing can resolve.

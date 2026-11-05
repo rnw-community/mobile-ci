@@ -53,7 +53,7 @@ the section that matches your task; skip the other.
 - `profiles/ci.json` — the simslim profile every simulator, in CI and locally,
   is slimmed against; the actions resolve `slim-profile: bundled` to it.
 - `scripts/ci-metrics.py` — the #272 report: PR feedback, queue time per
-  pool, native-build share, shard durations and the infra/test failure split
+  pool, native-build share, e2e suite durations and the infra/test failure split
   across the consumer repos, from the Actions API. Runs locally with
   `GH_TOKEN=$(gh auth token) scripts/ci-metrics.py --repo <owner/name> --since
   <day> --until <day>`; `ci-metrics.yml` needs a `CI_METRICS_TOKEN` secret
@@ -164,7 +164,8 @@ that alters runtime behaviour — action `run:` logic, workflow wiring, new or
 changed inputs, pinned third-party action bumps — **must be validated against
 `vitalyiegorov/suuudokuuu` on the real fleet before it is released**, because
 that repo consumes every reusable workflow end to end (e2e, cache seeding,
-dev release, store publish, screenshots).
+dev release, store publish, screenshots). Its suite, like every consumer's, is
+a tester-army project on the simlock farm.
 
 Procedure:
 
@@ -179,7 +180,7 @@ Procedure:
    exercise it off `main`.
 3. Read the artifacts, not just the check marks. Several defects have shipped
    green: an `aab` no tester could install, an App Store Connect key that was
-   written but never exported, a Maestro workspace config silently dropped.
+   written but never exported.
    Confirm the *effect* — the artifact's extension, the absence of a fallback
    log line, the screenshot actually collected.
 4. Only then open the release PR and move the tag.
@@ -213,7 +214,7 @@ and style findings may be fixed or answered with reasoning.**
 
 Self-references pin to the exact release tag (`@vX.Y.Z # vX.Y.Z`);
 consumers pin to an exact tag or a full commit SHA, or float on the
-sliding major tag (`v4` is current) at their own risk. The exact
+sliding major tag (`v5` is current) at their own risk. The exact
 tag-and-publish procedure, including moving the floating major tag of the
 release being cut — and only that major's, so `v1` stays frozen — lives in
 [RELEASE.md](RELEASE.md) — never move a release tag manually outside that
@@ -246,10 +247,10 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 
 | Workflow | Purpose | Calling job `permissions:` |
 | --- | --- | --- |
-| `ios-maestro.yml` | iOS Maestro e2e (`ios-driver: local` or `device-cloud`; `tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
-| `android-maestro.yml` | Android Maestro e2e (`android-driver: avd` default on x86_64 KVM, `redroid` on `linux-aarch64`, or `device-cloud`; `test-framework` `e2e`/`both` runs a tester-army suite from Linux against Android devices leased from simlock) | `contents: read`, `packages: write`, `actions: read` |
+| `ios-e2e.yml` | iOS e2e: a tester-army suite from Linux against simulators leased from simlock (`tolerate-test-failures` for a time-boxed quarantine) | `contents: read`, `packages: write`, `actions: read` |
+| `android-e2e.yml` | Android e2e: the same, against Android devices leased from simlock | `contents: read`, `packages: write`, `actions: read` |
 | `seed-native-cache.yml` | The warm-up: publishes the base binary pull requests repack. Default-branch push with a `paths:` filter | `contents: read`, `packages: write`, `actions: read` |
-| `store-screenshots.yml` | Store screenshot capture matrix (`test-framework: maestro` on macOS, or `e2e` on Linux against simlock) + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
+| `store-screenshots.yml` | Store screenshot capture matrix (iOS through the e2e project on simlock, Android over adb) + gated fastlane upload | `contents: read`, `packages: write`, `actions: read` |
 | `native-dev-release.yml` | Dev build to a GitHub Release (`distribution: github-release`) or EAS internal distribution (`eas`); `build-location: local` or `cloud` | `contents: write` (+ `pull-requests: write` with `pr-comment: true`) |
 | `native-publish.yml` | Signed store publish (`eas build --local` + `eas submit`); `credentials-source: secrets\|eas`, `record-scope` per brand call, `mode: auto` with `ota-baseline: github-release\|eas-channel` | `contents: read` (+ `contents: write` for the store build record, + `actions: read` for `build-number: auto` in a private repo) |
 | `store-release.yml` | Submits an uploaded iOS build for App Review and promotes an Android build between Play tracks; dry run by default, `github-environment` gate | `contents: read` |
@@ -262,12 +263,12 @@ even a skipped job. Put this `permissions:` block on the job with `uses:`:
 | `swift-ios.yml` | Pure Swift/Xcode build, sharded tests, opt-in TestFlight publish | `contents: write` (always — its `publish` job requests it) |
 | `expo-base-plan.yml` | Shared repack decision the e2e/screenshot/warm-up workflows call; not called directly | — |
 
-**E2E suites on a simlock farm** — `test-framework: e2e|both` on
-`ios-maestro.yml` and `android-maestro.yml` runs a tester-army suite through
+**E2E suites on a simlock farm** — `ios-e2e.yml` and `android-e2e.yml` run a
+tester-army suite through
 the `e2e-suite` action; the suite's config imports `simlockDevices` from
 `@mobile-ci/e2e-simlock`, which the workflow installs from its own tag. Use the
 farm's public HTTPS URL, never a LAN address. See
-`docs/workflows/ios-maestro.md#e2e-suite-on-simlock`.
+`docs/workflows/ios-e2e.md#e2e-suite-on-simlock`.
 
 **EAS Update outside these workflows** — compose the actions: `eas-update`
 publishes to a channel; `eas-channel-fingerprint` decides `ota|native` against
@@ -294,29 +295,19 @@ source every OTA path uses (the project's own `expo-updates`).
   name (`NAME: ${{ secrets.NAME }}`); one it does not name arrives empty.
   `native-publish.yml` declares none.
 
-### Maestro flow-file convention
-
-Runnable Maestro flows are top-level `*.flow.yaml` files directly inside
-whatever directory you pass as `flows-dir`. Subflows, fixtures, and
-capture-only flows live in **subdirectories** of `flows-dir` and are never
-auto-discovered or run standalone by the sharding logic.
-
 ### Secrets
 
 Pass secrets explicitly, never `secrets: inherit` (that hands every repository
 secret to a third-party workflow).
 
-- No secrets: `ios-maestro.yml`, `android-maestro.yml`,
-  `seed-native-cache.yml`, `pr-closed-cleanup-reusable.yml`,
+- No secrets: `seed-native-cache.yml`, `pr-closed-cleanup-reusable.yml`,
   `preview-sweep-reusable.yml`, `expo-fingerprint-guard.yml`,
   `assert-distinct-fingerprints.yml`.
 - Optional masked env: `build-secrets-env` (e2e, screenshots, warm-up; only a
   digest enters the native key, so pass the warm-up the same secret) and
-  `maestro-secrets-env` (e2e, screenshots); `device-cloud-api-key` for the
-  `device-cloud` drivers.
-- `simlock-token` (`SIMLOCK_TOKEN`) for `ios-maestro.yml` and
-  `android-maestro.yml` with `test-framework` `e2e` or `both`, and for
-  `store-screenshots.yml`'s `e2e` driver.
+  `e2e-secrets-env` (e2e, screenshots).
+- `simlock-token` (`SIMLOCK_TOKEN`), required by `ios-e2e.yml` and
+  `android-e2e.yml`, and by `store-screenshots.yml` with iOS entries.
 - `native-publish.yml`: `EXPO_TOKEN`; `ASC_API_KEY` + `ASC_KEY_ID` +
   `ASC_ISSUER_ID` (iOS) and `GOOGLE_SERVICE_ACCOUNT_JSON` (Android), optional
   with `credentials-source: eas`; optional `EAS_EXTRA_ENV`.
@@ -337,30 +328,23 @@ which secret and how it fails fast when one is missing.
 ### Pinning
 
 Pin to an exact `vX.Y.Z` tag or a full commit SHA, with a trailing
-`# comment`. A floating major tag (`v4`) exists for consumers who accept
+`# comment`. A floating major tag (`v5`) exists for consumers who accept
 moving with the latest release of that major; `@main` can change without a
 deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.0 # v4.11.0
+uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
 ```
 
 ### Self-hosted runner prerequisites
 
-Every workflow above assumes a self-hosted fleet: macOS Xcode pools for iOS,
-and one of two Android host shapes — x86_64 Linux with `/dev/kvm` and an
-Android SDK for the default `avd` driver (no Docker daemon, no privileged
-container, no kernel module), or `linux-aarch64` with Docker,
-`binder_linux`, and privileged containers allowed for the `redroid` driver.
-The `avd` shape is what `android-maestro.yml`'s default `runner-labels`
-name; the `redroid` shape is selected by passing `android-driver: redroid`
-together with `runner-labels` for that pool. `android-maestro.yml`'s test
-job fails closed on the mismatch rather than timing out. Read
-[docs/self-hosted-runners.md](docs/self-hosted-runners.md) before wiring a
-pipeline — it covers exact Xcode install layout, which pool a job belongs
-on, KVM/emulator prerequisites, the `binder_linux` kernel module,
-privileged-container requirements, and the Redroid prewarm manifest format
-that avoids paying for a cold `docker pull` + first-boot on every shard.
+Every workflow above assumes a self-hosted fleet: macOS Xcode pools for iOS
+native builds, x86_64 Linux for repacks, Android builds and e2e suites, and a
+simlock farm for devices. An Android store capture adds x86_64 Linux with
+`/dev/kvm` or `linux-aarch64` with Docker, `binder_linux` and privileged
+containers. Read [docs/self-hosted-runners.md](docs/self-hosted-runners.md)
+before wiring a pipeline: it covers the Xcode install layout, which pool a job
+belongs on, and the Android capture hosts.
 
 ### Minimal consumer snippet
 
@@ -378,23 +362,31 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
     android:
         permissions:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
 Add the warm-up ([docs/examples/public-expo-app/warm-up.yml](docs/examples/public-expo-app/warm-up.yml))
 with the same `fingerprint-config` / `fingerprint-env`, or every pull request
 whose native key moved compiles natively.
+
+Moving from v4: see [What changed in v5.0.0](README.md#what-changed-in-v500).

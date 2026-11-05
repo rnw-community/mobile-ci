@@ -42,7 +42,7 @@ rules:
         rnw-community/mobile-ci/*: ref-pin
 
   # Each finding here is this action's OWN script exporting its OWN
-  # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a Maestro
+  # resolved, action-internal value (a resolved Xcode DEVELOPER_DIR, a tool
   # install path, a ccache directory) to $GITHUB_ENV/$GITHUB_PATH — not
   # attacker-controlled content. This is the same idiom
   # actions/setup-node and actions/setup-java use internally; zizmor itself
@@ -51,8 +51,7 @@ rules:
   # zizmor's local-path ignore matching is by file basename, not full
   # relative path — every composite action in this monorepo is named
   # action.yml, so this entry is necessarily repo-wide rather than scoped to
-  # the five action.yml files that currently trigger it (run-maestro-ios,
-  # run-maestro-android, run-maestro-android-redroid, setup-ccache-ios,
+  # the action.yml files that currently trigger it (setup-ccache-ios,
   # setup-xcode-pinned). Re-run the command above after adding a new
   # composite action to confirm it does not silently pick up a genuine
   # github-env finding under this same ignore.

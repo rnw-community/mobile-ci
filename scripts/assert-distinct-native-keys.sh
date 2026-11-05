@@ -33,7 +33,7 @@ if [ "$require_app_id" = false ]; then
   fi
   with_app_id=$(jq '[.[] | select((.appId // "") != "")] | length' <<< "$plans")
   if [ "$with_app_id" -eq 0 ]; then
-    echo "::notice::No $platform target declares an appId, so there is no appId to prove distinct; skipped the shared-key comparison. The callers that consume these bases (ios-maestro, android-maestro, store-screenshots) run it with their appIds."
+    echo "::notice::No $platform target declares an appId, so there is no appId to prove distinct; skipped the shared-key comparison. The callers that consume these bases (ios-e2e, android-e2e, store-screenshots) run it with their appIds."
     exit 0
   fi
 fi

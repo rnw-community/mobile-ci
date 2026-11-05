@@ -1,24 +1,17 @@
 # store-screenshots.yml
 
 `workflow_call` reusable workflow: fleet-native store screenshot capture for
-**iOS simulators and Android emulators or Redroid containers**, in one of two capture
-modes:
-
-- **`capture-mode: flows`** (default) — the legacy v1.5.x behavior,
-  byte-for-byte: scenes are numbered Maestro flow files discovered under
-  `screenshots-dir`. iOS-only; Android entries in the manifest fail closed.
-- **`capture-mode: direct`** — scenes come from a `capture-scenes` JSON
-  manifest shared across every device entry. Each scene is either a
-  **deep link** (app terminated → optional `seed-command` → launch →
-  `launch-settle-seconds` (iOS only) → open URL → settle →
-  [open-confirmation sheet check](#ios-open-confirmation-sheet) on iOS → OS
-  screenshot) or a **Maestro flow** (for scenes that need real interaction).
-  Required for Android.
+**iOS simulators leased from a simlock farm and Android emulators or Redroid
+containers**. Scenes come from a `capture-scenes` JSON manifest shared across
+every device entry. iOS cells are captured by your e2e project
+([E2E capture](#e2e-capture)); Android cells over adb from a deep link
+(app force-stopped → optional `seed-command` → launch → settle → OS screenshot).
+One call captures one platform: an iOS and an Android manifest are two calls.
 
 Nine jobs: **validate-manifest** (hosted `ubuntu-latest`; loads and resolves
 the optional [config file](#config-file) — including `build-strategy` — then
 fails closed on a malformed `capture-manifest`/`capture-scenes` or any
-mode/target cross-check; every downstream job reads its resolved values from
+target cross-check; every downstream job reads its resolved values from
 this job's outputs) → **plan-ios** and **plan-android** (each calls the
 reusable [`expo-base-plan.yml`](../../.github/workflows/expo-base-plan.yml) on
 the Linux repack pool for its single target — compute the native key with
@@ -27,14 +20,14 @@ published for it with [`expo-base-binary`](../../actions/expo-base-binary),
 and, when one exists, produce this run's binary from it with
 [`expo-repack`](../../actions/expo-repack) instead of compiling anything; each
 job's `native-targets` output is the set of targets whose key had no base) →
-**build-ios** (same build-job shape as `ios-maestro.yml`'s `build` job, and it
+**build-ios** (same build-job shape as `ios-e2e.yml`'s `build` job, and it
 runs **only** when `plan-ios` found no base for the `ios-target`; on the
 default branch it publishes the base it just built) and **build-android** (the
 same, from `plan-android` and the `android-target`) → **capture-ios** (one job per
-iOS manifest entry — download the built `.app`, boot that entry's pinned
-simulator once via [`capture-screenshots-ios`](../../actions/capture-screenshots-ios/README.md),
-loop `locales x appearances x scenes` on it, optional
-`post-capture-command`, upload `raw-screenshots-ios-<device-slug>`) and
+iOS manifest entry — download the built `.app`, run your e2e project against
+simulators of that device leased from simlock, one PNG per
+`locales x appearances x scenes` cell, optional `post-capture-command`, upload
+`raw-screenshots-ios-<device-slug>`) and
 **capture-android** (one job per Android entry —
 [`redroid-container`](../../actions/redroid-container/README.md) start, or
 [`android-emulator`](../../actions/android-emulator/README.md) start with
@@ -68,7 +61,7 @@ keep working unchanged).
 ```json
 [
   {"platform":"ios","device":"iPhone 17 Pro Max","locales":["en","de"],"appearances":["light","dark"],"orientation":"portrait"},
-  {"platform":"ios","device":"iPad Pro 13-inch (M4)","locales":[{"id":"en"},{"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE"}}],"appearances":["light"],"orientation":"landscape"},
+  {"platform":"ios","device":"iPad Pro 13-inch (M4)","locales":[{"id":"en"},"de"],"appearances":["light"],"orientation":"landscape"},
   {"platform":"android","device":"phone-6.7","width":1080,"height":2340,"density":440,"locales":["en","de"],"appearances":["light","dark"]}
 ]
 ```
@@ -76,25 +69,17 @@ keep working unchanged).
 Validation rules (all fail closed in `validate-manifest`):
 
 - `platform` — optional, `"ios"` (default) or `"android"`.
-- **iOS entries**: `device` is an exact simulator name (matched with no
-  fuzziness by `capture-screenshots-ios`), `locales` a non-empty array of
-  non-empty strings, `appearances` ⊆ `["light","dark"]`, optional
-  `orientation` `portrait` (default) or `landscape`.
+- **iOS entries**: `device` is an exact simulator name, `locales` a non-empty array of
+  non-empty strings, `appearances` ⊆ `["light","dark"]`; `orientation` must be
+  absent or `portrait`.
 - **Android entries**: `device` is a free-form label matching
   `^[A-Za-z0-9 ._-]+$` used **only** for the output/artifact slug — the
   actual device shape comes from required positive-integer
   `width`/`height`/`density` (applied via `wm size`/`wm density`);
   `orientation` must be absent or `portrait` (**Android landscape is a
   v1.6.0 non-goal** — the pixel-rotation bake relies on macOS-only `sips`).
-  Android entries also require `capture-mode: direct`.
-- **Locale items** may be a plain string (`"de"`) or an object
-  `{"id": "de", "env": {"LOCALE_IDENTIFIER": "de-DE"}}`. The object's `id`
-  must match `^[A-Za-z0-9_-]+$`, its optional `env` maps env names
-  (`^[A-Za-z_][A-Za-z0-9_]*$`) to string values, and the reserved names
-  `APP_ID`/`LOCALE`/`APPEARANCE` fail closed — the capture actions always
-  pass those themselves and an override would be order-dependent. The same
-  locale may not be listed twice in one entry. See
-  [Per-locale flow env](#per-locale-flow-env) for why this exists.
+- **Locale items** are plain strings (`"de"`); the same locale may not be
+  listed twice in one entry.
 - Device slugs (lowercased, non-alphanumeric runs collapsed to `-`) must be
   unique **per platform** — artifact names are platform-prefixed, so
   `iPhone 17 Pro` (iOS) and an Android label slugifying identically may
@@ -103,40 +88,7 @@ Validation rules (all fail closed in `validate-manifest`):
   `android-target`; at least one entry overall; at most 256 entries per
   platform.
 
-## Per-locale flow env
-
-**The problem:** a screenshot flow often needs Maestro env inputs that must
-*vary per locale* — suuudokuuu's flows read `LOCALE_IDENTIFIER` (the BCP-47
-tag the in-app language switcher applies) and `OS_LANGUAGE_MODE`, which
-cannot be derived from the bare `${LOCALE}` path segment. The workflow-level
-`maestro-env` input is one static list applied to every cell of every device,
-so the only pre-v1.8 workarounds were splitting the manifest into one entry
-per locale (one simulator boot each) or templating files inside a
-`seed-command`.
-
-**The contract:** declare a locale as an object instead:
-
-```json
-{"platform":"ios","device":"iPhone 17 Pro Max",
- "locales":[
-   "en",
-   {"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE","OS_LANGUAGE_MODE":"german"}},
-   {"id":"fr","env":{"LOCALE_IDENTIFIER":"fr-FR"}}
- ],
- "appearances":["light","dark"]}
-```
-
-Every flow-backed scene captured for `de` then receives `-e LOCALE=de -e
-LOCALE_IDENTIFIER=de-DE -e OS_LANGUAGE_MODE=german ...`; `en` receives only
-the global `maestro-env`. Precedence is documented and deterministic:
-global `maestro-env` pairs first, then the locale's own pairs (Maestro's
-last `-e` wins). Deep-link scenes run no Maestro and receive nothing.
-
-**When not to use it:** if the value is identical for every locale it
-belongs in `maestro-env`; if it varies per scene rather than per locale,
-give the scene its own flow that derives the value from `${LOCALE}`.
-
-## capture-scenes (direct mode)
+## capture-scenes
 
 One shared scene list; per-scene filters narrow where each scene runs.
 
@@ -144,33 +96,23 @@ One shared scene list; per-scene filters narrow where each scene runs.
 [
   {"name":"home","deepLink":"sudoku://home","readySelector":{"id":"HomeScreenSelectors.Root"}},
   {"name":"game","deepLink":"sudoku://game/continue","readySelector":{"id":"GameScreenSelectors.Root"},"settleSeconds":5},
-  {"name":"win","flow":"14.win.flow.yaml"},
+  {"name":"win","test":"14-win"},
   {"name":"stats","deepLink":"sudoku://stats","readySelector":{"id":"StatsScreenSelectors.Root"},"platforms":["ios"],"appearances":["dark"],"locales":["en"]}
 ]
 ```
 
 - `name` — required, `^[A-Za-z0-9_-]+$`, unique; becomes the output path
   segment `raw/<platform>/<device-slug>/<locale>/<appearance>/<name>.png`.
-- Exactly one of `deepLink` (non-empty string), `test` (an e2e scene name,
-  `^[A-Za-z0-9_.-]+$`, only with [`test-framework: e2e`](#e2e-capture)) or `flow` (path relative to
-  `screenshots-dir`; absolute paths and `..` segments fail closed; existence
-  is checked at capture time). Any flow scene makes `screenshots-dir`
-  required. In direct mode the `<number>.<name>.flow.yaml` naming convention
-  is **not** required — the scene name comes from the manifest, and each
-  flow must still produce exactly one `takeScreenshot` output. Flow scenes
-  are validated against the default Maestro (2.8.x): older 2.6.x releases
-  store `takeScreenshot` output in a layout the collector does not search,
-  so a downgraded `maestro-version` fails closed with the zero-screenshot
-  error rather than silently capturing nothing.
+- Exactly one of `deepLink` (non-empty string) or `test` (an e2e scene name,
+  `^[A-Za-z0-9_.-]+$`, iOS only; see [E2E capture](#e2e-capture)). Any other
+  driver, such as a `flow` key, fails closed.
 - `readySelector` — **required on every `deepLink` scene that applies to
-  `ios`, rejected on `flow` scenes** (a flow asserts its own readiness).
-  Either a non-empty string, matched by Maestro as text/regex, or an object
-  `{"id": "<testID>"}` matched by accessibility id. iOS capture asserts it
-  visible — via `extendedWaitUntil`, bounded by the cell's effective settle
-  seconds with a 5s floor — after the open-confirmation sheet is dismissed
-  and immediately before `simctl io screenshot`; the cell fails closed if it
-  never appears. Pick an element the scene renders unconditionally: a screen
-  root is a better anchor than a value that a setting can hide.
+  `ios`, rejected on `test` scenes** (a test asserts its own readiness).
+  Either a non-empty string, matched as text/regex, or an object
+  `{"id": "<testID>"}` matched by accessibility id. The capture waits for it
+  to be visible before the screenshot, and the cell fails closed if it never
+  appears. Pick an element the scene renders unconditionally: a screen root is
+  a better anchor than a value that a setting can hide.
 
   When a cell fails this check the job fails, but the
   `raw-screenshots-<platform>-<device-slug>` artifact is still uploaded with
@@ -181,10 +123,7 @@ One shared scene list; per-scene filters narrow where each scene runs.
   Android capture does not consume `readySelector` yet, so it is required
   only of scenes that apply to `ios`; an `android`-only deep-link scene may
   omit it, and a shared scene's selector is simply ignored on the Android
-  leg. The Android driver has no equivalent of the SpringBoard
-  open-confirmation sheet, but it has the same blind spot about which
-  activity is actually resumed — extending the probe there is tracked
-  separately.
+  leg.
 - Optional `settleSeconds` — integer 0–120, overriding the workflow-level
   `settle-seconds` for deep-link scenes.
 - Optional `platforms` — non-empty subset of `["ios","android"]`; default
@@ -193,63 +132,26 @@ One shared scene list; per-scene filters narrow where each scene runs.
 - Optional `locales`/`appearances` — filters; the scene is captured only for
   cells in the intersection with the device entry's lists.
 
-Maestro is only installed on a capture job when its scene set actually
-contains a flow, or — on iOS — a deep link, which needs it for the
-open-confirmation sheet check below. An all-deep-link Android manifest never
-touches Maestro.
-
-## iOS open-confirmation sheet
-
-On newer iOS runtimes SpringBoard answers a `simctl openurl` deep link with
-an **`Open in "<app>"?` / Cancel / Open** confirmation sheet, drawn over the
-home screen with the target app deactivated behind it, so the screencap that
-follows is a picture of SpringBoard rather than of the app. Nothing in
-`simctl` reports which bundle is frontmost, and pre-launching the app before
-the `openurl` does not avoid the sheet, so `capture-screenshots-ios` runs a
-generated one-flow Maestro check on every deep-link cell, after its settle
-and immediately before its screencap: it taps the sheet's confirm button when
-the sheet is on screen, then `assertNotVisible`s it. A sheet still up fails
-that cell (retried once, then the capture job fails naming the scene, locale
-and appearance) instead of writing a screenshot of it.
-
-The sheet is localised to the **simulator's own** language, which this
-workflow never changes — the `locales` axis writes app-scoped preferences
-only — so it is English on a stock CoreSimulator device.
-`deeplink-confirm-title`/`deeplink-confirm-button` default to the English
-strings; a simulator provisioned in another language fails the capture
-closed up front until **both** are set to that language's strings. Both are
-rejected, not just the title, because a simulator that already carries a
-persisted approval never shows the sheet and would leave a wrong button label
-unvalidated.
-
 ## Seed hook contract
 
-`seed-command` (direct mode only) runs once per
-`locale x appearance x scene` cell, from the repo root, with the app
-installed and terminated (iOS) / force-stopped (Android), before the scene's
+`seed-command` (Android only; an iOS capture seeds from its e2e project and
+fails closed if one is set) runs once per `locale x appearance x scene` cell,
+from the repo root, with the app installed and force-stopped, before the scene's
 launch. A seed failure marks that cell failed closed — no capture, no retry
 — and the capture job fails at the end. Environment:
 
-| Var              | iOS                    | Android |
-| ----------------- | ---------------------- | -------------- |
-| `SCENE`           | scene name             | same |
-| `LOCALE`          | current locale         | same |
-| `APPEARANCE`      | `light`/`dark`         | same |
-| `APP_ID`          | bundle id              | application id |
-| `PLATFORM`        | `ios`                  | `android` |
-| `DEVICE_SLUG`     | slugified device       | same |
-| `SIMULATOR_UDID`  | booted simulator UDID  | — |
-| `ANDROID_SERIAL`  | —                      | adb serial of the Android device |
-| `APP_PATH`        | packaged `.app` path   | — |
-| `APK_PATH`        | —                      | packaged `.apk` path |
+| Var              | Value |
+| ----------------- | -------------- |
+| `SCENE`           | scene name |
+| `LOCALE`          | current locale |
+| `APPEARANCE`      | `light`/`dark` |
+| `APP_ID`          | application id |
+| `PLATFORM`        | `android` |
+| `DEVICE_SLUG`     | slugified device |
+| `ANDROID_SERIAL`  | adb serial of the Android device |
+| `APK_PATH`        | packaged `.apk` path |
 
-Reference recipe (the suuudokuuu app's redux-persist state): on iOS, resolve
-the app's data container via
-`xcrun simctl get_app_container "$SIMULATOR_UDID" "$APP_ID" data`, then
-write the seed JSON into the expo-sqlite DB under it — creating the DB
-directory itself if the app has never launched (expo-sqlite's directory does
-not exist before first launch; the hook must `mkdir -p` it). On Android,
-`adb pull` the DB, rewrite it, `adb push` it back, and delete
+Reference recipe (a redux-persist state in expo-sqlite): `adb pull` the DB, rewrite it, `adb push` it back, and delete
 any stale `-wal`/`-shm` sidecar files so SQLite does not replay them over
 the seeded state. To rewrite the DB the hook can shell out to a host
 `sqlite3` binary, or — on Node >= 22.13 — use the built-in `node:sqlite`
@@ -276,28 +178,27 @@ values before relying on this.
 
 ## E2E capture
 
-`test-framework: e2e` captures the iOS cells with your
-[tester-army e2e](https://github.com/tester-army/e2e) project instead of
-Maestro: one Linux job per `capture-manifest` iOS entry (`capture-ios-e2e`)
-leases simulators of that `device` from simlock, the same way
-[ios-maestro.yml's e2e suite](ios-maestro.md#e2e-suite-on-simlock) does.
-No macOS runner captures anything; the app is still built or repacked as
-before, and the upload job is unchanged.
+The iOS cells are captured by your
+[tester-army e2e](https://github.com/tester-army/e2e) project: one Linux job per
+`capture-manifest` iOS entry (`capture-ios`) leases simulators of that `device`
+from simlock, the same way
+[ios-e2e.yml's e2e suite](ios-e2e.md#e2e-suite-on-simlock) does. The app is
+built or repacked as usual, and the upload job is unchanged. `e2e-dir`,
+`simlock-url` and the `simlock-token` secret are required with iOS entries.
 
 Scenes name what drives them:
 
 - `deepLink` (with its required `readySelector`) — the suite opens the link
   and waits for the selector, then settles `settleSeconds`.
 - `test` — the name of a scene your e2e project implements (a walk from a
-  freshly launched app to the screen). `flow` is refused with `e2e`, and
-  `test` is refused with `maestro`.
+  freshly launched app to the screen). `test` is refused on an Android capture.
 
 `seed-command` is refused too: there is no capture host to run it on, so the
 suite seeds each cell itself on the leased simulator.
 
 The job writes a plan, a JSON array with one object per
 locale × appearance × scene cell, filtered by each scene's `platforms`,
-`locales` and `appearances` exactly as the macOS capture is:
+`locales` and `appearances` exactly:
 
 ```json
 [{"scene":"01-home","locale":"en","appearance":"light","settleSeconds":6,
@@ -315,15 +216,14 @@ locale × appearance × scene cell, filtered by each scene's `platforms`,
 | `SCREENSHOT_DEVICE` / `SCREENSHOT_DEVICE_SLUG` | the entry's `device` (lease that model) and its slug |
 | `SCREENSHOT_STATUS_BAR` | `override` (9:41, full bars, charged) or `real`, from `status-bar-override` |
 | `E2E_APP_PATH`, `E2E_APP_ID`, `E2E_TARGET` | the `.app`, `ios-target.appId` and `ios-target.name` |
-| `E2E_WORKERS`, `E2E_RETRIES`, `E2E_SESSION` | as in [ios-maestro.yml](ios-maestro.md#e2e-suite-on-simlock) |
+| `E2E_WORKERS`, `E2E_RETRIES`, `E2E_SESSION` | as in [ios-e2e.yml](ios-e2e.md#e2e-suite-on-simlock) |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | the farm |
 
 It must write each cell's PNG to its `path` (a recorded clip may sit beside
 it as `<scene>.mp4`). The job fails closed when the command fails, when its
 report (`e2e-dir/.e2e/report.json`) is missing, executed nothing or did not
 pass, and when any planned path holds no PNG. `post-capture-command` then
-runs, and `raw-screenshots-ios-<device-slug>` is uploaded exactly as the
-macOS capture uploads it, so `apple-screenshot-slots`, `compose-command` and
+runs, and `raw-screenshots-ios-<device-slug>` is uploaded, so `apple-screenshot-slots`, `compose-command` and
 the upload see no difference. The e2e report is uploaded as
 `e2e-screenshots-ios-<device-slug>`, and leases a cancelled run left behind
 are released from `e2e-dir/.e2e/simlock-leases.json`. As in the e2e job,
@@ -338,11 +238,10 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: '["self-hosted","linux"]'
             config-path: .github/store-screenshots.config.json
-            test-framework: e2e
             e2e-dir: e2e
             e2e-runner-labels: '["self-hosted","linux","4x8"]'
             e2e-command: npx e2e run --config media.config.ts --target ios
@@ -364,19 +263,15 @@ loop) is identical on both:
   [docs/self-hosted-runners.md](../self-hosted-runners.md) (binder_linux
   module, privileged containers, prewarm manifest).
 - **`avd`** (default) — Google's emulator via
-  [`android-emulator`](../../actions/android-emulator/README.md), the same
-  action `android-maestro.yml`'s `run-maestro-android` boots its shards with,
-  configured by the `emulator-*` inputs (same names and defaults as
-  `android-maestro.yml`). Needs an x86_64 Linux runner with `/dev/kvm` — the
-  pool `android-maestro.yml` defaults to — and no Docker, privileged
+  [`android-emulator`](../../actions/android-emulator/README.md), configured by
+  the `emulator-*` inputs. Needs an x86_64 Linux runner with `/dev/kvm` and no Docker, privileged
   container or `binder_linux`. It fails closed on another architecture, and
   when `emulator -accel-check` reports no hardware acceleration. The guest's
   RAM and cores are derived from the capture container's cgroup limits unless
-  set, `emulator-slots-dir` caps emulators per host exactly as it does for
-  the Maestro shards, and the always-run stop kills only this job's emulator
+  set, `emulator-slots-dir` caps emulators per host, and the always-run stop kills only this job's emulator
   processes. Every capture job boots a dedicated `mobile-ci-screenshots` AVD
   with `-wipe-data`, so no app state or device-wide setting crosses between a
-  capture job and a Maestro job sharing a persistent host. A `google_apis`
+  capture job and another job sharing a persistent host. A `google_apis`
   image carries real Google Play Services, which Redroid's stock images do
   not (see the rendering caveat below).
 
@@ -400,8 +295,7 @@ x86_64 KVM pool can omit both inputs. Explicit `redroid-*` settings remain
 available when `android-driver: redroid` is selected.
 
 - `android-capture-runner-labels` deliberately does **not** fall back to
-  `runner-labels`, whose macOS default can run neither driver;
-  `capture-runner-labels` stays iOS-only for the same reason.
+  `runner-labels`, whose macOS default can run neither driver.
 - The Android **build** happens elsewhere: `android-build-runner-labels` →
   `build-runner-labels` → `runner-labels` (the macOS default is correct —
   Google publishes no `linux-aarch64` NDK/cmake, so the Redroid pool cannot
@@ -509,84 +403,6 @@ Store Connect. It requires the `ASC_API_KEY`, `ASC_KEY_ID`, and
 `ASC_ISSUER_ID` secrets and an `ios-target`; Android-only runs have nothing
 to dedupe and fail closed if enabled without an `ios-target`.
 
-## Flow convention (`capture-mode: flows`)
-
-Unchanged from v1.5.x — screenshot scenes are numbered top-level
-`*.flow.yaml` files directly inside `screenshots-dir`:
-
-```text
-apps/mobile/e2e/flows/screenshots/
-├── 01.home.flow.yaml          # runnable scene -> raw/ios/<device-slug>/<locale>/<appearance>/home.png
-├── 02.settings.flow.yaml      # runnable scene -> .../settings.png
-└── subflows/                  # never auto-discovered or run standalone
-    ├── apply-language.flow.yaml
-    └── apply-appearance.flow.yaml
-```
-
-The scene name used in the output path is the filename with its numeric
-prefix and `.flow.yaml` suffix stripped (`01.home.flow.yaml` -> `home`) -
-`capture-screenshots-ios` fails closed if a discovered file does not match
-that `<number>.<name>.flow.yaml` shape.
-
-**Locale/appearance are applied at two layers.** `capture-screenshots-ios`
-sets both at the OS level before each locale's/appearance's scenes run
-(`xcrun simctl ui <udid> appearance light|dark`, and a best-effort
-`defaults write <app-id> AppleLanguages/AppleLocale`), *and* passes
-`-e LOCALE=<value> -e APPEARANCE=<value>` into every flow-backed scene. An
-app that follows the system setting needs no flow changes at all; an app
-with its own in-app language/theme switcher needs its scenes to read
-`${LOCALE}`/`${APPEARANCE}` and apply them - the reference convention
-(mirrored from `apply-language.flow.yaml`/`apply-appearance.flow.yaml` in
-[vitalyiegorov/suuudokuuu](https://github.com/vitalyiegorov/suuudokuuu)) is a
-subflow under `screenshots-dir`'s `subflows/` directory that each scene
-`runFlow`s at its start:
-
-```yaml
-# screenshots/subflows/apply-appearance.flow.yaml
-appId: ${APP_ID}
----
-- runFlow:
-      when:
-          true: ${APPEARANCE == 'dark'}
-          visible:
-              id: 'SettingsScreenSelectors.DarkModeSwitch'
-              checked: false
-      commands:
-          - tapOn:
-                id: 'SettingsScreenSelectors.DarkModeSwitch'
-```
-
-```yaml
-# screenshots/01.home.flow.yaml
-appId: ${APP_ID}
----
-- runFlow: subflows/reset-app.flow.yaml
-- runFlow:
-      file: subflows/apply-language.flow.yaml
-      env:
-          LOCALE: ${LOCALE}
-- runFlow:
-      file: subflows/apply-appearance.flow.yaml
-      env:
-          APPEARANCE: ${APPEARANCE}
-- takeScreenshot: 'home'
-```
-
-## Maestro workspace config
-
-Maestro only auto-discovers a workspace `config.yaml` when the CLI is pointed
-at a **directory**. Both capture actions hand the CLI one scene flow file per
-invocation, so a workspace `config.yaml` is never read and nothing warns about
-it. `maestro-config` passes it explicitly (`--config`) to every `maestro test`
-a flow-backed scene runs.
-
-The case that motivated it: an `@expo/ui` SwiftUI `.sheet()` modal renders its
-React Native content outside the app's main window, so the XCUITest hierarchy
-Maestro snapshots never contains it and every selector inside the sheet times
-out at its assertion budget. The fix is one workspace-config key —
-`platform.ios.snapshotKeyHonorModalViews: false` — which is inert unless
-`--config` actually reaches the CLI.
-
 ## Config file
 
 Everything app-shaped about a caller — targets, manifest, scenes, build and
@@ -596,7 +412,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -624,8 +440,7 @@ runs.
 **explicit workflow input > config file value > built-in default.**
 
 Every config-loadable input whose old `default:` was a non-empty literal
-(`capture-mode`, `settle-seconds`, `deeplink-confirm-title`,
-`deeplink-confirm-button`, `screenshots-dir`, `install-command`,
+(`settle-seconds`, `install-command`,
 `android-gradle-task`,
 `build-strategy`, `screenshots-download-dir`, `asc-dedupe-version-state`) now
 declares
@@ -674,12 +489,9 @@ Exactly these 33 keys may appear in the config file (plus the tolerated
 `$schema` key described above, which is not a workflow input and is stripped
 before this list is checked). Anything else fails closed:
 
-`ios-target`, `android-target`, `capture-manifest`, `capture-mode`,
-`capture-scenes`, `screenshots-dir`, `seed-command`, `settle-seconds`,
-`launch-settle-seconds`,
-`deeplink-confirm-title`, `deeplink-confirm-button`,
-`status-bar-override`, `apple-screenshot-slots`, `maestro-env`,
-`maestro-config`, `build-env`, `install-command`, `build-command`,
+`ios-target`, `android-target`, `capture-manifest`,
+`capture-scenes`, `seed-command`, `settle-seconds`,
+`status-bar-override`, `apple-screenshot-slots`, `build-env`, `install-command`, `build-command`,
 `android-gradle-task`,
 `android-gradle-args`, `build-strategy`, `rct-use-prebuilt-rncore`,
 `rct-use-rn-dep`, `upload-screenshots`, `upload-command`,
@@ -720,7 +532,7 @@ resolved to before this feature existed.
   otherwise) already exists in the app directory — the config file can supply
   the command string, never the lane itself; if you have no uploader, keep
   `upload-screenshots: false` and consume the `raw-screenshots-*` artifacts.
-- `capture-mode: direct` on Android assumes you already have a working
+- An Android capture assumes you already have a working
   Android build target (`android-target`); this workflow builds it, it does
   not create one.
 - `apple-screenshot-slots` **keys** must match `^[0-9]+x[0-9]+$`; the
@@ -748,33 +560,29 @@ resolved to before this feature existed.
             "platform": "ios",
             "device": "iPhone 17 Pro Max",
             "locales": [
-                { "id": "en", "env": { "LOCALE_IDENTIFIER": "en-US", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "de", "env": { "LOCALE_IDENTIFIER": "de-DE", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "es", "env": { "LOCALE_IDENTIFIER": "es-ES", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "fr", "env": { "LOCALE_IDENTIFIER": "fr-FR", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "pt", "env": { "LOCALE_IDENTIFIER": "pt-BR", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "sv", "env": { "LOCALE_IDENTIFIER": "sv-SE", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "hi", "env": { "LOCALE_IDENTIFIER": "hi-IN", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "ar", "env": { "LOCALE_IDENTIFIER": "ar-SA", "OS_LANGUAGE_MODE": "true" } },
-                { "id": "id", "env": { "LOCALE_IDENTIFIER": "id-ID", "OS_LANGUAGE_MODE": "true" } }
+                "en",
+                "de",
+                "es",
+                "fr",
+                "pt",
+                "sv",
+                "hi",
+                "ar",
+                "id"
             ],
             "appearances": ["light"]
         }
     ],
-    "capture-mode": "direct",
     "capture-scenes": [
         { "name": "home", "deepLink": "suuudokuuu://", "readySelector": { "id": "HomeScreenSelectors.Root" } },
         { "name": "game", "deepLink": "suuudokuuu://game", "readySelector": { "id": "GameScreenSelectors.Root" } },
         { "name": "stats", "deepLink": "suuudokuuu://history", "readySelector": { "id": "HistoryScreenSelectors.Root" } }
     ],
-    "screenshots-dir": "tests/app-tests/flows/screenshots",
-    "seed-command": "node tests/app-tests/scripts/ci-seed-scene.ts",
     "settle-seconds": 5,
     "status-bar-override": true,
     "rct-use-prebuilt-rncore": true,
     "rct-use-rn-dep": true,
     "build-env": "APP_VARIANT=production\n",
-    "maestro-env": "OS_LANGUAGE_MODE=true\n",
     "apple-screenshot-slots": {
         "1320x2868": "iPhone 6.9\"",
         "1290x2796": "iPhone 6.9\"",
@@ -804,7 +612,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -821,11 +629,11 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
-            capture-runner-labels: '["self-hosted","macOS","ARM64","macos-maestro"]'
+            e2e-runner-labels: '["self-hosted","linux-portable-4x8"]'
             upload-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
         secrets:
             ASC_API_KEY: ${{ secrets.EXPO_IOS_ASC_API_KEY }}
@@ -844,32 +652,20 @@ loadable from `config-path`; for those, the declared `default:` in
 | Name                          | Required | Default                             | Description |
 | -------------------------------- | -------- | -------------------------------------- | -------------- |
 | `config-path`                      | no       | `''`                                     | Repository-relative path to a JSON config file holding this workflow's app-shaped configuration; see [Config file](#config-file). Empty (the default) changes nothing. |
-| `runner-labels`                    | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS build/capture jobs. |
+| `runner-labels`                    | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS build job. |
 | `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
 | `runs-on-cache-bypass` | no | `false` | Opt-in. When a job lands on a RunsOn runner started with `extras=s3-cache`, whose cache proxy takes over the Actions results URL and breaks `actions/upload-artifact`/`download-artifact`, run a SHA-pinned `runs-on/action` first (via the [`runs-on-cache-bypass`](../../actions/runs-on-cache-bypass/README.md) action). A logged no-op on every other runner. |
 | `build-runner-labels`               | no       | `''`                                     | JSON array of runner labels for the iOS build job (and the Android build job, unless `android-build-runner-labels` is set). Falls back to `runner-labels`. |
-| `capture-runner-labels`             | no       | `''`                                     | JSON array of runner labels for the **iOS** capture job only (Android uses `android-capture-runner-labels` — a deliberate asymmetry, the pools can never overlap). Falls back to `runner-labels`. Must be a macOS pool that can run the `ios-simulator-archs` slice: arm64 for `arm64`; x86_64, or arm64 with Rosetta 2, for `x86_64`. |
-| `ios-simulator-archs`               | no       | `arm64`                                   | Simulator slice the iOS build produces: `arm64` or `x86_64`, anything else fails closed. Same contract as [`ios-maestro.yml`'s](ios-maestro.md#x86_64-simulator-builds): `x86_64` builds with `EXCLUDED_ARCHS=arm64`, gets its own native key, and the capture job checks the host can run it (natively, or under Rosetta 2) before a simulator boots. |
+| `ios-simulator-archs`               | no       | `arm64`                                   | Simulator slice the iOS build produces: `arm64` or `x86_64`, anything else fails closed. Same contract as [`ios-e2e.yml`'s](ios-e2e.md#x86_64-simulator-builds): `x86_64` builds with `EXCLUDED_ARCHS=arm64`, gets its own native key, and the capture job checks the host can run it (natively, or under Rosetta 2) before a simulator boots. |
 | `upload-runner-labels`              | no       | `''`                                     | JSON array of runner labels for the gated upload job. Falls back to `runner-labels`. |
 | `ios-target`                        | when the manifest has iOS entries | `''`   | Single iOS build target JSON object: `{name, appDir, workspace, scheme, appId, prebuildCommand}`. Renamed from `target` in v1.6.0. **cfg** |
-| `android-target`                    | when the manifest has Android entries | `''` | Single Android build target JSON object: `{name, appDir, appId, prebuildCommand}` — the same per-target shape as `android-maestro.yml`'s `targets` entries. **cfg** |
+| `android-target`                    | when the manifest has Android entries | `''` | Single Android build target JSON object: `{name, appDir, appId, prebuildCommand}` — the same per-target shape as `android-e2e.yml`'s `targets` entries. **cfg** |
 | `capture-manifest`                  | **yes**, as the input or a `config-path` key | — | JSON array of capture matrix entries, one job per entry; see [capture-manifest](#capture-manifest). Declared `required: false` since v1.11.0 so it can come from `config-path` instead; an empty resolved value still fails closed. **cfg** |
-| `capture-mode`                      | no       | `flows`                                   | `flows` (legacy discovery, iOS-only) or `direct` (scene-manifest-driven). Anything else fails closed. **cfg** |
-| `capture-scenes`                    | when `capture-mode: direct` | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes-direct-mode). Fails closed if set in `flows` mode. **cfg** |
-| `seed-command`                      | no       | `''`                                     | Per-cell seed hook, direct mode only (fails closed in `flows` mode); see [Seed hook contract](#seed-hook-contract). **cfg** |
+| `capture-scenes`                    | **yes** | `''`          | JSON array of scenes; see [capture-scenes](#capture-scenes). **cfg** |
+| `seed-command`                      | no       | `''`                                     | Per-cell seed hook, Android only (fails closed with iOS entries); see [Seed hook contract](#seed-hook-contract). **cfg** |
 | `settle-seconds`                    | no       | `3`                                       | Seconds (integer 0–120) between a deep-link launch and its screenshot; per-scene `settleSeconds` overrides it. **cfg** |
-| `launch-settle-seconds`             | no       | `0`                                       | iOS only. Seconds (integer 0–120) between `simctl launch` and the deep-link `simctl openurl`, distinct from `settle-seconds` (the openurl-to-screenshot wait). Added after a fleet session needed both settles independently tunable under host load (suuudokuuu#388). **cfg** |
-| `deeplink-confirm-title`            | no       | `Open in .*\?`                            | iOS direct mode only. Maestro text pattern matching the title of the [open-confirmation sheet](#ios-open-confirmation-sheet); tapped away and then asserted gone before every deep-link screencap. The trailing `\?` anchors the default to the sheet's own title rather than to app content that merely starts with `Open in`. Fails closed when the simulator's own language is not English and this or `deeplink-confirm-button` is still the default. **cfg** |
-| `deeplink-confirm-button`           | no       | `Open`                                    | iOS direct mode only. Label of the confirm button on the sheet matched by `deeplink-confirm-title`. Also fails closed when the simulator's own language is not English and it is still the default. **cfg** |
-| `status-bar-override`               | no       | `true`                                    | Store-clean status bar in both modes (iOS `simctl status_bar` 9:41 override; Android SystemUI demo mode). Fails closed if it cannot be applied. **cfg** |
+| `status-bar-override`               | no       | `true`                                    | Store-clean status bar (Android SystemUI demo mode; an iOS capture sets its own in the e2e project). Fails closed if it cannot be applied. **cfg** |
 | `apple-screenshot-slots`            | no       | `''`                                     | JSON object `{"<W>x<H>": "<slot-label>"}`; non-empty enables the fail-closed upload-job resolution check. See [apple-screenshot-slots](#apple-screenshot-slots). **cfg** |
-| `screenshots-dir`                   | in `flows` mode, or when a scene has a `flow` | `''` | Scene-discovery root (`flows` mode) / the directory flow-backed scenes resolve against (`direct` mode). **cfg** |
-| `scenes-name-pattern`               | no       | `*.flow.yaml`                             | Space-separated `find -name` globs selecting scenes directly inside `screenshots-dir` (`flows` mode only). |
-| `scenes-exclude-pattern`            | no       | `''`                                     | Optional `find ! -name` globs excluding matched scenes by basename (`flows` mode only): one glob, or a comma- and/or newline-separated list (each entry trimmed, empty entries ignored; a glob containing a comma is not supported). |
-| `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. **cfg** |
-| `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. **cfg** |
-| `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode — on iOS also for deep-link scenes, which need it for the [open-confirmation sheet](#ios-open-confirmation-sheet) check. |
-| `test-framework` | no | `maestro` | What drives the iOS capture: `maestro` (macOS runner, simctl + Maestro) or `e2e` (your tester-army e2e project, from a Linux runner, against simulators leased from simlock). `e2e` needs `capture-mode: direct`, iOS entries only and portrait. See [E2E capture](#e2e-capture). |
 | `e2e-dir` | with `e2e` | `''` | Directory of the e2e project (its `package.json`, lockfile and e2e config), relative to the repository root. |
 | `e2e-runner-labels` | no | `''` (falls back to `control-runner-labels`) | JSON array of Linux runner labels for the e2e capture job; any runner with Node that reaches `simlock-url`. It hosts one worker per leased device. |
 | `e2e-node-version` | no | `^24.8.0` | Node.js version the e2e capture job runs the e2e project with. |
@@ -878,11 +674,6 @@ loadable from `config-path`; for those, the declared `default:` in
 | `e2e-workers` | no | `1` | Devices leased and cells captured at once per device entry (`E2E_WORKERS`), lowered to the farm's free capacity when the farm reports it. |
 | `e2e-retries` | no | `1` | Retries per failed cell inside the run (`E2E_RETRIES`). |
 | `simlock-url` | with `e2e` | `''` | Base URL of the simlock gateway the e2e capture leases simulators from (`SIMLOCK_URL`). |
-| `simslim-version` | no | `0.12.2` | iOS capture jobs only. Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
-| `simslim-sha256` | no | `b47302da6fb8...` | iOS capture jobs only. SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
-| `simulator-slim-profile` | no | `bundled` | iOS capture jobs only. `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
-| `simulator-slim-repair` | no | `true` | iOS capture jobs only. `true` (the default) re-applies the profile in-job with `simslim on` (reboots the simulator) when `simulator-slim-profile` reports drift, then verifies again; a second mismatch still fails. Set it to `false` once the host image ships slimmed devices. |
-| `simulator-requires` | no | `''` | iOS capture jobs only. Comma-separated simslim feature IDs the capture depends on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
 | `post-capture-command`              | no       | `''`                                     | Optional consumer-owned command run in each capture job (both platforms) after capture, before upload — e.g. a device-bezel framing script. Runs with `SCREENSHOTS_OUTPUT_DIR` and `DEVICE_SLUG` in its environment. Its failure fails the capture job. |
 | `xcode-version`                     | no       | `26.4.1`                                  | Xcode version string. |
 | `xcode-build`                       | no       | `17E202`                                  | Xcode build number. |
@@ -931,7 +722,7 @@ loadable from `config-path`; for those, the declared `default:` in
 | `emulator-ram-size`                 | no       | `''`                                      | `avd` only. Emulator RAM in MB. Empty derives it from the capture runner's cgroup memory limit (256 MB per GiB, clamped 1536–4096; 2048 on a 4 vCPU / 8 GiB container); with no limit detected the profile default applies. |
 | `emulator-heap-size`                | no       | `''`                                      | `avd` only. Android VM heap size in MB. |
 | `emulator-cores`                    | no       | `''`                                      | `avd` only. Emulator CPU cores. Empty derives half the cgroup CPU quota, clamped 2–4. |
-| `emulator-slots-dir`                | no       | `''`                                      | `avd` only. Host directory of fleet-provisioned `slot-*` files capping concurrent emulators per host, shared with `android-maestro.yml`'s input of the same name. Empty takes no slot; a missing or empty directory fails the capture job. |
+| `emulator-slots-dir`                | no       | `''`                                      | `avd` only. Host directory of fleet-provisioned `slot-*` files capping concurrent emulators per host, shared with `android-e2e.yml`'s input of the same name. Empty takes no slot; a missing or empty directory fails the capture job. |
 | `emulator-slot-timeout-minutes`     | no       | `60`                                      | `avd` only. Minutes to wait for a free slot; counts against `android-capture-timeout-minutes`. |
 | `redroid-image`                     | no       | `redroid/redroid:15.0.0_64only-latest`    | Redroid image tag, used on a prewarm-manifest miss. Must resolve to API 33+. |
 | `redroid-memory`                    | no       | `3g`                                      | Container memory limit. |
@@ -961,8 +752,8 @@ is addressed by, [`expo-base-binary`](../../actions/expo-base-binary) fetches
 or publishes the base under that key, and
 [`expo-repack`](../../actions/expo-repack) turns the base into this run's
 binary and asserts the result against `expect-config`. Both platforms follow
-the identical rule, and it is the same rule `ios-maestro.yml`,
-`android-maestro.yml` and `seed-native-cache.yml` apply — a base warmed by one
+the identical rule, and it is the same rule `ios-e2e.yml`,
+`android-e2e.yml` and `seed-native-cache.yml` apply — a base warmed by one
 is repacked by the others, as long as `fingerprint-env`, `fingerprint-config`,
 `base-flavor` and the pinned toolchain match byte for byte.
 
@@ -1043,22 +834,22 @@ always()` (or `!cancelled()`) to see a `failed` result:
 | `ASC_KEY_ID`          | with `asc-dedupe-screenshots` | App Store Connect API key ID for the dedupe gate's JWT. |
 | `ASC_ISSUER_ID`       | with `asc-dedupe-screenshots` | App Store Connect API issuer ID (UUID) for the dedupe gate's JWT. |
 | `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md), the same parser as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
-| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan/repack legs and the `build-ios`/`build-android` jobs, parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest enters the native key, never a value, so the warm-up must be passed the same secret. See [ios-maestro.md](ios-maestro.md#secrets). |
-| `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to the resolved `maestro-env` and exported to the capture jobs' environment for `seed-command`. A capture job uploads only screenshots. |
-| `simlock-token` | with `test-framework: e2e` | simlock agent token (`SIMLOCK_TOKEN`) the e2e capture leases simulators with. Reaches only the e2e capture job's run and lease-release steps. A call that needs it and lacks it fails in `validate-manifest`. |
+| `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan/repack legs and the `build-ios`/`build-android` jobs, parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest enters the native key, never a value, so the warm-up must be passed the same secret. See [ios-e2e.md](ios-e2e.md#secrets). |
+| `e2e-secrets-env` | no | Masked `KEY=VALUE` entries, one line each, exported to the capture jobs' environment. A capture job uploads only screenshots. |
+| `simlock-token` | with iOS entries | simlock agent token (`SIMLOCK_TOKEN`) the e2e capture leases simulators with. Reaches only the e2e capture job's run and lease-release steps. A call that needs it and lacks it fails in `validate-manifest`. |
 
 Unlike `native-publish.yml`, none of these secrets are hard-required even
 when `upload-screenshots` is `true` - `upload-command` is entirely
 consumer-owned, and some fastlane setups authenticate a different way (e.g.
 `FASTLANE_SESSION` threaded through `EAS_EXTRA_ENV`). The two capture
 pipelines themselves need no secrets at all; `build-secrets-env` and
-`maestro-secrets-env` are there for an app whose build or seed hook does, and
+`e2e-secrets-env` are there for an app whose build or seed hook does, and
 with neither passed every job behaves exactly as before.
 
 ## Concurrency
 
 The workflow sets its own `concurrency` group of the caller's workflow name,
-the `config-path` and `screenshots-dir` inputs and, for a `pull_request` run, the pull request's ref. Only a
+the `config-path` input and, for a `pull_request` run, the pull request's ref. Only a
 `pull_request` run is cancelled when a newer push to the same pull request
 supersedes it. Every other run — a push to the default branch, a schedule, a
 manual dispatch — gets a group unique to its run id, so a newer push never
@@ -1092,7 +883,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
 ```
 
 - `contents: read` — checkout.
@@ -1114,7 +905,7 @@ This workflow still never writes to the repository.
 
 ### Minimal
 
-iOS only, Maestro flow per scene (`capture-mode: flows`), no upload:
+iOS only, deep-link scenes through the e2e project, no upload:
 
 ```yaml
 on: workflow_dispatch
@@ -1124,13 +915,18 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             ios-target: >-
                 {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
             capture-manifest: >-
                 [{"device":"iPhone 17 Pro Max","locales":["en"],"appearances":["light"]}]
-            screenshots-dir: apps/mobile/e2e/flows/screenshots
+            capture-scenes: >-
+                [{"name":"home","deepLink":"myapp://home","readySelector":{"id":"HomeScreen.Root"}}]
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
 ### Full
@@ -1153,26 +949,22 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v5.0.0 # v5.0.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}
-            android-target: >-
-                {"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}
             capture-manifest: >-
                 [
-                  {"device":"iPhone 17 Pro Max","locales":["en",{"id":"de","env":{"LOCALE_IDENTIFIER":"de-DE"}}],"appearances":["light","dark"]},
-                  {"platform":"android","device":"phone-6.7","width":1080,"height":2340,"density":440,"locales":["en","de"],"appearances":["light","dark"]}
+                  {"device":"iPhone 17 Pro Max","locales":["en","de"],"appearances":["light","dark"]},
                 ]
-            capture-mode: direct
             capture-scenes: >-
                 [
                   {"name":"home","deepLink":"myapp://home","readySelector":{"id":"HomeScreen.Root"}},
                   {"name":"stats","deepLink":"myapp://stats","readySelector":{"id":"StatsScreen.Root"},"settleSeconds":5},
-                  {"name":"win","flow":"14.win.flow.yaml","platforms":["ios"]}
+                  {"name":"win","test":"14-win"}
                 ]
-            screenshots-dir: apps/mobile/e2e/flows/screenshots
-            seed-command: yarn tsx scripts/seed-app-state.ts
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
             apple-screenshot-slots: >-
                 {"1320x2868":"IPHONE_69"}
             upload-screenshots: true
@@ -1202,7 +994,7 @@ workflow's inputs in CI, live in [docs/examples/](../examples/README.md).
 ## Why the native build no longer reads a host cache
 
 A `native-app-cache` entry is keyed on the native key, and the native key
-deliberately excludes JavaScript. Restoring one and handing it to a Maestro or
+deliberately excludes JavaScript. Restoring one and handing it to a test or
 capture job would test whatever bundle the cached shell happened to carry —
 exactly the hole `repack-on-hit` existed to paper over in v2. The base binary
 store is the cross-run cache now, and what it holds is always repacked with
@@ -1211,72 +1003,3 @@ when it runs — and it only runs for a key nothing has published a base for.
 `seed-native-cache.yml` still keeps a host cache, because what it produces
 becomes a base to be repacked, never a test artifact. `cache-profile` is gone
 with it.
-
-## Migrating from v2
-
-- **`repack-on-hit: true`** — delete the input (and the key from your
-  `config-path` file, where it now fails closed as an unknown key). Repacking
-  is the default path now, and a better one: v2 could only repack onto a shell
-  this *same host* had cached, while v3 repacks a base published for the
-  native key from any host, on Linux, before a Mac or a Gradle slot is
-  involved at all.
-- **`repack-on-hit: false`** — remove the input *and* the key from your
-  `config-path` file; neither exists any more, and a caller that still passes
-  it fails workflow validation or the config resolver. If it was already unset,
-  add nothing. The default `build-strategy: auto` is what you want; it is not
-  v2's behaviour (v2 compiled unless the same host held a cache entry), and
-  `build-strategy: native`, which compiles every run, is a regression to undo
-  rather than a setting to keep.
-- **The calling job now needs `permissions:`** — see
-  [Permissions](#permissions). This is the one step that silently breaks a
-  caller that changed nothing else: the run still goes green by compiling
-  natively, and no key is ever warmed.
-- `repack-app-version`, `android-build-tools-version` and
-  `android-build-tools-dir` survive with the same defaults, and now apply to
-  every repack rather than only to a native-app-cache hit.
-- New, all optional: `build-strategy` (also a config-file key),
-  `repack-runner-labels`, `native-build-label`, `base-backend`, `base-flavor`,
-  `fingerprint-config`, `fingerprint-env`, `repack-env`, `expect-config`,
-  `repack-timeout-minutes`, and the four `android-keystore-*` inputs. Every
-  value `repack-env` rewrites should be asserted in `expect-config`.
-
-## Migrating from v1.5.x
-
-v1.6.0 is a **documented breaking release** for this workflow. What breaks:
-
-1. **`target` → `ios-target`.** Rename the input; the JSON shape is
-   unchanged. It is now optional — required only when the manifest has iOS
-   entries.
-2. **Capture artifact names are platform-prefixed.** What was
-   `raw-screenshots-<device-slug>` is now
-   `raw-screenshots-ios-<device-slug>` (and
-   `raw-screenshots-android-<device-slug>` for Android entries). The
-   workflow's own upload job still merges via the `raw-screenshots-*`
-   pattern, but anything of yours that downloads a capture artifact by
-   exact name (a follow-up job, a `gh run download -n ...` script) must add
-   the platform segment. The merged download layout also gains a platform
-   level: screenshots that previously landed at
-   `<screenshots-download-dir>/ios/<slug>/...` are unchanged, since the
-   `raw/` tree always contained an `ios/` level — but Android entries now
-   add a sibling `android/` tree your fastlane lane should ignore or
-   consume explicitly.
-3. **`screenshots-dir` is no longer hard-required** — only in `flows` mode
-   or when a scene declares a `flow`. Existing callers keep passing it and
-   are unaffected.
-4. **`status-bar-override` defaults to `true`.** Every capture — including
-   unchanged `flows`-mode pipelines — now gets the 9:41/full-bars/100%
-   status bar. This is an intentional behavior change; pass
-   `status-bar-override: false` to restore the previous real-status-bar
-   captures.
-
-Everything else is additive and inert by default: `capture-mode` defaults to
-`flows`, which preserves v1.5.x capture behavior byte-for-byte (and rejects
-every direct-mode-only input — `capture-scenes`, `seed-command` — fail
-closed rather than silently ignoring them).
-
-See [README.md](../../README.md#reusable-workflow-catalog) for the full
-action/workflow catalog, and the à-la-carte composite actions this
-workflow's capture jobs wrap:
-[capture-screenshots-ios](../../actions/capture-screenshots-ios/README.md),
-[capture-screenshots-android](../../actions/capture-screenshots-android/README.md),
-[redroid-container](../../actions/redroid-container/README.md).

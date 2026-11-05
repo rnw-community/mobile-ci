@@ -4,17 +4,9 @@ Run-scoped **Redroid** (Android-in-a-privileged-container over the
 `binder_linux` kernel module) lifecycle, split into two calls: `mode: start`
 boots a container, waits for `sys.boot_completed`, zeroes all three Android
 animation scales, and exports the container's adb serial; `mode: teardown`
-removes the container and its per-job data directory. Unlike
-[`run-maestro-android-redroid`](../run-maestro-android-redroid/README.md)
-(which owns the whole boot → install → test → capture → teardown span for a
-Maestro e2e shard), this action owns *only* the container — what happens on
-the device between start and teardown belongs to the caller, e.g.
+removes the container and its per-job data directory. What happens on the device between start and teardown belongs to the caller, e.g.
 [`capture-screenshots-android`](../capture-screenshots-android/README.md),
 which takes an already-booted serial as an input.
-
-`run-maestro-android-redroid` calls this action for both halves of its own
-container lifecycle, so everything documented there about container handling
-is identical here by construction rather than by convention:
 
 - **Prewarm manifest.** A host-side prewarm step (pulled image + a `/data`
   volume booted once, manifest written to `prewarm-manifest-path`) makes
@@ -76,7 +68,7 @@ each is also exported to the job environment under the name in parentheses.
 ```yaml
 - name: Start Redroid
   id: redroid
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.11.0 # v4.11.0
+  uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
   with:
       mode: start
       container-name: redroid-screenshots-${{ strategy.job-index }}
@@ -89,7 +81,7 @@ each is also exported to the job environment under the name in parentheses.
 
 - name: Teardown Redroid
   if: always()
-  uses: rnw-community/mobile-ci/actions/redroid-container@v4.11.0 # v4.11.0
+  uses: rnw-community/mobile-ci/actions/redroid-container@v5.0.0 # v5.0.0
   with:
       mode: teardown
       container-name: redroid-screenshots-${{ strategy.job-index }}

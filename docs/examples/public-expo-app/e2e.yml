@@ -1,5 +1,11 @@
-# Public Expo app: Maestro e2e on every pull request, iOS and Android.
-# Copy to .github/workflows/e2e.yml in the app repository.
+# Public Expo app: a tester-army e2e suite on every pull request, iOS and
+# Android, on devices leased from a simlock farm. Copy to
+# .github/workflows/e2e.yml in the app repository.
+#
+# The suite lives in its own project, e2e/ (package.json, lockfile,
+# e2e.config.ts, tests), whose config leases devices with
+# @mobile-ci/e2e-simlock; each workflow installs that package from its own tag.
+# See docs/workflows/ios-e2e.md#e2e-suite-on-simlock.
 #
 # A pull request does not compile native code: each workflow computes the
 # native key on Linux, fetches the base binary the warm-up (warm-up.yml)
@@ -24,11 +30,12 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p ios"}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
             install-command: pnpm install --frozen-lockfile
             # Must be byte-identical to warm-up.yml, or the two never agree on a key.
             fingerprint-config: fingerprint.config.js
@@ -36,17 +43,20 @@ jobs:
                 docs/**
                 **/*.md
             force-label: e2e:force
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 
     android:
         permissions:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p android"}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
             install-command: pnpm install --frozen-lockfile
             fingerprint-config: fingerprint.config.js
             # android-driver defaults to avd on the x86_64 KVM pool. For a
@@ -57,3 +67,5 @@ jobs:
                 docs/**
                 **/*.md
             force-label: e2e:force
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}

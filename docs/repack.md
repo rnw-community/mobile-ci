@@ -13,7 +13,7 @@ From **v3.0.0** it does not happen by default. A pull request:
 3. **repacks** it — re-bundles this commit's JavaScript with the repository's
    own Metro and Hermes, swaps the bundle and assets into the simulator `.app`
    or the APK, rewrites the embedded Expo config — and hands the result to the
-   Maestro or capture job exactly as a native build would have;
+   e2e or capture job exactly as a native build would have;
 4. reaches a native build **only** when that key has no published base, when
    the base is unusable, or when the consumer set the escape hatch.
 
@@ -79,7 +79,7 @@ folded in beside it:
   neither a toolchain bump nor a flipped switch nor a changed Gradle task nor
   another ABI can leave a base reachable that was built the other way. The
   e2e workflow and the warm-up must therefore resolve the same ABIs:
-  `android-maestro.yml`'s `android-abis: auto` follows the driver (`x86_64` for
+  `android-e2e.yml`'s `android-abis: auto` follows the driver (`x86_64` for
   `avd`, `arm64-v8a` for `redroid`), `seed-native-cache.yml`'s is `x86_64`, so
   a `redroid` pipeline passes `android-abis: arm64-v8a` to the warm-up;
 - **the hash of `fingerprint.config.js`**, so relaxing an ignore rule
@@ -236,7 +236,7 @@ annotations must be exactly what this publish would write, or the step fails
 without touching it. The binaries are not compared — two native builds are
 never byte-identical, and the key is the claim that they are interchangeable.
 
-The native build jobs that can publish (`ios-maestro.yml`, `android-maestro.yml`,
+The native build jobs that can publish (`ios-e2e.yml`, `android-e2e.yml`,
 `store-screenshots.yml` and the warm-up) share one concurrency group per
 repository, platform, flavor and native key, with `cancel-in-progress: false`,
 so the warm-up and the e2e run do not compile the same key on two Macs at once:
@@ -246,7 +246,7 @@ on one. GitHub keeps at most one job *pending* per group, so a third build of th
 same key queued behind the first two cancels the pending one — it shows as
 cancelled, not failed, and a re-run finds the base and repacks. The test and
 capture jobs start only on a build that succeeded or was skipped because a base
-was found, so a cancelled or timed-out build never sends a shard to a device slot
+was found, so a cancelled or timed-out build never sends a suite to a device slot
 to download an app nobody built.
 
 A fetch that finds nothing reports `found=false`, and that is the signal to
@@ -390,7 +390,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/seed-native-cache.yml@v5.0.0 # v5.0.0
         with:
             ios-targets: '[{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]'
             android-targets: '[{"name":"bare","appDir":"apps/mobile","prebuildCommand":"npx expo prebuild -p android"}]'
@@ -412,7 +412,7 @@ are already repacking onto, so run it deliberately and say why.
 ## Permissions
 
 A reusable workflow's job `permissions:` block can only **narrow** the token the
-caller grants it. Declaring `packages: write` inside `ios-maestro.yml` does not
+caller grants it. Declaring `packages: write` inside `ios-e2e.yml` does not
 grant it — the consumer's calling job has to. In a repository whose default
 workflow token permission is **read** (the recommended setting, and the one both
 reference consumers use), a caller without this block gets a run that plans
@@ -425,11 +425,14 @@ jobs:
             contents: read
             packages: write   # publish the base binary (ghcr backend)
             actions: read     # read artifacts (artifact backend, and the plan's own)
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@v5.0.0 # v5.0.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
-            flows-dir: apps/mobile/e2e/flows
+            e2e-dir: e2e
+            simlock-url: https://simlock.example.com
+        secrets:
+            simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 ```
 
 `packages: write` is only needed where a base can be published — the e2e and

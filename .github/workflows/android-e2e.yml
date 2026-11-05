@@ -1,4 +1,4 @@
-name: android-maestro
+name: android-e2e
 
 on:
     workflow_call:
@@ -29,7 +29,7 @@ on:
                 required: false
                 default: false
             e2e-cache-test-paths:
-                description: Optional newline-separated dependency paths/globs replacing the flows-dir tree; config, pre-run/recovery flows and shard manifests are still hashed.
+                description: Optional newline-separated dependency paths/globs replacing the e2e-dir tree.
                 type: string
                 required: false
                 default: ''
@@ -44,258 +44,33 @@ on:
                 required: false
                 default: ''
             e2e-cache-extra-paths:
-                description: Newline-separated fixture and hook dependency paths outside flows-dir (literal paths or globs; every pattern must match).
+                description: Newline-separated fixture and hook dependency paths outside e2e-dir (literal paths or globs; every pattern must match).
                 type: string
                 required: false
                 default: ''
-            runner-labels:
+            build-runner-labels:
                 description: >-
-                    JSON array of self-hosted runner labels for the build/test jobs.
-                    The default is an x86_64 Linux KVM pool (4 vCPU / 8 GiB), the
-                    host shape the default android-driver ('avd') needs: Google
-                    ships an x86_64 Linux emulator and NDK, and both the Gradle
-                    build and the emulator fit in 8 GiB with the emulator's RAM
-                    bounded by the container's memory limit (see
-                    emulator-ram-size). Override it to a linux-aarch64
-                    binder/privileged-docker pool together with
-                    android-driver: redroid.
+                    JSON array of self-hosted runner labels for the native build job. The
+                    default is an x86_64 Linux pool (4 vCPU / 8 GiB). Google publishes no
+                    linux-aarch64 NDK/cmake binaries, so a linux-aarch64 pool cannot compile
+                    an app's native code.
                 type: string
                 required: false
                 default: '["self-hosted","trf-linux-amd64-4x8"]'
-            build-runner-labels:
-                description: >-
-                    JSON array of self-hosted runner labels for the build job only. Falls
-                    back to runner-labels when empty; set this and test-runner-labels
-                    together to split build/test across separate runner pools. Android
-                    builds cross-compiling native code (NDK/cmake) on a linux-aarch64
-                    self-hosted fleet need this overridden to a macOS or x86_64 pool —
-                    Google does not publish linux-aarch64 NDK/cmake binaries. The
-                    default runner-labels pool is x86_64 and needs no such override.
-                type: string
-                required: false
-                default: ''
-            test-runner-labels:
-                description: >-
-                    JSON array of self-hosted runner labels for the test job only. Falls
-                    back to runner-labels when empty.
-                type: string
-                required: false
-                default: ''
             targets:
                 description: >-
                     JSON array of build targets: {name, appDir, appId, prebuildCommand}.
                     prebuildCommand may be an empty string. Optional per target:
-                    flowsDir, tolerateTestFailures and buildStrategy, each defaulting to
-                    the flows-dir, tolerate-test-failures and build-strategy input.
+                    tolerateTestFailures and buildStrategy, defaulting to the
+                    tolerate-test-failures and build-strategy input.
                 type: string
                 required: true
-            flows-dir:
-                description: >-
-                    Directory (relative to repo root) whose top-level files are the
-                    runnable Maestro flows by default. Subdirectories are not searched
-                    unless flows-max-depth is raised; see flows-max-depth/flows-name-pattern.
-                    The default of every target's flowsDir; may be empty when every
-                    target names its own.
-                type: string
-                required: false
-                default: ''
-            flows-max-depth:
-                description: >-
-                    find -maxdepth under flows-dir. 0 means unbounded recursion. Default
-                    1 (top-level only) keeps subflows invoked via runFlow, conventionally
-                    living in subdirectories, out of the shard.
-                type: string
-                required: false
-                default: '1'
-            flows-name-pattern:
-                description: >-
-                    Space-separated find -name globs (OR'd together) selecting runnable
-                    flows directly inside flows-dir. Keeps reusable subflows and
-                    capture-only flows in subdirectories out of the shard by default.
-                type: string
-                required: false
-                default: '*.flow.yaml'
-            flows-exclude-pattern:
-                description: >-
-                    Optional find ! -name globs excluding matched flows by
-                    basename: a comma- and/or newline-separated list of globs,
-                    each emitted as its own find ! -name clause (surrounding
-                    whitespace trimmed, empty entries ignored; a single glob
-                    works as before, a glob containing a comma is not
-                    supported).
-                type: string
-                required: false
-                default: ''
-            shard-manifest-dir:
-                description: >-
-                    Optional directory (relative to repo root) of hand-curated
-                    shard-<index>.txt files (one flows-dir-relative flow path per line)
-                    overriding the computed index-modulo split so a consumer's balanced
-                    shard assignment survives. Unset (default) falls back to the
-                    index-modulo split entirely.
-                type: string
-                required: false
-                default: ''
-            pre-run-flow:
-                description: >-
-                    Path to a single priming flow run once before each shard's flows,
-                    excluded from sharding. Its failure fails that shard immediately.
-                type: string
-                required: false
-                default: ''
-            flow-recovery-flow:
-                description: >-
-                    Path to a single best-effort recovery flow run after a failed flow
-                    attempt: before the same flow's next retry attempt, and before the
-                    next flow starts, so a failure cannot strand the app in a state that
-                    cascades into the flows after it. Not run after a passing attempt,
-                    and not after a shard's last flow. Its own failure only logs a
-                    warning and never fails the shard. Like pre-run-flow it is removed
-                    from the discovered flow list, so it never also runs as a scenario of
-                    its own. Leave empty to skip recovery. Passed to both
-                    android-driver options.
-                type: string
-                required: false
-                default: ''
-            pre-test-command:
-                description: >-
-                    Optional consumer-owned shell command run once after the app is
-                    installed on the device/container and before any flow (including
-                    pre-run-flow) executes, e.g. seeding a fixture into the app's data
-                    container. Runs with ANDROID_SERIAL, APP_ID, and APK_PATH in its
-                    environment. Its failure fails that shard immediately. Passed to
-                    both android-driver options.
-                type: string
-                required: false
-                default: ''
-            pre-flow-command:
-                description: >-
-                    Optional consumer-owned shell command run before every flow attempt,
-                    each retry included, after pre-run-flow and the warm-up. It is never
-                    run before pre-run-flow or flow-recovery-flow themselves. Runs with
-                    FLOW_PATH, FLOW_NAME, APP_ID, ANDROID_SERIAL and MAESTRO_FLOW_ENV_FILE
-                    in its environment. Unlike the best-effort flow-recovery-flow this is
-                    a precondition: a non-zero exit fails that attempt without running the
-                    flow, consuming one of its 1 + flow-retries attempts and triggering the
-                    recovery flow as any other failed attempt would. Every KEY=VALUE line
-                    the command appends to the file at MAESTRO_FLOW_ENV_FILE becomes an
-                    extra -e KEY=VALUE argument for that one flow's `maestro test`,
-                    validated exactly like maestro-env. Passed to both
-                    android-driver options.
-                type: string
-                required: false
-                default: ''
-            maestro-env:
-                description: >-
-                    Newline-separated KEY=VALUE pairs, each passed as an additional
-                    -e KEY=VALUE argument to every `maestro test` invocation (pre-run-flow
-                    and shard flows alike). Rejects (fails closed) any line without '='
-                    or whose name does not match ^[A-Za-z_][A-Za-z0-9_]*$. Passed to both
-                    android-driver options.
-                type: string
-                required: false
-                default: ''
-            maestro-config:
-                description: >-
-                    Path to the consumer's Maestro workspace config (config.yaml),
-                    passed as --config to every `maestro test` invocation. Maestro only
-                    auto-discovers a workspace config.yaml when it is pointed at a
-                    directory, and the actions below always pass individual flow files,
-                    so without this input a workspace config is silently ignored.
-                    Relative paths resolve against the job's working directory. Fails
-                    closed when set to a path that is not a file. Its
-                    includeTags/excludeTags are honoured when shards are planned
-                    (see include-tags).
-                type: string
-                required: false
-                default: ''
-            include-tags:
-                description: >-
-                    Comma-separated Maestro tags: only flows whose config section's
-                    `tags:` list holds any of them are run. Applied when shards are
-                    planned, with Maestro's own semantics (exclude-tags wins), added
-                    to maestro-config's includeTags, and also passed to `maestro
-                    test`. An unparsable flow config section, or a selection left
-                    with no flow, fails the test job.
-                type: string
-                required: false
-                default: ''
-            exclude-tags:
-                description: >-
-                    Comma-separated Maestro tags: flows whose `tags:` list holds any
-                    of them are never run, even when include-tags selects them.
-                    Added to maestro-config's excludeTags.
-                type: string
-                required: false
-                default: ''
-            junit-report:
-                description: >-
-                    When true, every flow's final attempt writes a JUnit report
-                    (`maestro test --format junit`) to junit/ inside the shard's
-                    existing Maestro artifact.
-                type: boolean
-                required: false
-                default: true
             artifact-retention-days:
                 description: >-
-                    Retention in days of each shard's Maestro artifact (debug
-                    output, final-state capture, JUnit reports).
+                    Retention in days of the e2e report artifact.
                 type: number
                 required: false
                 default: 7
-            flow-retries:
-                description: >-
-                    Non-negative retry budget per flow; each flow gets up to
-                    1 + flow-retries attempts.
-                type: string
-                required: false
-                default: '0'
-            infra-retries:
-                description: >-
-                    Per-flow retry budget, separate from flow-retries, spent
-                    only on a failed attempt that hit ActivityManager's
-                    startProcessLocked non-zero startSeq race (no app
-                    process started). android-driver avd only.
-                type: string
-                required: false
-                default: '1'
-            settle-before-flow:
-                description: >-
-                    'true' force-stops the app and waits for its process to
-                    be gone before every flow attempt, so a launchApp
-                    clearState cannot race the process death pm clear
-                    causes. App data is untouched. android-driver avd only.
-                type: string
-                required: false
-                default: 'true'
-            app-warm-seconds:
-                description: >-
-                    Seconds the app is left running during a one-off warm-up
-                    (launch, settle, force-stop) performed after install and
-                    before any flow runs, so first-launch cold-start cost is
-                    not absorbed by the first flow's own timeout budget. Set
-                    to '0' to disable warming. Passed to both android-driver
-                    options.
-                type: string
-                required: false
-                default: '20'
-            balance-shards:
-                description: >-
-                    Balance each target's flows over its shards on the durations
-                    earlier default-branch runs recorded (longest flow first onto the
-                    least-loaded shard) instead of the index-modulo split. Every
-                    default-branch push, schedule or dispatch run records its shards'
-                    flow durations to a maestro-flow-timings-android artifact; pull
-                    requests only read it. No history yet, or an unreadable one, splits
-                    by index. shard-manifest-dir takes precedence; the device-cloud
-                    driver does not shard.
-                type: boolean
-                required: false
-                default: false
-            shard-count:
-                type: number
-                required: false
-                default: 2
             cmdline-tools-version:
                 description: See build-android-app README — pin explicitly, do not trust upstream defaults.
                 type: string
@@ -356,34 +131,11 @@ on:
                 type: string
                 required: false
                 default: '0.20.6'
-            maestro-version:
-                type: string
-                required: false
-                default: '2.8.0'
-            android-driver:
-                description: >-
-                    'avd' (default) or 'redroid'. 'avd' boots Google's own emulator
-                    and matches the default runner-labels, an x86_64 Linux pool with
-                    /dev/kvm and no privileged-container or binder_linux support.
-                    'redroid' runs Android as a privileged Docker container over the
-                    host's binder_linux module and is the driver for a linux-aarch64
-                    pool, where Google publishes no emulator/NDK/cmake at all; select
-                    it together with runner-labels pointing at such a host, since it
-                    cannot run on the default pool. 'device-cloud' boots nothing: it
-                    submits the repacked or built .apk and flows-dir to
-                    devicecloud.dev from a plain Linux runner
-                    (device-cloud-runner-labels) and needs the device-cloud-api-key
-                    secret. Device Cloud runs the flows in parallel itself, so the
-                    test job submits once per target.
-                type: string
-                required: false
-                default: avd
             android-abis:
                 description: >-
                     Comma-separated ABIs the native build compiles, passed to Gradle
-                    as -PreactNativeArchitectures. 'auto' (default) follows the
-                    test device: emulator-arch (x86_64) for android-driver avd,
-                    arm64-v8a for redroid; when gradle-args or build-env already
+                    as -PreactNativeArchitectures. 'auto' (default) is arm64-v8a,
+                    the ABI of the farm's emulators; when gradle-args or build-env already
                     pins reactNativeArchitectures, auto leaves it to that pin.
                     Empty compiles the project's own reactNativeArchitectures
                     (every ABI in a stock project). Part of the native key, so
@@ -391,144 +143,12 @@ on:
                 type: string
                 required: false
                 default: auto
-            device-cloud-runner-labels:
-                description: >-
-                    JSON array of runner labels for the test job when the android-driver
-                    is device-cloud. The job only uploads the app and flows to
-                    Device Cloud and waits, so any Linux runner with Node will do -
-                    no simulator, KVM or binder. Empty (default) falls back to
-                    repack-runner-labels, the plain Linux pool the repack already uses.
-                type: string
-                required: false
-                default: ''
-            device-cloud-cli-version:
-                description: Exact @devicecloud.dev/dcd npm version the device-cloud driver runs.
-                type: string
-                required: false
-                default: '5.7.1'
-            device-cloud-android-api-level:
-                description: >-
-                    Device Cloud Android API level, e.g. 34 (dcd --android-api-level).
-                    Empty uses Device Cloud's default.
-                type: string
-                required: false
-                default: ''
-            device-cloud-android-device:
-                description: >-
-                    Device Cloud Android device model, e.g. pixel-7 (dcd
-                    --android-device). Empty uses Device Cloud's default.
-                type: string
-                required: false
-                default: ''
-            emulator-api-level:
-                type: string
-                required: false
-                default: '34'
-            emulator-target:
-                type: string
-                required: false
-                default: google_apis
-            emulator-arch:
-                type: string
-                required: false
-                default: x86_64
-            emulator-profile:
-                type: string
-                required: false
-                default: pixel_6
-            emulator-ram-size:
-                description: >-
-                    Emulator RAM in MB. Empty (default) derives it from the test
-                    runner's cgroup memory limit: 256 MB of guest RAM per GiB of
-                    limit, clamped to 1536-4096, so the default runner-labels pool
-                    (a memory-bounded 8 GiB container) gets 2048. With no memory
-                    limit detected the hardware profile's own default applies. A
-                    cgroup limit kills qemu instead of reporting an out-of-memory
-                    condition, so an unbounded guest fails the job as a lost adb
-                    connection ("0 devices connected") partway through a run whose
-                    earlier flows passed; set a value only with headroom measured
-                    on the pool the run lands on. Mirrors what redroid-memory does
-                    for the redroid driver.
-                type: string
-                required: false
-                default: ''
-            emulator-heap-size:
-                description: Android VM heap size in MB for the emulated device.
-                type: string
-                required: false
-                default: ''
-            emulator-cores:
-                description: >-
-                    Emulator CPU cores. Empty (default) derives half the test
-                    runner's cgroup CPU quota, clamped to 2-4; with no quota
-                    detected the profile default applies.
-                type: string
-                required: false
-                default: ''
-            emulator-slots-dir:
-                description: >-
-                    Host directory of fleet-provisioned slot-* files capping how
-                    many emulators the test runner's host boots at once, across
-                    every job and repository (avd driver only). Each shard holds an
-                    exclusive flock on one slot from before the emulator boots
-                    until it shuts down. Empty (default) takes no slot. Set it
-                    only once the fleet bind-mounts the directory into every
-                    runner container: a missing or empty directory fails the job.
-                type: string
-                required: false
-                default: ''
-            emulator-slot-timeout-minutes:
-                description: >-
-                    Minutes a shard waits for a free slot in emulator-slots-dir
-                    before failing. The wait counts against test-timeout-minutes.
-                type: string
-                required: false
-                default: '60'
-            redroid-image:
-                description: >-
-                    Redroid image tag, used on a redroid-prewarm-manifest-path miss.
-                    Verified against a 6.17 host kernel — older 13.x tags are known to
-                    never finish boot on that kernel, and 14.x images hard-lock the
-                    guest kernel version.
-                type: string
-                required: false
-                default: redroid/redroid:15.0.0_64only-latest
-            redroid-memory:
-                type: string
-                required: false
-                default: 3g
-            redroid-cpus:
-                type: string
-                required: false
-                default: '2'
-            redroid-prewarm-manifest-path:
-                type: string
-                required: false
-                default: $HOME/.rnw-ci/android-emulator.json
-            redroid-boot-timeout-seconds:
-                type: string
-                required: false
-                default: '600'
-            test-framework:
-                description: >-
-                    Which suite tests the repacked or built .apk. 'maestro'
-                    (default) runs the Maestro shards (the test job). 'e2e' runs the
-                    consumer's tester-army e2e suite instead, from a Linux runner
-                    against Android devices leased from a simlock farm (the e2e job;
-                    see the e2e-* inputs). 'both' runs the two side by side on the
-                    same app, for migrating flow by flow: the e2e suite gates the
-                    result only with e2e-required: true.
-                type: string
-                required: false
-                default: maestro
             e2e-dir:
                 description: >-
                     Directory, relative to the repository root, holding the e2e
-                    project: its package.json, lockfile and e2e config. Required
-                    with test-framework e2e or both.
+                    project: its package.json, lockfile and e2e config.
                 type: string
-                required: false
-                default: ''
+                required: true
             e2e-runner-labels:
                 description: >-
                     JSON array of runner labels for the e2e job. It drives remote
@@ -575,15 +195,6 @@ on:
                 type: string
                 required: false
                 default: '1'
-            e2e-required:
-                description: >-
-                    With test-framework both: true makes a failing e2e suite fail the
-                    result; false (default) runs it as a non-blocking shadow while
-                    Maestro still gates. With test-framework e2e the suite always
-                    gates.
-                type: boolean
-                required: false
-                default: false
             e2e-timeout-minutes:
                 description: Timeout of the e2e job.
                 type: number
@@ -593,10 +204,9 @@ on:
                 description: >-
                     Base URL of the simlock gateway or worker the e2e suite leases
                     Android devices from (SIMLOCK_URL), e.g. https://simlock.vitaliiyehorov.dev.
-                    Required with test-framework e2e or both.
+                   
                 type: string
-                required: false
-                default: ''
+                required: true
             node-version:
                 type: string
                 required: false
@@ -643,7 +253,7 @@ on:
                 default: ''
             build-strategy:
                 description: >-
-                    How this pull request gets the APK its Maestro shards install.
+                    How this pull request gets the APK its e2e suite installs.
                     `auto` (the default) computes the native key, looks up the base
                     binary published for it, and repacks that base with this
                     commit's JavaScript; only a key with no published base, or an
@@ -783,13 +393,9 @@ on:
                 type: number
                 required: false
                 default: 60
-            test-timeout-minutes:
-                type: number
-                required: false
-                default: 75
             tolerate-test-failures:
                 description: >-
-                    true keeps the test job green when the Maestro run step fails, for a
+                    true keeps the e2e job green when the suite fails, for a
                     time-boxed quarantine of a known-broken suite. The failure is still
                     reported as a ::warning:: on the job. Defaults to false; a target's
                     own tolerateTestFailures wins over it.
@@ -820,27 +426,19 @@ on:
                     native key, so rotating one moves the key, and the warm-up must
                     be passed the same secret or the two never agree on a key.
                 required: false
-            maestro-secrets-env:
+            e2e-secrets-env:
                 description: >-
-                    Masked newline-separated KEY=VALUE entries appended to
-                    maestro-env (one line each, no multi-line values) and exported
-                    to the test job's environment for pre-test-command and
-                    pre-flow-command. Every value is scrubbed from the uploaded
-                    Maestro artifacts. For test-user passwords and the credentials a
-                    hook uses to prepare the backend under test.
-                required: false
-            device-cloud-api-key:
-                description: >-
-                    Device Cloud API key, required only when the android-driver is
-                    device-cloud. Handed to the CLI through its environment, never
-                    as an input or on a command line.
+                    Masked newline-separated KEY=VALUE entries (one line each, no
+                    multi-line values) exported to the e2e job's environment. For
+                    test-user passwords and the credentials a suite uses to prepare
+                    the backend under test.
                 required: false
             simlock-token:
                 description: >-
                     simlock agent token the e2e suite leases Android devices with
-                    (SIMLOCK_TOKEN). Required with test-framework e2e or both. Give
+                    (SIMLOCK_TOKEN). Give
                     each consuming repository its own token.
-                required: false
+                required: true
         outputs:
             result:
                 description: >-
@@ -855,7 +453,7 @@ on:
                 value: e2e-android${{ jobs.detect.outputs.artifact-scope }}-
 
 concurrency:
-    group: android-maestro-${{ github.workflow }}-${{ inputs.flows-dir }}-${{ inputs.call-scope }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    group: android-e2e-${{ github.workflow }}-${{ inputs.e2e-dir }}-${{ inputs.call-scope }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -871,16 +469,14 @@ jobs:
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
             forced: ${{ steps.affected.outputs.forced }}
-            shard-indices: ${{ steps.shard-indices.outputs.indices }}
             build-strategy: ${{ steps.build-strategy.outputs.strategy }}
             targets: ${{ steps.targets.outputs.targets }}
             artifact-scope: ${{ steps.targets.outputs.artifact-scope }}
-            flow-timings: ${{ steps.flow-timings.outputs.timings }}
             android-abis: ${{ steps.android-abis.outputs.abis }}
             android-abi-key: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -890,7 +486,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.11.0 # v4.11.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v5.0.0 # v5.0.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -902,41 +498,11 @@ jobs:
                   trigger-paths: ${{ inputs.trigger-paths }}
                   force-label: ${{ inputs.force-label }}
 
-            # The test job's matrix.shard-index must exactly match
-            # inputs.shard-count: fewer indices than shard-count silently
-            # never runs the flows assigned to the missing indices (the
-            # suite still reports success), and more indices than
-            # shard-count fails run-maestro-android-redroid's own
-            # [0, shard-count) bounds check. A hard-coded matrix can only
-            # ever match one specific shard-count, so derive it here instead.
-            - name: Compute shard indices
-              id: shard-indices
-              shell: bash
-              env:
-                  SHARD_COUNT: ${{ inputs.shard-count }}
-                  TARGETS: ${{ inputs.targets }}
-              run: |
-                  set -euo pipefail
-                  if [ "$SHARD_COUNT" -lt 1 ]; then
-                    echo "::error::shard-count must be >= 1, got $SHARD_COUNT."
-                    exit 1
-                  fi
-                  target_count=$(jq 'length' <<< "$TARGETS")
-                  total_jobs=$(( target_count * SHARD_COUNT ))
-                  if [ "$total_jobs" -gt 256 ]; then
-                    echo "::error::targets ($target_count) x shard-count ($SHARD_COUNT) = $total_jobs test jobs, exceeding GitHub Actions' 256-job matrix limit."
-                    exit 1
-                  fi
-                  indices=$(seq 0 $((SHARD_COUNT - 1)) | jq -R 'tonumber' | jq -sc .)
-                  echo "indices=$indices" >> "$GITHUB_OUTPUT"
-
             - name: Resolve the Android ABIs
               id: android-abis
               shell: bash
               env:
                   ANDROID_ABIS: ${{ inputs.android-abis }}
-                  ANDROID_DRIVER: ${{ inputs.android-driver }}
-                  EMULATOR_ARCH: ${{ inputs.emulator-arch }}
                   GRADLE_ARGS: ${{ inputs.gradle-args }}
                   BUILD_ENV: ${{ inputs.build-env }}
               run: |
@@ -976,12 +542,7 @@ jobs:
                         abis=''
                         echo "android-abis is auto and $pinned_by already pins reactNativeArchitectures to '$pinned'; it is left to $pinned_by."
                       else
-                        case "$ANDROID_DRIVER" in
-                          avd) abis="$EMULATOR_ARCH" ;;
-                          redroid) abis=arm64-v8a ;;
-                          device-cloud) fail "android-abis is auto but android-driver is device-cloud, whose device architecture this workflow cannot see, so no ABI follows from it. Set android-abis explicitly to the ABIs Device Cloud's devices run (and pass seed-native-cache.yml the same value, or the warm-up publishes under another key)." ;;
-                          *) fail "android-abis is auto but android-driver '$ANDROID_DRIVER' is neither 'avd' nor 'redroid', so no ABI follows from it. Set android-abis explicitly." ;;
-                        esac
+                        abis=arm64-v8a
                       fi
                       ;;
                     '')
@@ -1021,12 +582,10 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Validate the e2e call
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
               with:
                   mode: validate
                   platform: android
-                  test-framework: ${{ inputs.test-framework }}
-                  driver: ${{ inputs.android-driver }}
                   abis: ${{ steps.android-abis.outputs.built }}
                   e2e-dir: ${{ inputs.e2e-dir }}
                   workers: ${{ inputs.e2e-workers }}
@@ -1073,14 +632,11 @@ jobs:
                   echo "strategy=$strategy" >> "$GITHUB_OUTPUT"
                   echo "Build strategy: $strategy (requested '$REQUESTED_STRATEGY')."
 
-            - name: Resolve each target's flows, quarantine and build strategy
+            - name: Resolve each target's quarantine and build strategy
               id: targets
               shell: bash
               env:
                   TARGETS: ${{ inputs.targets }}
-                  FLOWS_DIR: ${{ inputs.flows-dir }}
-                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
-                  E2E_DIR: ${{ inputs.e2e-dir }}
                   TOLERATE_TEST_FAILURES: ${{ inputs.tolerate-test-failures }}
                   REQUESTED_STRATEGY: ${{ inputs.build-strategy }}
                   NATIVE_BUILD_LABEL: ${{ inputs.native-build-label }}
@@ -1092,22 +648,16 @@ jobs:
                     echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
                     exit 1
                   fi
-                  # An e2e-only call has no Maestro flows: a target's tests are the e2e project.
-                  if [ -z "$FLOWS_DIR" ] && [ "${TEST_FRAMEWORK:-maestro}" = e2e ]; then
-                    FLOWS_DIR=${E2E_DIR:-}
-                  fi
                   labelled=false
                   if [ -n "$NATIVE_BUILD_LABEL" ]; then
                     labelled=$(jq -r --arg label "$NATIVE_BUILD_LABEL" 'map(select(. == $label)) | length > 0' <<< "$PULL_REQUEST_LABELS")
                   fi
                   jq_error="$RUNNER_TEMP/resolve-targets.err"
-                  if ! targets="$(jq -c --arg flows "$FLOWS_DIR" --argjson tolerate "$TOLERATE_TEST_FAILURES" \
+                  if ! targets="$(jq -c --argjson tolerate "$TOLERATE_TEST_FAILURES" \
                     --arg strategy "$REQUESTED_STRATEGY" --argjson labelled "$labelled" --arg label "$NATIVE_BUILD_LABEL" '
                     if type != "array" or length == 0 then error("targets must be a non-empty JSON array of objects") else . end
                     | map(
                         if type != "object" then error("every targets entry must be an object; got \(tojson)") else . end
-                        | (if has("flowsDir") then . else .flowsDir = $flows end)
-                        | if (.flowsDir | type) != "string" or .flowsDir == "" then error("target \(.name | tojson) has no flowsDir and the flows-dir input is empty") else . end
                         | (if has("tolerateTestFailures") then . else .tolerateTestFailures = $tolerate end)
                         | if (.tolerateTestFailures | type) != "boolean" then error("target \(.name | tojson) tolerateTestFailures must be true or false; got \(.tolerateTestFailures | tojson)") else . end
                         | (if has("buildStrategy") then . else .buildStrategy = $strategy end)
@@ -1126,13 +676,6 @@ jobs:
                     echo "targets=$targets"
                     echo "artifact-scope=${CALL_SCOPE:+-$CALL_SCOPE-}"
                   } >> "$GITHUB_OUTPUT"
-            - name: Fetch the recorded flow timings
-              id: flow-timings
-              if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.0 # v4.11.0
-              with:
-                  mode: fetch
-                  artifact-name: maestro-flow-timings-android${{ steps.targets.outputs.artifact-scope }}
 
 
     plan:
@@ -1143,7 +686,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.0 # v4.11.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v5.0.0 # v5.0.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1152,10 +695,10 @@ jobs:
             e2e-cache-test-paths: ${{ inputs.e2e-cache-test-paths }}
             e2e-cache-state-command: ${{ inputs.e2e-cache-state-command }}
             e2e-cache-export-command: ${{ inputs.e2e-cache-export-command }}
-            # A pass vouches for the suite that ran: with the e2e suite running, its project is part of the key.
+            # A pass vouches for the suite that ran, so its project is part of the key.
             e2e-cache-extra-paths: |
                 ${{ inputs.e2e-cache-extra-paths }}
-                ${{ inputs.test-framework != 'maestro' && inputs.e2e-dir || '' }}
+                ${{ inputs.e2e-dir }}
             platform: android
             targets: ${{ needs.detect.outputs.targets }}
             build-strategy: ${{ needs.detect.outputs.build-strategy }}
@@ -1187,13 +730,13 @@ jobs:
             build-env: ${{ inputs.build-env }}
         secrets:
             build-secrets-env: ${{ secrets.build-secrets-env }}
-            maestro-secrets-env: ${{ secrets.maestro-secrets-env }}
+            e2e-secrets-env: ${{ secrets.e2e-secrets-env }}
 
     build:
         name: Build (${{ matrix.target.name }})
         needs: [detect, plan]
         if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.native-targets != '[]' }}
-        runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
+        runs-on: ${{ fromJSON(inputs.build-runner-labels) }}
         timeout-minutes: ${{ inputs.build-timeout-minutes }}
         permissions:
             contents: read
@@ -1211,7 +754,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1252,7 +795,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1364,7 +907,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v5.0.0 # v5.0.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1400,7 +943,7 @@ jobs:
 
             - name: build-android-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v5.0.0 # v5.0.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -1423,7 +966,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: android
@@ -1451,256 +994,10 @@ jobs:
                   path: ${{ steps.build.outputs.android-sdk-cache-paths }}
                   key: ${{ steps.build.outputs.android-sdk-cache-key }}
 
-    test:
-        name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
-        needs: [detect, plan, build]
-        if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
-        runs-on: ${{ fromJSON(inputs.android-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
-        timeout-minutes: ${{ inputs.test-timeout-minutes }}
-        strategy:
-            fail-fast: false
-            matrix:
-                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
-                shard-index: ${{ inputs.android-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
-
-        steps:
-            - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
-              with:
-                  enabled: ${{ inputs.runs-on-cache-bypass }}
-            - name: Checkout repository
-              uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-              with:
-                  persist-credentials: false
-
-            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-              with:
-                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-
-            - name: Validate the test driver
-              shell: bash
-              env:
-                  DRIVER: ${{ inputs.android-driver }}
-                  DRIVER_INPUT: android-driver
-                  LOCAL_DRIVERS: 'avd redroid'
-                  HAS_DEVICE_CLOUD_API_KEY: ${{ secrets.device-cloud-api-key != '' }}
-                  PRE_RUN_FLOW: ${{ inputs.pre-run-flow }}
-                  FLOW_RECOVERY_FLOW: ${{ inputs.flow-recovery-flow }}
-                  PRE_TEST_COMMAND: ${{ inputs.pre-test-command }}
-                  PRE_FLOW_COMMAND: ${{ inputs.pre-flow-command }}
-                  SHARD_COUNT: ${{ inputs.shard-count }}
-                  SHARD_MANIFEST_DIR: ${{ inputs.shard-manifest-dir }}
-              run: |
-                  set -euo pipefail
-                  known=0
-                  for candidate in $LOCAL_DRIVERS device-cloud; do
-                    if [ "$DRIVER" = "$candidate" ]; then
-                      known=1
-                    fi
-                  done
-                  if [ "$known" -ne 1 ]; then
-                    echo "::error::Unsupported $DRIVER_INPUT '$DRIVER'; expected one of: $LOCAL_DRIVERS device-cloud. Every test step is gated on an exact match, so an unknown value would run zero flows and still pass."
-                    exit 1
-                  fi
-                  [ "$DRIVER" = device-cloud ] || exit 0
-                  if [ "$HAS_DEVICE_CLOUD_API_KEY" != true ]; then
-                    echo "::error::$DRIVER_INPUT is device-cloud but the device-cloud-api-key secret is empty. Pass it in the calling job's secrets: block."
-                    exit 1
-                  fi
-                  unsupported=''
-                  [ -z "$PRE_RUN_FLOW" ] || unsupported="$unsupported pre-run-flow"
-                  [ -z "$FLOW_RECOVERY_FLOW" ] || unsupported="$unsupported flow-recovery-flow"
-                  [ -z "$PRE_TEST_COMMAND" ] || unsupported="$unsupported pre-test-command"
-                  [ -z "$PRE_FLOW_COMMAND" ] || unsupported="$unsupported pre-flow-command"
-                  if [ -n "$unsupported" ]; then
-                    echo "::error::$DRIVER_INPUT device-cloud cannot honour:${unsupported}. Each runs against a device this runner boots, and Device Cloud runs the flows remotely, so it would silently never run. Unset it, or use a local driver."
-                    exit 1
-                  fi
-                  if [ "$SHARD_COUNT" != 1 ] || [ -n "$SHARD_MANIFEST_DIR" ]; then
-                    echo "::notice::Device Cloud runs the flows in parallel itself, so the device-cloud driver submits every selected flow once per target as shard 0; shard-count and shard-manifest-dir do not apply."
-                  fi
-
-            # The test steps below are gated on an exact driver match; an
-            # unrecognized android-driver value would otherwise skip them all
-            # silently and let this job (and the status job that gates on its
-            # result) report success having run zero Maestro flows.
-            - name: Validate android-driver against this runner
-              shell: bash
-              env:
-                  ANDROID_DRIVER: ${{ inputs.android-driver }}
-              run: |
-                  case "$ANDROID_DRIVER" in
-                    redroid|avd|device-cloud) ;;
-                    *)
-                      echo "::error::Unsupported android-driver '$ANDROID_DRIVER'; expected 'redroid', 'avd' or 'device-cloud'."
-                      exit 1
-                      ;;
-                  esac
-                  [ "$ANDROID_DRIVER" = avd ] || exit 0
-                  [ "$(uname -s)" = Linux ] || exit 0
-                  arch="$(uname -m)"
-                  if [ "$arch" != x86_64 ]; then
-                    echo "::error::android-driver 'avd' needs an x86_64 Linux runner; this one is '$arch'. Google publishes no linux-aarch64 Android emulator, so no tuning makes an AVD boot here. Either point runner-labels/test-runner-labels at an x86_64 Linux KVM host (this workflow's default), or pass android-driver: redroid for a binder_linux/privileged-docker pool."
-                    exit 1
-                  fi
-                  if [ ! -e /dev/kvm ]; then
-                    echo "::error::android-driver 'avd' needs /dev/kvm on the runner; it is absent here. Without it the emulator falls back to software rendering and times out instead of failing clearly. Expose /dev/kvm to this runner, or pass android-driver: redroid with runner-labels naming a Redroid-capable pool."
-                    exit 1
-                  fi
-
-            - name: Apply maestro-secrets-env
-              id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
-              with:
-                  env: ${{ secrets.maestro-secrets-env }}
-                  label: maestro-secrets-env
-                  allow-multiline: false
-                  append-to: ${{ inputs.maestro-env }}
-
-            - name: Select the target's flow timings
-              id: shard-timings
-              if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.0 # v4.11.0
-              with:
-                  mode: select
-                  timings: ${{ needs.detect.outputs.flow-timings }}
-                  target: ${{ matrix.target.name }}
-
-            - name: run-maestro-android-redroid
-              id: run-maestro-android-redroid
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.11.0 # v4.11.0
-              with:
-                  image: ${{ inputs.redroid-image }}
-                  container-name: redroid-e2e${{ needs.detect.outputs.artifact-scope }}-${{ strategy.job-index }}
-                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
-                  flows-max-depth: ${{ inputs.flows-max-depth }}
-                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
-                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
-                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
-                  shard-timings-file: ${{ steps.shard-timings.outputs.file }}
-                  shard-index: ${{ matrix.shard-index }}
-                  shard-count: ${{ inputs.shard-count }}
-                  pre-run-flow: ${{ inputs.pre-run-flow }}
-                  flow-recovery-flow: ${{ inputs.flow-recovery-flow }}
-                  pre-test-command: ${{ inputs.pre-test-command }}
-                  pre-flow-command: ${{ inputs.pre-flow-command }}
-                  app-warm-seconds: ${{ inputs.app-warm-seconds }}
-                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
-                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
-                  maestro-config: ${{ inputs.maestro-config }}
-                  include-tags: ${{ inputs.include-tags }}
-                  exclude-tags: ${{ inputs.exclude-tags }}
-                  junit-report: ${{ inputs.junit-report }}
-                  flow-retries: ${{ inputs.flow-retries }}
-                  maestro-version: ${{ inputs.maestro-version }}
-                  memory: ${{ inputs.redroid-memory }}
-                  cpus: ${{ inputs.redroid-cpus }}
-                  prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
-                  boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  retention-days: ${{ inputs.artifact-retention-days }}
-
-            - name: run-maestro-android
-              id: run-maestro-android
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.11.0 # v4.11.0
-              with:
-                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
-                  flows-max-depth: ${{ inputs.flows-max-depth }}
-                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
-                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
-                  shard-manifest-dir: ${{ inputs.shard-manifest-dir }}
-                  shard-timings-file: ${{ steps.shard-timings.outputs.file }}
-                  shard-index: ${{ matrix.shard-index }}
-                  shard-count: ${{ inputs.shard-count }}
-                  pre-run-flow: ${{ inputs.pre-run-flow }}
-                  flow-recovery-flow: ${{ inputs.flow-recovery-flow }}
-                  pre-test-command: ${{ inputs.pre-test-command }}
-                  pre-flow-command: ${{ inputs.pre-flow-command }}
-                  app-warm-seconds: ${{ inputs.app-warm-seconds }}
-                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
-                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
-                  maestro-config: ${{ inputs.maestro-config }}
-                  include-tags: ${{ inputs.include-tags }}
-                  exclude-tags: ${{ inputs.exclude-tags }}
-                  junit-report: ${{ inputs.junit-report }}
-                  flow-retries: ${{ inputs.flow-retries }}
-                  infra-retries: ${{ inputs.infra-retries }}
-                  settle-before-flow: ${{ inputs.settle-before-flow }}
-                  maestro-version: ${{ inputs.maestro-version }}
-                  api-level: ${{ inputs.emulator-api-level }}
-                  target: ${{ inputs.emulator-target }}
-                  arch: ${{ inputs.emulator-arch }}
-                  profile: ${{ inputs.emulator-profile }}
-                  ram-size: ${{ inputs.emulator-ram-size }}
-                  heap-size: ${{ inputs.emulator-heap-size }}
-                  cores: ${{ inputs.emulator-cores }}
-                  emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
-                  emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  retention-days: ${{ inputs.artifact-retention-days }}
-
-            - name: run-maestro-device-cloud
-              id: run-maestro-device-cloud
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              if: inputs.android-driver == 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.11.0 # v4.11.0
-              with:
-                  platform: android
-                  app-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  api-key: ${{ secrets.device-cloud-api-key }}
-                  cli-version: ${{ inputs.device-cloud-cli-version }}
-                  node-version: ${{ inputs.node-version }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
-                  flows-max-depth: ${{ inputs.flows-max-depth }}
-                  flows-name-pattern: ${{ inputs.flows-name-pattern }}
-                  flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
-                  include-tags: ${{ inputs.include-tags }}
-                  exclude-tags: ${{ inputs.exclude-tags }}
-                  maestro-config: ${{ inputs.maestro-config }}
-                  maestro-env: ${{ steps.maestro-secrets.outputs.lines }}
-                  maestro-version: ${{ inputs.maestro-version }}
-                  retries: ${{ inputs.flow-retries }}
-                  android-api-level: ${{ inputs.device-cloud-android-api-level }}
-                  android-device: ${{ inputs.device-cloud-android-device }}
-                  junit-report: ${{ inputs.junit-report }}
-                  run-name: ${{ github.repository }}@${{ github.sha }} android ${{ matrix.target.name }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  retention-days: ${{ inputs.artifact-retention-days }}
-                  redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
-
-            - name: Upload the shard's flow timings
-              if: always() && inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-              with:
-                  name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  path: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}/flow-timings.tsv
-                  retention-days: 1
-                  if-no-files-found: ignore
-                  overwrite: true
-
-            - name: Report a tolerated Maestro failure
-              if: steps.run-maestro-android-redroid.outcome == 'failure' || steps.run-maestro-android.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
-              shell: bash
-              env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-              run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
-
     e2e:
         name: E2E suite (${{ matrix.target.name }})
         needs: [detect, plan, build]
-        if: ${{ !cancelled() && inputs.test-framework != 'maestro' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        if: ${{ !cancelled() && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.repack-runner-labels) }}
         timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
         strategy:
@@ -1709,7 +1006,7 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1723,16 +1020,15 @@ jobs:
               with:
                   name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-            - name: Apply maestro-secrets-env to the e2e suite
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.0 # v4.11.0
+            - name: Apply e2e-secrets-env
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v5.0.0 # v5.0.0
               with:
-                  env: ${{ secrets.maestro-secrets-env }}
-                  label: maestro-secrets-env
+                  env: ${{ secrets.e2e-secrets-env }}
+                  label: e2e-secrets-env
                   allow-multiline: false
             - name: Run the e2e suite
               id: run
-              continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
               with:
                   mode: run
                   platform: android
@@ -1746,13 +1042,12 @@ jobs:
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
                   session: e2e-android-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
                   tolerated: ${{ matrix.target.tolerateTestFailures }}
                   simlock-url: ${{ inputs.simlock-url }}
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v5.0.0 # v5.0.0
               with:
                   mode: release
                   platform: android
@@ -1769,35 +1064,10 @@ jobs:
                   include-hidden-files: true
                   if-no-files-found: warn
 
-    record-timings:
-        name: Record flow timings
-        needs: [detect, test]
-        if: ${{ always() && inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == '' && github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && (needs.test.result == 'success' || needs.test.result == 'failure') }}
-        runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
-        timeout-minutes: 10
-        steps:
-            - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
-              with:
-                  enabled: ${{ inputs.runs-on-cache-bypass }}
-            - name: Download this run's shard artifacts
-              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-              with:
-                  pattern: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-*-shard-*
-                  path: ${{ runner.temp }}/maestro-shard-artifacts
-            - name: Record the flow timings
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.0 # v4.11.0
-              with:
-                  mode: record
-                  timings: ${{ needs.detect.outputs.flow-timings }}
-                  records-dir: ${{ runner.temp }}/maestro-shard-artifacts
-                  artifact-prefix: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-
-                  artifact-name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}
-
     cache-pass:
         name: Record E2E pass (${{ matrix.target.name }})
-        needs: [detect, plan, build, test, e2e]
-        if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success')))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
+        needs: [detect, plan, build, e2e]
+        if: ${{ !cancelled() && needs.plan.result == 'success' && needs.e2e.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         timeout-minutes: 5
         strategy:
@@ -1806,20 +1076,20 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v5.0.0 # v5.0.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Save the successful test contract
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.11.0 # v4.11.0
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v5.0.0 # v5.0.0
               with:
                   mode: publish
                   platform: android
                   key: ${{ matrix.target.e2eCacheKey }}
 
     status:
-        name: Android Maestro E2E result
-        needs: [detect, plan, build, test, e2e, cache-pass]
+        name: Android E2E result
+        needs: [detect, plan, build, e2e, cache-pass]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
@@ -1836,50 +1106,36 @@ jobs:
                   PLAN_RESULT: ${{ needs.plan.result }}
                   NATIVE_TARGETS: ${{ needs.plan.outputs.native-targets }}
                   BUILD_RESULT: ${{ needs.build.result }}
-                  TEST_FRAMEWORK: ${{ inputs.test-framework }}
-                  TEST_RESULT: ${{ needs.test.result }}
-                  E2E_RESULT: ${{ needs.e2e.result }}
-                  E2E_REQUIRED: ${{ inputs.e2e-required }}
+                  TEST_RESULT: ${{ needs.e2e.result }}
                   TEST_TARGETS: ${{ needs.plan.outputs.test-targets }}
                   CACHED_TARGETS: ${{ needs.plan.outputs.cached-targets }}
               run: |
                   result=failed
                   trap 'echo "result=$result" >> "$GITHUB_OUTPUT"' EXIT
-                  # The suite that gates: Maestro, e2e, or with 'both' Maestro plus e2e when e2e-required.
-                  MAESTRO_RESULT=${TEST_RESULT:-}
-                  case "${TEST_FRAMEWORK:-maestro}" in
-                    e2e) TEST_RESULT=${E2E_RESULT:-}; SUITE='e2e suite' ;;
-                    both)
-                      TEST_RESULT=$MAESTRO_RESULT; SUITE='maestro suite'
-                      if [ "${E2E_REQUIRED:-}" = true ] && [ "$MAESTRO_RESULT" = success ] && [ "${E2E_RESULT:-}" != success ]; then
-                        TEST_RESULT=$E2E_RESULT; SUITE='e2e suite (e2e-required)'
-                      fi
-                      ;;
-                    *) TEST_RESULT=$MAESTRO_RESULT; SUITE='maestro suite' ;;
-                  esac
+                  SUITE='e2e suite'
                   summary() {
                     printf '%s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
                   }
                   cancelled_hint() {
                     if [ "$1" = 'cancelled' ]; then
-                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/test-timeout-minutes before assuming external cancellation."
+                      echo "::notice::A cancelled job result often means the job hit its timeout-minutes - check the job's duration against build-timeout-minutes/e2e-timeout-minutes before assuming external cancellation."
                     fi
                   }
                   if [ "$DETECT_RESULT" != "success" ]; then
                     echo "::error::Required jobs did not succeed: detection job (result: $DETECT_RESULT)."
-                    summary "### Android Maestro E2E: failed (detect job result: $DETECT_RESULT)"
+                    summary "### Android E2E: failed (detect job result: $DETECT_RESULT)"
                     cancelled_hint "$DETECT_RESULT"
                     exit 1
                   fi
                   if [ "$DETECT_AFFECTED" != "true" ]; then
                     result=skipped
-                    echo "::notice::Android Maestro E2E skipped: target packages untouched, so every build/test leg was skipped and zero Maestro flows ran. This is not a pass."
-                    summary "### Android Maestro E2E: skipped — target packages untouched, zero Maestro flows ran (not a pass)"
+                    echo "::notice::Android E2E skipped: target packages untouched, so every build/test leg was skipped and no e2e test ran. This is not a pass."
+                    summary "### Android E2E: skipped — target packages untouched, no e2e test ran (not a pass)"
                     exit 0
                   fi
                   if [ "$PLAN_RESULT" != "success" ]; then
                     echo "::error::Required jobs did not succeed: plan job (result: $PLAN_RESULT)."
-                    summary "### Android Maestro E2E: failed (plan job result: $PLAN_RESULT)"
+                    summary "### Android E2E: failed (plan job result: $PLAN_RESULT)"
                     cancelled_hint "$PLAN_RESULT"
                     exit 1
                   fi
@@ -1889,36 +1145,33 @@ jobs:
                       exit 1
                     fi
                     result=passed
-                    summary "### ANDROID Maestro E2E: passed (content-addressed cache)"
+                    summary "### Android E2E: passed (content-addressed cache)"
                     jq -r '.[] | "- \(.name): [successful producer run](\(.e2eCacheRunUrl))"' <<< "$CACHED_TARGETS" >> "$GITHUB_STEP_SUMMARY"
                     exit 0
                   fi
                   if [ "$BUILD_RESULT" = 'skipped' ] && [ "$NATIVE_TARGETS" != '[]' ]; then
                     echo "The native build was skipped while ${NATIVE_TARGETS} still needed one; a skipped build is not a build."
-                    summary "### Android Maestro E2E: failed (native build skipped with targets still needing one)"
+                    summary "### Android E2E: failed (native build skipped with targets still needing one)"
                     exit 1
                   fi
                   if [ "$BUILD_RESULT" != "success" ] && [ "$BUILD_RESULT" != 'skipped' ]; then
                     echo "::error::Required jobs did not succeed: build job (result: $BUILD_RESULT)."
-                    summary "### Android Maestro E2E: failed (build job result: $BUILD_RESULT)"
+                    summary "### Android E2E: failed (build job result: $BUILD_RESULT)"
                     cancelled_hint "$BUILD_RESULT"
                     exit 1
                   fi
                   if [ "$TEST_RESULT" != "success" ]; then
                     echo "::error::Required jobs did not succeed: $SUITE (result: $TEST_RESULT)."
-                    summary "### Android Maestro E2E: failed ($SUITE result: $TEST_RESULT)"
+                    summary "### Android E2E: failed ($SUITE result: $TEST_RESULT)"
                     cancelled_hint "$TEST_RESULT"
                     exit 1
                   fi
                   if [ "$DETECT_FORCED" = 'true' ]; then
                     result=passed
                     echo "Passed: $SUITE (forced by the '${FORCE_LABEL}' label)."
-                    summary "### Android Maestro E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
+                    summary "### Android E2E: passed (forced by the \`${FORCE_LABEL}\` label)"
                     exit 0
-                  fi
-                  if [ "${TEST_FRAMEWORK:-}" = both ] && [ "${E2E_REQUIRED:-}" != true ]; then
-                    summary "- e2e shadow suite: finished (not gating). Its outcome is the e2e jobs' warnings and summaries, not this job result; set e2e-required: true to gate."
                   fi
                   result=passed
                   echo "Passed: $SUITE."
-                  summary "### Android Maestro E2E: passed ($SUITE)"
+                  summary "### Android E2E: passed ($SUITE)"

@@ -3,11 +3,11 @@ set -euo pipefail
 # shellcheck source=tests/lib/harness.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib/harness.sh"
 ACTION="$REPO_ROOT/actions/e2e-result-cache/action.yml"
-case_start 'both platform lanes opt in, filter test targets and publish only after all shards pass'
+case_start 'both platform lanes opt in, filter test targets and publish only after the suite passes'
 if output=$(REPO="$REPO_ROOT" python3 - <<'PY'
 import os, yaml
 for platform in ('ios', 'android'):
-    workflow = yaml.safe_load(open(f"{os.environ['REPO']}/.github/workflows/{platform}-maestro.yml"))
+    workflow = yaml.safe_load(open(f"{os.environ['REPO']}/.github/workflows/{platform}-e2e.yml"))
     inputs = workflow[True]['workflow_call']['inputs']
     assert inputs['e2e-result-cache']['default'] is False
     assert 'e2e-cache-extra-paths' in inputs
@@ -16,8 +16,8 @@ for platform in ('ios', 'android'):
     steps = {step.get('name'): step for step in planner['jobs']['plan']['steps']}
     assert 'Resolve executing workflow refs' in steps
 
-    assert 'test-targets' in workflow['jobs']['test']['strategy']['matrix']['target']
-    assert "needs.test.result == 'success'" in workflow['jobs']['cache-pass']['if']
+    assert 'test-targets' in workflow['jobs']['e2e']['strategy']['matrix']['target']
+    assert "needs.e2e.result == 'success'" in workflow['jobs']['cache-pass']['if']
     assert 'cache-pass' in workflow['jobs']['status']['needs']
 PY
 ); then pass_case; else fail_case "$output"; fi
@@ -30,7 +30,7 @@ fi
 identity_workspace() {
     workspace=$(new_workspace "$ACTION" 'Export and hash the app and test contract')
     mkdir -p "$workspace/work/app" "$workspace/work/tests/flows" "$workspace/work/tests/fixtures"
-    printf 'flow' > "$workspace/work/tests/flows/test.flow.yaml"
+    printf 'flow' > "$workspace/work/tests/flows/test.spec.ts"
     printf 'fixture' > "$workspace/work/tests/fixtures/seed.db"
     stub "$workspace" npx "$(cat <<'STUB'
 if [ "${EXPORT_FAIL:-false}" = true ]; then exit 1; fi
@@ -59,7 +59,7 @@ STUB
 identity() {
     run_step "$workspace" ACTION_PATH="$REPO_ROOT/actions/e2e-result-cache" \
         APP_DIR=app PLATFORM=ios NATIVE_KEY=native-one LANE_INPUTS='{"device":"iPhone"}' \
-        TARGET='{"name":"e2e","flowsDir":"tests/flows"}' \
+        TARGET='{"name":"e2e","e2eDir":"tests/flows"}' \
         TEST_PATHS='tests' EXTRA_PATHS='' REPACK_ENV='' SECRETS_DIGEST=''  MOBILE_CI_REF=v4.5.0 \
         GITHUB_REPOSITORY=owner/repo "$@"
 }
@@ -79,7 +79,7 @@ mkdir -p "$workspace/work/.github/workflows"
 printf metadata > "$workspace/work/.github/workflows/store-metadata.yml"
 identity
 assert_equals "$original" "$(step_output "$workspace" key)" key && pass_case
-for variable in 'BUNDLE_CONTENT=changed' 'CONFIG_FLAG=two' 'NATIVE_KEY=native-two' 'LANE_INPUTS={"device":"iPad"}' 'SECRETS_DIGEST=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'MOBILE_CI_REF=v4.6.0' 'WORKFLOW_REFS=[{"path":"ios-maestro.yml","sha":"changed"}]'; do
+for variable in 'BUNDLE_CONTENT=changed' 'CONFIG_FLAG=two' 'NATIVE_KEY=native-two' 'LANE_INPUTS={"device":"iPad"}' 'SECRETS_DIGEST=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' 'MOBILE_CI_REF=v4.6.0' 'WORKFLOW_REFS=[{"path":"ios-e2e.yml","sha":"changed"}]'; do
     case_start "identity changes for $variable"
     identity "$variable"
     if [ "$(step_output "$workspace" key)" = "$original" ]; then fail_case 'key reused'; else pass_case; fi
@@ -179,7 +179,7 @@ PYTHON
 done
 for platform in ios android; do
     case_start "$platform cached status passes only with complete evidence and skipped work"
-    workspace=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/$platform-maestro.yml" status Report)
+    workspace=$(new_workflow_workspace "$REPO_ROOT/.github/workflows/$platform-e2e.yml" status Report)
     cached=$(jq -nc --arg key "$original" '[{name:"e2e",e2eCacheHit:true,e2eCacheKey:$key,e2eCacheRunUrl:"https://github.com/owner/repo/actions/runs/123/attempts/2"}]')
     run_step "$workspace" DETECT_RESULT=success DETECT_AFFECTED=true DETECT_FORCED=false FORCE_LABEL=e2e \
         PLAN_RESULT=success NATIVE_TARGETS='[]' TEST_TARGETS='[]' CACHED_TARGETS="$cached" BUILD_RESULT=skipped TEST_RESULT=skipped
@@ -216,7 +216,7 @@ stub "$workspace" gh "$(cat <<'STUB'
 printf '%s' "$REFS_JSON"
 STUB
 )"
-refs='[{"path":"rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@branch","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"path":"rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.5.0","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]'
+refs='[{"path":"rnw-community/mobile-ci/.github/workflows/ios-e2e.yml@branch","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"path":"rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.5.0","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]'
 run_step "$workspace" GITHUB_REPOSITORY=owner/repo GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1 PLATFORM=ios REFS_JSON="$refs"
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$workspace/log"))"; then pass_case; fi
 case_start 'unavailable workflow refs cannot supply identity evidence'

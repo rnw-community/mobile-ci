@@ -16,7 +16,7 @@ A restore hit only guarantees the native surface (package.json, native
 folders, autolinking config) is unchanged — it does **not** by itself
 guarantee the embedded JS bundle reflects the current commit's
 application-layer JS. A restored shell carries whatever JavaScript it was built with, so it may seed a base binary but must never be handed to a test job unchanged. The e2e and screenshot workflows no longer restore it at all for that reason; `seed-native-cache.yml` does, because what it builds becomes a base every consumer repacks. See [docs/repack.md](../../docs/repack.md).yml` /
-`android-maestro.yml` do this when their `build-strategy` input is enabled.
+`android-e2e.yml` do this when their `build-strategy` input is enabled.
 Consumers calling this action à la carte, or leaving `build-strategy` off, get
 the weaker guarantee only and should reseed on a schedule (see the
 `seed-native-cache` reusable workflow) instead.
@@ -42,7 +42,7 @@ the weaker guarantee only and should reseed on a schedule (see the
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.0 # v4.11.0
+- uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
   id: native-app-cache
   with:
       mode: restore
@@ -54,7 +54,7 @@ the weaker guarantee only and should reseed on a schedule (see the
 
 # ... build only when steps.native-app-cache.outputs.cache-hit != 'true' ...
 
-- uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.0 # v4.11.0
+- uses: rnw-community/mobile-ci/actions/native-app-cache@v5.0.0 # v5.0.0
   if: steps.native-app-cache.outputs.cache-hit != 'true'
   with:
       mode: save
