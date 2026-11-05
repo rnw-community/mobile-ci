@@ -25,6 +25,13 @@ inputs:
     description: '`ghcr` (default, an immutable OCI artifact) or `artifact` (workflow artifacts).'
     required: false
     default: ghcr
+  metadata-only:
+    description: >-
+      On a `ghcr` fetch, 'true' answers whether the base exists from its manifest
+      and pulls nothing, so `found` is set and `path` is empty. For a caller that
+      never reads the bytes, such as the warm-up's `repack: false` plan.
+    required: false
+    default: 'false'
   path:
     description: >-
       On publish, the base binary file to store. On fetch, the directory the
@@ -251,6 +258,7 @@ runs:
       env:
         REFERENCE: ${{ steps.address.outputs.reference }}
         DESTINATION: ${{ inputs.path }}
+        METADATA_ONLY: ${{ inputs.metadata-only }}
       run: |
         set -euo pipefail
         error_file="$RUNNER_TEMP/expo-base-binary-fetch.$$.err"
@@ -273,6 +281,16 @@ runs:
           exit 1
         fi
         rm -f "$error_file"
+
+        if [ "${METADATA_ONLY:-false}" = 'true' ]; then
+          {
+            echo "found=true"
+            echo "path="
+            echo "source=ghcr"
+          } >> "$GITHUB_OUTPUT"
+          echo "The base binary $REFERENCE exists; nothing is pulled because this caller only asks whether it does."
+          exit 0
+        fi
 
         scratch="$RUNNER_TEMP/expo-base-binary-pull.$$"
         rm -rf "$scratch"

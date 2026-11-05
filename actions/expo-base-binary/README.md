@@ -57,6 +57,7 @@ failure) fails the job: an unreadable store is not an absent base.
 | `flavor`                 | no       | `e2e`                                         | Flavor segment of the base's address.                                        |
 | `backend`                | no       | `ghcr`                                        | `ghcr` or `artifact`.                                                        |
 | `path`                   | yes      | —                                             | Publish: the file to store. Fetch: the directory it is pulled into.          |
+| `metadata-only`          | no       | `false`                                       | `ghcr` fetch only: answer `found` from the manifest and pull nothing, leaving `path` empty. |
 | `registry`               | no       | `ghcr.io`                                     | OCI registry host.                                                           |
 | `repository`             | no       | `${{ github.repository }}`                    | `<owner>/<repo>` the base is stored under; lowercased.                       |
 | `image-name`             | no       | `e2e-base`                                    | Repository path after `<registry>/<repository>/`.                            |

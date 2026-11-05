@@ -173,6 +173,25 @@ assert_equals 0 "$STEP_STATUS" 'fetch exit status' \
     && assert_equals 'base/Base.tar.gz' "$(step_output "$dir" path)" 'path' \
     && pass_case
 
+case_start 'a metadata-only fetch reports the base from its manifest and pulls nothing'
+dir="$(new_workspace "$ACTION" "$FETCH_GHCR_STEP")"
+stub_oras "$dir"
+run_step "$dir" ORAS_MANIFEST_MODE=present REFERENCE='ghcr.io/o/r/e2e-base:ios-e2e-k' DESTINATION=base METADATA_ONLY=true
+assert_equals 0 "$STEP_STATUS" 'fetch exit status' \
+    && assert_equals 'true' "$(step_output "$dir" found)" 'found' \
+    && assert_equals 'ghcr' "$(step_output "$dir" source)" 'source' \
+    && assert_equals '' "$(step_output "$dir" path)" 'path' \
+    && assert_equals '' "$(ls "$dir/base" 2>/dev/null)" 'nothing pulled' \
+    && pass_case
+
+case_start 'a metadata-only fetch of an absent base still reports found=false'
+dir="$(new_workspace "$ACTION" "$FETCH_GHCR_STEP")"
+stub_oras "$dir"
+run_step "$dir" ORAS_MANIFEST_MODE=missing REFERENCE='ghcr.io/o/r/e2e-base:ios-e2e-k' DESTINATION=base METADATA_ONLY=true
+assert_equals 0 "$STEP_STATUS" 'fetch exit status' \
+    && assert_equals 'false' "$(step_output "$dir" found)" 'found' \
+    && pass_case
+
 case_start 'a fetch never empties the directory it was pointed at'
 dir="$(new_workspace "$ACTION" "$FETCH_GHCR_STEP")"
 stub_oras "$dir"

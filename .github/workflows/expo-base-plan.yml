@@ -542,6 +542,7 @@ jobs:
                   key: ${{ steps.native-key.outputs.key }}
                   backend: ${{ inputs.base-backend }}
                   path: .ci-cache/e2e-base/${{ matrix.target.name }}
+                  metadata-only: ${{ !inputs.repack }}
 
             - name: Refuse to compile native code under build-strategy repack
               if: (matrix.target.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true' && steps.e2e-cache.outputs.hit != 'true'
@@ -639,9 +640,52 @@ jobs:
                     echo 'ANDROID_SDK_CACHE_PATHS_EOF'
                   } >> "$GITHUB_OUTPUT"
 
+            - name: Use the Android SDK baked into the image
+              id: sdk-baked
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
+              shell: bash
+              env:
+                  SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
+                  REQUIRED_PACKAGES: build-tools;${{ inputs.android-build-tools-version }}
+              run: |
+                  set -euo pipefail
+                  if [ "${RUNNER_ENVIRONMENT:-}" != 'self-hosted' ]; then
+                    echo 'ready=false' >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  sdkmanager=''
+                  for candidate in "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager; do
+                    if [ -x "$candidate" ]; then
+                      sdkmanager="$candidate"
+                      break
+                    fi
+                  done
+                  if [ -z "$sdkmanager" ] || [ ! -f "$SDK_ROOT/licenses/android-sdk-license" ] || [ ! -w "$SDK_ROOT" ]; then
+                    echo 'ready=false' >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
+                  read -r -a required <<< "${REQUIRED_PACKAGES:-}"
+                  for package in ${required[@]+"${required[@]}"}; do
+                    if [ ! -d "$SDK_ROOT/${package//;//}" ]; then
+                      echo "The image's Android SDK at $SDK_ROOT lacks $package, so the cached SDK is used instead."
+                      echo 'ready=false' >> "$GITHUB_OUTPUT"
+                      exit 0
+                    fi
+                  done
+                  {
+                    echo "ANDROID_HOME=$SDK_ROOT"
+                    echo "ANDROID_SDK_ROOT=$SDK_ROOT"
+                  } >> "$GITHUB_ENV"
+                  dirname "$sdkmanager" >> "$GITHUB_PATH"
+                  if [ -x "$SDK_ROOT/platform-tools/adb" ]; then
+                    echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+                  fi
+                  echo 'ready=true' >> "$GITHUB_OUTPUT"
+                  echo "Using the Android SDK baked into the image at $SDK_ROOT; no SDK cache is restored or saved."
+
             - name: Restore the Android SDK
               id: sdk-restore
-              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true'
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && steps.sdk-baked.outputs.ready != 'true'
               uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
               with:
                   path: ${{ steps.sdk-cache.outputs.paths }}
@@ -679,7 +723,7 @@ jobs:
                   echo "Using the Android SDK restored from the cache into $SDK_ROOT; sdkmanager is not run and nothing is downloaded."
 
             - name: Set up Android SDK for the repack
-              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && steps.sdk-cached.outputs.ready != 'true'
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && steps.sdk-baked.outputs.ready != 'true' && steps.sdk-cached.outputs.ready != 'true'
               uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
               env:
                   ANDROID_SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
@@ -783,7 +827,7 @@ jobs:
                   retention-days: 1
 
             - name: Save the Android SDK
-              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && github.event_name != 'pull_request' && steps.sdk-restore.outputs.cache-hit != 'true'
+              if: inputs.repack && inputs.platform == 'android' && steps.base.outputs.found == 'true' && github.event_name != 'pull_request' && steps.sdk-baked.outputs.ready != 'true' && steps.sdk-restore.outputs.cache-hit != 'true'
               continue-on-error: true
               timeout-minutes: 10
               uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

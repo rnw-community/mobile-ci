@@ -256,7 +256,7 @@ preinstalled here.
 | `app-path` | Path to the packaged APK (`<output-dir>/app-release.apk`). |
 | `android-sdk-cache-key` | Key of the Android SDK cache this build restored or would save. |
 | `android-sdk-cache-paths` | Newline-separated SDK directories the Android SDK cache holds. |
-| `android-sdk-cache-hit` | `true` when the Android SDK was restored from an exact cache hit. |
+| `android-sdk-cache-hit` | `true` when the Android SDK needs no save: the image already has it, or it was restored from an exact cache hit. |
 
 ## Example
 

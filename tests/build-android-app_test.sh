@@ -212,6 +212,69 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+# An image that already carries the SDK skips the restore and the save, and any
+# doubt falls through to today's cache and setup-android path unchanged.
+SDK_BAKED_STEP='Use the Android SDK baked into the image'
+
+baked_sdk() {
+    workspace="$(new_workspace "$ACTION" "$SDK_BAKED_STEP")"
+    sdk="$workspace/sdk"
+    mkdir -p "$sdk/cmdline-tools/16.0/bin" "$sdk/licenses" "$sdk/build-tools/37.0.0"
+    printf '#!/bin/sh\n' > "$sdk/cmdline-tools/16.0/bin/sdkmanager"
+    chmod +x "$sdk/cmdline-tools/16.0/bin/sdkmanager"
+    : > "$sdk/licenses/android-sdk-license"
+}
+
+case_start 'a baked SDK with no adb is used on a self-hosted runner'
+baked_sdk
+run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted REQUIRED_PACKAGES='build-tools;37.0.0'
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'true' "$(step_output "$workspace" ready)" 'ready' \
+    && assert_contains "$(cat "$workspace/env")" "ANDROID_SDK_ROOT=$sdk" 'env' \
+    && assert_contains "$(cat "$workspace/path")" "$sdk/cmdline-tools/16.0/bin" 'path'; then
+    pass_case
+fi
+
+case_start 'a hosted runner never trusts a preinstalled SDK'
+baked_sdk
+run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=github-hosted
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready' \
+    && assert_equals '' "$(cat "$workspace/env")" 'env'; then
+    pass_case
+fi
+
+case_start 'no sdkmanager falls through to the cache'
+baked_sdk
+rm "$sdk/cmdline-tools/16.0/bin/sdkmanager"
+run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
+case_start 'no accepted license falls through to the cache'
+baked_sdk
+rm "$sdk/licenses/android-sdk-license"
+run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
+case_start 'a missing required package falls through to the cache'
+baked_sdk
+run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted REQUIRED_PACKAGES='build-tools;36.0.0'
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready' \
+    && assert_equals '' "$(cat "$workspace/env")" 'env'; then
+    pass_case
+fi
+
+case_start 'a machine with no SDK falls through to the cache'
+workspace="$(new_workspace "$ACTION" "$SDK_BAKED_STEP")"
+run_step "$workspace" SDK_ROOT="$workspace/none" RUNNER_ENVIRONMENT=self-hosted
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
 case_start 'the SDK cache is wired restore-always, save-off-pull-request, and bounded in every workflow'
 if wiring="$(REPO_ROOT="$REPO_ROOT" ACTION_YML="$ACTION" python3 - <<'PYTHON' 2>&1
 import os
