@@ -195,6 +195,16 @@ Removed actions: `run-maestro-ios`, `run-maestro-android`, `run-maestro-android-
 
 ## What changed in v4.x
 
+- **v4.11.0** — less to download and run on the fleet. `eas-channel-cleanup-reusable.yml`
+  checks out blobless and sparse (`eas.json` and the app config files of `app-dir`) and,
+  with the new `project-id` and `project-slug` inputs, runs eas-cli against a generated
+  minimal `app.json`, so a PR close no longer needs a workspace install or a full
+  checkout; a non-empty `install-command` keeps the full checkout and install. On a
+  self-hosted runner whose image already carries a usable Android SDK (executable
+  `sdkmanager`, accepted licence, writable root, every required package),
+  `build-android-app` and `expo-base-plan` skip the SDK cache restore, setup and save.
+  `expo-base-binary` gains `metadata-only`: a `repack: false` plan learns from the
+  manifest whether a base exists and pulls nothing.
 - **v4.10.2** — one pnpm store for every Linux architecture. `node-pm-cache` keys a
   Linux pnpm store `node-pm-v2-Linux-pnpm-<lockfile>` and passes `actions/cache` a
   `~/`-relative path, since the literal path is part of a cache entry's version and
