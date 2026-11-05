@@ -65,8 +65,9 @@ on:
                 description: >-
                     EAS project id (UUID), with project-slug: eas-cli then runs against a generated minimal
                     app.json holding only these two values, so the app's own app config is never evaluated and
-                    the job needs nothing but eas.json and eas-cli. For an app config that requires installed
-                    packages, in place of install-command. Empty (default) evaluates the app config in app-dir.
+                    the job checks out nothing but eas.json and needs no install. For an app config that
+                    requires installed packages or local files, in place of install-command. Empty (default)
+                    evaluates the app config in app-dir, from a full (blobless) checkout.
                 type: string
                 required: false
                 default: ''
@@ -81,9 +82,8 @@ on:
                 description: >-
                     Command run at the repository root before eas-cli, for an app config that requires
                     installed packages and project-id is not set (e.g. `corepack enable && pnpm install
-                    --frozen-lockfile`). A non-empty command checks out the whole repository. Empty (default)
-                    installs nothing and checks out only eas.json and the app config files of app-dir, enough
-                    for app.json or a dependency-free app.config.js.
+                    --frozen-lockfile`). Empty (default) installs nothing, enough for app.json or an
+                    app.config.js that imports only files of the repository.
                 type: string
                 required: false
                 default: ''
@@ -126,13 +126,8 @@ jobs:
               env:
                   APP_DIR: ${{ inputs.app-dir }}
                   PROJECT_ID: ${{ inputs.project-id }}
-                  INSTALL_COMMAND: ${{ inputs.install-command }}
               run: |
                   set -euo pipefail
-                  if [ -n "$INSTALL_COMMAND" ]; then
-                    echo 'sparse=' >> "$GITHUB_OUTPUT"
-                    exit 0
-                  fi
                   dir="${APP_DIR#./}"
                   dir="${dir%/}"
                   dir="${dir:-.}"
@@ -142,16 +137,15 @@ jobs:
                       exit 1
                       ;;
                   esac
+                  if [ -z "$PROJECT_ID" ]; then
+                    echo 'sparse=' >> "$GITHUB_OUTPUT"
+                    exit 0
+                  fi
                   prefix=''
                   [ "$dir" = . ] || prefix="/$dir"
                   {
                     echo 'sparse<<EOF_SPARSE'
                     echo "$prefix/eas.json"
-                    if [ -z "$PROJECT_ID" ]; then
-                      echo "$prefix/app.json"
-                      echo "$prefix/app.config.*"
-                      echo "$prefix/package.json"
-                    fi
                     echo 'EOF_SPARSE'
                   } >> "$GITHUB_OUTPUT"
 
@@ -162,6 +156,13 @@ jobs:
                   filter: blob:none
                   sparse-checkout: ${{ steps.paths.outputs.sparse }}
                   sparse-checkout-cone-mode: false
+
+            - name: Create the app directory
+              if: inputs.project-id != ''
+              shell: bash
+              env:
+                  APP_DIR: ${{ inputs.app-dir }}
+              run: mkdir -p -- "$APP_DIR"
 
             - name: Setup Node
               uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0

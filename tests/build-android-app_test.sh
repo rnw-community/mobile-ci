@@ -213,31 +213,113 @@ if assert_equals 0 "$STEP_STATUS" 'step status' \
 fi
 
 # An image that already carries the SDK skips the restore and the save, and any
-# doubt falls through to today's cache and setup-android path unchanged.
+# doubt falls through to today's cache and setup-android path unchanged. The
+# step runs with the environment action.yml declares for it, not one the test
+# invents, so a variable the script reads and the step never sets fails here.
 SDK_BAKED_STEP='Use the Android SDK baked into the image'
 
+# baked_env <workspace> <sdk root> [input=value ...]: K=V lines for the step's declared env.
+baked_env() {
+    ACTION_YML="$ACTION" STEP_NAME="$SDK_BAKED_STEP" SDK_ROOT_VALUE="$2" WORKSPACE="$1" python3 -I - "${@:3}" <<'PYTHON'
+import os
+import re
+import sys
+
+import yaml
+
+action = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))
+step = next(s for s in action['runs']['steps'] if s.get('name') == os.environ['STEP_NAME'])
+overrides = dict(arg.split('=', 1) for arg in sys.argv[1:])
+inputs = {name: spec.get('default', '') for name, spec in action['inputs'].items()}
+inputs.update(overrides)
+
+
+def resolve(value):
+    def replace(match):
+        expression = match.group(1).strip()
+        if expression == 'steps.sdk-cache.outputs.root':
+            return os.environ['SDK_ROOT_VALUE']
+        name = re.fullmatch(r'inputs\.([a-z0-9-]+)', expression)
+        if name:
+            return str(inputs[name.group(1)])
+        sys.exit(f'unresolved expression {expression!r}')
+
+    return re.sub(r'\$\{\{(.*?)\}\}', replace, str(value))
+
+
+for key, value in step.get('env', {}).items():
+    print(f'{key}={resolve(value)}')
+PYTHON
+}
+
+# baked_sdk: a workspace with a complete image SDK and a React Native project to derive the list from.
 baked_sdk() {
     workspace="$(new_workspace "$ACTION" "$SDK_BAKED_STEP")"
     sdk="$workspace/sdk"
-    mkdir -p "$sdk/cmdline-tools/16.0/bin" "$sdk/licenses" "$sdk/build-tools/37.0.0"
+    mkdir -p "$sdk/cmdline-tools/16.0/bin" "$sdk/licenses" "$sdk/build-tools/36.0.0" "$sdk/platforms/android-36" "$sdk/ndk/27.1.12297006" \
+        "$workspace/work/node_modules/react-native/gradle"
     printf '#!/bin/sh\n' > "$sdk/cmdline-tools/16.0/bin/sdkmanager"
     chmod +x "$sdk/cmdline-tools/16.0/bin/sdkmanager"
     : > "$sdk/licenses/android-sdk-license"
+    printf '[versions]\nminSdk = "24"\ncompileSdk = "36"\nbuildTools = "36.0.0"\nndkVersion = "27.1.12297006"\n' \
+        > "$workspace/work/node_modules/react-native/gradle/libs.versions.toml"
 }
 
-case_start 'a baked SDK with no adb is used on a self-hosted runner'
+# run_baked <runner environment> [input=value ...]
+run_baked() {
+    local runner="$1"
+    shift
+    mapfile -t baked_args < <(baked_env "$workspace" "$sdk" app-dir=. "$@")
+    run_step "$workspace" RUNNER_ENVIRONMENT="$runner" "${baked_args[@]}"
+}
+
+case_start 'a baked SDK holding what the project needs is used on a self-hosted runner'
 baked_sdk
-run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted REQUIRED_PACKAGES='build-tools;37.0.0'
-if assert_equals 0 "$STEP_STATUS" 'step status' \
+run_baked self-hosted
+if assert_equals 0 "$STEP_STATUS" "step status ($(tail -3 "$workspace/log"))" \
     && assert_equals 'true' "$(step_output "$workspace" ready)" 'ready' \
     && assert_contains "$(cat "$workspace/env")" "ANDROID_SDK_ROOT=$sdk" 'env' \
     && assert_contains "$(cat "$workspace/path")" "$sdk/cmdline-tools/16.0/bin" 'path'; then
     pass_case
 fi
 
+for missing in build-tools/36.0.0 platforms/android-36 ndk/27.1.12297006; do
+    case_start "a baked SDK without $missing falls through to the cache"
+    baked_sdk
+    rm -rf "${sdk:?}/$missing"
+    run_baked self-hosted
+    if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready' \
+        && assert_equals '' "$(cat "$workspace/env")" 'env'; then
+        pass_case
+    fi
+done
+
+case_start 'a project whose React Native pins cannot be read falls through to the cache'
+baked_sdk
+rm "$workspace/work/node_modules/react-native/gradle/libs.versions.toml"
+run_baked self-hosted
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
+case_start 'android-sdk-required-packages replaces the derived list'
+baked_sdk
+rm "$workspace/work/node_modules/react-native/gradle/libs.versions.toml"
+run_baked self-hosted android-sdk-required-packages='build-tools;36.0.0 ndk;27.1.12297006'
+if assert_equals 'true' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
+case_start 'a package android-sdk-required-packages names that the image lacks falls through to the cache'
+baked_sdk
+run_baked self-hosted android-sdk-required-packages='build-tools;36.0.0 cmake;3.22.1'
+if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+    pass_case
+fi
+
 case_start 'a hosted runner never trusts a preinstalled SDK'
 baked_sdk
-run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=github-hosted
+run_baked github-hosted
 if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready' \
     && assert_equals '' "$(cat "$workspace/env")" 'env'; then
     pass_case
@@ -246,7 +328,7 @@ fi
 case_start 'no sdkmanager falls through to the cache'
 baked_sdk
 rm "$sdk/cmdline-tools/16.0/bin/sdkmanager"
-run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted
+run_baked self-hosted
 if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
     pass_case
 fi
@@ -254,24 +336,36 @@ fi
 case_start 'no accepted license falls through to the cache'
 baked_sdk
 rm "$sdk/licenses/android-sdk-license"
-run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted
+run_baked self-hosted
 if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
     pass_case
 fi
 
-case_start 'a missing required package falls through to the cache'
+case_start 'a machine with no SDK falls through to the cache'
 baked_sdk
-run_step "$workspace" SDK_ROOT="$sdk" RUNNER_ENVIRONMENT=self-hosted REQUIRED_PACKAGES='build-tools;36.0.0'
-if assert_equals 'false' "$(step_output "$workspace" ready)" 'ready' \
-    && assert_equals '' "$(cat "$workspace/env")" 'env'; then
+rm -rf "$sdk"
+run_baked self-hosted
+if assert_equals 0 "$STEP_STATUS" 'step status' \
+    && assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
     pass_case
 fi
 
-case_start 'a machine with no SDK falls through to the cache'
-workspace="$(new_workspace "$ACTION" "$SDK_BAKED_STEP")"
-run_step "$workspace" SDK_ROOT="$workspace/none" RUNNER_ENVIRONMENT=self-hosted
-if assert_equals 0 "$STEP_STATUS" 'step status' \
-    && assert_equals 'false' "$(step_output "$workspace" ready)" 'ready'; then
+case_start 'every variable the baked-SDK script reads is one the step declares'
+if undeclared="$(ACTION_YML="$ACTION" STEP_NAME="$SDK_BAKED_STEP" python3 -I - <<'PYTHON'
+import os
+import re
+
+import yaml
+
+action = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))
+step = next(s for s in action['runs']['steps'] if s.get('name') == os.environ['STEP_NAME'])
+script = step['run']
+read = set(re.findall(r'\$\{?([A-Z][A-Z0-9_]*)', script))
+assigned = set(re.findall(r'^\s*([A-Z][A-Z0-9_]*)=', script, re.M))
+provided = set(step.get('env', {})) | assigned | {'HOME', 'PATH'}
+print(' '.join(sorted(name for name in read - provided if not name.startswith(('GITHUB_', 'RUNNER_')))))
+PYTHON
+)" && assert_equals '' "$undeclared" 'variables read but never set'; then
     pass_case
 fi
 

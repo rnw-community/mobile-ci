@@ -44,6 +44,14 @@ version bump in any of them is a new key, so a cache never silently lacks the
 NDK the build asks for. There are no restore-keys: a partial match would carry
 every retired NDK forward forever.
 
+- **Baked image**: on a self-hosted runner whose SDK root already has an
+  executable `sdkmanager`, an accepted licence, a writable root and every
+  package in `android-sdk-required-packages` (by default the `buildTools`,
+  `compileSdk` platform and `ndkVersion` read from
+  `react-native/gradle/libs.versions.toml`), the image's SDK is used as it is:
+  no restore, no `setup-android`, no save. A missing package, or pins that
+  cannot be read, keeps the cache path below, so a half-provisioned image never
+  makes Gradle download the NDK on every job.
 - **Hit**: the restored SDK is exported as `ANDROID_HOME`/`ANDROID_SDK_ROOT`
   and put on `PATH`; `setup-android` and `sdkmanager` do not run, and nothing
   is downloaded unless the restored tree lacks a component the build needs:
@@ -247,6 +255,7 @@ preinstalled here.
 | `android-abis`                 | no       | `''`         | Comma-separated ABIs passed as `-PreactNativeArchitectures=<value>`, e.g. `x86_64`. Empty passes nothing, so the project's own `reactNativeArchitectures` applies. Fails closed on an unknown ABI or a contradicting pin in `gradle-args` / `ORG_GRADLE_PROJECT_reactNativeArchitectures`. See [ABIs](#abis). |
 | `native-compile-jobs`          | no       | `''`         | Most C/C++ compilers the CMake builds inside Gradle run at once, across every native module. Empty derives it from the cgroup limits. See [Native compile parallelism](#native-compile-parallelism). |
 | `native-compile-memory-per-job` | no     | `3584`       | MiB of memory limit each derived native compile job is sized for, the peak of the heaviest translation unit. Ignored when `native-compile-jobs` is set. See [Native compile parallelism](#native-compile-parallelism). |
+| `android-sdk-required-packages` | no      | `''`         | Whitespace-separated `sdkmanager` packages a self-hosted image's SDK must hold to be used as it is. Empty derives build-tools, the compileSdk platform and the NDK from `react-native/gradle/libs.versions.toml`; anything missing keeps the cache path. |
 | `android-sdk-cache-save`       | no       | `'true'`     | `'true'` saves the [Android SDK cache](#android-sdk-cache) from inside the action after a successful build, off `pull_request`, with `continue-on-error`. `'false'` leaves the save to the caller, which can bound it with `timeout-minutes`. |
 
 ## Outputs

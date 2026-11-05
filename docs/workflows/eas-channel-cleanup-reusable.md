@@ -43,21 +43,24 @@ is deleted; a channel that cannot be read or deleted for any reason other than
 "not found" is kept, the remaining deletions still run, and the job fails at
 the end. The step summary lists what was deleted.
 
-**What the job downloads.** It is built for the least traffic a PR close can
-cost: a blobless, sparse checkout of `eas.json` and the app config files of
-`app-dir` (`app.json`, `app.config.*`, `package.json`) and eas-cli at
-`eas-cli-version`; no workspace install, no cache restore. eas-cli reads the
-project id from the app config, so an `app.json` or a dependency-free
-`app.config.js` works as is. An app config that imports packages (or Expo
-config plugins) cannot be evaluated without them; give the job either:
+**What the job downloads.** Least traffic a PR close can cost without breaking
+the app config: eas-cli at `eas-cli-version`, no cache restore and a blobless
+checkout (history without file contents, then only the files the checkout
+needs). eas-cli reads the project id from the app config, so the app config
+must be evaluable:
 
-- `project-id` and `project-slug` (preferred): eas-cli runs against a generated
-  `app.json` that holds only those two values, next to a copy of `eas.json`, so
-  the app config is never evaluated. The checkout shrinks to `eas.json`. eas-cli
-  still verifies the id and slug against EAS, so a wrong pair fails the job
-  instead of deleting anything.
-- `install-command`: run at the repository root before eas-cli, with a full
-  checkout, as before (about a thousand packages for a typical Expo monorepo).
+- By default the whole repository is checked out, so an `app.json` or an
+  `app.config.js` that imports files of the repository (`./brand.json`) works as
+  is. An app config that imports installed packages (or Expo config plugins)
+  cannot be evaluated without them.
+- `project-id` and `project-slug` (preferred for those apps): eas-cli runs
+  against a generated `app.json` that holds only those two values, next to a
+  copy of `eas.json`, so the app config is never evaluated. The checkout shrinks
+  to `eas.json` (the app directory is created if the repository has none) and
+  nothing is installed. eas-cli still verifies the id and slug against EAS, so a
+  wrong pair fails the job instead of deleting anything.
+- `install-command`: run at the repository root before eas-cli, as before
+  (about a thousand packages for a typical Expo monorepo).
 
 ## Inputs
 
@@ -74,7 +77,7 @@ config plugins) cannot be evaluated without them; give the job either:
 | `eas-cli-version`    | no       | `20.5.1`              | Pinned eas-cli npm version. |
 | `project-id`         | no       | `''`                  | EAS project id (UUID). With `project-slug`, eas-cli runs against a generated minimal `app.json` and the app config is never evaluated. |
 | `project-slug`       | no       | `''`                  | EAS project slug; required with `project-id`. |
-| `install-command`    | no       | `''`                  | Command run at the repository root first, with a full checkout, for an app config that requires packages and `project-id` is not set. |
+| `install-command`    | no       | `''`                  | Command run at the repository root first, for an app config that requires packages and `project-id` is not set. |
 | `node-version`       | no       | `22`                  | Node version. |
 | `runner-labels`      | no       | `'["ubuntu-latest"]'` | JSON array of runner labels. |
 | `timeout-minutes`    | no       | `15`                  | Job timeout. |
