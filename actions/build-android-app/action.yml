@@ -79,6 +79,17 @@ inputs:
       native-compile-jobs is set.
     required: false
     default: '3584'
+  android-sdk-required-packages:
+    description: >-
+      Whitespace-separated sdkmanager packages (e.g. `build-tools;36.0.0
+      ndk;27.1.12297006`) a self-hosted image's Android SDK must hold to be
+      used as it is, with no cache restore or save. Empty (the default)
+      derives build-tools, the compileSdk platform and the NDK from
+      react-native/gradle/libs.versions.toml, found under app-dir or the
+      node_modules above it; an image that lacks any of them, or a project
+      whose pins cannot be read, keeps the cache path.
+    required: false
+    default: ''
   android-sdk-cache-save:
     description: >-
       'true' (default) saves the Android SDK cache from inside this action
@@ -193,6 +204,8 @@ runs:
       shell: bash
       env:
         SDK_ROOT: ${{ steps.sdk-cache.outputs.root }}
+        APP_DIR: ${{ inputs.app-dir }}
+        REQUIRED_PACKAGES: ${{ inputs.android-sdk-required-packages }}
       run: |
         set -euo pipefail
         if [ "${RUNNER_ENVIRONMENT:-}" != 'self-hosted' ]; then
@@ -210,7 +223,35 @@ runs:
           echo 'ready=false' >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        read -r -a required <<< "${REQUIRED_PACKAGES:-}"
+        if [ -z "${REQUIRED_PACKAGES//[[:space:]]/}" ]; then
+          pins=''
+          dir="$APP_DIR"
+          while :; do
+            if [ -f "$dir/node_modules/react-native/gradle/libs.versions.toml" ]; then
+              pins="$dir/node_modules/react-native/gradle/libs.versions.toml"
+              break
+            fi
+            case "$dir" in
+              .|/) break ;;
+            esac
+            dir="$(dirname "$dir")"
+          done
+          pin() {
+            sed -n "/^$1[[:space:]]*=/{s/^[^=]*=[[:space:]]*\"\([^\"]*\)\".*/\1/p;q;}" "$pins"
+          }
+          if [ -n "$pins" ]; then
+            build_tools="$(pin buildTools)"
+            compile_sdk="$(pin compileSdk)"
+            ndk_version="$(pin ndkVersion)"
+          fi
+          if [ -z "$pins" ] || [ -z "$build_tools" ] || [ -z "$compile_sdk" ] || [ -z "$ndk_version" ]; then
+            echo "The Android SDK packages this build needs cannot be read from react-native's libs.versions.toml, so the cached SDK is used instead."
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          REQUIRED_PACKAGES="build-tools;$build_tools platforms;android-$compile_sdk ndk;$ndk_version"
+        fi
+        read -r -a required <<< "$REQUIRED_PACKAGES"
         for package in ${required[@]+"${required[@]}"}; do
           if [ ! -d "$SDK_ROOT/${package//;//}" ]; then
             echo "The image's Android SDK at $SDK_ROOT lacks $package, so the cached SDK is used instead."

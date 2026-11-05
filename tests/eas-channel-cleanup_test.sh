@@ -5,8 +5,9 @@
 # it, so a protected name (the deny-list, any channel an eas.json build profile
 # bakes into binaries, or one EAS marks protected) is never deleted, a dry run
 # deletes nothing, and a channel list EAS cannot read fails the job. The job
-# itself stays cheap: a sparse, blobless checkout of only what it reads and
-# eas-cli alone, with no workspace install unless the caller asks for one.
+# itself stays cheap: a blobless checkout, sparse down to eas.json when the app
+# config is never evaluated (project-id), and eas-cli alone, with no workspace
+# install unless the caller asks for one.
 set -euo pipefail
 
 # shellcheck source=tests/lib/harness.sh
@@ -15,6 +16,7 @@ set -euo pipefail
 WORKFLOW_YML="$REPO_ROOT/.github/workflows/eas-channel-cleanup-reusable.yml"
 STEP='Delete EAS channels'
 PATHS_STEP='Resolve checkout paths'
+APPDIR_STEP='Create the app directory'
 
 OLD=2001-01-01T00:00:00.000Z
 NEW=2999-01-01T00:00:00.000Z
@@ -86,7 +88,7 @@ cleanup() {
 # resolve_paths [VAR=value ...]: the sparse-checkout patterns the checkout step receives.
 resolve_paths() {
     PATHS_WS="$(new_workflow_workspace "$WORKFLOW_YML" cleanup "$PATHS_STEP")"
-    run_step "$PATHS_WS" APP_DIR=packages/app PROJECT_ID='' INSTALL_COMMAND='' "$@"
+    run_step "$PATHS_WS" APP_DIR=packages/app PROJECT_ID='' "$@"
 }
 
 calls() {
@@ -321,10 +323,9 @@ for bad in "PROJECT_ID=nope PROJECT_SLUG=demo|project-id must be" "PROJECT_ID=$P
     fi
 done
 
-case_start "the checkout is sparse and blobless: eas.json plus the app config files of the app dir"
+case_start "without a project id the checkout is full: the app config may import any file of the repository"
 resolve_paths
-if assert_equals 0 "$STEP_STATUS" 'status' \
-    && assert_equals $'/packages/app/eas.json\n/packages/app/app.json\n/packages/app/app.config.*\n/packages/app/package.json' "$(step_output "$PATHS_WS" sparse)" 'patterns'; then
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals '' "$(step_output "$PATHS_WS" sparse)" 'no patterns'; then
     pass_case
 fi
 
@@ -337,30 +338,35 @@ fi
 
 for dir in '.' './' './packages/app/' 'packages/app/'; do
     case_start "app-dir $dir is normalised"
-    resolve_paths APP_DIR="$dir"
+    resolve_paths PROJECT_ID="$PROJECT_UUID" APP_DIR="$dir"
     expected='/packages/app'
     case "$dir" in .|./) expected='' ;; esac
     if assert_equals 0 "$STEP_STATUS" 'status' \
-        && assert_equals "$expected/eas.json" "$(step_output "$PATHS_WS" sparse | head -1)" 'first pattern'; then
+        && assert_equals "$expected/eas.json" "$(step_output "$PATHS_WS" sparse)" 'pattern'; then
         pass_case
     fi
 done
 
-case_start "an install-command needs the whole repository, so the checkout is full"
-resolve_paths INSTALL_COMMAND='corepack enable && pnpm install --frozen-lockfile'
-if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals '' "$(step_output "$PATHS_WS" sparse)" 'no patterns'; then
+for bad in '../x' '/etc' 'a/../b' 'a/*' 'a[b]' '!a' '#a' 'a\b'; do
+    case_start "app-dir $bad is refused, with and without a project id"
+    resolve_paths APP_DIR="$bad"
+    status_plain="$STEP_STATUS"
+    resolve_paths APP_DIR="$bad" PROJECT_ID="$PROJECT_UUID"
+    if assert_equals 1 "$status_plain" 'status without project id' \
+        && assert_equals 1 "$STEP_STATUS" 'status with project id' \
+        && assert_contains "$(cat "$PATHS_WS/log")" 'app-dir' 'message'; then
+        pass_case
+    fi
+done
+
+case_start "the app directory is created for a project id, so a repository without eas.json still has one"
+WS="$(new_workflow_workspace "$WORKFLOW_YML" cleanup "$APPDIR_STEP")"
+run_step "$WS" APP_DIR=packages/app
+if assert_equals 0 "$STEP_STATUS" 'status' && assert_equals yes "$([ -d "$WS/work/packages/app" ] && echo yes || echo no)" 'directory'; then
     pass_case
 fi
 
-for bad in '../x' '/etc' 'a/../b' 'a/*' 'a[b]' '!a' '#a' 'a\b'; do
-    case_start "app-dir $bad cannot become a sparse-checkout pattern"
-    resolve_paths APP_DIR="$bad"
-    if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$PATHS_WS/log")" 'app-dir' 'message'; then
-        pass_case
-    fi
-done
-
-case_start "the checkout step is sparse, blobless and fed by the resolved patterns; installs run only on request"
+case_start "the checkout step is blobless and fed by the resolved patterns; the app directory exists before eas-cli runs; installs run only on request"
 if WORKFLOW="$WORKFLOW_YML" python3 -I - <<'PYTHON'
 import os
 import sys
@@ -370,8 +376,7 @@ import yaml
 steps = yaml.safe_load(open(os.environ['WORKFLOW'], encoding='utf-8'))['jobs']['cleanup']['steps']
 by_name = {step['name']: step for step in steps}
 names = [step['name'] for step in steps]
-checkout = by_name['Checkout repository']
-with_ = checkout['with']
+with_ = by_name['Checkout repository']['with']
 problems = []
 if names.index('Resolve checkout paths') > names.index('Checkout repository'):
     problems.append('paths are resolved after the checkout')
@@ -383,6 +388,13 @@ if with_.get('sparse-checkout-cone-mode') is not False:
     problems.append('sparse checkout is not in non-cone mode')
 if by_name['Resolve checkout paths'].get('id') != 'paths':
     problems.append('the paths step has no id')
+if 'INSTALL_COMMAND' in by_name['Resolve checkout paths'].get('env', {}):
+    problems.append('install-command still decides the checkout')
+create = by_name['Create the app directory']
+if create.get('if') != "inputs.project-id != ''":
+    problems.append('the app directory is not created for a project id')
+if not names.index('Checkout repository') < names.index('Create the app directory') < names.index('Delete EAS channels'):
+    problems.append('the app directory is not created between the checkout and eas-cli')
 if by_name['Install dependencies'].get('if') != "inputs.install-command != ''":
     problems.append('installs are not conditional on install-command')
 if problems:
@@ -391,7 +403,7 @@ PYTHON
 then
     pass_case
 else
-    fail_case "checkout step shape"
+    fail_case "workflow step shape"
 fi
 
 finish_suite
