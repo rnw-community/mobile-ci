@@ -40,6 +40,12 @@ a hit runs no `sdkmanager` and downloads nothing. The cache is saved by the
 job's last step, never on `pull_request`, with `continue-on-error` and a
 10-minute `timeout-minutes`.
 
+On a self-hosted runner whose image already carries a usable SDK at the root
+(`sdkmanager`, an accepted licence, a writable root and the repack's
+`build-tools`), the restore, setup and save are all skipped. Anything less falls
+through to the cache and `setup-android` unchanged. A plan with `repack: false`
+asks the registry only whether the base exists and pulls nothing.
+
 The collecting job also fails closed when two targets with different `appId`
 resolve to the same native key (same-`appId` targets sharing a key are a
 legitimate dedupe): the error names both targets, the key and the fingerprint
