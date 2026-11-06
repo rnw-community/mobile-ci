@@ -42,7 +42,7 @@ applies on a developer's Mac, so a local run reproduces the CI simulator.
 
 **One boot, already slim.** simslim keeps a device's disable overrides on the
 host, in a store keyed by the device's UDID that `launchd_sim` reads when the
-device starts ([simslim `disabled_store.go`](https://github.com/MobAI-App/simslim/blob/main/disabled_store.go)).
+device starts ([simslim `disabled_store.go`](https://github.com/MobAI-App/simslim/blob/v0.12.2/disabled_store.go)).
 So with `slim-profile` set and `slim-repair: true` (both defaults), `acquire`
 creates the device and leaves it **shut down**, and the slim step runs
 `simslim on --profile` against it: simslim writes the overrides offline and
@@ -52,13 +52,17 @@ The lease is then waited for with `bootstatus -b`, verified, and measured. That
 replaces the previous boot → verify → `simslim on` (spawn per label, then
 reboot) sequence, which cost about a minute per lease.
 
-**Templates do not carry slimming.** Because the store is keyed by UDID,
+**Raw clones do not carry slimming.** Because the store is keyed by UDID,
 `xcrun simctl clone` of a slimmed device produces a **stock** clone
 (rnw-community/mobile-ci#161). `template-device` is still honoured for a device
 that carries something else, and its clone is slimmed before first boot like a
 created one; `template-strategy: auto` is deprecated and leases exactly like
 `none`, since cloning or baking a template bought nothing. Devices named
 `mobile-ci-template-*` are still never deleted by `mode: release`.
+Upstream v0.12.2's `simslim clone` explicitly copies a profile and repairs
+clone references; it is a different operation from this action's raw
+`simctl clone`. See the [fleet SimSlim guidance](../../docs/self-hosted-runners.md#every-simulator-runs-slim)
+for verification, feature checks, worker watchers and capacity measurement.
 
 **XCUITest lanes.** A controlled A/B in #161 measured a slim lease ~1.23×
 slower than a stock one on an XCUITest subset (simslim 0.10.0). simslim 0.12.0
