@@ -77,6 +77,23 @@ describe('exec', () => {
         assert.deepEqual(requests.map(({ url }) => url), [...Array(3).fill('https://farm.test/v1/leases/L-cut'), 'https://farm.test/v1/leases/L-cut/exec']);
     });
 
+    it("pipes a stdin over simlock's inline cap from a lease file, deleted afterwards", async () => {
+        configureTransfers(api.url, 4);
+        const payload = 'x'.repeat(8_388_609);
+        answers.push(() => new Response('{"name":"f","size":8388609}', { status: 201 }));
+        answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
+        answers.push(() => new Response(null, { status: 204 }));
+        assert.equal((await exec(api, 'L1', ['spawn', 'drop'], payload, 'simctl')).exitCode, 0);
+        const [upload, run, remove] = requests;
+        const name = upload!.url.split('/').pop()!;
+        assert.match(name, /^stdin-[0-9a-f-]{36}$/);
+        assert.equal(upload!.init.method, 'PUT');
+        assert.equal(upload!.init.body, payload);
+        assert.equal(new Headers(upload!.init.headers).get('content-type'), 'application/octet-stream');
+        assert.deepEqual(JSON.parse(String(run!.init.body)), { tool: 'simctl', args: ['spawn', 'drop'], stdinFile: name });
+        assert.deepEqual([remove!.init.method, remove!.url], ['DELETE', upload!.url]);
+    });
+
     it('runs adb when asked, and keeps the stdin payload', async () => {
         answers.push(() => new Response(sse(['exit', { exitCode: 0 }])));
         await exec(api, 'L-adb', ['shell', 'cat'], 'payload', 'adb');

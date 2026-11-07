@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
 
@@ -10,7 +11,8 @@ import { acrossTunnel } from './tunnel.ts';
  * The file helpers are iOS only: `simctl spawn … /bin/sh -c` runs the simulator
  * runtime's shell, which reaches the Mac's own `/bin` and `/usr/bin` by
  * absolute path, so files travel as base64 on stdin and are unpacked by the
- * worker's own tools: the runner needs no SSH key and no shared disk.
+ * worker's own tools: the runner needs no SSH key and no shared disk. A stdin
+ * over simlock's inline cap goes up as a lease file first and is piped from it.
  */
 export interface SimlockApi {
     readonly url: string;
@@ -102,6 +104,23 @@ function remembered<T>(known: Map<string, Promise<T>>, key: string, work: () => 
     return result;
 }
 
+/** simlock's cap on an inline exec `stdin` (`EXEC_STDIN_MAX_LENGTH`, simlock 0.6). */
+const INLINE_STDIN_MAX_CHARS = 8_388_608;
+
+/** Uploads `stdin` to the lease's folder (simlock 0.6 takes up to 2 GiB a file) for `work` to pipe by name, then deletes it. */
+async function viaLeaseFile<T>(api: SimlockApi, leaseId: string, stdin: string, work: (stdinFile: string) => Promise<T>): Promise<T> {
+    const name = `stdin-${randomUUID()}`;
+    const path = `/v1/leases/${leaseId}/files/${name}`;
+    // The same name again replaces the file, so a retried upload is idempotent.
+    await answered(api, path, { method: 'PUT', body: stdin, headers: { 'content-type': 'application/octet-stream' } });
+    try {
+        return await work(name);
+    } finally {
+        // The lease's folder goes with the lease; deleting early only frees its quota.
+        await answered(api, path, { method: 'DELETE' }).catch(() => undefined);
+    }
+}
+
 /**
  * Runs one command on the leased device: `tool` defaults to the one its platform has (`simctl` on iOS, `adb` on
  * Android). A payload over 1 MiB takes one of the machine-wide transfer slots app uploads use (`installConcurrency`).
@@ -111,10 +130,12 @@ export async function exec(api: SimlockApi, leaseId: string, args: readonly stri
         throw new Error(`exec: tool must be 'simctl' or 'adb'; got '${String(tool)}'`);
     }
     const resolved = tool ?? (await leaseTool(api, leaseId));
-    const body = JSON.stringify({ tool: resolved, args, ...(stdin === undefined ? {} : { stdin }) });
     // A gateway's worker uplink can drop and reconnect within a second too; every command the suite sends is
     // idempotent. An error the gateway answered, or the request timeout, is not transient.
-    const send = () => answered(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body });
+    const run = (input: { stdin?: string; stdinFile?: string }) =>
+        answered(api, `/v1/leases/${leaseId}/exec`, { method: 'POST', body: JSON.stringify({ tool: resolved, args, ...input }) });
+    const send = () =>
+        stdin === undefined || stdin.length <= INLINE_STDIN_MAX_CHARS ? run(stdin === undefined ? {} : { stdin }) : viaLeaseFile(api, leaseId, stdin, stdinFile => run({ stdinFile }));
     const text = await (stdin !== undefined && stdin.length > LARGE_PAYLOAD_BYTES ? transfer(api.url, send) : send());
     let stdout = '';
     let stderr = '';
