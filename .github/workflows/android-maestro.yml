@@ -880,7 +880,7 @@ jobs:
             android-abi-key: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -890,7 +890,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.11.1 # v4.11.1
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.11.2 # v4.11.2
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -1021,7 +1021,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Validate the e2e call
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.2 # v4.11.2
               with:
                   mode: validate
                   platform: android
@@ -1129,7 +1129,7 @@ jobs:
             - name: Fetch the recorded flow timings
               id: flow-timings
               if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.2 # v4.11.2
               with:
                   mode: fetch
                   artifact-name: maestro-flow-timings-android${{ steps.targets.outputs.artifact-scope }}
@@ -1143,7 +1143,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.1 # v4.11.1
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.2 # v4.11.2
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1211,7 +1211,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1252,7 +1252,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.2 # v4.11.2
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1364,7 +1364,7 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.2 # v4.11.2
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
@@ -1400,7 +1400,7 @@ jobs:
 
             - name: build-android-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.2 # v4.11.2
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -1423,7 +1423,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.2 # v4.11.2
               with:
                   mode: publish
                   platform: android
@@ -1465,7 +1465,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1551,7 +1551,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.2 # v4.11.2
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1561,7 +1561,7 @@ jobs:
             - name: Select the target's flow timings
               id: shard-timings
               if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.2 # v4.11.2
               with:
                   mode: select
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1571,7 +1571,7 @@ jobs:
               id: run-maestro-android-redroid
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.11.2 # v4.11.2
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e${{ needs.detect.outputs.artifact-scope }}-${{ strategy.job-index }}
@@ -1610,7 +1610,7 @@ jobs:
               id: run-maestro-android
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.11.2 # v4.11.2
               with:
                   apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
                   app-id: ${{ matrix.target.appId }}
@@ -1654,7 +1654,7 @@ jobs:
               id: run-maestro-device-cloud
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
               if: inputs.android-driver == 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.11.2 # v4.11.2
               with:
                   platform: android
                   app-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
@@ -1709,7 +1709,7 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1724,7 +1724,7 @@ jobs:
                   name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
             - name: Apply maestro-secrets-env to the e2e suite
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.2 # v4.11.2
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1732,7 +1732,7 @@ jobs:
             - name: Run the e2e suite
               id: run
               continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.2 # v4.11.2
               with:
                   mode: run
                   platform: android
@@ -1752,7 +1752,7 @@ jobs:
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.11.2 # v4.11.2
               with:
                   mode: release
                   platform: android
@@ -1777,7 +1777,7 @@ jobs:
         timeout-minutes: 10
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download this run's shard artifacts
@@ -1786,7 +1786,7 @@ jobs:
                   pattern: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-*-shard-*
                   path: ${{ runner.temp }}/maestro-shard-artifacts
             - name: Record the flow timings
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.11.2 # v4.11.2
               with:
                   mode: record
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1806,12 +1806,12 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Save the successful test contract
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.11.1 # v4.11.1
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.11.2 # v4.11.2
               with:
                   mode: publish
                   platform: android
