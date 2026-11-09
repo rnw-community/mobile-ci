@@ -173,7 +173,7 @@ case_start 'an e2e run that ended in an infrastructure error, with no report and
 suite="$(new_workspace "$REPO_ROOT/actions/e2e-suite/action.yml" 'Run the e2e suite')"
 stub "$suite" curl 'exit 7'
 mkdir -p "$suite/work/Base.app"
-run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND='exit 3' E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND='exit 3' E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES=10 SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 e2e_annotations="$(sed -n 's/^::error:://p' "$suite/log")"
 scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|notice:The farm has 5 free ios devices; running 5 workers instead of 10.^^$e2e_annotations^^Process completed with exit code 3.
 2|iOS E2E / iOS Maestro E2E result|failure|Process completed with exit code 1.^^Required jobs did not succeed: e2e suite (result: failure).
@@ -187,7 +187,7 @@ case_start 'an e2e run whose tests failed stays a test failure'
 suite="$(new_workspace "$REPO_ROOT/actions/e2e-suite/action.yml" 'Run the e2e suite')"
 stub "$suite" curl 'exit 7'
 mkdir -p "$suite/work/Base.app"
-run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND="mkdir -p .e2e; printf '%s' '{\"run\":{\"status\":\"failed\",\"errors\":[],\"summary\":{\"executed\":3,\"failed\":1}}}' > .e2e/report.json; exit 1" E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+run_step "$suite" E2E_PLATFORM=ios E2E_COMMAND="mkdir -p .e2e; printf '%s' '{\"run\":{\"status\":\"failed\",\"errors\":[],\"summary\":{\"executed\":3,\"failed\":1}}}' > .e2e/report.json; exit 1" E2E_APP_PATH="$suite/work/Base.app" E2E_WORKERS=1 E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES=10 SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 e2e_annotations="$(sed -n 's/^::error:://p' "$suite/log")"
 scenario "$FAILED" "1|iOS E2E / E2E suite (e2e)|failure|$e2e_annotations^^Process completed with exit code 1."
 classify
