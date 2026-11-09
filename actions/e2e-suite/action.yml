@@ -59,6 +59,12 @@ inputs:
         description: Devices leased and tests run at once (validate, run).
         required: false
         default: '1'
+    capacity-wait-minutes:
+        description: >-
+            How long a run waits for a busy farm to free half the devices an idle farm
+            would give it, before failing as infrastructure (run).
+        required: false
+        default: '10'
     retries:
         description: Retries per failed test inside the run (validate, run).
         required: false
@@ -189,6 +195,7 @@ runs:
               E2E_APP_ID: ${{ inputs.app-id }}
               E2E_TARGET: ${{ inputs.target }}
               E2E_WORKERS: ${{ inputs.workers }}
+              E2E_CAPACITY_WAIT_MINUTES: ${{ inputs.capacity-wait-minutes }}
               E2E_RETRIES: ${{ inputs.retries }}
               E2E_SESSION: ${{ inputs.session }}
               E2E_TELEMETRY_DISABLED: '1'
@@ -208,20 +215,40 @@ runs:
               export E2E_WORKERS
               targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
               case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
-              free=$(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
-                | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
-                | jq -r --arg platform "$E2E_PLATFORM" --argjson targets "$targets" '.capacity[$platform] | if .limit == null then empty else ([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor end' 2>/dev/null || true)
-              case "$free" in
-                '' | *[!0-9]*) echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked." ;;
-                *)
+              case "$E2E_CAPACITY_WAIT_MINUTES" in
+                '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
+              esac
+              polls=$((10#$E2E_CAPACITY_WAIT_MINUTES * 2))
+              while :; do
+                read -r free need < <(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
+                  | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
+                  | jq -r --arg platform "$E2E_PLATFORM" --argjson targets "$targets" --argjson workers "$E2E_WORKERS" '.capacity[$platform] | if .limit == null then empty else "\(([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor) \([.limit / $targets | floor, $workers] | min)" end' 2>/dev/null || true) || true
+                case "${free:-}${need:-x}" in
+                  *[!0-9]*)
+                    echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked."
+                    break
+                    ;;
+                esac
+                floor=$(( (need + 1) / 2 ))
+                if [ "$floor" -lt 1 ]; then floor=1; fi
+                if [ "$free" -ge "$floor" ]; then
                   if [ "$free" -lt "$E2E_WORKERS" ]; then
-                    if [ "$free" -lt 1 ]; then free=1; fi
                     echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
                     E2E_WORKERS=$free
                     export E2E_WORKERS
                   fi
-                  ;;
-              esac
+                  break
+                fi
+                if [ "$polls" -eq 0 ]; then
+                  echo "::error::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
+                  exit 1
+                fi
+                if [ "$polls" -eq $((10#$E2E_CAPACITY_WAIT_MINUTES * 2)) ]; then
+                  echo "::notice::The farm has $free free $E2E_PLATFORM devices; waiting up to $E2E_CAPACITY_WAIT_MINUTES minutes for the $floor this run needs."
+                fi
+                polls=$((polls - 1))
+                sleep 30
+              done
               rm -rf .e2e
               started=$(date +%s)
               status=0
