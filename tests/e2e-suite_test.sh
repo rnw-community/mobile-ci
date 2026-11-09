@@ -268,6 +268,22 @@ if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     pass_case
 fi
 
+case_start 'a farm that stops answering during the wait keeps the run waiting'
+busy 10 10 '{"capacity":{"ios":{"limit":4,"used":4}}}' 'not json' '{"capacity":{"ios":{"limit":4,"used":2}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 2 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 3 "$(cat "$dir/polls")" 'polls'; then
+    pass_case
+fi
+
+case_start 'a farm that stops answering until the wait ends fails as infrastructure'
+busy 3 1 '{"capacity":{"ios":{"limit":2,"used":2}}}' 'not json'
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_equals no "$([ -e "$dir/work/workers" ] && echo yes || echo no)" 'suite ran' \
+    && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the farm stopped reporting its free ios capacity while this run waited for 1 devices.' 'error'; then
+    pass_case
+fi
+
 case_start 'a farm that stays busy fails as infrastructure without starting the suite'
 busy 3 1 '{"capacity":{"ios":{"limit":2,"used":2}}}'
 if assert_equals 1 "$STEP_STATUS" 'status' \

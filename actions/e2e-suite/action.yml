@@ -219,32 +219,43 @@ runs:
                 '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
               esac
               polls=$((10#$E2E_CAPACITY_WAIT_MINUTES * 2))
+              waiting=''
               while :; do
                 read -r free need < <(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
                   | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
                   | jq -r --arg platform "$E2E_PLATFORM" --argjson targets "$targets" --argjson workers "$E2E_WORKERS" '.capacity[$platform] | if .limit == null then empty else "\(([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor) \([.limit / $targets | floor, $workers] | min)" end' 2>/dev/null || true) || true
                 case "${free:-}${need:-x}" in
                   *[!0-9]*)
-                    echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked."
-                    break
+                    if [ -z "$waiting" ]; then
+                      echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked."
+                      break
+                    fi
+                    free=''
+                    ;;
+                  *)
+                    floor=$(( (need + 1) / 2 ))
+                    if [ "$floor" -lt 1 ]; then floor=1; fi
+                    if [ "$free" -ge "$floor" ]; then
+                      if [ "$free" -lt "$E2E_WORKERS" ]; then
+                        echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
+                        E2E_WORKERS=$free
+                        export E2E_WORKERS
+                      fi
+                      break
+                    fi
                     ;;
                 esac
-                floor=$(( (need + 1) / 2 ))
-                if [ "$floor" -lt 1 ]; then floor=1; fi
-                if [ "$free" -ge "$floor" ]; then
-                  if [ "$free" -lt "$E2E_WORKERS" ]; then
-                    echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
-                    E2E_WORKERS=$free
-                    export E2E_WORKERS
-                  fi
-                  break
-                fi
                 if [ "$polls" -eq 0 ]; then
-                  echo "::error::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
+                  if [ -z "$free" ]; then
+                    echo "::error::Infrastructure failure: the farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for $floor devices."
+                  else
+                    echo "::error::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
+                  fi
                   exit 1
                 fi
-                if [ "$polls" -eq $((10#$E2E_CAPACITY_WAIT_MINUTES * 2)) ]; then
+                if [ -z "$waiting" ]; then
                   echo "::notice::The farm has $free free $E2E_PLATFORM devices; waiting up to $E2E_CAPACITY_WAIT_MINUTES minutes for the $floor this run needs."
+                  waiting=1
                 fi
                 polls=$((polls - 1))
                 sleep 30
