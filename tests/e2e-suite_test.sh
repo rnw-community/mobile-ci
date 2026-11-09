@@ -253,6 +253,7 @@ busy() {
     stub "$dir" curl 'cat > /dev/null; d="$(dirname "$0")/.."; n=$(($(cat "$d/polls" 2>/dev/null || echo 0) + 1)); echo "$n" > "$d/polls"; t=$(wc -l < "$d/farms"); sed -n "$((n < t ? n : t))p" "$d/farms"'
     # shellcheck disable=SC2016 # expanded when the stub runs.
     stub "$dir" sleep 'echo "$1" >> "$(dirname "$0")/../sleeps"'
+    mkdir -p "$dir/work/.e2e" && report passed 9 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW="${BUSY_SHADOW:-false}" \
         E2E_CAPACITY_WAIT_MINUTES="$wait" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
@@ -300,11 +301,12 @@ if assert_equals 1 "$STEP_STATUS" 'status' \
     pass_case
 fi
 
-case_start 'a farm that stays busy fails as infrastructure without starting the suite'
+case_start 'a farm that stays busy fails as infrastructure without starting the suite, and clears a stale report'
 busy 3 1 '{"capacity":{"ios":{"limit":2,"used":2}}}'
 if assert_equals 1 "$STEP_STATUS" 'status' \
     && assert_equals 3 "$(cat "$dir/polls")" 'polls' \
     && assert_equals no "$([ -e "$dir/work/workers" ] && echo yes || echo no)" 'suite ran' \
+    && assert_equals no "$([ -e "$dir/work/.e2e" ] && echo yes || echo no)" 'stale report' \
     && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the farm still had 0 free ios devices after 1 minutes, fewer than the 1 this run needs to finish within the job limit.' 'error'; then
     pass_case
 fi

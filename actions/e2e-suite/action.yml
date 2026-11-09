@@ -215,6 +215,7 @@ runs:
               export E2E_WORKERS
               targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
               case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
+              rm -rf .e2e
               case "$E2E_CAPACITY_WAIT_MINUTES" in
                 '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
               esac
@@ -261,7 +262,6 @@ runs:
                 polls=$((polls - 1))
                 sleep 30
               done
-              rm -rf .e2e
               started=$(date +%s)
               status=0
               output=$(mktemp)
