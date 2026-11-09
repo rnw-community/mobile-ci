@@ -234,8 +234,8 @@ runs:
                     ;;
                   *)
                     floor=$(( (need + 1) / 2 ))
-                    if [ "$floor" -lt 1 ]; then floor=1; fi
                     if [ "$free" -ge "$floor" ]; then
+                      if [ "$free" -lt 1 ]; then free=1; fi
                       if [ "$free" -lt "$E2E_WORKERS" ]; then
                         echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
                         E2E_WORKERS=$free
@@ -246,10 +246,11 @@ runs:
                     ;;
                 esac
                 if [ "$polls" -eq 0 ]; then
+                  if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
                   if [ -z "$free" ]; then
-                    echo "::error::Infrastructure failure: the farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for $floor devices."
+                    echo "::$level::Infrastructure failure: the farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for $floor devices."
                   else
-                    echo "::error::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
+                    echo "::$level::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
                   fi
                   exit 1
                 fi

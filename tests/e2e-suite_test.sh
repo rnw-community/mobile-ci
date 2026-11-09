@@ -254,8 +254,8 @@ busy() {
     # shellcheck disable=SC2016 # expanded when the stub runs.
     stub "$dir" sleep 'echo "$1" >> "$(dirname "$0")/../sleeps"'
     run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
-        E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$wait" TEST_TARGETS='[]' SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW="${BUSY_SHADOW:-false}" \
+        E2E_CAPACITY_WAIT_MINUTES="$wait" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 }
 
 case_start 'a busy farm waits until half the devices an idle farm would give are free'
@@ -281,6 +281,22 @@ busy 3 1 '{"capacity":{"ios":{"limit":2,"used":2}}}' 'not json'
 if assert_equals 1 "$STEP_STATUS" 'status' \
     && assert_equals no "$([ -e "$dir/work/workers" ] && echo yes || echo no)" 'suite ran' \
     && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the farm stopped reporting its free ios capacity while this run waited for 1 devices.' 'error'; then
+    pass_case
+fi
+
+case_start 'more targets than the farm has devices still run one worker each, without waiting'
+BUSY_TARGETS='[{"name":"a"},{"name":"b"},{"name":"c"}]' busy 3 10 '{"capacity":{"ios":{"limit":2,"used":0}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 0 "$(grep -cx 30 "$dir/sleeps" || true)" 'capacity polls'; then
+    pass_case
+fi
+
+case_start 'a shadow run on a farm that stays busy warns instead of erroring'
+BUSY_SHADOW=true busy 3 0 '{"capacity":{"ios":{"limit":2,"used":2}}}'
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_equals 0 "$(log_count '^::error::')" 'errors' \
+    && assert_contains "$(cat "$dir/log")" '::warning::Infrastructure failure: the farm still had 0 free ios devices' 'warning'; then
     pass_case
 fi
 

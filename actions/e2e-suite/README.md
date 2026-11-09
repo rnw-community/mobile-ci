@@ -22,7 +22,8 @@ action does the rest in three modes.
     split across `targets`, up to `workers`) would not finish within the job
     limit, so the run polls every 30 seconds for up to `capacity-wait-minutes`
     and then fails with an `Infrastructure failure:` error without starting the
-    suite. A status the farm stops answering during that wait counts as busy.
+    suite. A status the farm stops answering during that wait counts as busy. A
+    target an idle farm cannot give a whole device still runs one worker.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
