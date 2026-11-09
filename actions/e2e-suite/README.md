@@ -17,7 +17,13 @@ action does the rest in three modes.
   [`@mobile-ci/e2e-simlock`](../e2e-simlock-install/README.md), then runs
   `command` with the suite's environment.
   - It lowers `workers` to the farm's free devices of the platform (`GET
-    /v1/status`, `capacity.<platform>`), split across `targets`.
+    /v1/status`, `capacity.<platform>`), split across `targets`. Fewer free
+    devices than half of what an idle farm would give the run (its `limit`
+    split across `targets`, up to `workers`) would not finish within the job
+    limit, so the run polls every 30 seconds for up to `capacity-wait-minutes`
+    and then fails with an `Infrastructure failure:` error without starting the
+    suite. A status the farm stops answering during that wait counts as busy. A
+    target an idle farm cannot give a whole device still runs one worker.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
@@ -57,6 +63,7 @@ stdin, never on its command line.
 | `target` | run | `''` | The target's name (`E2E_TARGET`). |
 | `targets` | run | `'[]'` | JSON array of the call's targets, which split the free devices. |
 | `workers` | validate, run | `'1'` | Devices leased and tests run at once (`E2E_WORKERS`). |
+| `capacity-wait-minutes` | run | `'10'` | How long a run waits for a busy farm to free half the devices an idle farm would give it, before failing as infrastructure. |
 | `retries` | validate, run | `'1'` | Retries per failed test (`E2E_RETRIES`). |
 | `session` | run | `''` | agent-device session name (`E2E_SESSION`). |
 | `shadow` | run | `'false'` | `true` when the suite runs as a non-gating shadow. |
