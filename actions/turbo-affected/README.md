@@ -96,7 +96,7 @@ read while `force-label` is set fails the step. Add `labeled` to the caller's
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.12.1 # v4.12.1
+- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.12.2 # v4.12.2
   id: affected
   with:
       targets: '[{"name":"app","appDir":"apps/mobile"}]'
