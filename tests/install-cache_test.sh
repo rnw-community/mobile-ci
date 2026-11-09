@@ -106,7 +106,7 @@ else
     fail_case 'install-cache action is misconfigured (see above)'
 fi
 
-case_start 'every install-command a workflow runs is wrapped by an install-cache restore and a bounded, non-fatal save'
+case_start 'every install-command a workflow runs is wrapped by an install-cache restore and a bounded, non-fatal save under the same guard'
 miswired="$(WORKFLOW_ROOT="$REPO_ROOT" python3 - <<'PYTHON'
 import glob
 import os
@@ -139,6 +139,11 @@ for path in sorted(glob.glob(f'{root}/.github/workflows/*.yml')):
             if (restore.get('with') or {}) != {'paths': '${{ inputs.install-cache-paths }}', 'key': '${{ inputs.install-cache-key }}'}:
                 problems.append('restore is not fed by install-cache-paths and install-cache-key')
             cond = str(save.get('if', ''))
+            install_guard = str(step.get('if', ''))
+            if install_guard and str(restore.get('if', '')) != install_guard:
+                problems.append('restore lacks the install guard')
+            if install_guard and install_guard not in cond:
+                problems.append('save lacks the install guard')
             for guard in ("github.event_name != 'pull_request'", "steps.install-cache.outputs.cache-key != ''", "steps.install-cache.outputs.cache-hit != 'true'"):
                 if guard not in cond:
                     problems.append(f'save lacks {guard}')

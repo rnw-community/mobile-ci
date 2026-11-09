@@ -52,6 +52,12 @@ Restored files are the bytes an earlier install downloaded, so anything hashed
 from them, such as an Expo fingerprint over autolinked native sources, is
 unchanged.
 
+A restore that fails partway, for example on a full disk, can leave a marker
+next to a truncated artifact, which a marker check would accept. The action then
+removes every relative path that matches `paths` before the install, so the
+install downloads afresh. Absolute paths and paths containing `..` are never
+removed.
+
 ## Key
 
 The full key is `install-cache-v1-<runner os>-<key>`. There are no restore-keys,

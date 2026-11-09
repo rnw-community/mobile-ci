@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.11.2`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.12.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See

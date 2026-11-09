@@ -72,3 +72,23 @@ runs:
       with:
         path: ${{ inputs.paths }}
         key: ${{ steps.resolve.outputs.key }}
+
+    - name: Discard a partly restored install cache
+      if: steps.restore.outcome == 'failure'
+      shell: bash
+      env:
+        CACHE_PATHS: ${{ inputs.paths }}
+      run: |
+        set -uo pipefail
+        shopt -s nullglob
+        echo "::warning::The install cache restore failed; removing anything it extracted so the install downloads afresh."
+        while IFS= read -r pattern; do
+          pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+          pattern="${pattern%"${pattern##*[![:space:]]}"}"
+          case "$pattern" in
+            '' | /* | *..*) continue ;;
+          esac
+          for match in $pattern; do
+            rm -rf -- "$match"
+          done
+        done <<< "$CACHE_PATHS"

@@ -331,7 +331,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.11.2/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.11.2 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.12.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.12.0 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
