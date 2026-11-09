@@ -145,7 +145,7 @@ jobs:
             fail-fast: false
             matrix:
                 brand: [acme, globex]
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-android: true
@@ -305,7 +305,7 @@ pull-request previews for development builds, not production):
 ```yaml
 jobs:
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         permissions:
             contents: write
             actions: read
@@ -391,7 +391,7 @@ if the next run must find the new runtime there.
 
 ```yaml
     publish:
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             mode: auto
@@ -409,7 +409,7 @@ if the next run must find the new runtime there.
         steps:
             - uses: actions/checkout@<sha> # <tag>
             # install dependencies, then:
-            - uses: rnw-community/mobile-ci/actions/eas-update@v4.12.0 # v4.12.0
+            - uses: rnw-community/mobile-ci/actions/eas-update@v4.12.1 # v4.12.1
               with:
                   app-dir: apps/mobile
                   channel: production
@@ -547,7 +547,7 @@ jobs:
     publish:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -581,7 +581,7 @@ jobs:
         permissions:
             contents: write   # the store build record on the tag's release
             actions: read     # build-number: auto in a private repository
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -603,7 +603,7 @@ jobs:
               with:
                   persist-credentials: false
             - run: corepack enable && pnpm install --frozen-lockfile
-            - uses: rnw-community/mobile-ci/actions/eas-update@v4.12.0 # v4.12.0
+            - uses: rnw-community/mobile-ci/actions/eas-update@v4.12.1 # v4.12.1
               with:
                   app-dir: apps/mobile
                   channel: production
@@ -624,7 +624,7 @@ jobs:
     publish:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true

@@ -90,7 +90,7 @@ A caller's notification job reads them as `needs.<job>.outputs.<name>`:
 ```yaml
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: false
@@ -380,7 +380,7 @@ jobs:
     dev-release:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -407,7 +407,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -446,7 +446,7 @@ jobs:
                 brand: [acme, globex]
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-android: true
@@ -487,7 +487,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.1 # v4.12.1
         with:
             app-dir: apps/mobile
             enable-ios: true
