@@ -19,8 +19,8 @@ mobile-ci's release tags.
 - **Locally**, after `npm ci` in the e2e project:
 
   ```sh
-  curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.11.2/scripts/fetch-e2e-simlock.sh
-  bash fetch-e2e-simlock.sh v4.11.2 e2e
+  curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.12.0/scripts/fetch-e2e-simlock.sh
+  bash fetch-e2e-simlock.sh v4.12.0 e2e
   ```
 
   Pin the same tag your workflows use. Any `npm ci` replaces `node_modules`, so

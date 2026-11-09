@@ -52,6 +52,8 @@ event payload and emits a warning naming the error.
 | `runner-labels`        | no       | `'["self-hosted","linux","x64"]'` | JSON array of runner labels for the guard job.                                            |
 | `node-version`         | no       | `22`                          | Node version.                                                                                 |
 | `install-command`      | no       | `''`                          | Install command run in both trees; empty derives it from the resolved package manager.        |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack`      | no       | `true`                        | Run `corepack enable` (skipped when the resolved manager is pnpm).                            |
 | `package-manager`      | no       | `''`                          | `yarn` / `pnpm` / `npm`; empty auto-detects from `package.json` and the single root lockfile.  |
 | `build-command`        | no       | `''`                          | Optional workspace JS build run at the repository root in both trees before fingerprinting.   |
@@ -103,7 +105,7 @@ jobs:
         permissions:
             contents: read
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.12.0 # v4.12.0
         with:
             working-directory: apps/mobile
 ```
@@ -120,7 +122,7 @@ jobs:
         permissions:
             contents: read
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-fingerprint-guard.yml@v4.12.0 # v4.12.0
         with:
             working-directory: packages/app
             platforms: ios,android

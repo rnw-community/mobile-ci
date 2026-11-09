@@ -78,6 +78,8 @@ must be evaluable:
 | `project-id`         | no       | `''`                  | EAS project id (UUID). With `project-slug`, eas-cli runs against a generated minimal `app.json` and the app config is never evaluated. |
 | `project-slug`       | no       | `''`                  | EAS project slug; required with `project-id`. |
 | `install-command`    | no       | `''`                  | Command run at the repository root first, for an app config that requires packages and `project-id` is not set. |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `node-version`       | no       | `22`                  | Node version. |
 | `runner-labels`      | no       | `'["ubuntu-latest"]'` | JSON array of runner labels. |
 | `timeout-minutes`    | no       | `15`                  | Job timeout. |
@@ -116,7 +118,7 @@ jobs:
     cleanup:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
         secrets:
@@ -139,7 +141,7 @@ permissions:
 jobs:
     cleanup:
         if: github.event_name == 'pull_request'
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             channel-template: myapp-pr-{number}
@@ -152,7 +154,7 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     sweep:
         if: github.event_name != 'pull_request'
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             channel-template: ''

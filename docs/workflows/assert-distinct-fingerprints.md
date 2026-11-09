@@ -38,6 +38,8 @@ workflow around the action.
 | `expo-fingerprint-version` | string | no | `0.20.6` | Pinned `@expo/fingerprint`. |
 | `node-version` | string | no | `22.x` | Node version. |
 | `install-command` | string | no | `yarn install --immutable` | Dependency install. |
+| `install-cache-paths` | string | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | string | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack` | boolean | no | `true` | Run `corepack enable`. |
 | `build-command` | string | no | `''` | Workspace build run before the key is computed. |
 
@@ -54,7 +56,7 @@ jobs:
     distinct-keys:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.12.0 # v4.12.0
         with:
             platform: ios
             targets: >-
@@ -63,7 +65,7 @@ jobs:
         needs: distinct-keys
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
         secrets:
@@ -86,7 +88,7 @@ jobs:
                 platform: [ios, android]
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.12.0 # v4.12.0
         with:
             platform: ${{ matrix.platform }}
             targets: >-
@@ -104,7 +106,7 @@ jobs:
                 brand: [acme, globex]
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-android: true

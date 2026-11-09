@@ -90,7 +90,7 @@ A caller's notification job reads them as `needs.<job>.outputs.<name>`:
 ```yaml
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-ios: false
@@ -266,6 +266,8 @@ android-post-build-command: test "$EMBEDDED_BUILD_NUMBER" = "$GITHUB_RUN_NUMBER"
 | `app-dir`                    | **yes**  | —                                        | App directory containing `app.json`/`eas.json`. |
 | `node-version`               | no       | `22`                                     | Node version for `actions/setup-node`. |
 | `install-command`            | no       | `yarn install --immutable`                | JS dependency install command. |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack`            | no       | `true`                                    | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
 | `package-manager`            | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, `actions/setup-node`'s `cache:` — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`              | no       | `''`                                      | Optional workspace JS build command run at repo root before the dev build. |
@@ -378,7 +380,7 @@ jobs:
     dev-release:
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -405,7 +407,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-ios: true
@@ -444,7 +446,7 @@ jobs:
                 brand: [acme, globex]
         permissions:
             contents: write
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-android: true
@@ -485,7 +487,7 @@ permissions:
     contents: write
 jobs:
     dev-release:
-        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-dev-release.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-ios: true

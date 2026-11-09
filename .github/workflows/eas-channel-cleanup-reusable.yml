@@ -87,6 +87,23 @@ on:
                 type: string
                 required: false
                 default: ''
+            install-cache-paths:
+                description: >-
+                    Newline-separated paths or globs, relative to the repository root, that install-command's
+                    dependency scripts download outside the package manager's store (e.g. a postinstall that fetches
+                    native binaries into its own package directory). Restored before install-command, saved after it
+                    off pull requests on a miss; a failed restore or save never fails the job. Set together with
+                    install-cache-key; empty (default) turns the cache off.
+                type: string
+                required: false
+                default: ''
+            install-cache-key:
+                description: >-
+                    Cache key for install-cache-paths, prefixed with install-cache-v1-<runner os>-. Change it whenever
+                    the downloaded files change, e.g. with the dependency's version.
+                type: string
+                required: false
+                default: ''
             node-version:
                 type: string
                 required: false
@@ -169,12 +186,29 @@ jobs:
               with:
                   node-version: ${{ inputs.node-version }}
 
+            - name: Restore install cache
+              if: inputs.install-command != ''
+              id: install-cache
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.12.0 # v4.12.0
+              with:
+                  paths: ${{ inputs.install-cache-paths }}
+                  key: ${{ inputs.install-cache-key }}
+
             - name: Install dependencies
               if: inputs.install-command != ''
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save install cache
+              if: inputs.install-command != '' && github.event_name != 'pull_request' && steps.install-cache.outputs.cache-key != '' && steps.install-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.install-cache.outputs.paths }}
+                  key: ${{ steps.install-cache.outputs.cache-key }}
 
             - name: Delete EAS channels
               working-directory: ${{ inputs.app-dir }}

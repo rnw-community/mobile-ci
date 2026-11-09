@@ -338,7 +338,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             control-runner-labels: '["self-hosted","linux"]'
             config-path: .github/store-screenshots.config.json
@@ -596,7 +596,7 @@ JSON-in-YAML string blobs through `with:`. Point `config-path` at it:
 ```yaml
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -804,7 +804,7 @@ block to five lines — only the plan-time runner pools stay:
 # before: 72-line caller, 49 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             ios-target: >-
                 {"name":"production","appDir":"packages/app","workspace":"suuudokuuu.xcworkspace", ...}
@@ -821,7 +821,7 @@ jobs:
 # after: 28-line caller, 5 lines of `with:`
 jobs:
     screenshots:
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             config-path: .github/store-screenshots.config.json
             build-runner-labels: '["self-hosted","macOS","ARM64","macos-builder"]'
@@ -889,6 +889,8 @@ loadable from `config-path`; for those, the declared `default:` in
 | `expo-fingerprint-version`          | no       | `0.20.6`                                  | Pinned `@expo/fingerprint` npm version. |
 | `node-version`                      | no       | `22.x`                                    | Node version for `actions/setup-node`. |
 | `install-command`                   | no       | `yarn install --immutable`                | JS dependency install command. **cfg** |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack`                   | no       | `true`                                    | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
 | `package-manager`                   | no       | `''` (auto-detect)                        | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, the package-manager dependency cache (`node-pm-cache`: restored on every event, saved only off pull requests) — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`                     | no       | `''`                                     | Optional workspace JS build command run at repo root before the native build (both build jobs). **cfg** |
@@ -1092,7 +1094,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
 ```
 
 - `contents: read` — checkout.
@@ -1124,7 +1126,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             ios-target: >-
                 {"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}
@@ -1153,7 +1155,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.12.0 # v4.12.0
         with:
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}

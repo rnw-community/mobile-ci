@@ -102,6 +102,8 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `simulator-requires` | no | `''` | Comma-separated simslim feature IDs the flows depend on (e.g. `push,universal-links`; `simslim doctor --list`). When set, `simslim doctor --requires` runs against the booted simulator and fails closed if slimming disabled a daemon behind any of them. Works without a profile. |
 | `node-version`                | no       | `22.x`                                     | Node version for `actions/setup-node`. |
 | `install-command`             | no       | `yarn install --immutable`                 | JS dependency install command. |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack`             | no       | `true`                                     | Run `corepack enable` before install. Skipped when the resolved package manager is `pnpm` (provisioned by `pnpm/action-setup`). |
 | `package-manager`             | no       | `''` (auto-detect)                         | Override the JS package manager (`yarn`, `pnpm`, `npm`). Empty auto-detects at the repo root: `devEngines.packageManager` / `packageManager` in `package.json` (needs `jq` on the runner), else exactly one root lockfile (`yarn.lock` / `pnpm-lock.yaml` / `package-lock.json` or `npm-shrinkwrap.json`); no match, an ambiguous match or an unsupported value fails the job. Drives pnpm provisioning and, in the jobs that configure one, the package-manager dependency cache (`node-pm-cache`: restored on every event, saved only off pull requests) — set `install-command` to match (e.g. `pnpm install --frozen-lockfile`). Resolving to `pnpm` also requires a pnpm version in `package.json`. See [Package manager](../../README.md#package-manager). |
 | `build-command`               | no       | `''`                                       | Optional workspace JS build command run at repo root before the native build. |
@@ -171,7 +173,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -291,7 +293,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -329,7 +331,7 @@ A repository that copied a simlock provider into its e2e project (budgie's
    workflow installs the package from that tag.
 4. A job of your own that typechecks or runs the e2e project outside these
    workflows (a `tsc` check on pull requests) installs the package first, after
-   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.11.2/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.11.2 e2e`, or the
+   its `npm ci`: `curl -fsSLO https://raw.githubusercontent.com/rnw-community/mobile-ci/v4.12.0/scripts/fetch-e2e-simlock.sh && bash fetch-e2e-simlock.sh v4.12.0 e2e`, or the
    [`e2e-simlock-install`](../../actions/e2e-simlock-install/README.md) action.
 
 ### Migrating gradually
@@ -380,7 +382,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -575,7 +577,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -775,7 +777,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
 ```
 
 - `contents: read` — checkout.
@@ -809,7 +811,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -838,7 +840,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -883,7 +885,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             force-label: e2e:force
 ```

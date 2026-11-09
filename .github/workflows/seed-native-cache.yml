@@ -111,6 +111,23 @@ on:
                 type: string
                 required: false
                 default: yarn install --immutable
+            install-cache-paths:
+                description: >-
+                    Newline-separated paths or globs, relative to the repository root, that install-command's
+                    dependency scripts download outside the package manager's store (e.g. a postinstall that fetches
+                    native binaries into its own package directory). Restored before install-command, saved after it
+                    off pull requests on a miss; a failed restore or save never fails the job. Set together with
+                    install-cache-key; empty (default) turns the cache off.
+                type: string
+                required: false
+                default: ''
+            install-cache-key:
+                description: >-
+                    Cache key for install-cache-paths, prefixed with install-cache-v1-<runner os>-. Change it whenever
+                    the downloaded files change, e.g. with the dependency's version.
+                type: string
+                required: false
+                default: ''
             enable-corepack:
                 type: boolean
                 required: false
@@ -277,7 +294,7 @@ jobs:
             targets: ${{ steps.caches.outputs.targets }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.0 # v4.12.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Mark the targets whose iOS compile caches are missing
@@ -366,7 +383,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.12.0 # v4.12.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -388,6 +405,8 @@ jobs:
             repack-app-version: ${{ inputs.repack-app-version }}
             node-version: ${{ inputs.node-version }}
             install-command: ${{ inputs.install-command }}
+            install-cache-paths: ${{ inputs.install-cache-paths }}
+            install-cache-key: ${{ inputs.install-cache-key }}
             enable-corepack: ${{ inputs.enable-corepack }}
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
@@ -405,7 +424,7 @@ jobs:
             key-segment: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.0 # v4.12.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Resolve the Android ABIs
@@ -506,7 +525,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.12.0 # v4.12.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -529,6 +548,8 @@ jobs:
             android-build-tools-version: ${{ inputs.android-build-tools-version }}
             node-version: ${{ inputs.node-version }}
             install-command: ${{ inputs.install-command }}
+            install-cache-paths: ${{ inputs.install-cache-paths }}
+            install-cache-key: ${{ inputs.install-cache-key }}
             enable-corepack: ${{ inputs.enable-corepack }}
             package-manager: ${{ inputs.package-manager }}
             build-command: ${{ inputs.build-command }}
@@ -559,7 +580,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.0 # v4.12.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -600,7 +621,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.0 # v4.12.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -712,15 +733,31 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.12.0 # v4.12.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Restore install cache
+              id: install-cache
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.12.0 # v4.12.0
+              with:
+                  paths: ${{ inputs.install-cache-paths }}
+                  key: ${{ inputs.install-cache-key }}
 
             - name: Install dependencies
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save install cache
+              if: github.event_name != 'pull_request' && steps.install-cache.outputs.cache-key != '' && steps.install-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.install-cache.outputs.paths }}
+                  key: ${{ steps.install-cache.outputs.cache-key }}
 
             - name: Save package manager cache
               if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
@@ -733,7 +770,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.12.0 # v4.12.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -747,7 +784,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.12.0 # v4.12.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -775,7 +812,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base && !matrix.target.forceNative'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.12.0 # v4.12.0
               with:
                   mode: restore
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -791,7 +828,7 @@ jobs:
 
             - name: setup-ccache-ios (restore)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.0 # v4.12.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -804,7 +841,7 @@ jobs:
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.12.0 # v4.12.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -832,7 +869,7 @@ jobs:
 
             - name: setup-ccache-ios (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.0 # v4.12.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -840,7 +877,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.12.0 # v4.12.0
               with:
                   mode: save
                   path: .ci-cache/ios-native-app/${{ matrix.target.name }}
@@ -862,7 +899,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.12.0 # v4.12.0
               with:
                   mode: publish
                   platform: ios
@@ -901,7 +938,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.0 # v4.12.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -942,7 +979,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.0 # v4.12.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1054,15 +1091,31 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.12.0 # v4.12.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
+
+            - name: Restore install cache
+              id: install-cache
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.12.0 # v4.12.0
+              with:
+                  paths: ${{ inputs.install-cache-paths }}
+                  key: ${{ inputs.install-cache-key }}
 
             - name: Install dependencies
               shell: bash
               env:
                   INSTALL_COMMAND: ${{ inputs.install-command }}
               run: eval "$INSTALL_COMMAND"
+
+            - name: Save install cache
+              if: github.event_name != 'pull_request' && steps.install-cache.outputs.cache-key != '' && steps.install-cache.outputs.cache-hit != 'true'
+              uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+              timeout-minutes: 10
+              continue-on-error: true
+              with:
+                  path: ${{ steps.install-cache.outputs.paths }}
+                  key: ${{ steps.install-cache.outputs.cache-key }}
 
             - name: Save package manager cache
               if: github.event_name != 'pull_request' && steps.pm-cache.outputs.cache-hit != 'true'
@@ -1091,7 +1144,7 @@ jobs:
             - name: native-app-cache (restore)
               id: native-app-cache
               if: '!inputs.force-base'
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.12.0 # v4.12.0
               with:
                   mode: restore
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1108,7 +1161,7 @@ jobs:
             - name: build-android-app
               id: build
               if: steps.native-app-cache.outputs.cache-hit != 'true'
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/build-android-app@v4.12.0 # v4.12.0
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
@@ -1123,7 +1176,7 @@ jobs:
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
-              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/native-app-cache@v4.12.0 # v4.12.0
               with:
                   mode: save
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}
@@ -1134,7 +1187,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.11.2 # v4.11.2
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.12.0 # v4.12.0
               with:
                   mode: publish
                   platform: android
