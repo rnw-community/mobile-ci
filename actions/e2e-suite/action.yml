@@ -297,7 +297,9 @@ runs:
               if [ -n "$infrastructure" ]; then
                 if [ "$status" = 0 ]; then status=1; fi
                 if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
-                echo "::$level::Infrastructure failure: $infrastructure${run_said:+ The run said: ${run_said:0:500}}"
+                infrastructure="$infrastructure${run_said:+ The run said: ${run_said:0:500}}"
+                echo "::$level::Infrastructure failure: $infrastructure"
+                { [ -f .e2e/summary.md ] || echo "### E2E suite (${E2E_TARGET})"; echo "**Infrastructure failure:** $infrastructure"; } >> "$GITHUB_STEP_SUMMARY"
               fi
               if [ "$status" != 0 ] && [ "$E2E_SHADOW" = true ]; then
                 echo "::warning::E2E shadow suite failed (exit $status); it does not gate this run (test-framework both, e2e-required false)."
