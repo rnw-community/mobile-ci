@@ -13,6 +13,7 @@ set -euo pipefail
 ACTION="$REPO_ROOT/actions/e2e-suite/action.yml"
 FARM='{"capacity":{"ios":{"limit":12,"used":3,"warm":1},"android":{"limit":2,"used":1,"warm":0}}}'
 WAIT="$(action_input_default "$ACTION" capacity-wait-minutes)"
+FENCE='~~~'
 
 report() {
     local status="$1" executed="$2" failed="$3"
@@ -162,11 +163,19 @@ done
 # suuudokuuu job 126511875088, as the suite printed it: the error sat only in the step log.
 RUN_ERROR="printf '\\033[1m\\033[41m ERROR \\033[49m\\033[22m infrastructure error \\033[2mENGINE_FAILURE\\033[22m\\033[2m (launch)\\033[22m\\n\\033[31mdevice provider \"simlock\" could not lease a device: No Android device with serial emulator-5588\\033[39m\\n\\n      Tests  no tests executed\\n'; exit 3"
 
-case_start 'an infrastructure failure names the error the run printed, and the step log keeps its output'
+case_start 'an infrastructure failure names the error the run printed in the annotation and the step summary, and the step log keeps its output'
 run_suite android "$RUN_ERROR"
 if assert_equals 3 "$STEP_STATUS" 'status' \
+    && assert_contains "$(cat "$dir/summary")" "$(printf '### E2E suite (app)\n\n\n**Infrastructure failure:**\n\n%stext' "$FENCE")" 'summary heading' \
+    && assert_contains "$(cat "$dir/summary")" 'the e2e command exited 3 but wrote no report (.e2e/report.json), so there is no evidence any test ran. The run said: infrastructure error ENGINE_FAILURE (launch): device provider "simlock" could not lease a device: No Android device with serial emulator-5588' 'summary' \
     && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the e2e command exited 3 but wrote no report (.e2e/report.json), so there is no evidence any test ran. The run said: infrastructure error ENGINE_FAILURE (launch): device provider "simlock" could not lease a device: No Android device with serial emulator-5588' 'annotation' \
     && assert_contains "$(cat "$dir/log")" 'no tests executed' 'output'; then
+    pass_case
+fi
+
+case_start 'the summary keeps the failure apart from a suite summary without a final newline, and quotes the error verbatim'
+run_suite ios "mkdir -p .e2e && printf '| a | b |' > .e2e/summary.md && printf ' ERROR x\\n <device> lost\\n'; exit 3"
+if assert_contains "$(cat "$dir/summary")" "$(printf '| a | b |\n\n**Infrastructure failure:**\n\n%stext\nthe e2e command exited 3 but wrote no report (.e2e/report.json), so there is no evidence any test ran. The run said: x: <device> lost\n%s' "$FENCE" "$FENCE")" 'summary'; then
     pass_case
 fi
 
