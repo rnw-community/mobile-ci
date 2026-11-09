@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,11 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.12.0** — new `install-cache` action and `install-cache-paths` / `install-cache-key`
+  inputs on every reusable workflow that runs `install-command`. They cache files a
+  dependency's install script downloads outside the package-manager store (for example
+  `llama.rn`'s native artifacts), restored before the install under an exact key and saved
+  off pull requests on a miss. Off unless both inputs are set.
 - **v4.11.2** — `@mobile-ci/e2e-simlock` sends an exec stdin over simlock's 8 MiB inline cap
   (`EXEC_STDIN_MAX_LENGTH`, simlock 0.6) as a lease file and pipes it with `stdinFile`, so a
   large fixture untar no longer fails with `400 stdin: Too big`.
@@ -502,7 +507,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -575,7 +580,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.12.0 # v4.12.0
 ```
 
 ## Scope
@@ -621,7 +626,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.11.2 # v4.11.2`). A major tag such as `@v4` floats to the
+checked against (`@v4.12.0 # v4.12.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

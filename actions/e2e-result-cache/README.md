@@ -37,7 +37,7 @@ dependencies and build workspace dependencies before lookup. Prefer the
 ```yaml
 - name: Look for a previous pass
   id: verdict
-  uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.11.2 # v4.11.2
+  uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.12.0 # v4.12.0
   with:
     platform: ios
     app-dir: apps/mobile

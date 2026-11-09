@@ -97,7 +97,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.0 # v4.12.0
         with:
             targets: >-
                 [{"name":"app","appDir":"packages/app","workspace":"App.xcworkspace","scheme":"App","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]

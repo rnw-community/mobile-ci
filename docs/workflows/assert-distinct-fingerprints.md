@@ -56,7 +56,7 @@ jobs:
     distinct-keys:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.12.0 # v4.12.0
         with:
             platform: ios
             targets: >-
@@ -65,7 +65,7 @@ jobs:
         needs: distinct-keys
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
         secrets:
@@ -88,7 +88,7 @@ jobs:
                 platform: [ios, android]
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/assert-distinct-fingerprints.yml@v4.12.0 # v4.12.0
         with:
             platform: ${{ matrix.platform }}
             targets: >-
@@ -106,7 +106,7 @@ jobs:
                 brand: [acme, globex]
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.11.2 # v4.11.2
+        uses: rnw-community/mobile-ci/.github/workflows/native-publish.yml@v4.12.0 # v4.12.0
         with:
             app-dir: apps/mobile
             enable-android: true
