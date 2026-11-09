@@ -234,6 +234,8 @@ With `ota-backend: github-release` (default):
 | `runner-labels`          | no       | `["self-hosted","linux","x64"]`| JSON array of self-hosted runner labels.                                                        |
 | `node-version`           | no       | `22`                           | Node version.                                                                                   |
 | `install-command`        | no       | `''`                           | Dependency install command; empty derives pnpm/yarn/npm from the resolved package manager.     |
+| `install-cache-paths` | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack`        | no       | `true`                         | Run `corepack enable` when the manager is not pnpm.                                             |
 | `package-manager`        | no       | `''`                           | `pnpm`, `yarn`, `npm`, or empty to auto-detect.                                                 |
 | `build-command`          | no       | `''`                           | Optional workspace JS build command run before `expo export`.                                   |

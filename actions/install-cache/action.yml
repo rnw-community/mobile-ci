@@ -1,0 +1,74 @@
+name: install-cache
+description: >-
+  Restores, before the dependency install, the files a dependency's install script downloads outside the package
+  manager's store (a postinstall that fetches native binaries into its own package directory), under a key the consumer
+  chooses, and exposes the paths and key for the calling workflow's own bounded, best-effort `actions/cache/save` step,
+  which runs only off pull requests. Does nothing when `paths` and `key` are both empty.
+inputs:
+  paths:
+    description: >-
+      Newline-separated paths or globs, relative to the workspace, that the install writes (e.g.
+      `node_modules/.pnpm/llama.rn@*/node_modules/llama.rn/ios/rnllama.xcframework`). Set together with `key`.
+    required: false
+    default: ''
+  key:
+    description: >-
+      Consumer-chosen cache key, prefixed with `install-cache-v1-<runner os>-`. Change it whenever the downloaded files
+      change, e.g. with the dependency's version. Set together with `paths`.
+    required: false
+    default: ''
+outputs:
+  cache-hit:
+    description: '`true` when the exact key was restored.'
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-key:
+    description: The full cache key; empty when the action is disabled.
+    value: ${{ steps.resolve.outputs.key }}
+  paths:
+    description: The `paths` input, for the calling workflow's `actions/cache/save` step.
+    value: ${{ inputs.paths }}
+runs:
+  using: composite
+  steps:
+    - name: Resolve install cache key
+      id: resolve
+      shell: bash
+      env:
+        CACHE_PATHS: ${{ inputs.paths }}
+        CACHE_KEY: ${{ inputs.key }}
+        RUNNER_OS_NAME: ${{ runner.os }}
+      run: |
+        set -euo pipefail
+        has_paths=false
+        case "$CACHE_PATHS" in
+          *[![:space:]]*) has_paths=true ;;
+        esac
+        if [ "$has_paths" = false ] && [ -z "$CACHE_KEY" ]; then
+          echo "No install-cache paths or key set; the install cache is off."
+          exit 0
+        fi
+        if [ "$has_paths" = false ] || [ -z "$CACHE_KEY" ]; then
+          echo "::error::install-cache paths and key are set together: set both, or neither."
+          exit 1
+        fi
+        key="install-cache-v1-${RUNNER_OS_NAME}-${CACHE_KEY}"
+        case "$CACHE_KEY" in
+          *,*)
+            echo "::error::install-cache key '$CACHE_KEY' contains a comma, which actions/cache rejects."
+            exit 1
+            ;;
+        esac
+        if [ "${#key}" -gt 512 ]; then
+          echo "::error::install-cache key '$key' is longer than the 512 characters actions/cache accepts."
+          exit 1
+        fi
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+
+    - name: Restore install cache
+      id: restore
+      if: steps.resolve.outputs.key != ''
+      continue-on-error: true
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.paths }}
+        key: ${{ steps.resolve.outputs.key }}

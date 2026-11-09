@@ -920,7 +920,7 @@ behind a small gate. The runner image is patched so its `ACTIONS_RESULTS_URL`
 points at that gate.
 
 **Nothing in this repository needs to change, and no input turns it on.**
-Every cache this repo uses goes through `actions/cache` (`node-pm-cache`,
+Every cache this repo uses goes through `actions/cache` (`node-pm-cache`, `install-cache`,
 `build-android-app`'s Gradle and Android SDK caches, `native-app-cache`,
 `setup-ccache-ios`, `xcode-cache`, `swift-test`, `e2e-result-cache`), and that is the protocol
 the server speaks. A consumer on such a fleet gets LAN-speed restores
@@ -931,7 +931,7 @@ What a workflow run sees differently:
 - **Pull requests restore, and never save.** The gate refuses every save whose
   runtime token grants write on `refs/pull/N/merge`, so a pull request reads
   what default-branch and other branch runs seeded, and writes nothing.
-  `build-android-app` and `node-pm-cache`'s callers already skip
+  `build-android-app` and the callers of `node-pm-cache` and `install-cache` already skip
   pull-request saves; the save modes of `native-app-cache`,
   `setup-ccache-ios`, `xcode-cache` and `swift-test` do not, and on such a
   fleet the gate refuses them. A refused save, like `actions/setup-node`'s

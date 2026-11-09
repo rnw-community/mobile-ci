@@ -347,6 +347,7 @@ that relied on the old default.
 | [`setup-xcode-pinned`](actions/setup-xcode-pinned/README.md)     | Select a pre-installed Xcode by exact version+build; hard-assert the match. |
 | [`native-fingerprint`](actions/native-fingerprint/README.md)     | Tokenless `@expo/fingerprint` hash of an app's native surface. |
 | [`node-pm-cache`](actions/node-pm-cache/README.md)                | Restore the package-manager store on every event, save it only off pull requests (bounded, non-fatal). |
+| [`install-cache`](actions/install-cache/README.md)                | Restore files a dependency's install script downloads outside the store (e.g. a postinstall's native binaries) before the install, keyed by you; the workflow saves them off pull requests. |
 | [`native-app-cache`](actions/native-app-cache/README.md)         | Restore/save the canonical native `.app`/`.apk` keyed on profile/os/arch/toolchain/fingerprint. |
 | [`setup-ccache-ios`](actions/setup-ccache-ios/README.md)         | Bounded, compressed ccache install + restore/save for `xcodebuild`. |
 | [`xcode-cache`](actions/xcode-cache/README.md)                   | Restore/save DerivedData + resolved Swift Package clones + the Xcode 26 compilation cache (CAS), keyed on toolchain + project fingerprint; `github` or network-free `local` backend. Emits the `xcodebuild` arguments that point Xcode at all three. |
@@ -476,6 +477,12 @@ bounded non-fatal step, so a stalled upload can never cancel a finished job. Res
 3. exactly one root lockfile — `yarn.lock`, `pnpm-lock.yaml`, or
    `package-lock.json` / `npm-shrinkwrap.json` (both mean npm, so having both
    is not ambiguous).
+
+Files a dependency's install script downloads outside the store (a postinstall
+fetching native binaries into its own package directory) are not in that cache.
+Every workflow that runs `install-command` takes `install-cache-paths` and
+`install-cache-key` to restore them before the install and save them off pull
+requests; see [`install-cache`](actions/install-cache/README.md).
 
 Those same lockfile names are what the ccache / Pods / Gradle cache keys hash,
 so a dependency change re-keys the native caches whichever manager you use.

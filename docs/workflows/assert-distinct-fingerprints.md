@@ -38,6 +38,8 @@ workflow around the action.
 | `expo-fingerprint-version` | string | no | `0.20.6` | Pinned `@expo/fingerprint`. |
 | `node-version` | string | no | `22.x` | Node version. |
 | `install-command` | string | no | `yarn install --immutable` | Dependency install. |
+| `install-cache-paths` | string | no | `''` | Newline-separated paths or globs, relative to the repository root, that `install-command`'s dependency scripts download outside the package manager's store (e.g. a postinstall fetching native binaries into its own package directory). Restored before the install, saved after it off pull requests on a miss; a failed restore or save never fails the job. Empty turns it off. See [`install-cache`](../../actions/install-cache/README.md). |
+| `install-cache-key` | string | no | `''` | Key for `install-cache-paths`, prefixed `install-cache-v1-<runner os>-`; set both or neither. Change it whenever the downloaded files change, e.g. with the dependency's version. |
 | `enable-corepack` | boolean | no | `true` | Run `corepack enable`. |
 | `build-command` | string | no | `''` | Workspace build run before the key is computed. |
 
