@@ -28,7 +28,7 @@ action does the rest in three modes.
     running 5 minutes before it, counted from `job-started-at` (or the start
     of the step without one), gets
     `SIGINT` (and `SIGKILL` 2 minutes later), so it writes its partial report
-    and the run fails with an `Infrastructure failure:` error instead of the job
+    when a test had started, and the run fails with an `Infrastructure failure:` error instead of the job
     ending `cancelled` with no report and no retry. The wait for a busy farm stops
     at the same deadline, with the same kind of error. It needs the runner's
     `timeout` command; without one the suite runs with no limit.

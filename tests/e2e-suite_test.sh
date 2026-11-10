@@ -358,9 +358,16 @@ read -r flag signal kill grace limit _ < "$dir/timeout-args" || true
 if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals '-s INT -k 120' "$flag $signal $kill $grace" 'signal and grace' \
     && assert_equals 1 "$([ "$limit" -gt 3240 ] && [ "$limit" -le 3300 ] && echo 1)" "limit $limit s within 55 minutes" \
-    && assert_contains "$(cat "$dir/log")" "::error::Infrastructure failure: the e2e suite was interrupted 55 minutes after this step started, 5 minutes before the job's 60-minute timeout, so its partial report is kept." 'error' \
+    && assert_contains "$(cat "$dir/log")" "::error::Infrastructure failure: the e2e suite was interrupted 55 minutes after this step started, 5 minutes before the job's 60-minute timeout. Its partial report is kept." 'error' \
     && assert_contains "$(cat "$dir/summary")" 'E2E report: interrupted, 3 executed, 0 failed, 0 flaky.' 'summary' \
     && assert_contains "$(cat "$dir/work/.e2e/report.json")" '"interrupted"' 'partial report kept'; then
+    pass_case
+fi
+
+case_start 'a suite interrupted before it wrote a report says so'
+timed 60 '"$@"; exit 124' 'true'
+if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/log")" "5 minutes before the job's 60-minute timeout. It had written no report." 'error'; then
     pass_case
 fi
 

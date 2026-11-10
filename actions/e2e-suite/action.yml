@@ -352,7 +352,12 @@ runs:
                 fi
               fi
               if [ -n "$timed_out" ]; then
-                infrastructure="the e2e suite was interrupted $limit minutes after $since, 5 minutes before the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout, so its partial report is kept."
+                infrastructure="the e2e suite was interrupted $limit minutes after $since, 5 minutes before the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout."
+                if [ -f .e2e/report.json ]; then
+                  infrastructure="$infrastructure Its partial report is kept."
+                else
+                  infrastructure="$infrastructure It had written no report."
+                fi
               fi
               if [ -n "$infrastructure" ]; then
                 if [ "$status" = 0 ]; then status=1; fi
