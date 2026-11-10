@@ -73,7 +73,7 @@ stdin, never on its command line.
 | `targets` | run | `'[]'` | JSON array of the call's targets, which split the free devices. |
 | `workers` | validate, run | `'1'` | Devices leased and tests run at once (`E2E_WORKERS`). |
 | `capacity-wait-minutes` | run | `'10'` | How long a run waits for a busy farm to free half the devices an idle farm would give it, before failing as infrastructure. |
-| `job-timeout-minutes` | run | `'0'` | The calling job's `timeout-minutes`. The suite is interrupted 5 minutes before it, counted from the start of the step, so its partial report is kept and the run fails as infrastructure; `0` sets no limit. |
+| `job-timeout-minutes` | run | `'0'` | The calling job's `timeout-minutes`. The suite is interrupted 5 minutes before it, counted from `job-started-at` (or the start of this step without one), so its partial report is kept and the run fails as infrastructure; `0` sets no limit. |
 | `job-started-at` | run | `''` | Unix time the calling job started, recorded with `date +%s` in its first step; empty counts `job-timeout-minutes` from the start of this step. |
 | `retries` | validate, run | `'1'` | Retries per failed test (`E2E_RETRIES`). |
 | `session` | run | `''` | agent-device session name (`E2E_SESSION`). |

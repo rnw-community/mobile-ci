@@ -341,11 +341,16 @@ fi
 
 # timed <job-timeout> <timeout-stub-body> <command> [VAR=value ...]: a run whose
 # timeout command is stubbed; the stub records its arguments in timeout-args.
+# EXPIRE in the body moves the step's clock an hour on, as a real expiry would.
+REAL_DATE="$(command -v date)"
+# shellcheck disable=SC2016 # expanded when the stub runs.
+EXPIRE='echo 3600 > "$(dirname "$0")/../skew"'
 timed() {
     local minutes="$1" body="$2" command="$3"
     shift 3
     dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
     stub "$dir" curl 'exit 7'
+    stub "$dir" date "if [ \"\$*\" = +%s ]; then echo \$(( \$($REAL_DATE +%s) + \$(cat \"$dir/skew\" 2>/dev/null || echo 0) )); else exec $REAL_DATE \"\$@\"; fi"
     stub "$dir" timeout "printf '%s\n' \"\$*\" > \"$dir/timeout-args\"; shift 5; $body"
     run_step "$dir" E2E_PLATFORM=android E2E_COMMAND="$command" E2E_APP_PATH="$(app android "$dir")" \
         E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
@@ -353,7 +358,7 @@ timed() {
 }
 
 case_start 'a suite still running 5 minutes before the job timeout is interrupted, keeps its report and fails as infrastructure'
-timed 60 '"$@"; exit 124' "$(writes "$(report interrupted 3 0)")" E2E_TOLERATED=true
+timed 60 "\"\$@\"; $EXPIRE; exit 124" "$(writes "$(report interrupted 3 0)")" E2E_TOLERATED=true
 read -r flag signal kill grace limit _ < "$dir/timeout-args" || true
 if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals '-s INT -k 120' "$flag $signal $kill $grace" 'signal and grace' \
@@ -365,7 +370,7 @@ if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
 fi
 
 case_start 'a suite interrupted before it wrote a report says so'
-timed 60 '"$@"; exit 124' 'true'
+timed 60 "\"\$@\"; $EXPIRE; exit 124" 'true'
 if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_contains "$(cat "$dir/log")" "5 minutes before the job's 60-minute timeout. It had written no report." 'error'; then
     pass_case
@@ -386,12 +391,14 @@ if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     pass_case
 fi
 
-case_start 'a suite killed before its time limit is not reported as timed out'
-timed 45 '"$@"; exit 137' "$(writes "$(report failed 3 1)")"
-if assert_equals 137 "$STEP_STATUS" 'status' \
-    && assert_equals 0 "$(log_count 'was interrupted')" 'no timeout message'; then
-    pass_case
-fi
+for code in 124 137; do
+    case_start "a suite that exits $code before its time limit is not reported as timed out"
+    timed 45 "\"\$@\"; exit $code" "$(writes "$(report failed 3 1)")"
+    if assert_equals "$code" "$STEP_STATUS" 'status' \
+        && assert_equals 0 "$(log_count 'was interrupted')" 'no timeout message'; then
+        pass_case
+    fi
+done
 
 case_start 'job-timeout-minutes 0 runs the suite without a time limit'
 timed 0 'exit 99' "$(writes "$(report passed 3 0)")"
@@ -401,7 +408,7 @@ if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
 fi
 
 case_start 'the time limit counts from job-started-at, so setup before the step uses up the budget'
-timed 60 '"$@"; exit 124' "$(writes "$(report interrupted 3 0)")" E2E_JOB_STARTED_AT="$(( $(date +%s) - 600 ))"
+timed 60 "\"\$@\"; $EXPIRE; exit 124" "$(writes "$(report interrupted 3 0)")" E2E_JOB_STARTED_AT="$(( $(date +%s) - 600 ))"
 read -r _ _ _ _ limit _ < "$dir/timeout-args" || true
 if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals 1 "$([ "$limit" -gt 2640 ] && [ "$limit" -le 2700 ] && echo 1)" "limit $limit s within 45 minutes" \

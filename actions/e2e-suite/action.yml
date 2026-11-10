@@ -322,7 +322,7 @@ runs:
                   exit 1
                 fi
                 timeout -s INT -k 120 "$remaining" bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
-                if [ "$status" = 124 ] || { [ "$status" = 137 ] && [ "$(date +%s)" -ge "$deadline" ]; }; then
+                if [ "$(date +%s)" -ge "$deadline" ] && { [ "$status" = 124 ] || [ "$status" = 137 ]; }; then
                   timed_out=1
                 fi
               else
