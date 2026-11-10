@@ -61,14 +61,14 @@ the latest update and build runtimes, and the verdict.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.12.2 # v4.12.2
+- uses: rnw-community/mobile-ci/actions/eas-channel-fingerprint@v4.12.3 # v4.12.3
   id: fingerprint
   with:
       app-dir: apps/mobile
       eas-profile: production
       expo-token: ${{ secrets.EXPO_TOKEN }}
 - if: steps.fingerprint.outputs.decision == 'ota'
-  uses: rnw-community/mobile-ci/actions/eas-update@v4.12.2 # v4.12.2
+  uses: rnw-community/mobile-ci/actions/eas-update@v4.12.3 # v4.12.3
   with:
       app-dir: apps/mobile
       channel: production

@@ -34,7 +34,7 @@ non-string `extends`, `channel` or `environment`.
 
 ```yaml
 - id: profile
-  uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.12.2 # v4.12.2
+  uses: rnw-community/mobile-ci/actions/eas-profile-env@v4.12.3 # v4.12.3
   with:
       app-dir: apps/mobile
       profiles: production

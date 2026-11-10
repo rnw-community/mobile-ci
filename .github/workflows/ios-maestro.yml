@@ -819,11 +819,11 @@ jobs:
             flow-timings: ${{ steps.flow-timings.outputs.timings }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate the e2e call
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.3 # v4.12.3
               with:
                   mode: validate
                   platform: ios
@@ -842,7 +842,7 @@ jobs:
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.12.2 # v4.12.2
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.12.3 # v4.12.3
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -977,7 +977,7 @@ jobs:
             - name: Fetch the recorded flow timings
               id: flow-timings
               if: inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.3 # v4.12.3
               with:
                   mode: fetch
                   artifact-name: maestro-flow-timings-ios${{ steps.targets.outputs.artifact-scope }}
@@ -990,7 +990,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.12.2 # v4.12.2
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.12.3 # v4.12.3
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1056,7 +1056,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1097,7 +1097,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.3 # v4.12.3
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1209,13 +1209,13 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.12.3 # v4.12.3
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Restore install cache
               id: install-cache
-              uses: rnw-community/mobile-ci/actions/install-cache@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.12.3 # v4.12.3
               with:
                   paths: ${{ inputs.install-cache-paths }}
                   key: ${{ inputs.install-cache-key }}
@@ -1246,7 +1246,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.12.3 # v4.12.3
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1260,7 +1260,7 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.12.3 # v4.12.3
               with:
                   app-dir: ${{ matrix.target.appDir }}
 
@@ -1286,7 +1286,7 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.3 # v4.12.3
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1299,7 +1299,7 @@ jobs:
 
             - name: build-ios-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.12.3 # v4.12.3
               with:
                   app-dir: ${{ matrix.target.appDir }}
                   workspace: ${{ matrix.target.workspace }}
@@ -1326,7 +1326,7 @@ jobs:
                   key: ${{ steps.rn-prebuilts.outputs.cache-key }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.12.3 # v4.12.3
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
@@ -1351,7 +1351,7 @@ jobs:
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.12.3 # v4.12.3
               with:
                   mode: publish
                   platform: ios
@@ -1429,7 +1429,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1523,7 +1523,7 @@ jobs:
 
             - name: setup-xcode-pinned
               if: inputs.ios-driver != 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.12.3 # v4.12.3
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1541,7 +1541,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.3 # v4.12.3
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1551,7 +1551,7 @@ jobs:
             - name: Select the target's flow timings
               id: shard-timings
               if: inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.3 # v4.12.3
               with:
                   mode: select
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1561,7 +1561,7 @@ jobs:
               id: run-maestro-ios
               if: inputs.ios-driver == 'local'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.12.3 # v4.12.3
               with:
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
                   app-id: ${{ matrix.target.appId }}
@@ -1602,7 +1602,7 @@ jobs:
               id: run-maestro-device-cloud
               if: inputs.ios-driver == 'device-cloud'
               continue-on-error: ${{ matrix.target.tolerateTestFailures }}
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.12.3 # v4.12.3
               with:
                   platform: ios
                   app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
@@ -1702,7 +1702,7 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Record when the job started
@@ -1726,7 +1726,7 @@ jobs:
                   APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
               run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
             - name: Apply maestro-secrets-env to the e2e suite
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.12.3 # v4.12.3
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1734,7 +1734,7 @@ jobs:
             - name: Run the e2e suite
               id: run
               continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.3 # v4.12.3
               with:
                   mode: run
                   platform: ios
@@ -1756,7 +1756,7 @@ jobs:
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.12.3 # v4.12.3
               with:
                   mode: release
                   platform: ios
@@ -1781,7 +1781,7 @@ jobs:
         timeout-minutes: 10
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download this run's shard artifacts
@@ -1790,7 +1790,7 @@ jobs:
                   pattern: maestro-flow-timings-ios${{ needs.detect.outputs.artifact-scope }}-*-shard-*
                   path: ${{ runner.temp }}/maestro-shard-artifacts
             - name: Record the flow timings
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.12.3 # v4.12.3
               with:
                   mode: record
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1810,12 +1810,12 @@ jobs:
                 target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.3 # v4.12.3
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Save the successful test contract
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.12.2 # v4.12.2
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.12.3 # v4.12.3
               with:
                   mode: publish
                   platform: ios

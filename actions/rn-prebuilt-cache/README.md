@@ -28,7 +28,7 @@ tarballs there. The `ios-maestro`,
 ```yaml
 - name: Restore the React Native prebuilt cache
   id: rn-prebuilts
-  uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.12.2 # v4.12.2
+  uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.12.3 # v4.12.3
   with:
       app-dir: apps/mobile
 # ... pod install / build-ios-app ...
