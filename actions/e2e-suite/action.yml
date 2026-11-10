@@ -67,11 +67,17 @@ inputs:
         default: '10'
     job-timeout-minutes:
         description: >-
-            The calling job's timeout-minutes. Five minutes before it, counted from the
-            start of this step, the suite is interrupted so its partial report is kept and
-            the run fails as infrastructure instead of being cancelled; 0 sets no limit (run).
+            The calling job's timeout-minutes. Five minutes before it, counted from
+            job-started-at, the suite is interrupted so its partial report is kept and the
+            run fails as infrastructure instead of being cancelled; 0 sets no limit (run).
         required: false
         default: '0'
+    job-started-at:
+        description: >-
+            Unix time the calling job started, recorded with date +%s in its first step;
+            empty counts job-timeout-minutes from the start of this step (run).
+        required: false
+        default: ''
     retries:
         description: Retries per failed test inside the run (validate, run).
         required: false
@@ -204,6 +210,7 @@ runs:
               E2E_WORKERS: ${{ inputs.workers }}
               E2E_CAPACITY_WAIT_MINUTES: ${{ inputs.capacity-wait-minutes }}
               E2E_JOB_TIMEOUT_MINUTES: ${{ inputs.job-timeout-minutes }}
+              E2E_JOB_STARTED_AT: ${{ inputs.job-started-at }}
               E2E_RETRIES: ${{ inputs.retries }}
               E2E_SESSION: ${{ inputs.session }}
               E2E_TELEMETRY_DISABLED: '1'
@@ -239,7 +246,19 @@ runs:
                   limit=0
                 fi
               fi
-              deadline=$(( $(date +%s) + limit * 60 ))
+              started_at=$(date +%s)
+              since='this step started'
+              case "$E2E_JOB_STARTED_AT" in
+                '') ;;
+                *[!0-9]*) echo "::error::job-started-at must be a Unix time in seconds; got '$E2E_JOB_STARTED_AT'."; exit 1 ;;
+                *)
+                  if [ "$((10#$E2E_JOB_STARTED_AT))" -le "$started_at" ]; then
+                    started_at=$((10#$E2E_JOB_STARTED_AT))
+                    since='the job started'
+                  fi
+                  ;;
+              esac
+              deadline=$(( started_at + limit * 60 ))
               case "$E2E_CAPACITY_WAIT_MINUTES" in
                 '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
               esac
@@ -329,7 +348,7 @@ runs:
                 fi
               fi
               if [ -n "$timed_out" ]; then
-                infrastructure="the e2e suite was interrupted $limit minutes after this step started, 5 minutes before the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout, so its partial report is kept."
+                infrastructure="the e2e suite was interrupted $limit minutes after $since, 5 minutes before the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout, so its partial report is kept."
               fi
               if [ -n "$infrastructure" ]; then
                 if [ "$status" = 0 ]; then status=1; fi

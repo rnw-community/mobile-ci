@@ -1750,6 +1750,10 @@ jobs:
               uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.12.2 # v4.12.2
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
+            - name: Record when the job started
+              id: job-start
+              shell: bash
+              run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
             - name: Checkout repository
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
               with:
@@ -1784,6 +1788,7 @@ jobs:
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
                   job-timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
+                  job-started-at: ${{ steps.job-start.outputs.epoch }}
                   session: e2e-android-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
                   tolerated: ${{ matrix.target.tolerateTestFailures }}
