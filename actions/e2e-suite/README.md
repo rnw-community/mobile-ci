@@ -29,7 +29,8 @@ action does the rest in three modes.
     of the step without one), gets
     `SIGINT` (and `SIGKILL` 2 minutes later), so it writes its partial report
     and the run fails with an `Infrastructure failure:` error instead of the job
-    ending `cancelled` with no report and no retry. It needs the runner's
+    ending `cancelled` with no report and no retry. The wait for a busy farm stops
+    at the same deadline, with the same kind of error. It needs the runner's
     `timeout` command; without one the suite runs with no limit.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`

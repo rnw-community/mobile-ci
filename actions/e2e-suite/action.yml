@@ -289,9 +289,13 @@ runs:
                     fi
                     ;;
                 esac
-                if [ "$polls" -eq 0 ]; then
+                out_of_time=''
+                if [ "$limit" -gt 0 ] && [ "$(( $(date +%s) + 30 ))" -ge "$deadline" ]; then out_of_time=1; fi
+                if [ "$polls" -eq 0 ] || [ -n "$out_of_time" ]; then
                   if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
-                  if [ -z "$free" ]; then
+                  if [ -n "$out_of_time" ]; then
+                    echo "::$level::Infrastructure failure: the farm had ${free:-no reported} free $E2E_PLATFORM devices, fewer than the $floor this run needs, and the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout left no time to keep waiting."
+                  elif [ -z "$free" ]; then
                     echo "::$level::Infrastructure failure: the farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for $floor devices."
                   else
                     echo "::$level::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."

@@ -266,7 +266,7 @@ busy() {
     mkdir -p "$dir/work/.e2e" && report passed 9 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW="${BUSY_SHADOW:-false}" \
-        E2E_CAPACITY_WAIT_MINUTES="$wait" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_CAPACITY_WAIT_MINUTES="$wait" E2E_JOB_TIMEOUT_MINUTES="${BUSY_JOB_TIMEOUT:-$JOB_TIMEOUT}" E2E_JOB_STARTED_AT="${BUSY_JOB_STARTED_AT:-}" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 }
 
 case_start 'a busy farm waits until half the devices an idle farm would give are free'
@@ -330,6 +330,15 @@ if assert_equals 0 "$STEP_STATUS" 'status' \
 fi
 
 VALIDATE='Validate the e2e call'
+case_start 'a busy farm stops the wait when the job time limit is nearly used up, and fails as infrastructure'
+BUSY_JOB_TIMEOUT=60 BUSY_JOB_STARTED_AT="$(( $(date +%s) - 3280 ))" busy 10 10 '{"capacity":{"ios":{"limit":4,"used":4}}}'
+if assert_equals 1 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals no "$([ -e "$dir/sleeps" ] && echo yes || echo no)" 'no 30 s poll past the limit' \
+    && assert_contains "$(cat "$dir/log")" "::error::Infrastructure failure: the farm had 0 free ios devices, fewer than the 2 this run needs, and the job's 60-minute timeout left no time to keep waiting." 'error' \
+    && assert_equals no "$([ -e "$dir/work/workers" ] && echo yes || echo no)" 'suite not started'; then
+    pass_case
+fi
+
 # timed <job-timeout> <timeout-stub-body> <command> [VAR=value ...]: a run whose
 # timeout command is stubbed; the stub records its arguments in timeout-args.
 timed() {
