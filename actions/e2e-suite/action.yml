@@ -65,6 +65,19 @@ inputs:
             would give it, before failing as infrastructure (run).
         required: false
         default: '10'
+    job-timeout-minutes:
+        description: >-
+            The calling job's timeout-minutes. Five minutes before it, counted from
+            job-started-at, the suite is interrupted so its partial report is kept and the
+            run fails as infrastructure instead of being cancelled; 0 sets no limit (run).
+        required: false
+        default: '0'
+    job-started-at:
+        description: >-
+            Unix time the calling job started, recorded with date +%s in its first step;
+            empty counts job-timeout-minutes from the start of this step (run).
+        required: false
+        default: ''
     retries:
         description: Retries per failed test inside the run (validate, run).
         required: false
@@ -196,6 +209,8 @@ runs:
               E2E_TARGET: ${{ inputs.target }}
               E2E_WORKERS: ${{ inputs.workers }}
               E2E_CAPACITY_WAIT_MINUTES: ${{ inputs.capacity-wait-minutes }}
+              E2E_JOB_TIMEOUT_MINUTES: ${{ inputs.job-timeout-minutes }}
+              E2E_JOB_STARTED_AT: ${{ inputs.job-started-at }}
               E2E_RETRIES: ${{ inputs.retries }}
               E2E_SESSION: ${{ inputs.session }}
               E2E_TELEMETRY_DISABLED: '1'
@@ -216,6 +231,34 @@ runs:
               targets=$(jq -r 'length' <<< "${TEST_TARGETS:-[]}" 2>/dev/null || echo 1)
               case "$targets" in '' | *[!0-9]* | 0) targets=1 ;; esac
               rm -rf .e2e
+              case "$E2E_JOB_TIMEOUT_MINUTES" in
+                '' | *[!0-9]*) echo "::error::job-timeout-minutes must be a whole number; got '$E2E_JOB_TIMEOUT_MINUTES'."; exit 1 ;;
+              esac
+              limit=0
+              if [ "$((10#$E2E_JOB_TIMEOUT_MINUTES))" -gt 0 ]; then
+                limit=$((10#$E2E_JOB_TIMEOUT_MINUTES - 5))
+                if [ "$limit" -lt 1 ]; then
+                  echo "::error::job-timeout-minutes must be 0 or more than 5, to leave the suite time to run and stop; got '$E2E_JOB_TIMEOUT_MINUTES'."
+                  exit 1
+                fi
+                if ! command -v timeout > /dev/null; then
+                  echo "::notice::This runner has no timeout command, so the suite runs without a time limit and the job's timeout-minutes cancels it."
+                  limit=0
+                fi
+              fi
+              started_at=$(date +%s)
+              since='this step started'
+              case "$E2E_JOB_STARTED_AT" in
+                '') ;;
+                *[!0-9]*) echo "::error::job-started-at must be a Unix time in seconds; got '$E2E_JOB_STARTED_AT'."; exit 1 ;;
+                *)
+                  if [ "$((10#$E2E_JOB_STARTED_AT))" -le "$started_at" ]; then
+                    started_at=$((10#$E2E_JOB_STARTED_AT))
+                    since='the job started'
+                  fi
+                  ;;
+              esac
+              deadline=$(( started_at + limit * 60 ))
               case "$E2E_CAPACITY_WAIT_MINUTES" in
                 '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
               esac
@@ -246,9 +289,13 @@ runs:
                     fi
                     ;;
                 esac
-                if [ "$polls" -eq 0 ]; then
+                out_of_time=''
+                if [ "$limit" -gt 0 ] && [ "$(( $(date +%s) + 30 ))" -ge "$deadline" ]; then out_of_time=1; fi
+                if [ "$polls" -eq 0 ] || [ -n "$out_of_time" ]; then
                   if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
-                  if [ -z "$free" ]; then
+                  if [ -n "$out_of_time" ]; then
+                    echo "::$level::Infrastructure failure: the farm had ${free:-no reported} free $E2E_PLATFORM devices, fewer than the $floor this run needs, and the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout left no time to keep waiting."
+                  elif [ -z "$free" ]; then
                     echo "::$level::Infrastructure failure: the farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for $floor devices."
                   else
                     echo "::$level::Infrastructure failure: the farm still had $free free $E2E_PLATFORM devices after $E2E_CAPACITY_WAIT_MINUTES minutes, fewer than the $floor this run needs to finish within the job limit."
@@ -266,7 +313,21 @@ runs:
               status=0
               output=$(mktemp)
               : > "$output.open"
-              bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
+              timed_out=''
+              if [ "$limit" -gt 0 ]; then
+                remaining=$(( deadline - $(date +%s) ))
+                if [ "$remaining" -lt 1 ]; then
+                  if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
+                  echo "::$level::Infrastructure failure: the job had already run $limit minutes since $since, 5 minutes before its $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout, so the e2e suite was not started."
+                  exit 1
+                fi
+                timeout -s INT -k 120 "$remaining" bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
+                if [ "$(date +%s)" -ge "$deadline" ] && { [ "$status" = 124 ] || [ "$status" = 137 ]; }; then
+                  timed_out=1
+                fi
+              else
+                bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
+              fi
               for _ in 1 2 3 4 5 6 7 8 9 10; do
                 [ -e "$output.open" ] || break
                 sleep 0.5
@@ -292,6 +353,14 @@ runs:
                 elif [ "$status" = 0 ] && { [ "$run_status" != passed ] || [ "$failed" -gt 0 ]; }; then
                   echo "::error::The e2e report did not pass ($run_status, $failed failed) although the command exited 0."
                   status=1
+                fi
+              fi
+              if [ -n "$timed_out" ]; then
+                infrastructure="the e2e suite was interrupted $limit minutes after $since, 5 minutes before the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout."
+                if [ -f .e2e/report.json ]; then
+                  infrastructure="$infrastructure Its partial report is kept."
+                else
+                  infrastructure="$infrastructure It had written no report."
                 fi
               fi
               if [ -n "$infrastructure" ]; then
