@@ -24,6 +24,12 @@ action does the rest in three modes.
     and then fails with an `Infrastructure failure:` error without starting the
     suite. A status the farm stops answering during that wait counts as busy. A
     target an idle farm cannot give a whole device still runs one worker.
+  - With `job-timeout-minutes` set to the job's `timeout-minutes`, a suite still
+    running 5 minutes before it, counted from the start of the step, gets
+    `SIGINT` (and `SIGKILL` 2 minutes later), so it writes its partial report
+    and the run fails with an `Infrastructure failure:` error instead of the job
+    ending `cancelled` with no report and no retry. It needs the runner's
+    `timeout` command; without one the suite runs with no limit.
   - A run passes only on its `.e2e/report.json`: `status: passed`, at least one
     executed test, none failed, every count a whole number. It clears `.e2e`
     first, so a stale report never counts.
@@ -65,6 +71,7 @@ stdin, never on its command line.
 | `targets` | run | `'[]'` | JSON array of the call's targets, which split the free devices. |
 | `workers` | validate, run | `'1'` | Devices leased and tests run at once (`E2E_WORKERS`). |
 | `capacity-wait-minutes` | run | `'10'` | How long a run waits for a busy farm to free half the devices an idle farm would give it, before failing as infrastructure. |
+| `job-timeout-minutes` | run | `'0'` | The calling job's `timeout-minutes`. The suite is interrupted 5 minutes before it, counted from the start of the step, so its partial report is kept and the run fails as infrastructure; `0` sets no limit. |
 | `retries` | validate, run | `'1'` | Retries per failed test (`E2E_RETRIES`). |
 | `session` | run | `''` | agent-device session name (`E2E_SESSION`). |
 | `shadow` | run | `'false'` | `true` when the suite runs as a non-gating shadow. |

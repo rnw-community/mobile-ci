@@ -13,6 +13,7 @@ set -euo pipefail
 ACTION="$REPO_ROOT/actions/e2e-suite/action.yml"
 FARM='{"capacity":{"ios":{"limit":12,"used":3,"warm":1},"android":{"limit":2,"used":1,"warm":0}}}'
 WAIT="$(action_input_default "$ACTION" capacity-wait-minutes)"
+JOB_TIMEOUT="$(action_input_default "$ACTION" job-timeout-minutes)"
 FENCE='~~~'
 
 report() {
@@ -42,7 +43,7 @@ run_suite() {
     stub "$dir" curl 'exit 7'
     run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND="$command" E2E_APP_PATH="$(app "$platform" "$dir")" \
         E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$WAIT" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
 }
 
 # log_count <pattern>: matching lines of the last run's log; none is a count, not a failure.
@@ -95,7 +96,7 @@ for platform in ios android; do
     mkdir -p "$dir/work/.e2e"
     report passed 5 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND='true' E2E_APP_PATH="$(app "$platform" "$dir")" E2E_APP_ID=a \
-        E2E_TARGET=app E2E_WORKERS=1 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES="$WAIT" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_TARGET=app E2E_WORKERS=1 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
     if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'wrote no report' 'error'; then
         pass_case
     fi
@@ -226,7 +227,7 @@ capacity() {
     stub "$dir" curl 'printf "%s\n" "$*" > "$(dirname "$0")/../curl-args"; cat > "$(dirname "$0")/../curl-stdin"; printf "%s" "$FARM"'
     run_step "$dir" FARM="$FARM" E2E_PLATFORM="$1" E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app "$1" "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$2" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$WAIT" TEST_TARGETS="$3" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" TEST_TARGETS="$3" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
 }
 
 case_start "ios: the farm's free simulators are split across the targets, and the token never reaches argv"
@@ -265,7 +266,7 @@ busy() {
     mkdir -p "$dir/work/.e2e" && report passed 9 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW="${BUSY_SHADOW:-false}" \
-        E2E_CAPACITY_WAIT_MINUTES="$wait" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_CAPACITY_WAIT_MINUTES="$wait" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
 }
 
 case_start 'a busy farm waits until half the devices an idle farm would give are free'
@@ -329,6 +330,62 @@ if assert_equals 0 "$STEP_STATUS" 'status' \
 fi
 
 VALIDATE='Validate the e2e call'
+# timed <job-timeout> <timeout-stub-body> <command> [VAR=value ...]: a run whose
+# timeout command is stubbed; the stub records its arguments in timeout-args.
+timed() {
+    local minutes="$1" body="$2" command="$3"
+    shift 3
+    dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
+    stub "$dir" curl 'exit 7'
+    stub "$dir" timeout "printf '%s\n' \"\$*\" > \"$dir/timeout-args\"; shift 5; $body"
+    run_step "$dir" E2E_PLATFORM=android E2E_COMMAND="$command" E2E_APP_PATH="$(app android "$dir")" \
+        E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$minutes" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
+}
+
+case_start 'a suite still running 5 minutes before the job timeout is interrupted, keeps its report and fails as infrastructure'
+timed 60 '"$@"; exit 124' "$(writes "$(report interrupted 3 0)")" E2E_TOLERATED=true
+read -r flag signal kill grace limit _ < "$dir/timeout-args" || true
+if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals '-s INT -k 120' "$flag $signal $kill $grace" 'signal and grace' \
+    && assert_equals 1 "$([ "$limit" -gt 3240 ] && [ "$limit" -le 3300 ] && echo 1)" "limit $limit s within 55 minutes" \
+    && assert_contains "$(cat "$dir/log")" "::error::Infrastructure failure: the e2e suite was interrupted 55 minutes after this step started, 5 minutes before the job's 60-minute timeout, so its partial report is kept." 'error' \
+    && assert_contains "$(cat "$dir/summary")" 'E2E report: interrupted, 3 executed, 0 failed, 0 flaky.' 'summary' \
+    && assert_contains "$(cat "$dir/work/.e2e/report.json")" '"interrupted"' 'partial report kept'; then
+    pass_case
+fi
+
+case_start 'a suite that finishes inside the time limit passes as before'
+timed 45 'exec "$@"' "$(writes "$(report passed 3 0)")"
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/timeout-args")" '-s INT -k 120 ' 'ran under timeout'; then
+    pass_case
+fi
+
+case_start 'a suite killed before its time limit is not reported as timed out'
+timed 45 '"$@"; exit 137' "$(writes "$(report failed 3 1)")"
+if assert_equals 137 "$STEP_STATUS" 'status' \
+    && assert_equals 0 "$(log_count 'was interrupted')" 'no timeout message'; then
+    pass_case
+fi
+
+case_start 'job-timeout-minutes 0 runs the suite without a time limit'
+timed 0 'exit 99' "$(writes "$(report passed 3 0)")"
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals no "$([ -e "$dir/timeout-args" ] && echo yes || echo no)" 'timeout not used'; then
+    pass_case
+fi
+
+for bad in 5 abc; do
+    case_start "job-timeout-minutes '$bad' fails before the suite starts"
+    timed "$bad" 'exit 99' 'touch ran'
+    if assert_equals 1 "$STEP_STATUS" 'status' \
+        && assert_contains "$(cat "$dir/log")" '::error::job-timeout-minutes must be' 'error' \
+        && assert_equals no "$([ -e "$dir/work/ran" ] && echo yes || echo no)" 'suite not started'; then
+        pass_case
+    fi
+done
+
 validate() {
     dir="$(new_workspace "$ACTION" "$VALIDATE")"
     run_step "$dir" PLATFORM=ios TEST_FRAMEWORK=e2e DRIVER=local ABIS=arm64 E2E_DIR=e2e E2E_WORKERS=2 E2E_RETRIES=1 \
@@ -405,7 +462,7 @@ steps = yaml.safe_load(open(os.environ["ACTION"]))["runs"]["steps"]
 env = next(s for s in steps if s["name"] == "Run the e2e suite")["env"]
 print(" ".join(f"{k}={v}" for k, v in sorted(env.items())))')"
 # shellcheck disable=SC2016 # the literal expressions the action must carry.
-if assert_equals 'E2E_APP_ID=${{ inputs.app-id }} E2E_APP_PATH=${{ inputs.app-path }} E2E_CAPACITY_WAIT_MINUTES=${{ inputs.capacity-wait-minutes }} E2E_COMMAND=${{ inputs.command }} E2E_PLATFORM=${{ inputs.platform }} E2E_RETRIES=${{ inputs.retries }} E2E_SESSION=${{ inputs.session }} E2E_SHADOW=${{ inputs.shadow }} E2E_TARGET=${{ inputs.target }} E2E_TELEMETRY_DISABLED=1 E2E_TOLERATED=${{ inputs.tolerated }} E2E_WORKERS=${{ inputs.workers }} SIMLOCK_TOKEN=${{ inputs.simlock-token }} SIMLOCK_URL=${{ inputs.simlock-url }} TEST_TARGETS=${{ inputs.targets }}' "$contract" 'env'; then
+if assert_equals 'E2E_APP_ID=${{ inputs.app-id }} E2E_APP_PATH=${{ inputs.app-path }} E2E_CAPACITY_WAIT_MINUTES=${{ inputs.capacity-wait-minutes }} E2E_COMMAND=${{ inputs.command }} E2E_JOB_TIMEOUT_MINUTES=${{ inputs.job-timeout-minutes }} E2E_PLATFORM=${{ inputs.platform }} E2E_RETRIES=${{ inputs.retries }} E2E_SESSION=${{ inputs.session }} E2E_SHADOW=${{ inputs.shadow }} E2E_TARGET=${{ inputs.target }} E2E_TELEMETRY_DISABLED=1 E2E_TOLERATED=${{ inputs.tolerated }} E2E_WORKERS=${{ inputs.workers }} SIMLOCK_TOKEN=${{ inputs.simlock-token }} SIMLOCK_URL=${{ inputs.simlock-url }} TEST_TARGETS=${{ inputs.targets }}' "$contract" 'env'; then
     pass_case
 fi
 

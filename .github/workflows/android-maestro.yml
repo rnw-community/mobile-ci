@@ -585,7 +585,10 @@ on:
                 required: false
                 default: false
             e2e-timeout-minutes:
-                description: Timeout of the e2e job.
+                description: >-
+                    Timeout of the e2e job. The suite is interrupted 5 minutes before it, so
+                    its partial report is kept and the run fails as infrastructure, which
+                    rerun-infra-failures retries, instead of being cancelled.
                 type: number
                 required: false
                 default: 60
@@ -1780,6 +1783,7 @@ jobs:
                   targets: ${{ needs.plan.outputs.test-targets }}
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
+                  job-timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
                   session: e2e-android-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
                   tolerated: ${{ matrix.target.tolerateTestFailures }}
