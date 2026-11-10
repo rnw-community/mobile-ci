@@ -67,7 +67,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.12.2 # v4.12.2
+        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.12.3 # v4.12.3
 ```
 
 ### Full
@@ -86,7 +86,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: read
-        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.12.2 # v4.12.2
+        uses: rnw-community/mobile-ci/.github/workflows/preview-sweep-reusable.yml@v4.12.3 # v4.12.3
         with:
             release-tag-prefix: ota
             dry-run: false
