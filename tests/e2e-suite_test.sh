@@ -371,6 +371,14 @@ if assert_equals 124 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     pass_case
 fi
 
+case_start 'a job that used up its time before the suite could start fails as infrastructure without starting it'
+timed 60 'exit 99' 'touch ran' E2E_JOB_STARTED_AT="$(( $(date +%s) - 3400 ))"
+if assert_equals 1 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_contains "$(cat "$dir/log")" "::error::Infrastructure failure: the job had already run 55 minutes since the job started, 5 minutes before its 60-minute timeout, so the e2e suite was not started." 'error' \
+    && assert_equals no "$([ -e "$dir/work/ran" ] || [ -e "$dir/timeout-args" ] && echo yes || echo no)" 'suite not started'; then
+    pass_case
+fi
+
 case_start 'a suite that finishes inside the time limit passes as before'
 timed 45 'exec "$@"' "$(writes "$(report passed 3 0)")"
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \

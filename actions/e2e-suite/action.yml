@@ -316,7 +316,11 @@ runs:
               timed_out=''
               if [ "$limit" -gt 0 ]; then
                 remaining=$(( deadline - $(date +%s) ))
-                if [ "$remaining" -lt 1 ]; then remaining=1; fi
+                if [ "$remaining" -lt 1 ]; then
+                  if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
+                  echo "::$level::Infrastructure failure: the job had already run $limit minutes since $since, 5 minutes before its $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout, so the e2e suite was not started."
+                  exit 1
+                fi
                 timeout -s INT -k 120 "$remaining" bash -c "$E2E_COMMAND" > >(tee "$output"; rm -f "$output.open") 2>&1 || status=$?
                 if [ "$status" = 124 ] || { [ "$status" = 137 ] && [ "$(date +%s)" -ge "$deadline" ]; }; then
                   timed_out=1
