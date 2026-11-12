@@ -566,7 +566,7 @@ exit 0'
         ADB_CALLS="$dir/adb-calls" AVDMANAGER_CALLS="$dir/avdmanager-calls" EMULATOR_ARGS="$dir/emulator-args" \
         API_LEVEL=34 TARGET=google_apis ARCH=x86_64 PROFILE=pixel_6 AVD_NAME=test PORT=5554 \
         BOOT_TIMEOUT_SECONDS=30 WIPE_DATA=false RAM_SIZE=2048 HEAP_SIZE='' CORES=2 \
-        EMULATOR_OPTIONS='-no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none' \
+        EMULATOR_OPTIONS='-no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none' \
         "$@"
 }
 
@@ -590,7 +590,7 @@ if assert_equals 0 "$STEP_STATUS" "step status ($(cat "$workspace/log"))" \
     && assert_equals 1 "$(grep -c '^hw.ramSize=' "$config")" 'one hw.ramSize line' \
     && assert_contains "$(cat "$config")" 'hw.ramSize=2048' 'hw.ramSize' \
     && assert_contains "$(cat "$config")" 'hw.cpu.ncore=2' 'hw.cpu.ncore' \
-    && assert_contains "$(cat "$workspace/emulator-args")" '-port 5554 -avd test -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none' 'emulator argv' \
+    && assert_contains "$(cat "$workspace/emulator-args")" '-port 5554 -avd test -no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none' 'emulator argv' \
     && assert_not_contains "$(cat "$workspace/emulator-args")" '-wipe-data' 'no wipe by default' \
     && assert_not_contains "$(cat "$workspace/emulator-args")" '-accel off' 'never software emulation' \
     && assert_contains "$(cat "$workspace/adb-calls")" '-s emulator-5554 shell settings put global window_animation_scale 0.0' 'window animations off' \

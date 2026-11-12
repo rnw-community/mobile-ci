@@ -771,6 +771,15 @@ on:
                 type: string
                 required: false
                 default: ''
+            emulator-options:
+                description: >-
+                    avd driver only. Whitespace-separated emulator command-line
+                    options. The default renders with swangle_indirect, since
+                    swiftshader_indirect segfaults qemu on AMD Zen 5 hosts once
+                    an app starts drawing.
+                type: string
+                required: false
+                default: -no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none
             emulator-slots-dir:
                 description: >-
                     avd driver only. Host directory of fleet-provisioned slot-*
@@ -2753,6 +2762,7 @@ jobs:
                   ram-size: ${{ inputs.emulator-ram-size }}
                   heap-size: ${{ inputs.emulator-heap-size }}
                   cores: ${{ inputs.emulator-cores }}
+                  emulator-options: ${{ inputs.emulator-options }}
                   emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
                   emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
 

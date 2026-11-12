@@ -75,7 +75,7 @@ inputs:
   emulator-options:
     description: Whitespace-separated options passed to the emulator after -port and -avd.
     required: false
-    default: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+    default: -no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none
   wipe-data:
     description: >-
       'true' boots with -wipe-data, discarding the AVD's userdata (installed

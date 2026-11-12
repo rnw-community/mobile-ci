@@ -41,7 +41,7 @@ of this job's emulator processes survive, and releases the slot — see
 | `ram-size`                      | no       | `''`    | Guest RAM in MB (`hw.ramSize`). Empty derives it from the cgroup memory limit — see [Emulator budget](#emulator-budget). An explicit value always wins. |
 | `heap-size`                     | no       | `''`    | Android VM heap size in MB (`hw.heapSize`). Empty keeps the profile default. |
 | `cores`                         | no       | `''`    | Guest CPU cores (`hw.cpu.ncore`). Empty derives half the cgroup CPU quota — see [Emulator budget](#emulator-budget). An explicit value always wins. |
-| `emulator-options`              | no       | `-no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none` | Whitespace-separated emulator options after `-port` and `-avd`. |
+| `emulator-options`              | no       | `-no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none` | Whitespace-separated emulator options after `-port` and `-avd`. |
 | `wipe-data`                     | no       | `false` | `true` boots with `-wipe-data`, discarding any earlier run's apps and settings. |
 | `boot-timeout-seconds`          | no       | `600`   | Seconds to wait for `sys.boot_completed` before failing. |
 | `cmdline-tools-version`         | no       | `12266719` | SDK cmdline-tools build `setup-android` installs when the SDK has no matching `sdkmanager`. |

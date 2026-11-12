@@ -463,7 +463,7 @@ runs:
           ram-size: ${{ inputs.ram-size }}
           heap-size: ${{ inputs.heap-size }}
           cores: ${{ inputs.cores }}
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none
           emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
           emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
 
