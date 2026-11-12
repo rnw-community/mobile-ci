@@ -94,7 +94,7 @@ action reads `npx expo config` for the project id, `updates.url` and slug.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/eas-update@v4.12.3 # v4.12.3
+- uses: rnw-community/mobile-ci/actions/eas-update@v4.12.4 # v4.12.4
   id: update
   with:
       app-dir: apps/mobile

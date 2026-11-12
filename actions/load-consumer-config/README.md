@@ -62,7 +62,7 @@ the object (types, precedence, defaults) is the calling workflow's job.
 
 - name: load-consumer-config
   id: load-config
-  uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.12.3 # v4.12.3
+  uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.12.4 # v4.12.4
   with:
       config-path: .github/store-screenshots.config.json
       allowed-keys: '["capture-mode","screenshots-dir","settle-seconds"]'

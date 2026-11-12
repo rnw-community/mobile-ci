@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.12.3`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.12.4`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.3 # v4.12.3
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.4 # v4.12.4
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.3 # v4.12.3
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.4 # v4.12.4
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,10 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.12.4** — Android emulators render with `-gpu swangle_indirect` instead of
+  `swiftshader_indirect`, which segfaulted qemu on AMD Zen 5 KVM hosts a few seconds after an
+  app started drawing. `store-screenshots.yml` gets an `emulator-options` input passed to
+  `android-emulator`.
 - **v4.12.3** — an e2e suite still running near the job's timeout is no longer killed with no
   report and left `cancelled`. The e2e jobs interrupt it 5 minutes before
   `e2e-timeout-minutes`, counted from the job start, so the partial report is uploaded and
@@ -520,7 +524,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.3 # v4.12.3
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.4 # v4.12.4
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -593,7 +597,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.12.3 # v4.12.3
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.12.4 # v4.12.4
 ```
 
 ## Scope
@@ -639,7 +643,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.12.3 # v4.12.3`). A major tag such as `@v4` floats to the
+checked against (`@v4.12.4 # v4.12.4`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

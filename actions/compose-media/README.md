@@ -120,7 +120,7 @@ H.264 at 170 KB. Tighten them to your own content.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/compose-media@v4.12.3 # v4.12.3
+- uses: rnw-community/mobile-ci/actions/compose-media@v4.12.4 # v4.12.4
   id: stills
   with:
       mode: stills
@@ -129,7 +129,7 @@ H.264 at 170 KB. Tighten them to your own content.
       output-template: '{slug}/{dir}/{name}@2x'
       max-avif-bytes: '45000'
 
-- uses: rnw-community/mobile-ci/actions/compose-media@v4.12.3 # v4.12.3
+- uses: rnw-community/mobile-ci/actions/compose-media@v4.12.4 # v4.12.4
   with:
       mode: frame
       input-dir: fastlane/screenshots/raw/ios/ipad-pro-13-inch-m4
