@@ -52,7 +52,7 @@ for input in api-level target arch profile ram-size heap-size cores emulator-slo
     esac
 done
 if assert_equals '' "$unwired" "inputs not passed through ($with_map)" \
-    && assert_contains "$with_map" '"emulator-options": "-no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none"' 'emulator options kept'; then
+    && assert_contains "$with_map" '"emulator-options": "-no-snapshot-save -no-window -gpu swangle_indirect -noaudio -no-boot-anim -camera-back none"' 'emulator options kept'; then
     pass_case
 fi
 

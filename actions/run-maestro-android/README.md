@@ -1,7 +1,7 @@
 # run-maestro-android
 
 Boots a **headless** Android emulator (`-no-window -no-audio -gpu
-swiftshader_indirect`, no boot animation, no snapshot save), waits for
+swangle_indirect`, no boot animation, no snapshot save), waits for
 `sys.boot_completed` before installing, installs the packaged `.apk`, runs a
 Maestro flow shard, and — regardless of pass/fail — captures a final
 screenshot plus full and crash logcat, uploaded as an artifact. Every
