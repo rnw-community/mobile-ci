@@ -300,7 +300,11 @@ suite seeds each cell itself on the leased simulator.
 The Android e2e job ignores `android-driver`, `android-capture-runner-labels`
 and the `emulator-*`/`redroid-*` inputs: it runs on `e2e-runner-labels` within
 `android-capture-timeout-minutes`, and the e2e project applies the entry's
-size and density to the emulator it leases.
+size and density to the emulator it leases. The APK must be built for the
+ABI of the farm's emulators (for example `arm64-v8a` through
+`android-gradle-args: -PreactNativeArchitectures=arm64-v8a`); an APK built only
+for `x86_64`, as a local-emulator Maestro capture uses, fails to install on
+every cell.
 
 The job writes a plan, a JSON array with one object per
 locale × appearance × scene cell, filtered by each scene's `platforms`,

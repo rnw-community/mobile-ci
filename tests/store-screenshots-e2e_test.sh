@@ -292,4 +292,12 @@ if assert_equals '[]' "$(query '[p for p in [
     pass_case
 fi
 
+case_start 'the iOS and Android e2e capture jobs share one plan, run and check body'
+# shellcheck disable=SC2016
+if assert_equals '[]' "$(query '[n for n in ["Plan the e2e capture cells", "Run the e2e capture", "Check every planned capture was written"]
+        if [s["run"] for s in jobs["capture-ios-e2e"]["steps"] if s.get("name") == n] != [s["run"] for s in jobs["capture-android-e2e"]["steps"] if s.get("name") == n]
+        or not [s for s in jobs["capture-ios-e2e"]["steps"] if s.get("name") == n]]')" 'diverged steps'; then
+    pass_case
+fi
+
 finish_suite
