@@ -118,7 +118,7 @@ jobs:
     cleanup:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.13.0 # v4.13.0
         with:
             app-dir: apps/mobile
         secrets:
@@ -141,7 +141,7 @@ permissions:
 jobs:
     cleanup:
         if: github.event_name == 'pull_request'
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.13.0 # v4.13.0
         with:
             app-dir: apps/mobile
             channel-template: myapp-pr-{number}
@@ -154,7 +154,7 @@ jobs:
             EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
     sweep:
         if: github.event_name != 'pull_request'
-        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/eas-channel-cleanup-reusable.yml@v4.13.0 # v4.13.0
         with:
             app-dir: apps/mobile
             channel-template: ''

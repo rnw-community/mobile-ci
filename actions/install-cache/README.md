@@ -103,7 +103,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.0 # v4.13.0
         with:
             targets: >-
                 [{"name":"app","appDir":"packages/app","workspace":"App.xcworkspace","scheme":"App","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -120,7 +120,7 @@ Composing the action yourself:
 ```yaml
 - name: Restore install cache
   id: install-cache
-  uses: rnw-community/mobile-ci/actions/install-cache@v4.12.4 # v4.12.4
+  uses: rnw-community/mobile-ci/actions/install-cache@v4.13.0 # v4.13.0
   with:
       paths: |
           node_modules/.pnpm/llama.rn@*/node_modules/llama.rn/android/src/main/jniLibs
