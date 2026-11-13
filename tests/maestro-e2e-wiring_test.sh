@@ -98,14 +98,18 @@ if out="$(IOS="$REPO_ROOT/.github/workflows/ios-maestro.yml" check "$REPO_ROOT/.
     ])(yaml.safe_load(open(os.environ['IOS']))[True]['workflow_call']['inputs'])
 ] for p in p if p]")"; then pass_case; else fail_case "$out"; fi
 
-case_start 'store-screenshots installs the package after the e2e project, and releases through e2e-suite'
-# shellcheck disable=SC2016
-if out="$(check "$REPO_ROOT/.github/workflows/store-screenshots.yml" "[p for p in [
-    (lambda names: names.index('Install the e2e project') + 1 != names.index('Install @mobile-ci/e2e-simlock') and names)([s.get('name') for s in job('capture-ios-e2e')['steps']]),
-    not pinned(step('capture-ios-e2e', 'Install @mobile-ci/e2e-simlock').get('uses'), 'e2e-simlock-install') and 'install uses',
-    step('capture-ios-e2e', 'Install @mobile-ci/e2e-simlock').get('with') != {'e2e-dir': '\${{ inputs.e2e-dir }}'} and 'install with',
-    not pinned(step('capture-ios-e2e', 'Release the simulators the capture left leased').get('uses'), 'e2e-suite') and 'release uses',
-    step('capture-ios-e2e', 'Release the simulators the capture left leased')['with'].get('mode') != 'release' and 'release mode',
-] if p]")"; then pass_case; else fail_case "$out"; fi
+for pair in 'ios|simulators' 'android|emulators'; do
+    platform="${pair%%|*}"
+    release="Release the ${pair#*|} the capture left leased"
+    case_start "store-screenshots ($platform) installs the package after the e2e project, and releases through e2e-suite"
+    # shellcheck disable=SC2016
+    if out="$(check "$REPO_ROOT/.github/workflows/store-screenshots.yml" "[p for p in [
+        (lambda names: names.index('Install the e2e project') + 1 != names.index('Install @mobile-ci/e2e-simlock') and names)([s.get('name') for s in job('capture-$platform-e2e')['steps']]),
+        not pinned(step('capture-$platform-e2e', 'Install @mobile-ci/e2e-simlock').get('uses'), 'e2e-simlock-install') and 'install uses',
+        step('capture-$platform-e2e', 'Install @mobile-ci/e2e-simlock').get('with') != {'e2e-dir': '\${{ inputs.e2e-dir }}'} and 'install with',
+        not pinned(step('capture-$platform-e2e', '$release').get('uses'), 'e2e-suite') and 'release uses',
+        {k: v for k, v in step('capture-$platform-e2e', '$release')['with'].items() if k in ('mode', 'platform')} != {'mode': 'release', 'platform': '$platform'} and 'release mode',
+    ] if p]")"; then pass_case; else fail_case "$out"; fi
+done
 
 finish_suite

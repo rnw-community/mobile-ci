@@ -276,13 +276,15 @@ values before relying on this.
 
 ## E2E capture
 
-`test-framework: e2e` captures the iOS cells with your
+`test-framework: e2e` captures the iOS and Android cells with your
 [tester-army e2e](https://github.com/tester-army/e2e) project instead of
 Maestro: one Linux job per `capture-manifest` iOS entry (`capture-ios-e2e`)
 leases simulators of that `device` from simlock, the same way
-[ios-maestro.yml's e2e suite](ios-maestro.md#e2e-suite-on-simlock) does.
-No macOS runner captures anything; the app is still built or repacked as
-before, and the upload job is unchanged.
+[ios-maestro.yml's e2e suite](ios-maestro.md#e2e-suite-on-simlock) does, and
+one per Android entry (`capture-android-e2e`) leases emulators from the same
+farm, the way [android-maestro.yml's e2e suite](android-maestro.md) does.
+No macOS runner or local emulator captures anything; the app and the `.apk`
+are still built or repacked as before, and the upload job is unchanged.
 
 Scenes name what drives them:
 
@@ -294,6 +296,11 @@ Scenes name what drives them:
 
 `seed-command` is refused too: there is no capture host to run it on, so the
 suite seeds each cell itself on the leased simulator.
+
+The Android e2e job ignores `android-driver`, `android-capture-runner-labels`
+and the `emulator-*`/`redroid-*` inputs: it runs on `e2e-runner-labels` within
+`android-capture-timeout-minutes`, and the e2e project applies the entry's
+size and density to the emulator it leases.
 
 The job writes a plan, a JSON array with one object per
 locale × appearance × scene cell, filtered by each scene's `platforms`,
@@ -307,25 +314,27 @@ locale × appearance × scene cell, filtered by each scene's `platforms`,
   "path":".../raw/ios/iphone-17-pro-max/en/light/03-analytics.png"}]
 ```
 
-`e2e-command` runs in `e2e-dir` with:
+`e2e-command` (iOS) and `e2e-android-command` (Android) run in `e2e-dir` with:
 
 | Variable | Value |
 | --- | --- |
 | `SCREENSHOT_PLAN` | absolute path of the plan |
-| `SCREENSHOT_DEVICE` / `SCREENSHOT_DEVICE_SLUG` | the entry's `device` (lease that model) and its slug |
+| `SCREENSHOT_DEVICE` / `SCREENSHOT_DEVICE_SLUG` | the entry's `device` (lease that model on iOS; a label on Android) and its slug |
 | `SCREENSHOT_STATUS_BAR` | `override` (9:41, full bars, charged) or `real`, from `status-bar-override` |
-| `E2E_APP_PATH`, `E2E_APP_ID`, `E2E_TARGET` | the `.app`, `ios-target.appId` and `ios-target.name` |
-| `E2E_WORKERS`, `E2E_RETRIES`, `E2E_SESSION` | as in [ios-maestro.yml](ios-maestro.md#e2e-suite-on-simlock) |
+| `SCREENSHOT_WIDTH`, `SCREENSHOT_HEIGHT`, `SCREENSHOT_DENSITY` | Android only: the entry's `width`, `height` and `density`, the size the Maestro capture sets with `wm size` / `wm density` |
+| `E2E_PLATFORM` | `ios` or `android` |
+| `E2E_APP_PATH`, `E2E_APP_ID`, `E2E_TARGET` | the `.app` (iOS) or `app-release.apk` (Android), and that platform's `*-target.appId` and `*-target.name` |
+| `E2E_WORKERS`, `E2E_RETRIES`, `E2E_SESSION` | as in [ios-maestro.yml](ios-maestro.md#e2e-suite-on-simlock); `E2E_WORKERS` is lowered to the farm's free capacity for that platform |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | the farm |
 
 It must write each cell's PNG to its `path` (a recorded clip may sit beside
 it as `<scene>.mp4`). The job fails closed when the command fails, when its
 report (`e2e-dir/.e2e/report.json`) is missing, executed nothing or did not
 pass, and when any planned path holds no PNG. `post-capture-command` then
-runs, and `raw-screenshots-ios-<device-slug>` is uploaded exactly as the
-macOS capture uploads it, so `apple-screenshot-slots`, `compose-command` and
+runs, and `raw-screenshots-<platform>-<device-slug>` is uploaded exactly as the
+Maestro capture uploads it, so `apple-screenshot-slots`, `compose-command` and
 the upload see no difference. The e2e report is uploaded as
-`e2e-screenshots-ios-<device-slug>`, and leases a cancelled run left behind
+`e2e-screenshots-<platform>-<device-slug>`, and leases a cancelled run left behind
 are released from `e2e-dir/.e2e/simlock-leases.json`. As in the e2e job,
 [`@mobile-ci/e2e-simlock`](../../packages/e2e-simlock/README.md) is installed
 into `e2e-dir` from this workflow's tag after `e2e-install-command`, so the
@@ -869,15 +878,16 @@ loadable from `config-path`; for those, the declared `default:` in
 | `maestro-env`                       | no       | `''`                                     | Newline-separated `KEY=VALUE` pairs, each passed as an additional `-e KEY=VALUE` argument on top of the always-passed `APP_ID`/`LOCALE`/`APPEARANCE` (flow-backed scenes in either mode). Fails closed on a malformed line or a reserved-name override. **cfg** |
 | `maestro-config`                    | no       | `''`                                     | Path to the consumer's Maestro workspace config (`config.yaml`), passed as `--config` to every `maestro test` invocation. Maestro only auto-discovers a workspace `config.yaml` when it is pointed at a **directory**, and the actions below always pass individual flow files, so without this input a workspace config is silently ignored — e.g. `platform.ios.snapshotKeyHonorModalViews: false`, which an `@expo/ui` SwiftUI `.sheet()` modal needs before its React Native content appears in the XCUITest hierarchy at all. Relative paths resolve against the job's working directory. Fails closed when set to a path that is not a file. Passed to both capture actions. **cfg** |
 | `maestro-version`                   | no       | `2.8.0`                                   | Pinned Maestro CLI version; still used by flow-backed scenes in either mode, installed lazily in direct mode — on iOS also for deep-link scenes, which need it for the [open-confirmation sheet](#ios-open-confirmation-sheet) check. |
-| `test-framework` | no | `maestro` | What drives the iOS capture: `maestro` (macOS runner, simctl + Maestro) or `e2e` (your tester-army e2e project, from a Linux runner, against simulators leased from simlock). `e2e` needs `capture-mode: direct`, iOS entries only and portrait. See [E2E capture](#e2e-capture). |
+| `test-framework` | no | `maestro` | What drives the capture: `maestro` (iOS on a macOS runner with simctl + Maestro, Android on `android-driver`) or `e2e` (your tester-army e2e project, from a Linux runner, against simulators and emulators leased from simlock). `e2e` needs `capture-mode: direct` and portrait. See [E2E capture](#e2e-capture). |
 | `e2e-dir` | with `e2e` | `''` | Directory of the e2e project (its `package.json`, lockfile and e2e config), relative to the repository root. |
 | `e2e-runner-labels` | no | `''` (falls back to `control-runner-labels`) | JSON array of Linux runner labels for the e2e capture job; any runner with Node that reaches `simlock-url`. It hosts one worker per leased device. |
 | `e2e-node-version` | no | `^24.8.0` | Node.js version the e2e capture job runs the e2e project with. |
 | `e2e-install-command` | no | `npm ci --no-audit --no-fund` | Installs the e2e project's dependencies, in `e2e-dir`. |
-| `e2e-command` | no | `npx e2e run --target ios` | Captures one device's cells, in `e2e-dir`. Gets the [capture contract](#e2e-capture); must write every planned PNG and its report under `e2e-dir/.e2e`. |
+| `e2e-command` | no | `npx e2e run --target ios` | Captures one iOS device's cells, in `e2e-dir`. Gets the [capture contract](#e2e-capture); must write every planned PNG and its report under `e2e-dir/.e2e`. |
+| `e2e-android-command` | no | `npx e2e run --target android` | Captures one Android device's cells, in `e2e-dir`, under the same [capture contract](#e2e-capture) plus `SCREENSHOT_WIDTH`/`SCREENSHOT_HEIGHT`/`SCREENSHOT_DENSITY`. |
 | `e2e-workers` | no | `1` | Devices leased and cells captured at once per device entry (`E2E_WORKERS`), lowered to the farm's free capacity when the farm reports it. |
 | `e2e-retries` | no | `1` | Retries per failed cell inside the run (`E2E_RETRIES`). |
-| `simlock-url` | with `e2e` | `''` | Base URL of the simlock gateway the e2e capture leases simulators from (`SIMLOCK_URL`). |
+| `simlock-url` | with `e2e` | `''` | Base URL of the simlock gateway the e2e capture leases simulators and emulators from (`SIMLOCK_URL`). |
 | `simslim-version` | no | `0.12.2` | iOS capture jobs only. Pinned simslim CLI version, consulted only when `simulator-slim-profile` or `simulator-requires` is set. A `simslim` already on PATH is reused on an exact `simslim version` match; otherwise the `simslim-v<version>-macos-arm64.tar.gz` asset is downloaded from [MobAI-App/simslim releases](https://github.com/MobAI-App/simslim/releases) into `$HOME/.simslim-pinned`, verified against `simslim-sha256`, and extracted per job; preinstall on the host to avoid it. |
 | `simslim-sha256` | no | `b47302da6fb8...` | iOS capture jobs only. SHA-256 of the `simslim-v<simslim-version>-macos-arm64.tar.gz` release asset (default: the v0.12.2 digest, maintained here because upstream publishes no checksum file). The tarball cached under `$HOME/.simslim-pinned` is re-hashed against it on every job before the binary is extracted into a job-private directory, so no previously extracted executable is reused. Empty refuses to download, so only a preinstalled `simslim` of the exact version satisfies the job. Bump together with `simslim-version`. |
 | `simulator-slim-profile` | no | `bundled` | iOS capture jobs only. `bundled` uses mobile-ci's own [`profiles/ci.json`](../../profiles/ci.json) (App Store/push/StoreKit and Safari/universal-link services on, every other category off), so a consumer commits no profile of its own; a repository-relative path uses that profile instead. The booted simulator is checked with `simslim verify --profile` before the app is installed; any drift fails closed unless `simulator-slim-repair` is `true`. Empty opts out of slimming. See [Every simulator runs slim](../../docs/self-hosted-runners.md#every-simulator-runs-slim). |
@@ -1048,7 +1058,7 @@ always()` (or `!cancelled()`) to see a `failed` result:
 | `EAS_EXTRA_ENV`       | no       | Newline-separated `KEY=VALUE` pairs of secret env appended to `$GITHUB_ENV` at the start of the upload job, each value masked before being written - parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md), the same parser as `native-publish.yml`'s `EAS_EXTRA_ENV`. |
 | `build-secrets-env`   | no       | Masked `KEY=VALUE` entries (`KEY<<DELIMITER` for a multi-line value) exported after `build-env` in both plan/repack legs and the `build-ios`/`build-android` jobs, parsed by [`apply-secret-env`](../../actions/apply-secret-env/README.md). Only a SHA-256 digest enters the native key, never a value, so the warm-up must be passed the same secret. See [ios-maestro.md](ios-maestro.md#secrets). |
 | `maestro-secrets-env` | no       | Masked `KEY=VALUE` entries, one line each, appended to the resolved `maestro-env` and exported to the capture jobs' environment for `seed-command`. A capture job uploads only screenshots. |
-| `simlock-token` | with `test-framework: e2e` | simlock agent token (`SIMLOCK_TOKEN`) the e2e capture leases simulators with. Reaches only the e2e capture job's run and lease-release steps. A call that needs it and lacks it fails in `validate-manifest`. |
+| `simlock-token` | with `test-framework: e2e` | simlock agent token (`SIMLOCK_TOKEN`) the e2e capture leases devices with. Reaches only the e2e capture jobs' run and lease-release steps. A call that needs it and lacks it fails in `validate-manifest`. |
 
 Unlike `native-publish.yml`, none of these secrets are hard-required even
 when `upload-screenshots` is `true` - `upload-command` is entirely

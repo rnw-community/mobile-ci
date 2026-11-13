@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016 # the expected values are literal ${{ }} expressions.
 # store-screenshots' test-framework e2e: a consumer's tester-army e2e project
-# captures the iOS cells from a Linux runner against simlock instead of
-# Maestro on a macOS host. The manifest validation must refuse what the e2e
-# capture would silently drop (Maestro flows, a seed hook, Android, landscape),
-# the plan must hold exactly the cells the macOS capture would take, at its
-# raw/ios/<slug>/<locale>/<appearance>/<scene>.png paths, and neither an exit
-# code nor a report may stand in for a PNG that was never written.
+# captures the iOS and Android cells from a Linux runner against simlock
+# instead of Maestro on a macOS host or a local emulator. The manifest
+# validation must refuse what the e2e capture would silently drop (Maestro
+# flows, a seed hook, landscape), the plan must hold exactly the cells the
+# Maestro capture would take, at its
+# raw/<platform>/<slug>/<locale>/<appearance>/<scene>.png paths, and neither an
+# exit code nor a report may stand in for a PNG that was never written.
 set -euo pipefail
 
 # shellcheck source=tests/lib/harness.sh
@@ -75,14 +76,15 @@ if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")
     pass_case
 fi
 
-case_start 'e2e refuses Android entries and landscape'
-validate CAPTURE_MANIFEST='[{"platform":"android","device":"Pixel","locales":["en"],"appearances":["light"],"width":1080,"height":2400,"density":420}]' \
+case_start 'e2e accepts Android entries beside iOS ones, and refuses landscape'
+validate CAPTURE_MANIFEST='[{"platform":"android","device":"Phone","locales":["en"],"appearances":["dark"],"width":1080,"height":2100,"density":420},{"platform":"ios","device":"iPhone 17 Pro Max","locales":["en"],"appearances":["dark"]}]' \
     ANDROID_TARGET='{"name":"app","appDir":"apps/mobile","appId":"com.example.app"}'
 android_status="$STEP_STATUS"
 android_log="$(cat "$dir/log")"
+android_has="$(step_output "$dir" has-android)"
 validate CAPTURE_MANIFEST='[{"platform":"ios","device":"iPad Pro 13-inch (M5)","locales":["en"],"appearances":["light"],"orientation":"landscape"}]'
-if assert_equals 1 "$android_status" 'android status' \
-    && assert_contains "$android_log" 'captures iOS only' 'android error' \
+if assert_equals 0 "$android_status" "android status ($android_log)" \
+    && assert_equals true "$android_has" 'has-android' \
     && assert_equals 1 "$STEP_STATUS" 'landscape status' \
     && assert_contains "$(cat "$dir/log")" 'ask for landscape' 'landscape error'; then
     pass_case
@@ -92,7 +94,7 @@ fi
 plan() {
     dir="$(new_workflow_workspace "$WORKFLOW" capture-ios-e2e 'Plan the e2e capture cells')"
     mkdir -p "$dir/runner-temp"
-    run_step "$dir" CAPTURE_SCENES="$E2E_SCENES" DEVICE='iPhone 17 Pro Max' LOCALES='["en","de"]' \
+    run_step "$dir" PLATFORM=ios CAPTURE_SCENES="$E2E_SCENES" DEVICE='iPhone 17 Pro Max' LOCALES='["en","de"]' \
         APPEARANCES='["light","dark"]' SETTLE_SECONDS=4 OUTPUT_DIR="$dir/work/out" "$@"
 }
 
@@ -119,6 +121,19 @@ if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     pass_case
 fi
 
+case_start 'the Android plan keeps the android scenes at the raw/android layout the Maestro capture writes'
+dir="$(new_workflow_workspace "$WORKFLOW" capture-android-e2e 'Plan the e2e capture cells')"
+run_step "$dir" PLATFORM=android \
+    CAPTURE_SCENES='[{"name":"a","test":"a"},{"name":"b","test":"b","platforms":["ios"]},{"name":"c","deepLink":"app://c","readySelector":{"id":"C"},"platforms":["android"]}]' \
+    DEVICE='Tablet 10' LOCALES='["en","uk"]' APPEARANCES='["dark"]' SETTLE_SECONDS=4 OUTPUT_DIR="$dir/work/out"
+plan_file="$(step_output "$dir" plan)"
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 'tablet-10' "$(step_output "$dir" device-slug)" 'slug' \
+    && assert_equals 'a c a c' "$(jq -r 'map(.scene) | join(" ")' "$plan_file")" 'scenes' \
+    && assert_equals "$dir/work/out/raw/android/tablet-10/uk/dark/c.png" "$(jq -r '.[3].path' "$plan_file")" 'path'; then
+    pass_case
+fi
+
 case_start 'a plan the filters left empty fails closed'
 plan CAPTURE_SCENES='[{"name":"a","test":"a","locales":["fr"]}]'
 if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'No capture cell' 'error'; then
@@ -129,7 +144,7 @@ case_start 'stale captures from an earlier run are cleared'
 dir="$(new_workflow_workspace "$WORKFLOW" capture-ios-e2e 'Plan the e2e capture cells')"
 mkdir -p "$dir/runner-temp" "$dir/work/out/raw/ios/iphone-17-pro-max/en/light"
 printf 'old' > "$dir/work/out/raw/ios/iphone-17-pro-max/en/light/old.png"
-run_step "$dir" CAPTURE_SCENES="$E2E_SCENES" DEVICE='iPhone 17 Pro Max' LOCALES='["en"]' \
+run_step "$dir" PLATFORM=ios CAPTURE_SCENES="$E2E_SCENES" DEVICE='iPhone 17 Pro Max' LOCALES='["en"]' \
     APPEARANCES='["light"]' SETTLE_SECONDS=4 OUTPUT_DIR="$dir/work/out"
 if assert_equals 0 "$STEP_STATUS" 'status' \
     && assert_equals no "$([ -e "$dir/work/out/raw/ios/iphone-17-pro-max/en/light/old.png" ] && echo yes || echo no)" 'stale capture'; then
@@ -145,7 +160,7 @@ capture() {
     dir="$(new_workflow_workspace "$WORKFLOW" capture-ios-e2e 'Run the e2e capture')"
     mkdir -p "$dir/work/Base.app"
     stub "$dir" curl 'exit 7'
-    run_step "$dir" E2E_COMMAND="$1" E2E_APP_PATH="$dir/work/Base.app" E2E_APP_ID=com.example.app E2E_TARGET=app \
+    run_step "$dir" E2E_COMMAND="$1" E2E_PLATFORM=ios E2E_APP_PATH="$dir/work/Base.app" E2E_APP_ID=com.example.app E2E_TARGET=app \
         E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s SCREENSHOT_PLAN=plan.json SCREENSHOT_DEVICE=d \
         SCREENSHOT_DEVICE_SLUG=d SCREENSHOT_STATUS_BAR=override SIMLOCK_URL=http://farm.invalid SIMLOCK_TOKEN=t
 }
@@ -174,6 +189,32 @@ fi
 case_start 'a failing command keeps its exit status'
 capture 'exit 3'
 if assert_equals 3 "$STEP_STATUS" 'status'; then
+    pass_case
+fi
+
+# capture_android <app file> - the Android run step against a farm reporting 1 free emulator and 3 free simulators.
+capture_android() {
+    dir="$(new_workflow_workspace "$WORKFLOW" capture-android-e2e 'Run the e2e capture')"
+    printf 'apk' > "$dir/work/app-release.apk"
+    stub "$dir" curl "printf '%s' '{\"capacity\":{\"ios\":{\"limit\":3,\"used\":0},\"android\":{\"limit\":2,\"used\":1}}}'"
+    run_step "$dir" E2E_COMMAND="printf '%s %s' \"\$E2E_PLATFORM\" \"\$E2E_WORKERS\" > seen && mkdir -p .e2e && printf '%s' '$(report passed 2 0)' > .e2e/report.json" \
+        E2E_PLATFORM=android E2E_APP_PATH="$dir/work/$1" E2E_APP_ID=com.example.app E2E_TARGET=app \
+        E2E_WORKERS=4 E2E_RETRIES=0 E2E_SESSION=s SCREENSHOT_PLAN=plan.json SCREENSHOT_DEVICE=Phone \
+        SCREENSHOT_DEVICE_SLUG=phone SCREENSHOT_STATUS_BAR=override SCREENSHOT_WIDTH=1080 SCREENSHOT_HEIGHT=2100 \
+        SCREENSHOT_DENSITY=420 SIMLOCK_URL=http://farm.invalid SIMLOCK_TOKEN=t
+}
+
+case_start 'the Android capture runs the .apk on the farm'"'"'s free Android capacity'
+capture_android app-release.apk
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 'android 1' "$(cat "$dir/work/seen")" 'platform and workers' \
+    && assert_contains "$(cat "$dir/log")" '1 free android devices' 'notice'; then
+    pass_case
+fi
+
+case_start 'the Android capture fails closed without the .apk'
+capture_android missing.apk
+if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'The capture app is not at' 'error'; then
     pass_case
 fi
 
@@ -216,13 +257,38 @@ print(result if isinstance(result, str) else json.dumps(result, sort_keys=True),
 ' 2>&1 || true
 }
 
-case_start 'exactly one iOS capture job runs per test-framework, and upload and status read that one'
-if assert_contains "$(query 'jobs["capture-ios"]["if"]')" "inputs.test-framework != 'e2e'" 'maestro capture gate' \
-    && assert_contains "$(query 'jobs["capture-ios-e2e"]["if"]')" "inputs.test-framework == 'e2e'" 'e2e capture gate' \
-    && assert_contains "$(query 'jobs["upload"]["if"]')" "needs.capture-ios-e2e.result" 'upload gate' \
-    && assert_contains "$(query '[s for s in jobs["status"]["steps"] if s.get("id") == "report"][0]["env"]["CAPTURE_IOS_RESULT"]')" \
-        "needs.capture-ios-e2e.result" 'status' \
-    && assert_contains "$(query 'jobs["status"]["needs"]')" 'capture-ios-e2e' 'status needs'; then
+case_start 'exactly one capture job per platform runs per test-framework, and upload and status read that one'
+ok=true
+for pair in 'ios|capture-ios|CAPTURE_IOS_RESULT' 'android|capture-android|CAPTURE_ANDROID_RESULT'; do
+    platform="${pair%%|*}"
+    rest="${pair#*|}"
+    job="${rest%%|*}"
+    variable="${rest#*|}"
+    if ! { assert_contains "$(query "jobs[\"$job\"][\"if\"]")" "inputs.test-framework != 'e2e'" "$platform maestro capture gate" \
+        && assert_contains "$(query "jobs[\"$job-e2e\"][\"if\"]")" "inputs.test-framework == 'e2e'" "$platform e2e capture gate" \
+        && assert_contains "$(query 'jobs["upload"]["if"]')" "needs.$job-e2e.result" "$platform upload gate" \
+        && assert_contains "$(query 'jobs["upload"]["needs"]')" "\"$job-e2e\"" "$platform upload needs" \
+        && assert_contains "$(query "[s for s in jobs[\"upload\"][\"steps\"] if s.get(\"name\") == \"Validate required inputs and capture results\"][0][\"env\"][\"$variable\"]")" \
+            "needs.$job-e2e.result" "$platform upload result" \
+        && assert_contains "$(query "[s for s in jobs[\"status\"][\"steps\"] if s.get(\"id\") == \"report\"][0][\"env\"][\"$variable\"]")" \
+            "needs.$job-e2e.result" "$platform status" \
+        && assert_contains "$(query 'jobs["status"]["needs"]')" "\"$job-e2e\"" "$platform status needs"; }; then
+        ok=false
+    fi
+done
+if [ "$ok" = true ]; then
+    pass_case
+fi
+
+case_start 'the Android e2e capture uses the Maestro lane'"'"'s apk and artifact names, and e2e-android-command'
+# shellcheck disable=SC2016
+if assert_equals '[]' "$(query '[p for p in [
+        [s for s in jobs["capture-android-e2e"]["steps"] if "download-artifact" in s.get("uses", "")][0]["with"] != [s for s in jobs["capture-android"]["steps"] if "download-artifact" in s.get("uses", "")][0]["with"] and "download",
+        [s for s in jobs["capture-android-e2e"]["steps"] if s.get("name") == "Run the e2e capture"][0]["env"]["E2E_COMMAND"] != "${{ inputs.e2e-android-command }}" and "command",
+        not [s for s in jobs["capture-android-e2e"]["steps"] if s.get("name") == "Run the e2e capture"][0]["env"]["E2E_APP_PATH"].endswith("/app-release.apk") and "apk",
+        [s["with"]["name"] for s in jobs["capture-android-e2e"]["steps"] if s.get("name", "").startswith("Upload raw screenshots")] != [s["with"]["name"].replace("steps.capture.", "steps.plan.") for s in jobs["capture-android"]["steps"] if s.get("name", "").startswith("Upload raw screenshots")] and "raw artifact",
+        jobs["capture-android-e2e"]["strategy"]["matrix"]["entry"] != "${{ fromJSON(needs.validate-manifest.outputs.android-entries) }}" and "matrix",
+    ] if p]')" 'mismatches'; then
     pass_case
 fi
 
