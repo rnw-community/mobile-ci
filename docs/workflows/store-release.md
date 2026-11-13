@@ -144,7 +144,7 @@ jobs:
     release:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-release.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/store-release.yml@v4.13.0 # v4.13.0
         with:
             platforms: ios,android
             ios-app-id: '1234567890'
@@ -177,7 +177,7 @@ jobs:
     release:
         permissions:
             contents: read
-        uses: rnw-community/mobile-ci/.github/workflows/store-release.yml@v4.12.4 # v4.12.4
+        uses: rnw-community/mobile-ci/.github/workflows/store-release.yml@v4.13.0 # v4.13.0
         with:
             platforms: ios,android
             dry-run: ${{ inputs.dry-run }}

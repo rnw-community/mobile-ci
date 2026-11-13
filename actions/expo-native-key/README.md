@@ -57,7 +57,7 @@ contract and what the ignore list does and does not cover.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/expo-native-key@v4.12.4 # v4.12.4
+- uses: rnw-community/mobile-ci/actions/expo-native-key@v4.13.0 # v4.13.0
   id: key
   with:
       platform: ios
