@@ -155,7 +155,7 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
-- **v4.13.1** — the iOS `e2e` job (`ios-maestro.yml`) and `capture-ios-e2e`
+- **v4.13.1** — the iOS `e2e` and `test` jobs (`ios-maestro.yml`) and `capture-ios-e2e`
   (`store-screenshots.yml`) find the app wherever it was stored. They read the
   runner's own artifact store first and fall back to GitHub's when that has no copy.
   This is needed when a self-hosted Linux runner keeps artifacts in a local store

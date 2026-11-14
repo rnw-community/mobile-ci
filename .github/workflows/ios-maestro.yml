@@ -1419,6 +1419,9 @@ jobs:
         name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        permissions:
+            contents: read
+            actions: read
         runs-on: ${{ fromJSON(inputs.ios-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
         timeout-minutes: ${{ inputs.test-timeout-minutes }}
         strategy:
@@ -1528,10 +1531,20 @@ jobs:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
 
-            - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+            - name: Download the app from this runner's artifact store
+              id: app-local
+              continue-on-error: true
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
                   name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
                   path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+            - name: Download the app from GitHub when another runner class built it
+              if: steps.app-local.outcome == 'failure'
+              uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+              with:
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  github-token: ${{ github.token }}
 
             - name: Unpack app
               shell: bash
