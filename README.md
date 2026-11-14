@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.13.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.13.1`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.0 # v4.13.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.1 # v4.13.1
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.0 # v4.13.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.1 # v4.13.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,11 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.13.1** — the iOS `e2e` job (`ios-maestro.yml`) and `capture-ios-e2e`
+  (`store-screenshots.yml`) find the app wherever it was stored. They read the
+  runner's own artifact store first and fall back to GitHub's when that has no copy.
+  This is needed when a self-hosted Linux runner keeps artifacts in a local store
+  while the macOS build job uploads to GitHub.
 - **v4.13.0** — `store-screenshots.yml` captures Android with `test-framework: e2e`: a new
   `capture-android-e2e` job runs the consumer's e2e project against simlock-farm emulators (input
   `e2e-android-command`), with the same plan, report and PNG checks as iOS and the Maestro lane's
@@ -528,7 +533,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.0 # v4.13.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.13.1 # v4.13.1
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -601,7 +606,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.13.0 # v4.13.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.13.1 # v4.13.1
 ```
 
 ## Scope
@@ -647,7 +652,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.13.0 # v4.13.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.13.1 # v4.13.1`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.
