@@ -2460,6 +2460,9 @@ jobs:
         name: Capture iOS with e2e (${{ matrix.entry.device }})
         needs: [validate-manifest, plan-ios, build-ios]
         if: ${{ !cancelled() && inputs.test-framework == 'e2e' && needs.validate-manifest.outputs.has-ios == 'true' && needs.plan-ios.result == 'success' && (needs.build-ios.result == 'success' || needs.build-ios.result == 'skipped') }}
+        permissions:
+            contents: read
+            actions: read
         runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.control-runner-labels) }}
         timeout-minutes: ${{ inputs.capture-timeout-minutes }}
         strategy:

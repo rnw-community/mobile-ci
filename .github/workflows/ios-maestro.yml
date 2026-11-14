@@ -1694,6 +1694,9 @@ jobs:
         name: E2E suite (${{ matrix.target.name }})
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'maestro' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+        permissions:
+            contents: read
+            actions: read
         runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.repack-runner-labels) }}
         timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
         strategy:
