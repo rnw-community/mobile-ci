@@ -2,7 +2,7 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "https://raw.githubusercontent.com/rnw-community/mobile-ci/main/schemas/store-screenshots.schema.json",
     "title": "rnw-community/mobile-ci store-screenshots.yml consumer config",
-    "description": "Config file loaded by store-screenshots.yml's config-path input. Keys are workflow input names; JSON-blob inputs take the real JSON structure. Editor autocomplete only - CI validation is the workflow's own fail-closed jq allowlist, which is the source of truth.",
+    "description": "Config file loaded by store-screenshots.yml's config-path input. Keys are workflow input names; JSON-blob inputs take the real JSON structure. call-scope is caller-only and is not a config key. Editor autocomplete only - CI validation is the workflow's own fail-closed jq allowlist, which is the source of truth.",
     "type": "object",
     "additionalProperties": false,
     "definitions": {

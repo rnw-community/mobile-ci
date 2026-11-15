@@ -155,6 +155,10 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **Unreleased** — `store-screenshots.yml` accepts `call-scope` to isolate each
+  brand/platform call's artifacts, plans, per-run concurrency and capture sessions.
+  Uploads collect only that call's screenshots; an empty scope keeps existing names.
+
 - **v4.14.0** — `rerun-infra-failures` takes `scope: all` to re-run the whole run instead
   of only its failed jobs. A fleet whose artifact store scopes artifacts to one run
   attempt needs it: a re-run job there cannot download what attempt 1's jobs uploaded.

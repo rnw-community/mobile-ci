@@ -34,6 +34,15 @@ else
     fail_case "$output"
 fi
 
+case_start 'the documented store-screenshots caller accepts call-scope'
+sed -e '/^            call-scope:/d' -e '/^            ios-target: >-$/i\            call-scope: brand-a-ios' \
+    "$REPO_ROOT/docs/workflows/store-screenshots.md" > "$scratch/scoped-screenshots.md"
+if output="$(python3 "$CHECKER" "$REPO_ROOT" "$scratch/scoped-screenshots.md" 2>&1)"; then
+    pass_case
+else
+    fail_case "$output"
+fi
+
 sed 's/^            flows-dir: apps\/mobile\/e2e\/flows$/&\n            flows-directory: apps\/mobile\/e2e\/flows/' "$EXAMPLE" > "$scratch/unknown-input.yml"
 expect_rejected 'an example passing an input the workflow does not declare is rejected' \
     "$scratch/unknown-input.yml" "has no input 'flows-directory'"
