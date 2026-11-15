@@ -33,18 +33,23 @@ def freshness(api, repository, run):
         branch, sha = run['head_branch'], run['head_sha']
         if not branch or not sha:
             raise ValueError('missing run head branch or SHA')
+        current_pulls = set()
         if run['event'] in ('pull_request', 'pull_request_target'):
             pulls = run.get('pull_requests') or []
+            if not pulls and run['event'] == 'pull_request_target':
+                raise ValueError('missing target run PR association')
             if not pulls:
                 owner = run['head_repository']['owner']['login']
                 query = urlencode({'state': 'open', 'head': f'{owner}:{branch}'})
                 pulls = checked_pages(api, f'/repos/{repository}/pulls?{query}')
-            current = False
             for pull in pulls:
                 detail = api.get(f"/repos/{repository}/pulls/{pull['number']}", False)
-                if detail['state'] == 'open' and detail['head']['sha'] == sha:
-                    current = True
-            if not current:
+                if not detail['head']['sha']:
+                    raise ValueError('missing PR head SHA')
+                trigger_sha = pull.get('head', {}).get('sha') if run['event'] == 'pull_request_target' else sha
+                if detail['state'] == 'open' and (not trigger_sha or detail['head']['sha'] == trigger_sha):
+                    current_pulls.add(pull['number'])
+            if not current_pulls:
                 return 'superseded', 'the run head is no longer the head of an associated open PR'
         elif run['event'] == 'push':
             ref = api.get(f'/repos/{repository}/git/ref/heads/{quote(branch, safe="")}', False)
@@ -54,6 +59,10 @@ def freshness(api, repository, run):
         runs = checked_pages(api, f"/repos/{repository}/actions/workflows/{run['workflow_id']}/runs?{query}", 'workflow_runs')
         for candidate in runs:
             if candidate['run_number'] > run['run_number']:
+                if candidate['event'] != run['event'] or candidate['head_sha'] == sha:
+                    continue
+                if current_pulls and not current_pulls.intersection(pull['number'] for pull in candidate['pull_requests']):
+                    continue
                 if candidate.get('head_repository', {}).get('full_name') != run.get('head_repository', {}).get('full_name'):
                     continue
                 return 'superseded', f"newer workflow run {candidate['id']} exists on this branch"
