@@ -944,6 +944,18 @@ on:
                 required: false
                 default: true
 
+            call-scope:
+                description: >-
+                    Names this call's artifacts, plans and concurrency group, so a caller
+                    can run this workflow several times in one run, e.g. once per package
+                    in a matrix, without the calls overwriting or cancelling each other.
+                    Calls that share a run must each set a distinct, non-empty value.
+                    Letters, digits, '.', '_' and single '-' between them. Empty (default)
+                    keeps today's names.
+                type: string
+                required: false
+                default: ''
+
         secrets:
             EXPO_TOKEN:
                 description: Expo access token, forwarded to the upload job's environment if upload-command needs it.
@@ -1002,7 +1014,7 @@ on:
                 value: ${{ jobs.status.outputs.result }}
 
 concurrency:
-    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+    group: store-screenshots-${{ github.workflow }}-${{ inputs.config-path }}-${{ inputs.screenshots-dir }}${{ inputs.call-scope != '' && format('-{0}-', inputs.call-scope) || '' }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
     cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -1013,6 +1025,7 @@ jobs:
         name: Validate capture manifest and scenes
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
         outputs:
+            artifact-scope: ${{ steps.scope.outputs.artifact-scope }}
             has-ios: ${{ steps.validate.outputs.has-ios }}
             has-android: ${{ steps.validate.outputs.has-android }}
             ios-entries: ${{ steps.validate.outputs.ios-entries }}
@@ -1047,6 +1060,19 @@ jobs:
             asc-dedupe-app-id: ${{ steps.resolve.outputs.asc-dedupe-app-id }}
             asc-fail-on-duplicates: ${{ steps.resolve.outputs.asc-fail-on-duplicates }}
         steps:
+            - name: Validate call-scope
+              id: scope
+              shell: bash
+              env:
+                  CALL_SCOPE: ${{ inputs.call-scope }}
+              run: |
+                  set -euo pipefail
+                  if [ -n "$CALL_SCOPE" ] && ! [[ "$CALL_SCOPE" =~ ^[A-Za-z0-9._]+(-[A-Za-z0-9._]+)*$ ]]; then
+                    echo "::error::call-scope '$CALL_SCOPE' must be letters, digits, '.' and '_', with single '-' only between them, so no two calls' artifact names can collide."
+                    exit 1
+                  fi
+                  echo "artifact-scope=${CALL_SCOPE:+-$CALL_SCOPE-}" >> "$GITHUB_OUTPUT"
+
             - name: Check out the consumer config file
               if: inputs.config-path != ''
               uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -1648,8 +1674,8 @@ jobs:
             build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
             runner-labels: ${{ inputs.repack-runner-labels }}
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
-            app-artifact-prefix: store-screenshots-app
-            plan-artifact-prefix: store-screenshots-ios-plan
+            app-artifact-prefix: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}
+            plan-artifact-prefix: store-screenshots-ios-plan${{ needs.validate-manifest.outputs.artifact-scope }}
             toolchain: xcode-${{ inputs.xcode-version }}-${{ inputs.xcode-build }}${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore == 'true' && '-rncore' || '' }}${{ needs.validate-manifest.outputs.rct-use-rn-dep == 'true' && '-rndep' || '' }}${{ inputs.expo-use-precompiled-modules && '-precompiled' || '' }}
             ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
             base-backend: ${{ inputs.base-backend }}
@@ -1682,7 +1708,7 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.target.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
@@ -1973,17 +1999,18 @@ jobs:
             - name: Archive app for the capture job
               shell: bash
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   TARGET_NAME: ${{ matrix.target.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
                   mkdir -p .ci-artifacts
-                  tar -czf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
+                  tar -czf ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}.tar.gz" -C ".ci-cache/ios-native-app/${TARGET_NAME}" Base.app
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-app-${{ matrix.target.name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ matrix.target.name }}.tar.gz
+                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
                   retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
@@ -1994,7 +2021,7 @@ jobs:
                   flavor: ${{ inputs.base-flavor }}
                   key: ${{ matrix.target.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-artifacts/store-screenshots-app-${{ matrix.target.name }}.tar.gz
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
 
             - name: Report that this key is now warm
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
@@ -2002,8 +2029,9 @@ jobs:
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
                   NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
               run: |
-                  echo "### iOS ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "### iOS${ARTIFACT_SCOPE:-} ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Runs on this native surface now repack instead of compiling.' >> "$GITHUB_STEP_SUMMARY"
 
     plan-android:
@@ -2023,8 +2051,8 @@ jobs:
             build-strategy: ${{ needs.validate-manifest.outputs.build-strategy }}
             runner-labels: ${{ inputs.repack-runner-labels }}
             timeout-minutes: ${{ inputs.repack-timeout-minutes }}
-            app-artifact-prefix: store-screenshots-apk
-            plan-artifact-prefix: store-screenshots-android-plan
+            app-artifact-prefix: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}
+            plan-artifact-prefix: store-screenshots-android-plan${{ needs.validate-manifest.outputs.artifact-scope }}
             toolchain: cmdline-${{ inputs.android-cmdline-tools-version }}-${{ needs.validate-manifest.outputs.android-gradle-task }}${{ needs.validate-manifest.outputs.android-gradle-args != '' && format('-{0}', needs.validate-manifest.outputs.android-gradle-args) || '' }}
             base-backend: ${{ inputs.base-backend }}
             base-flavor: ${{ inputs.base-flavor }}
@@ -2063,7 +2091,7 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.target.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
@@ -2292,7 +2320,7 @@ jobs:
             - name: Upload the APK for the capture job
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-apk-${{ matrix.target.name }}
+                  name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}
                   path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
                   if-no-files-found: error
                   retention-days: 1
@@ -2314,8 +2342,9 @@ jobs:
               env:
                   TARGET_NAME: ${{ matrix.target.name }}
                   NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
               run: |
-                  echo "### Android ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
+                  echo "### Android${ARTIFACT_SCOPE:-} ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Runs on this native surface now repack instead of running Gradle.' >> "$GITHUB_STEP_SUMMARY"
 
     capture-ios:
@@ -2389,14 +2418,15 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
 
             - name: Unpack app
               shell: bash
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-              run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
+              run: tar -xzf ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}"
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
@@ -2411,7 +2441,7 @@ jobs:
               id: capture
               uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.14.0 # v4.14.0
               with:
-                  app-path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  app-path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
                   seed-command: ${{ needs.validate-manifest.outputs.seed-command }}
@@ -2451,7 +2481,7 @@ jobs:
               if: always() && steps.capture.outputs.device-slug != ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}
+                  name: raw-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-ios-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
                   if-no-files-found: warn
                   retention-days: 14
@@ -2486,20 +2516,21 @@ jobs:
               continue-on-error: true
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
             - name: Download the app from GitHub when another runner class built it
               if: steps.app-local.outcome == 'failure'
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-                  path: .ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
                   github-token: ${{ github.token }}
             - name: Unpack app
               shell: bash
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
-              run: tar -xzf ".ci-artifacts/store-screenshots-app-${TARGET_NAME}/store-screenshots-app-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app-${TARGET_NAME}"
+              run: tar -xzf ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}"
             - name: Apply maestro-secrets-env to the e2e capture
               uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.14.0 # v4.14.0
               with:
@@ -2578,14 +2609,15 @@ jobs:
               shell: bash
               working-directory: ${{ inputs.e2e-dir }}
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   E2E_COMMAND: ${{ inputs.e2e-command }}
                   E2E_PLATFORM: ios
-                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
+                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   E2E_APP_ID: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   E2E_TARGET: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
                   E2E_WORKERS: ${{ inputs.e2e-workers }}
                   E2E_RETRIES: ${{ inputs.e2e-retries }}
-                  E2E_SESSION: screenshots-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.plan.outputs.device-slug }}
+                  E2E_SESSION: screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.plan.outputs.device-slug }}
                   E2E_TELEMETRY_DISABLED: '1'
                   SCREENSHOT_PLAN: ${{ steps.plan.outputs.plan }}
                   SCREENSHOT_DEVICE: ${{ matrix.entry.device }}
@@ -2624,7 +2656,7 @@ jobs:
                   bash -c "$E2E_COMMAND" || status=$?
                   echo "E2E capture exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
                   if [ -f .e2e/summary.md ]; then
-                    { echo "### E2E $E2E_PLATFORM capture (${SCREENSHOT_DEVICE})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+                    { echo "### E2E $E2E_PLATFORM${ARTIFACT_SCOPE:-} capture (${SCREENSHOT_DEVICE})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
                   fi
                   # An exit code of 0 is not evidence that cells ran: the report must say so.
                   if [ "$status" = 0 ]; then
@@ -2688,7 +2720,7 @@ jobs:
               if: always() && steps.plan.outputs.device-slug != ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: raw-screenshots-ios-${{ steps.plan.outputs.device-slug }}
+                  name: raw-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-ios-${{ steps.plan.outputs.device-slug }}
                   path: screenshots-output/raw/**
                   if-no-files-found: warn
                   retention-days: 14
@@ -2696,7 +2728,7 @@ jobs:
               if: ${{ always() && steps.run.outcome != 'skipped' }}
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: e2e-screenshots-ios-${{ steps.plan.outputs.device-slug }}
+                  name: e2e-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-ios-${{ steps.plan.outputs.device-slug }}
                   path: ${{ inputs.e2e-dir }}/.e2e
                   retention-days: 14
                   include-hidden-files: true
@@ -2726,8 +2758,8 @@ jobs:
                   node-version: ${{ inputs.e2e-node-version }}
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  path: .ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
             - name: Apply maestro-secrets-env to the e2e capture
               uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.14.0 # v4.14.0
               with:
@@ -2806,14 +2838,15 @@ jobs:
               shell: bash
               working-directory: ${{ inputs.e2e-dir }}
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   E2E_COMMAND: ${{ inputs.e2e-android-command }}
                   E2E_PLATFORM: android
-                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
+                  E2E_APP_PATH: ${{ github.workspace }}/.ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   E2E_APP_ID: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
                   E2E_TARGET: ${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
                   E2E_WORKERS: ${{ inputs.e2e-workers }}
                   E2E_RETRIES: ${{ inputs.e2e-retries }}
-                  E2E_SESSION: screenshots-android-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.plan.outputs.device-slug }}
+                  E2E_SESSION: screenshots-android${{ needs.validate-manifest.outputs.artifact-scope }}-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.plan.outputs.device-slug }}
                   E2E_TELEMETRY_DISABLED: '1'
                   SCREENSHOT_PLAN: ${{ steps.plan.outputs.plan }}
                   SCREENSHOT_DEVICE: ${{ matrix.entry.device }}
@@ -2855,7 +2888,7 @@ jobs:
                   bash -c "$E2E_COMMAND" || status=$?
                   echo "E2E capture exited $status after $(( $(date +%s) - started ))s with $E2E_WORKERS workers."
                   if [ -f .e2e/summary.md ]; then
-                    { echo "### E2E $E2E_PLATFORM capture (${SCREENSHOT_DEVICE})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+                    { echo "### E2E $E2E_PLATFORM${ARTIFACT_SCOPE:-} capture (${SCREENSHOT_DEVICE})"; cat .e2e/summary.md; } >> "$GITHUB_STEP_SUMMARY"
                   fi
                   # An exit code of 0 is not evidence that cells ran: the report must say so.
                   if [ "$status" = 0 ]; then
@@ -2919,7 +2952,7 @@ jobs:
               if: always() && steps.plan.outputs.device-slug != ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: raw-screenshots-android-${{ steps.plan.outputs.device-slug }}
+                  name: raw-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-android-${{ steps.plan.outputs.device-slug }}
                   path: screenshots-output/raw/**
                   if-no-files-found: warn
                   retention-days: 14
@@ -2927,7 +2960,7 @@ jobs:
               if: ${{ always() && steps.run.outcome != 'skipped' }}
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: e2e-screenshots-android-${{ steps.plan.outputs.device-slug }}
+                  name: e2e-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-android-${{ steps.plan.outputs.device-slug }}
                   path: ${{ inputs.e2e-dir }}/.e2e
                   retention-days: 14
                   include-hidden-files: true
@@ -2956,8 +2989,8 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
-                  path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
+                  path: .ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
 
             - name: Validate android-driver against this runner
               shell: bash
@@ -2994,7 +3027,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/redroid-container@v4.14.0 # v4.14.0
               with:
                   mode: start
-                  container-name: redroid-screenshots-${{ strategy.job-index }}
+                  container-name: redroid-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-${{ strategy.job-index }}
                   image: ${{ inputs.redroid-image }}
                   memory: ${{ inputs.redroid-memory }}
                   cpus: ${{ inputs.redroid-cpus }}
@@ -3025,7 +3058,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.14.0 # v4.14.0
               with:
                   android-serial: ${{ inputs.android-driver == 'avd' && steps.emulator.outputs.android-serial || steps.redroid.outputs.android-serial }}
-                  apk-path: .ci-artifacts/store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
+                  apk-path: .ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.android-target).appId }}
                   scenes: ${{ needs.validate-manifest.outputs.capture-scenes }}
                   screenshots-dir: ${{ needs.validate-manifest.outputs.screenshots-dir }}
@@ -3057,7 +3090,7 @@ jobs:
               if: always() && steps.capture.outputs.device-slug != ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: raw-screenshots-android-${{ steps.capture.outputs.device-slug }}
+                  name: raw-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-android-${{ steps.capture.outputs.device-slug }}
                   path: screenshots-output/raw/**
                   if-no-files-found: warn
                   retention-days: 14
@@ -3067,7 +3100,7 @@ jobs:
               uses: rnw-community/mobile-ci/actions/redroid-container@v4.14.0 # v4.14.0
               with:
                   mode: teardown
-                  container-name: redroid-screenshots-${{ strategy.job-index }}
+                  container-name: redroid-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-${{ strategy.job-index }}
 
             - name: android-emulator (stop)
               if: always() && inputs.android-driver == 'avd'
@@ -3299,7 +3332,7 @@ jobs:
             - name: Download raw screenshots
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  pattern: raw-screenshots-*
+                  pattern: raw-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-*
                   path: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
                   merge-multiple: true
 
@@ -3316,6 +3349,7 @@ jobs:
               if: needs.validate-manifest.outputs.apple-screenshot-slots != ''
               shell: bash
               env:
+                  ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
                   APPLE_SCREENSHOT_SLOTS: ${{ needs.validate-manifest.outputs.apple-screenshot-slots }}
                   DOWNLOAD_ROOT: ${{ needs.validate-manifest.outputs.ios-target != '' && fromJSON(needs.validate-manifest.outputs.ios-target).appDir || fromJSON(needs.validate-manifest.outputs.android-target).appDir }}/${{ needs.validate-manifest.outputs.screenshots-download-dir }}
               run: |
@@ -3372,7 +3406,7 @@ jobs:
                           print(f"::error::'{path}' ({resolution}) does not resolve to any apple-screenshot-slots entry (WxH and HxW both checked).")
                       sys.exit(1)
                   with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
-                      f.write('### apple-screenshot-slots coverage\n')
+                      f.write(f"### apple-screenshot-slots{os.environ.get('ARTIFACT_SCOPE', '')} coverage\n")
                       f.write('| Slot | Screenshots |\n')
                       f.write('| --- | --- |\n')
                       for label in sorted(counts):

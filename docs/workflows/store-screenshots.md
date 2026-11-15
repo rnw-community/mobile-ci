@@ -60,6 +60,28 @@ The normal outcome of a run is that **no build slot is taken at all**: the
 plan job repacks a published base on Linux and the capture jobs install what
 it uploaded. See [Build strategy](#build-strategy) below.
 
+## call-scope
+
+When a brand × platform matrix calls this workflow several times in one run,
+pass a distinct, non-empty `call-scope` for each call, for example
+`${{ matrix.brand }}-${{ matrix.platform }}`. Letters, digits, `.`, `_` and
+single `-` between them are accepted; invalid values fail before planning.
+This is a caller input only, not a `config-path` key.
+
+The same convention as `ios-maestro.yml` and `android-maestro.yml` inserts
+`-<call-scope>-` into app, plan, raw capture and e2e report artifact names.
+For `call-scope: brand-a`, a raw iOS artifact is
+`raw-screenshots-brand-a--ios-<device-slug>`; the upload job merges only
+`raw-screenshots-brand-a--*`. Both Maestro and e2e captures use this scope,
+as do per-run concurrency groups, e2e sessions, Redroid containers and
+summary headings. Native-key publication locks remain shared across calls
+so two builds cannot publish the same base concurrently.
+
+The default empty scope preserves existing artifact names, download patterns,
+concurrency groups and summaries byte for byte. Screenshot paths inside the
+artifacts are unchanged. Every call sharing a run must opt into a distinct
+scope; leaving one unscoped retains its broad legacy download pattern.
+
 ## capture-manifest
 
 One capture job per entry. `platform` defaults to `"ios"` (v1.5.x manifests
@@ -856,6 +878,7 @@ loadable from `config-path`; for those, the declared `default:` in
 
 | Name                          | Required | Default                             | Description |
 | -------------------------------- | -------- | -------------------------------------- | -------------- |
+| `call-scope` | no | `''` | Unique caller-only scope per brand/platform call; scopes artifacts, plans and per-run concurrency. See [call-scope](#call-scope). |
 | `config-path`                      | no       | `''`                                     | Repository-relative path to a JSON config file holding this workflow's app-shaped configuration; see [Config file](#config-file). Empty (the default) changes nothing. |
 | `runner-labels`                    | no       | `["self-hosted","macOS","ARM64"]`         | JSON array of self-hosted runner labels for the iOS build/capture jobs. |
 | `control-runner-labels` | no | `'["ubuntu-latest"]'` | JSON array of runner labels for the lightweight control jobs (detect/status/collect/validate-manifest/cancel-queued-runs), which need no self-hosted hardware. Set it when the org has no hosted runners, e.g. an ephemeral RunsOn label set; it is passed on to `expo-base-plan.yml` by the workflows that call it. |
@@ -1172,6 +1195,7 @@ jobs:
             actions: read
         uses: rnw-community/mobile-ci/.github/workflows/store-screenshots.yml@v4.14.0 # v4.14.0
         with:
+            call-scope: brand-a
             ios-target: >-
                 {"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}
             android-target: >-

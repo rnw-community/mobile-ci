@@ -267,7 +267,7 @@ for name in ('ios-maestro', 'android-maestro', 'store-screenshots', 'seed-native
             r"\$\{\{ \((?P<cond>.+)\) && format\('expo-base-publish-\{0\}-(?P<platform>[a-z]+)-\{1\}-\{2\}', github\.repository, inputs\.base-flavor, matrix\.target\.nativeKey\)"
             r" \|\| format\('expo-base-build-\{0\}-\{1\}-(?P<job>[a-z]+)"
             r"(?:-\{2\}', github\.run_id, github\.run_attempt, matrix\.target\.name"
-            r"|\{2\}-\{3\}', github\.run_id, github\.run_attempt, needs\.detect\.outputs\.artifact-scope, matrix\.target\.name)\) \}\}",
+            r"|\{2\}-\{3\}', github\.run_id, github\.run_attempt, needs\.(?:detect|validate-manifest)\.outputs\.artifact-scope, matrix\.target\.name)\) \}\}",
             group,
         )
         if not match:
