@@ -42,7 +42,7 @@ PYTHON
 }
 classify() {
     run_step "$workspace" GITHUB_ACTION_PATH="$REPO_ROOT/actions/rerun-infra-failures" CI_METRICS_FIXTURES="$fixtures" \
-        GH_TOKEN=token REPOSITORY=o/r RUN_ID=7 MAX_ATTEMPTS=1 DRY_RUN=false "$@"
+        GH_TOKEN=token REPOSITORY=o/r RUN_ID=7 MAX_ATTEMPTS=1 DRY_RUN=false SCOPE=failed-jobs "$@"
 }
 posts() {
     cat "$fixtures/posts.log" 2>/dev/null || true
@@ -217,14 +217,20 @@ if assert_equals nothing-failed "$passed" 'successful run' \
     && assert_equals not-finished "$(step_output "$workspace" decision)" 'unfinished run' \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
+case_start 'scope all re-runs the whole run, so a failed job can download what an earlier attempt uploaded'
+scenario "$FAILED" "1|Android E2E / E2E suite (e2e)|failure|$LOST"
+classify SCOPE=all
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun' "$(posts)" 'rerun request'; then pass_case; fi
+
 case_start 'malformed inputs fail closed before any request'
 scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST"
 statuses=''
-for override in 'RUN_ID=abc' 'REPOSITORY=bad' 'MAX_ATTEMPTS=0' 'DRY_RUN=yes'; do
+for override in 'RUN_ID=abc' 'REPOSITORY=bad' 'MAX_ATTEMPTS=0' 'DRY_RUN=yes' 'SCOPE=failed'; do
     classify "$override"
     statuses="$statuses$STEP_STATUS"
 done
-if assert_equals 1111 "$statuses" statuses && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+if assert_equals 11111 "$statuses" statuses && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'the action re-runs with the classifier the metrics report uses'
 assert_contains "$(cat "$REPO_ROOT/actions/rerun-infra-failures/rerun.py")" "'scripts' / 'ci-metrics.py'" 'shared classifier' && pass_case

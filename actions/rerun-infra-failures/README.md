@@ -21,6 +21,12 @@ or a concurrency group: `nothing-failed`, whatever else failed in it. Have the
 `workflow_run` job run for `cancelled` too, or a timed-out run never reaches the
 action.
 
+A re-run job downloads what earlier jobs uploaded through the artifact store
+the run used. A runner fleet whose own store scopes artifacts to one run
+attempt cannot serve attempt 1's uploads to attempt 2, so a re-run of failed
+jobs alone fails at its download. Such a fleet sets `scope: all`: the whole run
+starts again and every artifact is uploaded anew.
+
 ## Inputs
 
 | Input | Default | Description |
@@ -29,6 +35,7 @@ action.
 | `repository` | `${{ github.repository }}` | `owner/name` of the run. |
 | `max-attempts` | `1` | Automatic retries per run; a run whose attempt is above this is left alone. |
 | `dry-run` | `false` | `true` classifies and reports without re-running. |
+| `scope` | `failed-jobs` | `failed-jobs` re-runs the failed jobs and their dependents; `all` re-runs the whole run. |
 | `github-token` | `${{ github.token }}` | Needs `actions: write` and `checks: read`. |
 
 ## Outputs
@@ -57,7 +64,7 @@ jobs:
             actions: write
             checks: read
         steps:
-            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.13.2 # v4.13.2
+            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.14.0 # v4.14.0
               with:
                   run-id: ${{ github.event.workflow_run.id }}
 ```

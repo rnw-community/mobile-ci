@@ -1,7 +1,7 @@
 name: rerun-infra-failures
 description: >-
-  Re-runs a failed workflow run's failed jobs once when every failure is
-  infrastructure (lost runner, exec format error, job not acquired, shutdown
+  Re-runs a failed workflow run's failed jobs, or the whole run, once when
+  every failure is infrastructure (lost runner, exec format error, job not acquired, shutdown
   signal, disk full, network, timeout, missing command), classified from the
   jobs' annotations with the same rules as scripts/ci-metrics.py. A test
   failure anywhere in the run means nothing is re-run. A run a job timeout left
@@ -23,6 +23,14 @@ inputs:
     description: true classifies and reports without re-running anything.
     required: false
     default: 'false'
+  scope:
+    description: >-
+      failed-jobs re-runs only the failed jobs and their dependents. all re-runs
+      the whole run, for a runner fleet whose artifact store scopes artifacts to
+      one run attempt, where a re-run job cannot download what an earlier
+      attempt's jobs uploaded.
+    required: false
+    default: failed-jobs
   github-token:
     description: Token with actions write and checks read on the repository.
     required: false
@@ -58,4 +66,5 @@ runs:
         RUN_ID: ${{ inputs.run-id }}
         MAX_ATTEMPTS: ${{ inputs.max-attempts }}
         DRY_RUN: ${{ inputs.dry-run }}
+        SCOPE: ${{ inputs.scope }}
       run: python3 -I "$GITHUB_ACTION_PATH/rerun.py"
