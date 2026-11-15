@@ -36,8 +36,6 @@ def freshness(api, repository, run):
         current_pulls = set()
         if run['event'] in ('pull_request', 'pull_request_target'):
             pulls = run.get('pull_requests') or []
-            if not pulls and run['event'] == 'pull_request_target':
-                raise ValueError('missing target run PR association')
             if not pulls:
                 owner = run['head_repository']['owner']['login']
                 query = urlencode({'state': 'open', 'head': f'{owner}:{branch}'})
@@ -46,8 +44,7 @@ def freshness(api, repository, run):
                 detail = api.get(f"/repos/{repository}/pulls/{pull['number']}", False)
                 if not detail['head']['sha']:
                     raise ValueError('missing PR head SHA')
-                trigger_sha = pull.get('head', {}).get('sha') if run['event'] == 'pull_request_target' else sha
-                if detail['state'] == 'open' and (not trigger_sha or detail['head']['sha'] == trigger_sha):
+                if detail['state'] == 'open' and detail['head']['sha'] == sha:
                     current_pulls.add(pull['number'])
             if not current_pulls:
                 return 'superseded', 'the run head is no longer the head of an associated open PR'

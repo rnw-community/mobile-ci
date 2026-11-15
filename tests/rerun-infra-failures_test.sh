@@ -286,50 +286,59 @@ classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a current target PR retries with unknown trigger head'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
+case_start 'a current target PR retries without an association head SHA'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a target PR ignores a newer run for another PR with unknown trigger head'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":10}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
+case_start 'a target PR ignores a newer run for another PR without an association head SHA'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":10}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a current target PR retries with known trigger head'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9,"head":{"sha":"current"}}]}' "1|Deploy|failure|$LOST"
+case_start 'a current target PR retries with an association head SHA'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9,"head":{"sha":"current"}}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a target PR ignores a newer run for another PR with known trigger head'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":10}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9,"head":{"sha":"current"}}]}' "1|Deploy|failure|$LOST"
+case_start 'a target PR ignores a newer run for another PR with an association head SHA'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":10}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9,"head":{"sha":"current"}}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a target PR with unknown trigger head skips a newer target run for that PR'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":9}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
+case_start 'a target PR without an association head SHA skips a newer target run for that PR'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"event":"pull_request_target","head_sha":"new","pull_requests":[{"number":9}]}]}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals superseded "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a target PR with a known stale trigger head is superseded'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9,"head":{"sha":"old"}}]}' "1|Deploy|failure|$LOST"
+case_start 'a target PR with a stale run head is superseded'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"old","pull_requests":[{"number":9,"head":{"sha":"current"}}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals superseded "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
-case_start 'a target run without associations fails closed'
-FRESHNESS='{}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[]}' "1|Deploy|failure|$LOST"
+FORK_TARGET_RUN='{"status":"completed","conclusion":"failure","event":"pull_request_target","head_branch":"feature","head_sha":"current","head_repository":{"owner":{"login":"fork-owner"},"full_name":"fork-owner/r"},"pull_requests":[]}'
+case_start 'a fork target run without associations retries its current PR head'
+FRESHNESS='{"/repos/o/r/pulls?state=open&head=fork-owner%3Afeature&per_page=100&page=1":[{"number":9}],"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}},"/repos/o/r/actions/workflows/3/runs?branch=feature&per_page=100&page=1":{"workflow_runs":[]}}' scenario "$FORK_TARGET_RUN" "1|Deploy|failure|$LOST"
 classify
-if assert_equals freshness-check-failed "$(step_output "$workspace" decision)" decision \
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a fork target run without associations skips its superseded PR head'
+FRESHNESS='{"/repos/o/r/pulls?state=open&head=fork-owner%3Afeature&per_page=100&page=1":[{"number":9}],"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"new"}}}' scenario "$FORK_TARGET_RUN" "1|Deploy|failure|$LOST"
+classify SCOPE=all
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals superseded "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
 
 case_start 'a target PR with an incomplete API response fails closed'
-FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"base","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request_target","head_sha":"current","pull_requests":[{"number":9}]}' "1|Deploy|failure|$LOST"
 classify
 if assert_equals freshness-check-failed "$(step_output "$workspace" decision)" decision \
     && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
