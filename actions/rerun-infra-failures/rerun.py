@@ -16,6 +16,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 spec = importlib.util.spec_from_file_location('ci_metrics', Path(__file__).resolve().parents[2] / 'scripts' / 'ci-metrics.py')
 metrics = importlib.util.module_from_spec(spec)
@@ -25,6 +26,54 @@ spec.loader.exec_module(metrics)
 def fail(message):
     print(f'::error::{message}')
     sys.exit(1)
+
+
+def freshness(api, repository, run):
+    try:
+        branch, sha = run['head_branch'], run['head_sha']
+        if not branch or not sha:
+            raise ValueError('missing run head branch or SHA')
+        if run['event'] in ('pull_request', 'pull_request_target'):
+            pulls = run.get('pull_requests') or []
+            if not pulls:
+                owner = run['head_repository']['owner']['login']
+                query = urlencode({'state': 'open', 'head': f'{owner}:{branch}'})
+                pulls = checked_pages(api, f'/repos/{repository}/pulls?{query}')
+            current = False
+            for pull in pulls:
+                detail = api.get(f"/repos/{repository}/pulls/{pull['number']}", False)
+                if detail['state'] == 'open' and detail['head']['sha'] == sha:
+                    current = True
+            if not current:
+                return 'superseded', 'the run head is no longer the head of an associated open PR'
+        elif run['event'] == 'push':
+            ref = api.get(f'/repos/{repository}/git/ref/heads/{quote(branch, safe="")}', False)
+            if ref['object']['sha'] != sha:
+                return 'superseded', 'the run head is no longer the tip of its push branch'
+        query = urlencode({'branch': branch})
+        runs = checked_pages(api, f"/repos/{repository}/actions/workflows/{run['workflow_id']}/runs?{query}", 'workflow_runs')
+        for candidate in runs:
+            if candidate['run_number'] > run['run_number']:
+                if candidate.get('head_repository', {}).get('full_name') != run.get('head_repository', {}).get('full_name'):
+                    continue
+                return 'superseded', f"newer workflow run {candidate['id']} exists on this branch"
+        return 'rerun', 'every failure is infrastructure'
+    except (Exception, SystemExit) as error:
+        return 'freshness-check-failed', f'could not verify run freshness ({type(error).__name__}); skipping to avoid retrying a superseded run'
+
+
+def checked_pages(api, path, key=None):
+    items, page = [], 1
+    while True:
+        separator = '&' if '?' in path else '?'
+        data = api.get(f'{path}{separator}per_page=100&page={page}', False)
+        batch = data[key] if key else data
+        if not isinstance(batch, list):
+            raise ValueError('invalid freshness API response')
+        items.extend(batch)
+        if len(batch) < 100:
+            return items
+        page += 1
 
 
 def main():
@@ -46,6 +95,7 @@ def main():
     run = api.get(f'/repos/{repository}/actions/runs/{run_id}', False) or fail(f'run {run_id} was not found in {repository}.')
     attempt = run.get('run_attempt', 1)
     rows, infra, test = [], [], []
+    freshness_reason = ''
     if run.get('status') != 'completed':
         decision = 'not-finished'
     elif run.get('conclusion') not in ('failure', 'timed_out', 'cancelled'):
@@ -80,11 +130,16 @@ def main():
         elif attempt > int(max_attempts):
             decision = 'retries-exhausted'
         else:
-            decision = 'rerun'
-            if dry_run == 'false':
+            decision, freshness_reason = freshness(api, repository, run)
+            if decision != 'rerun':
+                level = 'warning' if decision == 'freshness-check-failed' else 'notice'
+                print(f'::{level}::{freshness_reason}.')
+            if decision == 'rerun' and dry_run == 'false':
                 api.post(f"/repos/{repository}/actions/runs/{run_id}/{'rerun' if scope == 'all' else 'rerun-failed-jobs'}")
 
     explanation = {
+        'superseded': freshness_reason,
+        'freshness-check-failed': freshness_reason,
         'not-finished': 'the run has not completed',
         'nothing-failed': f"the run concluded {run.get('conclusion')}",
         'test-failure': 'a test failure is never retried, and re-running failed jobs would retry it',

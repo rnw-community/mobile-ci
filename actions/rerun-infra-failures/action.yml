@@ -6,7 +6,7 @@ description: >-
   jobs' annotations with the same rules as scripts/ci-metrics.py. A test
   failure anywhere in the run means nothing is re-run. A run a job timeout left
   cancelled counts; one a user or concurrency cancelled does not. Call it from
-  a workflow_run job; it needs actions write and checks read.
+  a workflow_run job; it needs actions write, checks read, contents read and pull-requests read.
 inputs:
   run-id:
     description: Workflow run id to inspect, e.g. github.event.workflow_run.id.
@@ -32,12 +32,12 @@ inputs:
     required: false
     default: failed-jobs
   github-token:
-    description: Token with actions write and checks read on the repository.
+    description: Token with actions write, checks read, contents read and pull-requests read on the repository.
     required: false
     default: ${{ github.token }}
 outputs:
   decision:
-    description: rerun, test-failure, retries-exhausted, unclassified, nothing-failed or not-finished.
+    description: rerun, test-failure, retries-exhausted, unclassified, nothing-failed, not-finished, superseded or freshness-check-failed.
     value: ${{ steps.classify.outputs.decision }}
   infra-jobs:
     description: Number of failed jobs classified as infrastructure.
