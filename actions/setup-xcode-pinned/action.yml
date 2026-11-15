@@ -43,7 +43,7 @@ runs:
           exit 1
         fi
         printf '%s\n' "$version_output"
-        if ! grep -qx "Xcode ${XCODE_VERSION}" <<< "$version_output" || ! grep -qx "Build version ${XCODE_BUILD}" <<< "$version_output"; then
+        if ! grep -Fqx "Xcode ${XCODE_VERSION}" <<< "$version_output" || ! grep -Fqx "Build version ${XCODE_BUILD}" <<< "$version_output"; then
           echo "::error::The Xcode at $developer_dir is not Xcode ${XCODE_VERSION} (Build version ${XCODE_BUILD})."
           exit 1
         fi

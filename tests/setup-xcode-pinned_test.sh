@@ -82,4 +82,13 @@ if assert_equals 1 "$STEP_STATUS" 'step status' \
     pass_case
 fi
 
+case_start 'the version and build are compared literally, not as patterns'
+workspace="$(prepare "Xcode 99x9x1
+Build version $BUILD")"
+invoke "$workspace"
+if assert_equals 1 "$STEP_STATUS" 'step status' \
+    && assert_equals '' "$(cat "$workspace/env")" 'GITHUB_ENV'; then
+    pass_case
+fi
+
 finish_suite
