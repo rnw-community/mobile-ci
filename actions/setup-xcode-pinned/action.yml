@@ -1,7 +1,9 @@
 name: setup-xcode-pinned
 description: >-
   Selects a pre-installed Xcode toolchain by exact version and build number,
-  hard-asserting the match before any build step runs.
+  hard-asserting the match before any build step runs. Uses
+  /Applications/Xcode_<version>.app, or the already selected Xcode when that is
+  not installed.
 inputs:
   version:
     description: Xcode version string as it appears in `xcodebuild -version` (e.g. 26.4.1).
@@ -28,15 +30,23 @@ runs:
       run: |
         set -euo pipefail
         xcode_app="/Applications/Xcode_${XCODE_VERSION}.app"
-        if [ ! -d "$xcode_app" ]; then
-          echo "::error::Xcode ${XCODE_VERSION} is not installed on this runner ($xcode_app missing)."
+        if [ -d "$xcode_app" ]; then
+          developer_dir="$xcode_app/Contents/Developer"
+        elif developer_dir=$(xcode-select -p 2> /dev/null) && [ -n "$developer_dir" ]; then
+          echo "::notice::$xcode_app is not installed; asserting the selected Xcode at $developer_dir instead."
+        else
+          echo "::error::Xcode ${XCODE_VERSION} is not installed on this runner ($xcode_app missing, and no Xcode is selected)."
           exit 1
         fi
-        developer_dir="$xcode_app/Contents/Developer"
-        echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
-        version_output=$("$developer_dir/usr/bin/xcodebuild" -version)
+        if ! version_output=$("$developer_dir/usr/bin/xcodebuild" -version); then
+          echo "::error::$developer_dir/usr/bin/xcodebuild -version failed."
+          exit 1
+        fi
         printf '%s\n' "$version_output"
-        grep -qx "Xcode ${XCODE_VERSION}" <<< "$version_output"
-        grep -qx "Build version ${XCODE_BUILD}" <<< "$version_output"
+        if ! grep -qx "Xcode ${XCODE_VERSION}" <<< "$version_output" || ! grep -qx "Build version ${XCODE_BUILD}" <<< "$version_output"; then
+          echo "::error::The Xcode at $developer_dir is not Xcode ${XCODE_VERSION} (Build version ${XCODE_BUILD})."
+          exit 1
+        fi
+        echo "DEVELOPER_DIR=$developer_dir" >> "$GITHUB_ENV"
         echo "developer-dir=$developer_dir" >> "$GITHUB_OUTPUT"
         echo "toolchain-key=xcode-${XCODE_VERSION}-${XCODE_BUILD}" >> "$GITHUB_OUTPUT"

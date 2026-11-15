@@ -3,7 +3,10 @@
 Selects a pre-installed Xcode toolchain by exact version and build number. The
 runner is expected to already have `/Applications/Xcode_<version>.app`
 installed (self-hosted macOS fleets typically carry several pinned Xcode
-installations side by side). This action never installs or switches Xcode via
+installations side by side). When that path is missing, as on an image that
+ships one Xcode at `/Applications/Xcode.app`, the Xcode `xcode-select -p`
+already points at is used instead, under the same exact version and build
+assertion. This action never installs or switches Xcode via
 `xcode-select -s` globally — it only exports `DEVELOPER_DIR` for the current
 job, and hard-asserts both the version string and the build number reported by
 `xcodebuild -version` before any build step runs. A drifted or missing
