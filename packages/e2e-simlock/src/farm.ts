@@ -85,7 +85,8 @@ export interface QueuedAllocation<L> {
  * `allocate`, queued client-side. A lease request blocks while the farm is full, and through the
  * public Cloudflare tunnel one open past 100 s ends in a 524, so the slot first waits for the farm
  * to report a free device. A request cut off anyway is released by its own id (the farm may still
- * grant it) and asked again, as is one naming an emulator gone from adb. Any other error fails at once; so does the queue deadline and an abort.
+ * grant it) and asked again, as is one naming an emulator gone from adb or one the farm could not serve because its
+ * daemon or worker was briefly down. Any other error fails at once; so does the queue deadline and an abort.
  */
 export async function allocateQueued<L>(queue: QueuedAllocation<L>): Promise<L> {
     const now = queue.now ?? Date.now;
@@ -111,7 +112,7 @@ export async function allocateQueued<L>(queue: QueuedAllocation<L>): Promise<L> 
             return await queue.allocate(leaseId);
         } catch (cause) {
             const message = cause instanceof Error ? cause.message : String(cause);
-            if (!LEASE_ASK_AGAIN.test(message)) {
+            if (!LEASE_ASK_AGAIN.test(message) && !FARM_DOWN.test(message)) {
                 throw cause;
             }
             await queue.release(leaseId).catch(() => undefined);

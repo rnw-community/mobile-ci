@@ -143,6 +143,23 @@ describe('allocateQueued', () => {
         assert.deepEqual(logs, ['simlock: lease request not served (error code: 524); waiting to ask again']);
     });
 
+    it('waits out a farm whose daemon is briefly down, then asks again', async () => {
+        let calls = 0;
+        const { q, logs, pauses } = queue({
+            allocate: async () => {
+                calls += 1;
+                if (calls === 1) {
+                    throw new Error('Remote daemon is unavailable while preparing engine mobile for target "ios"');
+                }
+                return 'lease';
+            }
+        });
+        assert.equal(await allocateQueued(q), 'lease');
+        assert.equal(calls, 2);
+        assert.equal(pauses.length, 1);
+        assert.match(logs[0]!, /^simlock: lease request not served \(Remote daemon is unavailable/);
+    });
+
     it('a cut-off whose release fails still asks again', async () => {
         let calls = 0;
         const { q } = queue({
