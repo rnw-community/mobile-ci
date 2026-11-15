@@ -158,6 +158,8 @@ called workflow's jobs request — see the table in
 - **v4.15.0** — `store-screenshots.yml` accepts `call-scope` to isolate each
   brand/platform call's artifacts, plans, per-run concurrency and capture sessions.
   Uploads collect only that call's screenshots; an empty scope keeps existing names.
+  `setup-xcode-pinned` also accepts the selected Xcode when the versioned install is
+  missing, while still requiring the exact requested version and build (#357, #370).
 
 - **v4.14.0** — `rerun-infra-failures` takes `scope: all` to re-run the whole run instead
   of only its failed jobs. A fleet whose artifact store scopes artifacts to one run
