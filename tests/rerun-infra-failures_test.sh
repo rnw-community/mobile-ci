@@ -30,7 +30,12 @@ spec.loader.exec_module(metrics)
 root = Path(os.environ['FIXTURES'])
 put = lambda path, data: (root / f'{metrics.Api._slug(path)}.json').write_text(json.dumps(data))
 run = json.loads(os.environ['RUN'])
+run = {'id': 7, 'workflow_id': 3, 'run_number': 7, 'event': 'push', 'head_branch': 'main', 'head_sha': 'current', **run}
 put('/repos/o/r/actions/runs/7', run)
+put('/repos/o/r/git/ref/heads/main', {'object': {'sha': 'current'}})
+put('/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1', {'workflow_runs': [run]})
+for path, data in json.loads(os.environ.get('FRESHNESS', '{}')).items():
+    put(path, data)
 jobs = []
 for line in filter(None, os.environ['JOBS'].splitlines()):
     job_id, name, conclusion, annotation = line.split('|')
@@ -222,6 +227,57 @@ scenario "$FAILED" "1|Android E2E / E2E suite (e2e)|failure|$LOST"
 classify SCOPE=all
 if assert_equals rerun "$(step_output "$workspace" decision)" decision \
     && assert_equals 'POST /repos/o/r/actions/runs/7/rerun' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a superseded push head never re-runs the whole run'
+FRESHNESS='{"/repos/o/r/git/ref/heads/main":{"object":{"sha":"new"}}}' scenario "$FAILED" "1|Deploy|failure|$LOST"
+classify SCOPE=all
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals superseded "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request' \
+    && assert_contains "$(cat "$workspace/summary")" 'head' summary; then pass_case; fi
+
+PR_RUN='{"status":"completed","conclusion":"failure","event":"pull_request","head_sha":"current","pull_requests":[{"number":9}]}'
+case_start 'a current open PR head can re-run'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario "$PR_RUN" "1|Test|failure|$LOST"
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a PR without run associations is found by its head branch'
+FRESHNESS='{"/repos/o/r/pulls?state=open&head=o%3Amain&per_page=100&page=1":[{"number":9}],"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"current"}}}' scenario '{"status":"completed","conclusion":"failure","event":"pull_request","head_repository":{"owner":{"login":"o"}},"pull_requests":[]}' "1|Test|failure|$LOST"
+classify
+if assert_equals rerun "$(step_output "$workspace" decision)" decision \
+    && assert_equals 'POST /repos/o/r/actions/runs/7/rerun-failed-jobs' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a superseded PR head never re-runs'
+FRESHNESS='{"/repos/o/r/pulls/9":{"state":"open","head":{"sha":"new"}}}' scenario "$PR_RUN" "1|Test|failure|$LOST"
+classify SCOPE=all
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals superseded "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a newer workflow run blocks retry even at the same SHA'
+FRESHNESS='{"/repos/o/r/actions/workflows/3/runs?branch=main&per_page=100&page=1":{"workflow_runs":[{"id":8,"run_number":8,"head_branch":"main"}]}}' scenario "$FAILED" "1|Deploy|failure|$LOST"
+classify
+if assert_equals superseded "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request'; then pass_case; fi
+
+case_start 'a failed freshness API response skips with a warning'
+FRESHNESS='{"/repos/o/r/git/ref/heads/main":null}' scenario "$FAILED" "1|Deploy|failure|$LOST"
+classify
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals freshness-check-failed "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request' \
+    && assert_contains "$(cat "$workspace/log")" '::warning::' log; then pass_case; fi
+
+case_start 'a freshness API parse error skips with a warning'
+scenario "$FAILED" "1|Deploy|failure|$LOST"
+printf 'invalid JSON' > "$fixtures/repos_o_r_git_ref_heads_main.json"
+classify
+if assert_equals 0 "$STEP_STATUS" status \
+    && assert_equals freshness-check-failed "$(step_output "$workspace" decision)" decision \
+    && assert_equals '' "$(posts)" 'rerun request' \
+    && assert_contains "$(cat "$workspace/log")" '::warning::' log; then pass_case; fi
 
 case_start 'malformed inputs fail closed before any request'
 scenario "$FAILED" "1|Maestro shard 0 (e2e)|failure|$LOST"

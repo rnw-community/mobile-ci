@@ -27,6 +27,19 @@ attempt cannot serve attempt 1's uploads to attempt 2, so a re-run of failed
 jobs alone fails at its download. Such a fleet sets `scope: all`: the whole run
 starts again and every artifact is uploaded anew.
 
+Before either retry scope, the action verifies that a push run still matches
+its branch tip, or a pull-request run still matches any associated open PR's
+current head (falling back to open PRs for the head branch when the run has no
+PR associations). It also skips when a newer run of the same workflow exists
+on that branch in the same head repository, even at the same commit.
+`superseded` exits successfully with a notice and summary explaining the skip.
+
+Freshness checks fail closed: an API error or incomplete response produces
+`freshness-check-failed`, a warning and summary, and no retry. The token also
+needs `contents: read` for branch refs and `pull-requests: read` for PR heads.
+These checks are a snapshot before the retry request; GitHub provides no atomic
+check-and-rerun operation.
+
 ## Inputs
 
 | Input | Default | Description |
@@ -36,13 +49,13 @@ starts again and every artifact is uploaded anew.
 | `max-attempts` | `1` | Automatic retries per run; a run whose attempt is above this is left alone. |
 | `dry-run` | `false` | `true` classifies and reports without re-running. |
 | `scope` | `failed-jobs` | `failed-jobs` re-runs the failed jobs and their dependents; `all` re-runs the whole run. |
-| `github-token` | `${{ github.token }}` | Needs `actions: write` and `checks: read`. |
+| `github-token` | `${{ github.token }}` | Needs `actions: write`, `checks: read`, `contents: read` and `pull-requests: read`. |
 
 ## Outputs
 
 | Output | Description |
 | --- | --- |
-| `decision` | `rerun`, `test-failure`, `retries-exhausted`, `unclassified`, `nothing-failed` or `not-finished`. |
+| `decision` | `rerun`, `test-failure`, `retries-exhausted`, `unclassified`, `nothing-failed`, `not-finished`, `superseded` or `freshness-check-failed`. |
 | `infra-jobs` | Failed jobs classified as infrastructure. |
 | `test-jobs` | Failed jobs classified as test failures. |
 
@@ -63,8 +76,10 @@ jobs:
         permissions:
             actions: write
             checks: read
+            contents: read
+            pull-requests: read
         steps:
-            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.15.0 # v4.15.0
+            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.15.1 # v4.15.1
               with:
                   run-id: ${{ github.event.workflow_run.id }}
 ```
