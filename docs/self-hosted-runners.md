@@ -178,7 +178,10 @@ these by exact version *and* build number — it never runs `xcode-select -s`
 globally, and it never installs or switches Xcode itself. It only exports
 `DEVELOPER_DIR` for the current job and hard-asserts that
 `xcodebuild -version` reports exactly the requested `Xcode <version>` /
-`Build version <build>` pair before any build step runs.
+`Build version <build>` pair before any build step runs. An image with a
+single Xcode at another path (for example `/Applications/Xcode.app`) works
+too: when the versioned path is missing, the action asserts the Xcode
+`xcode-select -p` already selects, and fails unless it is the exact pair.
 
 **Why assert the build number, not just the version string.** Apple
 sometimes ships two different builds under what looks like the same
