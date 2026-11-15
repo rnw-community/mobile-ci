@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Re-runs a failed workflow run's failed jobs once when every failure is infrastructure.
+"""Re-runs a failed workflow run's failed jobs, or the whole run, once when every failure is infrastructure.
 
 Classification is scripts/ci-metrics.py's, so the weekly report and the retry
 agree on what counts as infra. A failed job without a matching annotation is
@@ -30,7 +30,7 @@ def fail(message):
 def main():
     env = os.environ
     repository, run_id = env.get('REPOSITORY', ''), env.get('RUN_ID', '')
-    max_attempts, dry_run = env.get('MAX_ATTEMPTS', ''), env.get('DRY_RUN', '')
+    max_attempts, dry_run, scope = env.get('MAX_ATTEMPTS', ''), env.get('DRY_RUN', ''), env.get('SCOPE', '')
     if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         fail(f"repository '{repository}' must be owner/name.")
     if not re.fullmatch(r'[0-9]+', run_id):
@@ -39,6 +39,8 @@ def main():
         fail(f"max-attempts '{max_attempts}' must be a positive whole number.")
     if dry_run not in ('true', 'false'):
         fail(f"dry-run must be 'true' or 'false', got '{dry_run}'.")
+    if scope not in ('failed-jobs', 'all'):
+        fail(f"scope must be 'failed-jobs' or 'all', got '{scope}'.")
 
     api = metrics.Api(None)
     run = api.get(f'/repos/{repository}/actions/runs/{run_id}', False) or fail(f'run {run_id} was not found in {repository}.')
@@ -80,7 +82,7 @@ def main():
         else:
             decision = 'rerun'
             if dry_run == 'false':
-                api.post(f'/repos/{repository}/actions/runs/{run_id}/rerun-failed-jobs')
+                api.post(f"/repos/{repository}/actions/runs/{run_id}/{'rerun' if scope == 'all' else 'rerun-failed-jobs'}")
 
     explanation = {
         'not-finished': 'the run has not completed',
