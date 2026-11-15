@@ -29,9 +29,15 @@ starts again and every artifact is uploaded anew.
 
 Before either retry scope, the action verifies that a push run still matches
 its branch tip, or a pull-request run still matches any associated open PR's
-current head (falling back to open PRs for the head branch when the run has no
-PR associations). It also skips when a newer run of the same workflow exists
-on that branch in the same head repository, even at the same commit.
+current head (falling back to open PRs for the head branch for `pull_request`
+runs without associations). A `pull_request_target` run identifies its PR from
+the run associations: its run SHA belongs to the base branch, so the PR head is
+compared only when the association records the triggering head SHA. Missing
+target-run associations fail closed.
+It also skips when a newer run of the same workflow and event, with a different
+head SHA, exists on that branch in the same head repository. For PR events the
+newer run must also share an associated open PR; unrelated events and runs at
+the same commit never supersede the run.
 `superseded` exits successfully with a notice and summary explaining the skip.
 
 Freshness checks fail closed: an API error or incomplete response produces
@@ -79,7 +85,7 @@ jobs:
             contents: read
             pull-requests: read
         steps:
-            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.15.1 # v4.15.1
+            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.15.2 # v4.15.2
               with:
                   run-id: ${{ github.event.workflow_run.id }}
 ```
