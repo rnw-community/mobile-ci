@@ -24,6 +24,13 @@ action does the rest in three modes.
     and then fails with an `Infrastructure failure:` error without starting the
     suite. A status the farm stops answering during that wait counts as busy. A
     target an idle farm cannot give a whole device still runs one worker.
+  - The suite leases every worker's device when it starts and keeps that pool for
+    the whole run, so a run started with fewer workers never gains more. With at
+    least half its devices but not all of them free, the run keeps polling for
+    up to `full-capacity-wait-minutes` and starts as soon as all are free; when
+    that wait ends, or the farm stops answering during it, it starts with the
+    devices last reported free and says it waited. Both waits stop at the
+    `job-timeout-minutes` deadline.
   - With `job-timeout-minutes` set to the job's `timeout-minutes`, a suite still
     running 5 minutes before it, counted from `job-started-at` (or the start
     of the step without one), gets
@@ -73,6 +80,7 @@ stdin, never on its command line.
 | `targets` | run | `'[]'` | JSON array of the call's targets, which split the free devices. |
 | `workers` | validate, run | `'1'` | Devices leased and tests run at once (`E2E_WORKERS`). |
 | `capacity-wait-minutes` | run | `'10'` | How long a run waits for a busy farm to free half the devices an idle farm would give it, before failing as infrastructure. |
+| `full-capacity-wait-minutes` | run | `'5'` | How long a run with at least half its devices free keeps waiting for all of them before it starts with fewer workers; `0` starts at once. |
 | `job-timeout-minutes` | run | `'0'` | The calling job's `timeout-minutes`. The suite is interrupted 5 minutes before it, counted from `job-started-at` (or the start of this step without one), so its partial report is kept and the run fails as infrastructure; `0` sets no limit. |
 | `job-started-at` | run | `''` | Unix time the calling job started, recorded with `date +%s` in its first step; empty counts `job-timeout-minutes` from the start of this step. |
 | `retries` | validate, run | `'1'` | Retries per failed test (`E2E_RETRIES`). |
@@ -87,7 +95,7 @@ stdin, never on its command line.
 ```yaml
 - name: Run the e2e suite
   id: run
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.16.0 # v4.16.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
   with:
       mode: run
       platform: android
@@ -101,7 +109,7 @@ stdin, never on its command line.
       simlock-token: ${{ secrets.SIMLOCK_TOKEN }}
 - name: Release the devices the suite left leased
   if: ${{ always() && steps.run.outcome != 'skipped' }}
-  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.16.0 # v4.16.0
+  uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
   with:
       mode: release
       platform: android

@@ -65,6 +65,12 @@ inputs:
             would give it, before failing as infrastructure (run).
         required: false
         default: '10'
+    full-capacity-wait-minutes:
+        description: >-
+            How long a run with at least half its devices free keeps waiting for all of
+            them before it starts with fewer workers; 0 starts at once (run).
+        required: false
+        default: '5'
     job-timeout-minutes:
         description: >-
             The calling job's timeout-minutes. Five minutes before it, counted from
@@ -193,7 +199,7 @@ runs:
 
         - name: Install @mobile-ci/e2e-simlock
           if: inputs.mode == 'run'
-          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.16.0 # v4.16.0
+          uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.17.0 # v4.17.0
           with:
               e2e-dir: ${{ inputs.e2e-dir }}
 
@@ -209,6 +215,7 @@ runs:
               E2E_TARGET: ${{ inputs.target }}
               E2E_WORKERS: ${{ inputs.workers }}
               E2E_CAPACITY_WAIT_MINUTES: ${{ inputs.capacity-wait-minutes }}
+              E2E_FULL_CAPACITY_WAIT_MINUTES: ${{ inputs.full-capacity-wait-minutes }}
               E2E_JOB_TIMEOUT_MINUTES: ${{ inputs.job-timeout-minutes }}
               E2E_JOB_STARTED_AT: ${{ inputs.job-started-at }}
               E2E_RETRIES: ${{ inputs.retries }}
@@ -262,35 +269,66 @@ runs:
               case "$E2E_CAPACITY_WAIT_MINUTES" in
                 '' | *[!0-9]*) echo "::error::capacity-wait-minutes must be a whole number; got '$E2E_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
               esac
+              case "$E2E_FULL_CAPACITY_WAIT_MINUTES" in
+                '' | *[!0-9]*) echo "::error::full-capacity-wait-minutes must be a whole number; got '$E2E_FULL_CAPACITY_WAIT_MINUTES'."; exit 1 ;;
+              esac
               polls=$((10#$E2E_CAPACITY_WAIT_MINUTES * 2))
+              full_polls=$((10#$E2E_FULL_CAPACITY_WAIT_MINUTES * 2))
               waiting=''
+              full_waiting=''
+              full_ended=''
+              last_full=''
               while :; do
                 read -r free need < <(printf 'Authorization: Bearer %s\n' "$SIMLOCK_TOKEN" \
                   | curl -fsS -m 15 -H @- "${SIMLOCK_URL%/}/v1/status" 2>/dev/null \
                   | jq -r --arg platform "$E2E_PLATFORM" --argjson targets "$targets" --argjson workers "$E2E_WORKERS" '.capacity[$platform] | if .limit == null then empty else "\(([.limit - ((.used // 0) - (.warm // 0)), 0] | max) / $targets | floor) \([.limit / $targets | floor, $workers] | min)" end' 2>/dev/null || true) || true
                 case "${free:-}${need:-x}" in
                   *[!0-9]*)
-                    if [ -z "$waiting" ]; then
+                    if [ -n "$last_full" ]; then
+                      read -r free need <<< "$last_full"
+                      full_ended="The farm stopped reporting its free $E2E_PLATFORM capacity while this run waited for all $need devices."
+                      full_polls=0
+                    elif [ -z "$waiting" ]; then
                       echo "::notice::The farm did not report its free $E2E_PLATFORM capacity; running $E2E_WORKERS workers as asked."
                       break
-                    fi
-                    free=''
-                    ;;
-                  *)
-                    floor=$(( (need + 1) / 2 ))
-                    if [ "$free" -ge "$floor" ]; then
-                      if [ "$free" -lt 1 ]; then free=1; fi
-                      if [ "$free" -lt "$E2E_WORKERS" ]; then
-                        echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
-                        E2E_WORKERS=$free
-                        export E2E_WORKERS
-                      fi
-                      break
+                    else
+                      free=''
                     fi
                     ;;
                 esac
                 out_of_time=''
                 if [ "$limit" -gt 0 ] && [ "$(( $(date +%s) + 30 ))" -ge "$deadline" ]; then out_of_time=1; fi
+                if [ -n "$free" ]; then
+                  floor=$(( (need + 1) / 2 ))
+                  last_full=''
+                  if [ "$free" -ge "$floor" ]; then
+                    if [ "$free" -lt "$need" ] && [ "$full_polls" -gt 0 ] && [ -z "$out_of_time" ]; then
+                      if [ -z "$full_waiting" ]; then
+                        echo "::notice::The farm has $free free $E2E_PLATFORM devices; waiting up to $E2E_FULL_CAPACITY_WAIT_MINUTES minutes for all $need before running fewer workers."
+                        full_waiting=1
+                      fi
+                      last_full="$free $need"
+                      full_polls=$((full_polls - 1))
+                      sleep 30
+                      continue
+                    fi
+                    if [ "$free" -lt 1 ]; then free=1; fi
+                    if [ "$free" -lt "$E2E_WORKERS" ]; then
+                      if [ -n "$full_waiting" ] && [ "$free" -lt "$need" ]; then
+                        if [ -z "$full_ended" ] && [ -n "$out_of_time" ]; then
+                          full_ended="Stopped waiting for all $need free $E2E_PLATFORM devices: the job's $((10#$E2E_JOB_TIMEOUT_MINUTES))-minute timeout left no time to keep waiting."
+                        elif [ -z "$full_ended" ]; then
+                          full_ended="Waited $E2E_FULL_CAPACITY_WAIT_MINUTES minutes for all $need free $E2E_PLATFORM devices."
+                        fi
+                        echo "::notice::$full_ended"
+                      fi
+                      echo "::notice::The farm has $free free $E2E_PLATFORM devices; running $free workers instead of $E2E_WORKERS."
+                      E2E_WORKERS=$free
+                      export E2E_WORKERS
+                    fi
+                    break
+                  fi
+                fi
                 if [ "$polls" -eq 0 ] || [ -n "$out_of_time" ]; then
                   if [ "$E2E_SHADOW" = true ]; then level=warning; else level=error; fi
                   if [ -n "$out_of_time" ]; then
