@@ -287,7 +287,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.16.0 # v4.16.0
         with:
             app-dir: packages/app
             scheme: budgie
@@ -312,7 +312,7 @@ jobs:
         permissions:
             contents: write
             pull-requests: write
-        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/expo-ota-preview.yml@v4.16.0 # v4.16.0
         with:
             app-dir: apps/mobile
             scheme: myapp

@@ -63,13 +63,13 @@ The runtime versions must be what the development build's own
 `native-fingerprint` hash:
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.15.4 # v4.15.4
+- uses: rnw-community/mobile-ci/actions/ota-runtime-version@v4.16.0 # v4.16.0
   id: runtime
   with:
       app-dir: apps/mobile
       eas-profile: development
 
-- uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.15.4 # v4.15.4
+- uses: rnw-community/mobile-ci/actions/expo-ota-manifest@v4.16.0 # v4.16.0
   id: manifest
   with:
       dist-dir: apps/mobile/dist

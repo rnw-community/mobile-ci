@@ -10,6 +10,7 @@ set -euo pipefail
 
 ACTION="$REPO_ROOT/actions/turbo-affected/action.yml"
 STEP='Compute affected packages'
+RESOLVE_STEP='Resolve the verdict without the repository'
 
 WORKSPACE_PACKAGES='@example/app @example/tv @example/landing @example/shared @example/other'
 
@@ -28,6 +29,8 @@ turbo_items() {
 prepare() {
     local dir
     dir="$(new_workspace "$ACTION" "$STEP")"
+    mv "$dir/step.sh" "$dir/detect.sh"
+    extract_step_script "$ACTION" "$RESOLVE_STEP" > "$dir/resolve.sh"
     turbo_items "$@" > "$dir/turbo.json"
     # shellcheck disable=SC2086 # the workspace package list is word-split on purpose.
     turbo_items $WORKSPACE_PACKAGES > "$dir/turbo-all.json"
@@ -46,10 +49,15 @@ package() {
     printf '{"name":"%s","private":true}\n' "$name" > "$dir/work/$app_dir/package.json"
 }
 
+# detect <workspace> [VAR=value ...]
+# Runs the action the way the composite does: the resolve step first, then the
+# detect step only when resolve left the verdict pending.
 detect() {
     local dir="$1"
     shift
-    run_step "$dir" \
+    set -- \
+        AFFECTED= \
+        CHECKOUT=false \
         TURBO_VERSION=2.10.8 \
         TARGET_PACKAGES='' \
         TARGETS='' \
@@ -62,6 +70,12 @@ detect() {
         TURBO_JSON_FILE="$dir/turbo.json" \
         TURBO_ALL_FILE="$dir/turbo-all.json" \
         "$@"
+    cp "$dir/resolve.sh" "$dir/step.sh"
+    run_step "$dir" "$@"
+    if [ "$STEP_STATUS" -eq 0 ] && [ "$(step_output "$dir" pending)" = true ]; then
+        cp "$dir/detect.sh" "$dir/step.sh"
+        run_step "$dir" "$@"
+    fi
 }
 
 assert_failed_closed() {
@@ -719,6 +733,143 @@ detect "$dir" TARGET_PACKAGES=@example/app FORCE_LABEL='e2e:force' GITHUB_EVENT_
 assert_equals 1 "$STEP_STATUS" 'detect exit status' \
     && assert_contains "$(cat "$dir/log")" '::error::' 'error' \
     && pass_case
+
+# Issue #378: a verdict the repository cannot change is resolved before any
+# checkout, and a caller that already knows the answer supplies it.
+
+case_start 'affected defaults to empty so detection runs'
+if assert_equals '' "$(action_input_default "$ACTION" affected)" 'affected default' \
+    && assert_equals false "$(action_input_default "$ACTION" checkout)" 'checkout default'; then
+    pass_case
+fi
+
+for verdict in true false; do
+    case_start "a caller verdict of $verdict is reported without the repository or turbo"
+    dir="$(prepare @example/app)"
+    detect "$dir" AFFECTED="$verdict" EXEMPT_PATHS='**' TRIGGER_PATHS='**'
+    assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+        && assert_equals "$verdict" "$(step_output "$dir" affected)" 'affected' \
+        && assert_equals false "$(step_output "$dir" forced)" 'forced' \
+        && assert_equals '' "$(step_output "$dir" pending)" 'pending' \
+        && assert_equals no "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+        && pass_case
+done
+
+case_start 'a caller verdict that is neither true nor false fails closed'
+dir="$(prepare)"
+detect "$dir" AFFECTED=yes
+assert_failed_closed "$dir" "affected must be 'true', 'false' or empty" && pass_case
+
+case_start 'a checkout value that is neither true nor false fails closed'
+dir="$(prepare)"
+detect "$dir" CHECKOUT=yes
+assert_failed_closed "$dir" "checkout must be 'true' or 'false'" && pass_case
+
+case_start 'the force label wins over a caller verdict of false and still reports forced'
+dir="$(prepare)"
+label_event "$dir" 'e2e:force'
+detect "$dir" AFFECTED=false FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json"
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals true "$(step_output "$dir" forced)" 'forced' \
+    && assert_equals '' "$(step_output "$dir" pending)" 'pending' \
+    && pass_case
+
+case_start 'a caller verdict of false wins over always-affected'
+dir="$(prepare)"
+detect "$dir" AFFECTED=false ALWAYS_AFFECTED=true
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals false "$(step_output "$dir" affected)" 'affected' \
+    && pass_case
+
+case_start 'always-affected and the force label never ask for the repository'
+dir="$(prepare)"
+detect "$dir" ALWAYS_AFFECTED=true
+always_pending="$(step_output "$dir" pending)"
+dir="$(prepare)"
+label_event "$dir" 'e2e:force'
+detect "$dir" FORCE_LABEL='e2e:force' GITHUB_EVENT_PATH="$dir/event.json"
+assert_equals '' "$always_pending" 'pending under always-affected' \
+    && assert_equals '' "$(step_output "$dir" pending)" 'pending under the force label' \
+    && pass_case
+
+case_start 'a pull request with no verdict yet leaves it pending for detection'
+dir="$(prepare @example/app)"
+detect "$dir" TARGET_PACKAGES=@example/app
+assert_equals 0 "$STEP_STATUS" "detect exit status ($(cat "$dir/log"))" \
+    && assert_equals true "$(step_output "$dir" pending)" 'pending' \
+    && assert_equals true "$(step_output "$dir" affected)" 'affected' \
+    && assert_equals yes "$([ -e "$dir/turbo-ran" ] && echo yes || echo no)" 'turbo ran' \
+    && pass_case
+
+case_start 'the action checks out blobless history only when detection is pending and the caller asked for it'
+if failure="$(ACTION_YML="$ACTION" python3 - <<'PYTHON' 2>&1
+import os
+import sys
+
+import yaml
+
+action = yaml.safe_load(open(os.environ['ACTION_YML'], encoding='utf-8'))
+steps = action['runs']['steps']
+names = [step.get('name') for step in steps]
+problems = []
+if names != ['Resolve the verdict without the repository', 'Check out the history detection reads', 'Compute affected packages']:
+    problems.append(f'unexpected step order {names}')
+else:
+    checkout, detect = steps[1], steps[2]
+    if not checkout.get('uses', '').startswith('actions/checkout@'):
+        problems.append('the checkout step does not use actions/checkout')
+    if checkout.get('if') != "steps.resolve.outputs.pending == 'true' && inputs.checkout == 'true'":
+        problems.append(f"checkout runs under {checkout.get('if')!r}")
+    if checkout.get('with') != {'fetch-depth': 0, 'filter': 'blob:none', 'persist-credentials': False}:
+        problems.append(f"checkout with: {checkout.get('with')!r}")
+    if detect.get('if') != "steps.resolve.outputs.pending == 'true'":
+        problems.append(f"detection runs under {detect.get('if')!r}")
+outputs = action['outputs']
+if outputs['affected']['value'] != '${{ steps.resolve.outputs.affected || steps.detect.outputs.affected }}':
+    problems.append('affected is not read from resolve first')
+if outputs['forced']['value'] != '${{ steps.resolve.outputs.forced }}':
+    problems.append('forced is not read from resolve')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
+    pass_case
+else
+    fail_case "$failure"
+fi
+
+for workflow in ios-maestro android-maestro; do
+    case_start "$workflow.yml passes the caller's affected verdict and leaves the checkout to turbo-affected"
+    if failure="$(WORKFLOW_YML="$REPO_ROOT/.github/workflows/$workflow.yml" python3 - <<'PYTHON' 2>&1
+import os
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(os.environ['WORKFLOW_YML'], encoding='utf-8'))
+inputs = workflow[True]['workflow_call']['inputs']
+problems = []
+affected = inputs.get('affected', {})
+if affected.get('default', 'MISSING') != '' or affected.get('type') != 'string':
+    problems.append('affected must be a string input defaulting to empty')
+steps = workflow['jobs']['detect']['steps']
+if any(step.get('uses', '').startswith('actions/checkout@') for step in steps):
+    problems.append('detect still checks out the repository itself')
+step = next(step for step in steps if 'turbo-affected' in step.get('uses', ''))
+if step['with'].get('affected') != '${{ inputs.affected }}':
+    problems.append('turbo-affected does not receive affected')
+if step['with'].get('checkout') is not True:
+    problems.append('turbo-affected is not asked to check out')
+if problems:
+    sys.exit('; '.join(problems))
+PYTHON
+)"; then
+        pass_case
+    else
+        fail_case "$failure"
+    fi
+done
 
 for workflow in ios-maestro android-maestro; do
     case_start "$workflow.yml passes force-label to turbo-affected and reports a forced run"

@@ -2,7 +2,8 @@
 
 `workflow_call` reusable workflow: iOS Maestro e2e on self-hosted runners.
 
-**detect** (turbo-affected gate, shard-index computation, and build-strategy
+**detect** (turbo-affected gate, which checks the repository out only when
+the verdict needs it, shard-index computation, and build-strategy
 resolution, hosted `ubuntu-latest`) → **plan** (one leg per `targets` entry, on
 the Linux repack pool — compute the native key with
 [`expo-native-key`](../../actions/expo-native-key), look up the base binary
@@ -74,6 +75,7 @@ needing one is reported as a failure too — a skipped build is not a build.
 | `exempt-paths`                | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `docs/**`, `**/*.md`, `apps/website/**`. A pull request whose every changed file (`base...HEAD`) matches one skips the run without turbo detection. One non-exempt file, an empty diff, or a diff that cannot be computed (logged as a `::warning::`) runs normal detection instead. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `trigger-paths`               | no       | `''`                                       | Newline- or comma-separated pathspec globs relative to the repository root, e.g. `.github/workflows/e2e.yml`, `e2e/**`. A pull request that changes a matching file (`base...HEAD`, renames counted at both paths) runs without turbo detection, which never attributes a file outside a workspace package to one. `**` runs every pull request, which is what an empty `target-packages` did before v3.3.0. Wins over `exempt-paths`; a diff that cannot be computed runs, with a `::warning::`. See the [`turbo-affected` README](../../actions/turbo-affected/README.md). |
 | `force-label` | no | `''` | Pull request label that runs the pipeline whatever turbo reports: with it on the pull request, `detect` reports affected without turbo (even for an `exempt-paths`-only diff) and the status summary reads `passed (forced by the <label> label)`. Add `labeled` to the caller's `pull_request` `types` so adding the label starts a run (see [Forcing a run](#forcing-a-run)). Empty never forces. |
+| `affected` | no | `''` | The caller's own verdict, `'true'` or `'false'`, for a caller that already knows whether the app is affected: `detect` then checks out nothing and runs no turbo (see [Supplying the verdict](#supplying-the-verdict)). `force-label` still forces a run. Any other value fails `detect`. Empty detects. |
 | `expo-fingerprint-version`    | no       | `0.20.6`                                   | Pinned `@expo/fingerprint` npm version. |
 | `maestro-version`             | no       | `2.10.0`                                   | Pinned Maestro CLI version; also the version the `device-cloud` driver asks Device Cloud for. |
 | `ios-driver`                    | no       | `local`                                            | `local` runs the flows on a simulator the test runner boots (`run-maestro-ios`). `device-cloud` submits the `.app` and `flows-dir` to devicecloud.dev from a plain Linux runner — see [Device Cloud driver](#device-cloud-driver). |
@@ -173,7 +175,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -293,7 +295,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app", "workspace":"MyApp.xcworkspace","scheme":"MyApp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -382,7 +384,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -577,7 +579,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -777,7 +779,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
 ```
 
 - `contents: read` — checkout.
@@ -811,7 +813,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -840,7 +842,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -885,10 +887,50 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.15.4 # v4.15.4
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
         with:
             force-label: e2e:force
 ```
 
 The label is read from the triggering event's payload, so it applies to every
 later push to the pull request until it is removed.
+
+## Supplying the verdict
+
+`detect` answers "is this app affected?" at the cheapest point that can: the
+force label, then the caller's `affected` input, then the event (a non-PR
+event, or `e2e-result-cache: true`, always runs). None of those reads the
+repository, so `detect` checks nothing out for them. Only a pull request with
+no verdict yet is checked out, blobless, for `trigger-paths`, `exempt-paths`
+and turbo.
+
+A caller that already decided passes the answer, and one detection can serve
+both platforms:
+
+```yaml
+jobs:
+    affected:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        outputs:
+            affected: ${{ steps.affected.outputs.affected }}
+        steps:
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.16.0 # v4.16.0
+              id: affected
+              with:
+                  checkout: true
+                  targets: '[{"name":"app","appDir":"apps/mobile"}]'
+                  base-sha: ${{ github.event.pull_request.base.sha }}
+                  always-affected: ${{ github.event_name != 'pull_request' }}
+    e2e:
+        needs: affected
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
+        with:
+            affected: ${{ needs.affected.outputs.affected }}
+```
+
+Pass the same output to `android-maestro.yml`. A caller whose own job already gates
+this call (`if: needs.changes.outputs.mobile == 'true'`) passes
+`affected: 'true'`. `'false'` reports the run as unaffected, exactly as turbo
+would have.
