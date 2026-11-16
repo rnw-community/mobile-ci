@@ -27,7 +27,7 @@ not "the embedded JS bundle is current for this commit".
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.15.3 # v4.15.3
+- uses: rnw-community/mobile-ci/actions/native-fingerprint@v4.15.4 # v4.15.4
   id: fingerprint
   with:
       platform: ios
