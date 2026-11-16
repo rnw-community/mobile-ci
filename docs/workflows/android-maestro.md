@@ -135,6 +135,8 @@ major release.
 | `e2e-retries`                   | no       | `1`                                                | Retries per failed test inside the run (`E2E_RETRIES`). |
 | `e2e-required`                  | no       | `false`                                            | With `both`: `true` makes a failing e2e suite fail the result; `false` runs it as a non-blocking shadow while Maestro gates. With `e2e` the suite always gates. |
 | `e2e-timeout-minutes`           | no       | `60`                                               | Timeout of the e2e job. The suite is interrupted 5 minutes before it, so its partial report is kept and the run fails as infrastructure (retried by `rerun-infra-failures`) instead of being cancelled. |
+| `e2e-capacity-wait-minutes`     | no       | `10`                                               | How long the suite waits for a busy farm to free half the devices an idle farm would give it, before failing as infrastructure. |
+| `e2e-full-capacity-wait-minutes` | no       | `5`                                                | How long the suite, with at least half its devices free, keeps waiting for all of them before it starts with fewer workers. The workers are fixed for the whole run, so one started short stays short; `0` starts at once. Both waits stop at the `e2e-timeout-minutes` deadline. |
 | `simlock-url`                   | with `e2e`/`both` | `''`                                      | Base URL of the simlock gateway or worker (`SIMLOCK_URL`), reachable from `e2e-runner-labels`. |
 | `device-cloud-runner-labels`    | no       | `''`                                               | JSON array of runner labels for the test job when the driver is `device-cloud`. The job only uploads and waits, so any Linux runner with Node works. Empty falls back to `repack-runner-labels`. |
 | `device-cloud-cli-version`      | no       | `5.7.1`                                            | Exact `@devicecloud.dev/dcd` npm version the `device-cloud` driver runs. |
@@ -229,7 +231,7 @@ hand every repository secret to a third-party workflow.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -277,7 +279,7 @@ workflow's own tag into `e2e-dir/node_modules`, then runs `e2e-command` in
 | `E2E_APP_PATH` | absolute path of the repacked or built `.apk` |
 | `E2E_APP_ID` | the target's `appId` |
 | `E2E_TARGET` | the target's `name` |
-| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free Android devices split across this call's targets, when the farm reports them (best effort: other runs may lease in between) |
+| `E2E_WORKERS` | `e2e-workers`, lowered to the farm's free Android devices split across this call's targets, when the farm reports them and still has fewer free after `e2e-full-capacity-wait-minutes` (best effort: other runs may lease in between) |
 | `E2E_RETRIES` | `e2e-retries` |
 | `E2E_SESSION` | unique per platform, run, attempt and target; give it to agent-device as the session name |
 | `SIMLOCK_URL`, `SIMLOCK_TOKEN` | `simlock-url` and the `simlock-token` secret |
@@ -351,7 +353,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
@@ -446,7 +448,7 @@ It fails closed:
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: ...
             flows-dir: apps/mobile/e2e/flows
@@ -692,7 +694,7 @@ action neither deduplicates nor claims a precedence.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -873,7 +875,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
 ```
 
 - `contents: read` — checkout.
@@ -907,7 +909,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]
@@ -934,7 +936,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":""}]
@@ -978,7 +980,7 @@ on:
 jobs:
     e2e:
         if: github.event.action != 'labeled' || github.event.label.name == 'e2e:force'
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             force-label: e2e:force
 ```
@@ -1007,7 +1009,7 @@ jobs:
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
         steps:
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.16.0 # v4.16.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.17.0 # v4.17.0
               id: affected
               with:
                   checkout: true
@@ -1016,7 +1018,7 @@ jobs:
                   always-affected: ${{ github.event_name != 'pull_request' }}
     e2e:
         needs: affected
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
         with:
             affected: ${{ needs.affected.outputs.affected }}
 ```

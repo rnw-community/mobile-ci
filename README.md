@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.16.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.17.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -154,6 +154,16 @@ called workflow's jobs request — see the table in
 [docs/examples/README.md](docs/examples/README.md#permissions-at-a-glance).
 
 ## What changed in v4.x
+
+- **v4.17.0** — an e2e suite with at least half its devices free no longer
+  starts short at once. The suite leases every worker's device up front and
+  keeps that pool for the whole run, so a run started with 1 of 2 workers ran
+  serially to the end. `e2e-suite` now keeps polling the farm for up to the new
+  `full-capacity-wait-minutes` (default 5) and starts as soon as every device
+  is free; when that wait ends it runs with the free devices, as before, and
+  says it waited. The wait stops at the `job-timeout-minutes` deadline.
+  `ios-maestro` and `android-maestro` take `e2e-full-capacity-wait-minutes`,
+  and `e2e-capacity-wait-minutes` for the existing busy-farm wait.
 
 - **v4.16.0** — `detect` no longer clones a repository it will not read.
   `turbo-affected` resolves the force label, the new `affected` input (the
@@ -567,7 +577,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -640,7 +650,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.16.0 # v4.16.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.17.0 # v4.17.0
 ```
 
 ## Scope
@@ -686,7 +696,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.16.0 # v4.16.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.17.0 # v4.17.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.

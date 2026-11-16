@@ -13,6 +13,7 @@ set -euo pipefail
 ACTION="$REPO_ROOT/actions/e2e-suite/action.yml"
 FARM='{"capacity":{"ios":{"limit":12,"used":3,"warm":1},"android":{"limit":2,"used":1,"warm":0}}}'
 WAIT="$(action_input_default "$ACTION" capacity-wait-minutes)"
+FULL_WAIT="$(action_input_default "$ACTION" full-capacity-wait-minutes)"
 JOB_TIMEOUT="$(action_input_default "$ACTION" job-timeout-minutes)"
 FENCE='~~~'
 
@@ -43,7 +44,7 @@ run_suite() {
     stub "$dir" curl 'exit 7'
     run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND="$command" E2E_APP_PATH="$(app "$platform" "$dir")" \
         E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_FULL_CAPACITY_WAIT_MINUTES="$FULL_WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
 }
 
 # log_count <pattern>: matching lines of the last run's log; none is a count, not a failure.
@@ -96,7 +97,7 @@ for platform in ios android; do
     mkdir -p "$dir/work/.e2e"
     report passed 5 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM="$platform" E2E_COMMAND='true' E2E_APP_PATH="$(app "$platform" "$dir")" E2E_APP_ID=a \
-        E2E_TARGET=app E2E_WORKERS=1 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_TARGET=app E2E_WORKERS=1 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_FULL_CAPACITY_WAIT_MINUTES="$FULL_WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
     if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")" 'wrote no report' 'error'; then
         pass_case
     fi
@@ -220,14 +221,15 @@ if assert_equals 1 "$STEP_STATUS" 'status' && assert_contains "$(cat "$dir/log")
     pass_case
 fi
 
-# capacity <platform> <workers> <targets>: runs the suite against a farm that reports $FARM.
+# capacity <platform> <workers> <targets>: runs the suite against a farm that reports $FARM,
+# with no wait for full capacity.
 capacity() {
     dir="$(new_workspace "$ACTION" 'Run the e2e suite')"
     # shellcheck disable=SC2016 # expanded when the stub runs.
     stub "$dir" curl 'printf "%s\n" "$*" > "$(dirname "$0")/../curl-args"; cat > "$(dirname "$0")/../curl-stdin"; printf "%s" "$FARM"'
     run_step "$dir" FARM="$FARM" E2E_PLATFORM="$1" E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app "$1" "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$2" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= TEST_TARGETS="$3" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_FULL_CAPACITY_WAIT_MINUTES=0 E2E_JOB_TIMEOUT_MINUTES="$JOB_TIMEOUT" E2E_JOB_STARTED_AT= TEST_TARGETS="$3" SIMLOCK_URL=https://farm.invalid/ SIMLOCK_TOKEN=secret-token
 }
 
 case_start "ios: the farm's free simulators are split across the targets, and the token never reaches argv"
@@ -253,7 +255,8 @@ case_start 'workers within capacity are kept'
 capacity ios 2 '[]'
 if assert_equals 2 "$(cat "$dir/work/workers")" 'workers'; then pass_case; fi
 
-# busy <workers> <wait minutes> <farm>...: a farm that reports each <farm> in turn, then the last one again.
+# busy <workers> <wait minutes> <farm>...: a farm that reports each <farm> in turn, then the last one again;
+# BUSY_FULL_WAIT sets the wait for full capacity, none by default.
 busy() {
     local workers="$1" wait="$2"
     shift 2
@@ -266,7 +269,13 @@ busy() {
     mkdir -p "$dir/work/.e2e" && report passed 9 0 > "$dir/work/.e2e/report.json"
     run_step "$dir" E2E_PLATFORM=ios E2E_COMMAND="printf '%s' \"\$E2E_WORKERS\" > workers; $(writes "$(report passed 1 0)")" \
         E2E_APP_PATH="$(app ios "$dir")" E2E_APP_ID=a E2E_TARGET=app E2E_WORKERS="$workers" E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW="${BUSY_SHADOW:-false}" \
-        E2E_CAPACITY_WAIT_MINUTES="$wait" E2E_JOB_TIMEOUT_MINUTES="${BUSY_JOB_TIMEOUT:-$JOB_TIMEOUT}" E2E_JOB_STARTED_AT="${BUSY_JOB_STARTED_AT:-}" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+        E2E_CAPACITY_WAIT_MINUTES="$wait" E2E_FULL_CAPACITY_WAIT_MINUTES="${BUSY_FULL_WAIT:-0}" E2E_JOB_TIMEOUT_MINUTES="${BUSY_JOB_TIMEOUT:-$JOB_TIMEOUT}" E2E_JOB_STARTED_AT="${BUSY_JOB_STARTED_AT:-}" TEST_TARGETS="${BUSY_TARGETS:-[]}" SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t
+}
+
+# capacity_polls: the 30-second capacity polls the last busy run slept; the step's
+# 0.5-second waits for its output also reach the sleep stub, and are not counted.
+capacity_polls() {
+    { grep -x 30 "$dir/sleeps" 2> /dev/null || true; } | wc -l | tr -d ' '
 }
 
 case_start 'a busy farm waits until half the devices an idle farm would give are free'
@@ -299,7 +308,7 @@ case_start 'more targets than the farm has devices still run one worker each, wi
 BUSY_TARGETS='[{"name":"a"},{"name":"b"},{"name":"c"}]' busy 3 10 '{"capacity":{"ios":{"limit":2,"used":0}}}'
 if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
     && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
-    && assert_equals 0 "$(grep -cx 30 "$dir/sleeps" || true)" 'capacity polls'; then
+    && assert_equals 0 "$(capacity_polls)" 'capacity polls'; then
     pass_case
 fi
 
@@ -318,6 +327,70 @@ if assert_equals 1 "$STEP_STATUS" 'status' \
     && assert_equals no "$([ -e "$dir/work/workers" ] && echo yes || echo no)" 'suite ran' \
     && assert_equals no "$([ -e "$dir/work/.e2e" ] && echo yes || echo no)" 'stale report' \
     && assert_contains "$(cat "$dir/log")" '::error::Infrastructure failure: the farm still had 0 free ios devices after 1 minutes, fewer than the 1 this run needs to finish within the job limit.' 'error'; then
+    pass_case
+fi
+
+case_start 'a farm with every device free keeps the workers and does not wait'
+BUSY_FULL_WAIT="$FULL_WAIT" busy 2 10 '{"capacity":{"ios":{"limit":2,"used":0}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 2 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 0 "$(capacity_polls)" 'polls' \
+    && assert_equals 0 "$(log_count '^::notice::')" 'notices'; then
+    pass_case
+fi
+
+case_start 'a farm with half its devices free waits for all of them, and keeps the workers once they are free'
+BUSY_FULL_WAIT="$FULL_WAIT" busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}' '{"capacity":{"ios":{"limit":2,"used":1}}}' '{"capacity":{"ios":{"limit":2,"used":0}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 2 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 2 "$(capacity_polls)" 'polls' \
+    && assert_contains "$(cat "$dir/log")" "::notice::The farm has 1 free ios devices; waiting up to $FULL_WAIT minutes for all 2 before running fewer workers." 'waiting' \
+    && assert_equals 0 "$(log_count 'workers instead of')" 'downscale'; then
+    pass_case
+fi
+
+case_start 'a farm that never frees every device runs fewer workers once the full-capacity wait ends'
+BUSY_FULL_WAIT="$FULL_WAIT" busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals "$((FULL_WAIT * 2))" "$(capacity_polls)" 'polls' \
+    && assert_contains "$(cat "$dir/log")" "::notice::Waited $FULL_WAIT minutes for all 2 free ios devices." 'waited' \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm has 1 free ios devices; running 1 workers instead of 2.' 'notice'; then
+    pass_case
+fi
+
+case_start 'a full-capacity wait of 0 runs fewer workers at once'
+BUSY_FULL_WAIT=0 busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 0 "$(capacity_polls)" 'polls' \
+    && assert_equals 0 "$(log_count 'waiting up to\|Waited')" 'wait notices' \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm has 1 free ios devices; running 1 workers instead of 2.' 'notice'; then
+    pass_case
+fi
+
+case_start 'a farm that stops answering during the full-capacity wait runs the devices it last reported'
+BUSY_FULL_WAIT="$FULL_WAIT" busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}' 'not json'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 2 "$(cat "$dir/polls")" 'polls' \
+    && assert_contains "$(cat "$dir/log")" '::notice::The farm stopped reporting its free ios capacity while this run waited for all 2 devices.' 'stopped'; then
+    pass_case
+fi
+
+case_start 'a run near the job time limit does not wait for full capacity'
+BUSY_FULL_WAIT="$FULL_WAIT" BUSY_JOB_TIMEOUT=60 BUSY_JOB_STARTED_AT="$(( $(date +%s) - 3280 ))" busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}'
+if assert_equals 0 "$STEP_STATUS" "status ($(cat "$dir/log"))" \
+    && assert_equals 1 "$(cat "$dir/work/workers")" 'workers' \
+    && assert_equals 0 "$(capacity_polls)" 'polls'; then
+    pass_case
+fi
+
+case_start 'a malformed full-capacity wait fails before polling the farm'
+BUSY_FULL_WAIT=5m busy 2 10 '{"capacity":{"ios":{"limit":2,"used":1}}}'
+if assert_equals 1 "$STEP_STATUS" 'status' \
+    && assert_equals no "$([ -e "$dir/polls" ] && echo yes || echo no)" 'polled' \
+    && assert_contains "$(cat "$dir/log")" "::error::full-capacity-wait-minutes must be a whole number; got '5m'." 'error'; then
     pass_case
 fi
 
@@ -354,7 +427,7 @@ timed() {
     stub "$dir" timeout "printf '%s\n' \"\$*\" > \"$dir/timeout-args\"; shift 5; $body"
     run_step "$dir" E2E_PLATFORM=android E2E_COMMAND="$command" E2E_APP_PATH="$(app android "$dir")" \
         E2E_APP_ID=com.example.app E2E_TARGET=app E2E_WORKERS=2 E2E_RETRIES=0 E2E_SESSION=s E2E_SHADOW=false \
-        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_JOB_TIMEOUT_MINUTES="$minutes" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
+        E2E_CAPACITY_WAIT_MINUTES="$WAIT" E2E_FULL_CAPACITY_WAIT_MINUTES="$FULL_WAIT" E2E_JOB_TIMEOUT_MINUTES="$minutes" E2E_JOB_STARTED_AT= SIMLOCK_URL=https://farm.invalid SIMLOCK_TOKEN=t "$@"
 }
 
 case_start 'a suite still running 5 minutes before the job timeout is interrupted, keeps its report and fails as infrastructure'
@@ -510,7 +583,7 @@ steps = yaml.safe_load(open(os.environ["ACTION"]))["runs"]["steps"]
 env = next(s for s in steps if s["name"] == "Run the e2e suite")["env"]
 print(" ".join(f"{k}={v}" for k, v in sorted(env.items())))')"
 # shellcheck disable=SC2016 # the literal expressions the action must carry.
-if assert_equals 'E2E_APP_ID=${{ inputs.app-id }} E2E_APP_PATH=${{ inputs.app-path }} E2E_CAPACITY_WAIT_MINUTES=${{ inputs.capacity-wait-minutes }} E2E_COMMAND=${{ inputs.command }} E2E_JOB_STARTED_AT=${{ inputs.job-started-at }} E2E_JOB_TIMEOUT_MINUTES=${{ inputs.job-timeout-minutes }} E2E_PLATFORM=${{ inputs.platform }} E2E_RETRIES=${{ inputs.retries }} E2E_SESSION=${{ inputs.session }} E2E_SHADOW=${{ inputs.shadow }} E2E_TARGET=${{ inputs.target }} E2E_TELEMETRY_DISABLED=1 E2E_TOLERATED=${{ inputs.tolerated }} E2E_WORKERS=${{ inputs.workers }} SIMLOCK_TOKEN=${{ inputs.simlock-token }} SIMLOCK_URL=${{ inputs.simlock-url }} TEST_TARGETS=${{ inputs.targets }}' "$contract" 'env'; then
+if assert_equals 'E2E_APP_ID=${{ inputs.app-id }} E2E_APP_PATH=${{ inputs.app-path }} E2E_CAPACITY_WAIT_MINUTES=${{ inputs.capacity-wait-minutes }} E2E_COMMAND=${{ inputs.command }} E2E_FULL_CAPACITY_WAIT_MINUTES=${{ inputs.full-capacity-wait-minutes }} E2E_JOB_STARTED_AT=${{ inputs.job-started-at }} E2E_JOB_TIMEOUT_MINUTES=${{ inputs.job-timeout-minutes }} E2E_PLATFORM=${{ inputs.platform }} E2E_RETRIES=${{ inputs.retries }} E2E_SESSION=${{ inputs.session }} E2E_SHADOW=${{ inputs.shadow }} E2E_TARGET=${{ inputs.target }} E2E_TELEMETRY_DISABLED=1 E2E_TOLERATED=${{ inputs.tolerated }} E2E_WORKERS=${{ inputs.workers }} SIMLOCK_TOKEN=${{ inputs.simlock-token }} SIMLOCK_URL=${{ inputs.simlock-url }} TEST_TARGETS=${{ inputs.targets }}' "$contract" 'env'; then
     pass_case
 fi
 
