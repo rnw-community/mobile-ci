@@ -72,6 +72,25 @@ reports `forced=false` and detects as usual. An event payload that cannot be
 read while `force-label` is set fails the step. Add `labeled` to the caller's
 `pull_request` types so adding the label starts a run.
 
+**The cheapest answer wins, and the repository is read last.** Three verdicts
+need no repository: the force label, the caller's own `affected` verdict, and
+`always-affected`, checked in that order. Only when none of them answers does
+detection read git. With `checkout: true` the action checks the repository out
+itself at that point, blobless with full history (`fetch-depth: 0`,
+`filter: blob:none`, `persist-credentials: false`): every commit and tree back
+to the merge base, and only HEAD's file contents. A run the event already
+decides (a push, a schedule, a forced or caller-decided pull request) then
+clones nothing. Without credentials git cannot fetch a blob later, and turbo
+does not need one: a lockfile whose base blob is absent is reported as every
+package affected, never as none. With `checkout: false` (default) the caller's
+own checkout is used, and it must reach `base-sha`.
+
+**A caller that already knows passes `affected`.** `true` or `false` is
+reported as-is, with `forced=false` and no turbo run; any other value fails
+the step. One job can run this action once and hand its `affected` output to
+several pipelines, instead of each detecting again. The force label still wins
+over `affected: false`.
+
 ## Inputs
 
 | Name               | Required | Default   | Description                                                          |
@@ -84,21 +103,24 @@ read while `force-label` is set fails the step. Add `labeled` to the caller's
 | `base-sha`          | no       | `''`      | Base SHA for the affected computation (`TURBO_SCM_BASE`).                |
 | `always-affected`   | no       | `false`   | Skip detection and report affected unconditionally.                     |
 | `force-label`       | no       | `''`      | Pull request label that forces `affected=true` (and `forced=true`) without detection. Empty never forces. |
+| `affected`          | no       | `''`      | The caller's own verdict, `true` or `false`, reported without detection or a checkout. `force-label` still wins. Empty detects. |
+| `checkout`          | no       | `false`   | Check the repository out, blobless with full history, only when detection reads it. `false` expects the caller's own checkout. |
 
 ## Outputs
 
 | Name       | Description                                     |
 | ---------- | -------------------------------------------------- |
 | `affected` | `true` or `false`.                                  |
-| `turbo-version` | The turbo version detection ran; empty when turbo did not run (`always-affected`, empty `base-sha`). |
+| `turbo-version` | The turbo version detection ran; empty when turbo did not run (`force-label`, `affected`, `always-affected`, empty `base-sha`). |
 | `forced` | `true` when `force-label` was on the pull request and forced `affected=true`, else `false`. |
 
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.15.3 # v4.15.3
+- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.16.0 # v4.16.0
   id: affected
   with:
+      checkout: true
       targets: '[{"name":"app","appDir":"apps/mobile"}]'
       base-sha: ${{ github.event.pull_request.base.sha }}
       always-affected: ${{ github.event_name != 'pull_request' }}

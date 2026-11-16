@@ -52,33 +52,56 @@ inputs:
       reports affected and forced without running detection. Empty (default) never forces.
     required: false
     default: ''
+  affected:
+    description: >-
+      The caller's own verdict, `true` or `false`, reported as-is without detection or a
+      checkout; `force-label` still wins and `always-affected` does not. Empty (default) detects.
+    required: false
+    default: ''
+  checkout:
+    description: >-
+      When `true`, checks out the repository itself, blobless with full history, and only when
+      detection has to read it. `false` (default) expects the caller's own checkout, with the
+      history back to `base-sha`.
+    required: false
+    default: 'false'
 outputs:
   affected:
     description: '`true` or `false` — whether any target package is affected.'
-    value: ${{ steps.detect.outputs.affected }}
+    value: ${{ steps.resolve.outputs.affected || steps.detect.outputs.affected }}
   turbo-version:
     description: The turbo version detection ran; empty when turbo did not run.
     value: ${{ steps.detect.outputs.turbo-version }}
   forced:
     description: '`true` when `force-label` is on the pull request and forced `affected=true`, else `false`.'
-    value: ${{ steps.detect.outputs.forced }}
+    value: ${{ steps.resolve.outputs.forced }}
 runs:
   using: composite
   steps:
-    - name: Compute affected packages
-      id: detect
+    - name: Resolve the verdict without the repository
+      id: resolve
       shell: bash
       env:
-        TURBO_VERSION: ${{ inputs.turbo-version }}
-        TARGET_PACKAGES: ${{ inputs.target-packages }}
-        TARGETS: ${{ inputs.targets }}
-        TURBO_SCM_BASE: ${{ inputs.base-sha }}
+        AFFECTED: ${{ inputs.affected }}
+        CHECKOUT: ${{ inputs.checkout }}
         ALWAYS_AFFECTED: ${{ inputs.always-affected }}
-        EXEMPT_PATHS: ${{ inputs.exempt-paths }}
-        TRIGGER_PATHS: ${{ inputs.trigger-paths }}
         FORCE_LABEL: ${{ inputs.force-label }}
       run: |
         set -euo pipefail
+        case "$AFFECTED" in
+          ''|true|false) ;;
+          *)
+            echo "::error::affected must be 'true', 'false' or empty; got '$AFFECTED'."
+            exit 1
+            ;;
+        esac
+        case "$CHECKOUT" in
+          true|false) ;;
+          *)
+            echo "::error::checkout must be 'true' or 'false'; got '$CHECKOUT'."
+            exit 1
+            ;;
+        esac
         if [ -n "$FORCE_LABEL" ]; then
           labelled=$(node -e '
             const { readFileSync } = require("node:fs");
@@ -100,11 +123,37 @@ runs:
           fi
         fi
         echo 'forced=false' >> "$GITHUB_OUTPUT"
+        if [ -n "$AFFECTED" ]; then
+          echo "affected=$AFFECTED" >> "$GITHUB_OUTPUT"
+          echo "The caller supplied affected=$AFFECTED: skipping detection."
+          exit 0
+        fi
         if [ "$ALWAYS_AFFECTED" = 'true' ]; then
           echo 'affected=true' >> "$GITHUB_OUTPUT"
           echo 'always-affected input set: skipping turbo detection.'
           exit 0
         fi
+        echo 'pending=true' >> "$GITHUB_OUTPUT"
+    - name: Check out the history detection reads
+      if: steps.resolve.outputs.pending == 'true' && inputs.checkout == 'true'
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      with:
+        fetch-depth: 0
+        filter: blob:none
+        persist-credentials: false
+    - name: Compute affected packages
+      id: detect
+      if: steps.resolve.outputs.pending == 'true'
+      shell: bash
+      env:
+        TURBO_VERSION: ${{ inputs.turbo-version }}
+        TARGET_PACKAGES: ${{ inputs.target-packages }}
+        TARGETS: ${{ inputs.targets }}
+        TURBO_SCM_BASE: ${{ inputs.base-sha }}
+        EXEMPT_PATHS: ${{ inputs.exempt-paths }}
+        TRIGGER_PATHS: ${{ inputs.trigger-paths }}
+      run: |
+        set -euo pipefail
         if [ -z "$(printf '%s' "$TARGET_PACKAGES" | tr -d '[:space:]')" ]; then
           TARGET_PACKAGES=$(node -e '
             const { readFileSync } = require("node:fs");
