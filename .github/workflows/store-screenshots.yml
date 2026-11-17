@@ -1084,7 +1084,7 @@ jobs:
             - name: load-consumer-config
               id: load-config
               if: inputs.config-path != ''
-              uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/load-consumer-config@v4.18.0 # v4.18.0
               with:
                   config-path: ${{ inputs.config-path }}
                   allowed-keys: >-
@@ -1665,7 +1665,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.18.0 # v4.18.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1698,7 +1698,7 @@ jobs:
             build-secrets-env: ${{ secrets.build-secrets-env }}
 
     build-ios:
-        name: Build iOS (${{ matrix.target.name }})
+        name: Build iOS
         needs: [validate-manifest, plan-ios]
         if: ${{ !cancelled() && needs.plan-ios.result == 'success' && needs.plan-ios.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
@@ -1708,20 +1708,21 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan-ios.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ matrix.target.appDir }}
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
+            APP_DIR: ${{ matrix.appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.name }}
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1762,7 +1763,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1874,13 +1875,13 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.18.0 # v4.18.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Restore install cache
               id: install-cache
-              uses: rnw-community/mobile-ci/actions/install-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.18.0 # v4.18.0
               with:
                   paths: ${{ inputs.install-cache-paths }}
                   key: ${{ inputs.install-cache-key }}
@@ -1911,7 +1912,7 @@ jobs:
 
             - name: setup-xcode-pinned
               id: xcode
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.18.0 # v4.18.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -1925,16 +1926,16 @@ jobs:
 
             - name: Restore the React Native prebuilt cache
               id: rn-prebuilts
-              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.18.0 # v4.18.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
                   RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
                   RCT_USE_RN_DEP_ENABLED: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
@@ -1951,29 +1952,29 @@ jobs:
                   eval "$PREBUILD_COMMAND"
 
             - name: setup-ccache-ios (restore)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.18.0 # v4.18.0
               with:
                   mode: restore
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-
 
             - name: build-ios-app
-              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/build-ios-app@v4.18.0 # v4.18.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
-                  workspace: ${{ matrix.target.workspace }}
-                  scheme: ${{ matrix.target.scheme }}
+                  app-dir: ${{ matrix.appDir }}
+                  workspace: ${{ matrix.workspace }}
+                  scheme: ${{ matrix.scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.name }}
+                  pods-cache-key: pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-
                   rct-use-prebuilt-rncore: ${{ needs.validate-manifest.outputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ needs.validate-manifest.outputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
@@ -1990,17 +1991,17 @@ jobs:
                   key: ${{ steps.rn-prebuilts.outputs.cache-key }}
 
             - name: setup-ccache-ios (save)
-              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/setup-ccache-ios@v4.18.0 # v4.18.0
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
 
             - name: Archive app for the capture job
               shell: bash
               env:
                   ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
-                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_NAME: ${{ matrix.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -2009,26 +2010,26 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
+                  name: store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.name }}.tar.gz
                   retention-days: 1
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.18.0 # v4.18.0
               with:
                   mode: publish
                   platform: ios
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
+                  path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.name }}.tar.gz
 
             - name: Report that this key is now warm
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
                   ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
               run: |
                   echo "### iOS${ARTIFACT_SCOPE:-} ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
@@ -2042,7 +2043,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.18.0 # v4.18.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -2081,7 +2082,7 @@ jobs:
             build-secrets-env: ${{ secrets.build-secrets-env }}
 
     build-android:
-        name: Build Android (${{ matrix.target.name }})
+        name: Build Android
         needs: [validate-manifest, plan-android]
         if: ${{ !cancelled() && needs.plan-android.result == 'success' && needs.plan-android.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.android-build-runner-labels != '' && inputs.android-build-runner-labels || (inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels)) }}
@@ -2091,18 +2092,19 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-android{2}-{3}', github.run_id, github.run_attempt, needs.validate-manifest.outputs.artifact-scope, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan-android.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ matrix.target.appDir }}
+            APP_DIR: ${{ matrix.appDir }}
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2143,7 +2145,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -2255,13 +2257,13 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.18.0 # v4.18.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Restore install cache
               id: install-cache
-              uses: rnw-community/mobile-ci/actions/install-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.18.0 # v4.18.0
               with:
                   paths: ${{ inputs.install-cache-paths }}
                   key: ${{ inputs.install-cache-key }}
@@ -2298,50 +2300,50 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: build-android-app
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v4.18.0 # v4.18.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
                   cmdline-tools-version: ${{ inputs.android-cmdline-tools-version }}
                   gradle-task: ${{ needs.validate-manifest.outputs.android-gradle-task }}
                   gradle-args: ${{ needs.validate-manifest.outputs.android-gradle-args }}
-                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.name }}
+                  gradle-cache-key: gradle-${{ matrix.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.appDir), format('{0}/android/**/*.gradle*', matrix.appDir), format('{0}/android/gradle/*.versions.toml', matrix.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
-                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
+                      gradle-${{ matrix.name }}-${{ runner.os }}-
 
             - name: Upload the APK for the capture job
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-cache/android-native-app/${{ matrix.name }}/app-release.apk
                   if-no-files-found: error
                   retention-days: 1
 
             - name: expo-base-binary (publish)
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.18.0 # v4.18.0
               with:
                   mode: publish
                   platform: android
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  path: .ci-cache/android-native-app/${{ matrix.name }}/app-release.apk
 
             - name: Report that this key is now warm
               if: github.ref_name == github.event.repository.default_branch && needs.validate-manifest.outputs.build-strategy != 'native'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
                   ARTIFACT_SCOPE: ${{ needs.validate-manifest.outputs.artifact-scope }}
               run: |
                   echo "### Android${ARTIFACT_SCOPE:-} ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
@@ -2360,7 +2362,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2411,7 +2413,7 @@ jobs:
                   esac
 
             - name: setup-xcode-pinned
-              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/setup-xcode-pinned@v4.18.0 # v4.18.0
               with:
                   version: ${{ inputs.xcode-version }}
                   build: ${{ inputs.xcode-build }}
@@ -2430,7 +2432,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -2439,7 +2441,7 @@ jobs:
 
             - name: capture-screenshots-ios
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-ios@v4.18.0 # v4.18.0
               with:
                   app-path: .ci-artifacts/store-screenshots-app${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}/Base.app
                   app-id: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
@@ -2501,7 +2503,7 @@ jobs:
                 entry: ${{ fromJSON(needs.validate-manifest.outputs.ios-entries) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2532,7 +2534,7 @@ jobs:
                   TARGET_NAME: ${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}
               run: tar -xzf ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}.tar.gz" -C ".ci-artifacts/store-screenshots-app${ARTIFACT_SCOPE:-}-${TARGET_NAME}"
             - name: Apply maestro-secrets-env to the e2e capture
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -2544,7 +2546,7 @@ jobs:
                   INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
               run: bash -c "$INSTALL_COMMAND"
             - name: Install @mobile-ci/e2e-simlock
-              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.18.0 # v4.18.0
               with:
                   e2e-dir: ${{ inputs.e2e-dir }}
             - name: Plan the e2e capture cells
@@ -2709,7 +2711,7 @@ jobs:
               run: eval "$POST_CAPTURE_COMMAND"
             - name: Release the simulators the capture left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.18.0 # v4.18.0
               with:
                   mode: release
                   platform: ios
@@ -2746,7 +2748,7 @@ jobs:
                 entry: ${{ fromJSON(needs.validate-manifest.outputs.android-entries) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -2761,7 +2763,7 @@ jobs:
                   name: store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
                   path: .ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}
             - name: Apply maestro-secrets-env to the e2e capture
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -2773,7 +2775,7 @@ jobs:
                   INSTALL_COMMAND: ${{ inputs.e2e-install-command }}
               run: bash -c "$INSTALL_COMMAND"
             - name: Install @mobile-ci/e2e-simlock
-              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.18.0 # v4.18.0
               with:
                   e2e-dir: ${{ inputs.e2e-dir }}
             - name: Plan the e2e capture cells
@@ -2941,7 +2943,7 @@ jobs:
               run: eval "$POST_CAPTURE_COMMAND"
             - name: Release the emulators the capture left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.18.0 # v4.18.0
               with:
                   mode: release
                   platform: android
@@ -2979,7 +2981,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -3014,7 +3016,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -3024,7 +3026,7 @@ jobs:
             - name: redroid-container (start)
               id: redroid
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/redroid-container@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v4.18.0 # v4.18.0
               with:
                   mode: start
                   container-name: redroid-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-${{ strategy.job-index }}
@@ -3037,7 +3039,7 @@ jobs:
             - name: android-emulator (start)
               id: emulator
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/android-emulator@v4.18.0 # v4.18.0
               with:
                   mode: start
                   avd-name: mobile-ci-screenshots
@@ -3055,7 +3057,7 @@ jobs:
 
             - name: capture-screenshots-android
               id: capture
-              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/capture-screenshots-android@v4.18.0 # v4.18.0
               with:
                   android-serial: ${{ inputs.android-driver == 'avd' && steps.emulator.outputs.android-serial || steps.redroid.outputs.android-serial }}
                   apk-path: .ci-artifacts/store-screenshots-apk${{ needs.validate-manifest.outputs.artifact-scope }}-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}/app-release.apk
@@ -3097,14 +3099,14 @@ jobs:
 
             - name: redroid-container (teardown)
               if: always() && inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/redroid-container@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/redroid-container@v4.18.0 # v4.18.0
               with:
                   mode: teardown
                   container-name: redroid-screenshots${{ needs.validate-manifest.outputs.artifact-scope }}-${{ strategy.job-index }}
 
             - name: android-emulator (stop)
               if: always() && inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/android-emulator@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/android-emulator@v4.18.0 # v4.18.0
               with:
                   mode: stop
 
@@ -3126,7 +3128,7 @@ jobs:
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Validate required inputs and capture results
@@ -3197,7 +3199,7 @@ jobs:
 
             - name: Apply EAS_EXTRA_ENV
               if: env.HAS_EAS_EXTRA_ENV == 'true'
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.EAS_EXTRA_ENV }}
                   label: EAS_EXTRA_ENV
@@ -3309,7 +3311,7 @@ jobs:
 
             - name: Restore install cache
               id: install-cache
-              uses: rnw-community/mobile-ci/actions/install-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.18.0 # v4.18.0
               with:
                   paths: ${{ inputs.install-cache-paths }}
                   key: ${{ inputs.install-cache-key }}
@@ -3448,7 +3450,7 @@ jobs:
               # against 'true' here - unlike a raw boolean input, whose
               # `== 'true'` comparison is always false and needs truthiness.
               if: needs.validate-manifest.outputs.asc-dedupe-screenshots == 'true' && env.HAS_ASC_API_KEY == 'true'
-              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/asc-dedupe-screenshots@v4.18.0 # v4.18.0
               with:
                   app-id: ${{ needs.validate-manifest.outputs.asc-dedupe-app-id != '' && needs.validate-manifest.outputs.asc-dedupe-app-id || fromJSON(needs.validate-manifest.outputs.ios-target).appId }}
                   asc-key-path: ${{ steps.asc-key.outputs.key-path }}

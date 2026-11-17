@@ -83,8 +83,8 @@ the section that matches your task; skip the other.
   step/job, never silently report success or "unaffected"/"skip". See
   `turbo-affected` and `expo-repack` for the pattern.
 - Every third-party `uses:` (anything not `rnw-community/mobile-ci/...`) is
-  pinned to a full commit SHA with a trailing `# vX.Y.Z` comment. Dependabot
-  opens the bump PRs; never hand-edit a SHA without updating its comment.
+  pinned to a full commit SHA with a trailing `# vX.Y.Z` comment. Bump pins
+  by hand; never change a SHA without updating its comment.
 - Self-references (this repo's own actions/workflows calling each other) use
   the full `rnw-community/mobile-ci/actions/<name>@<ref>` /
   `rnw-community/mobile-ci/.github/workflows/<name>.yml@<ref>` form, never a
@@ -342,7 +342,7 @@ moving with the latest release of that major; `@main` can change without a
 deprecation window.
 
 ```yaml
-uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
 ```
 
 ### Self-hosted runner prerequisites
@@ -378,7 +378,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -388,7 +388,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.app","prebuildCommand":"npx expo prebuild -p android"}]

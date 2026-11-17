@@ -72,7 +72,7 @@ if not spec or spec.get('type') != 'boolean' or spec.get('default') is not False
 resolve = {step.get('name'): step for step in workflow['jobs']['detect']['steps']}.get("Resolve each target's flows, quarantine and build strategy", {})
 if resolve.get('env', {}).get('TOLERATE_TEST_FAILURES') != '${{ inputs.tolerate-test-failures }}':
     problems.append('the input is not the default of each target tolerateTestFailures')
-want = '${{ matrix.target.tolerateTestFailures }}'
+want = '${{ matrix.tolerateTestFailures }}'
 runs, report = 0, False
 for job in workflow['jobs'].values():
     for step in job.get('steps', []):
@@ -104,5 +104,38 @@ else
     fail_case "$output"
 fi
 done
+
+case_start "every job matrixed over a targets list has a static name and keys its matrix on name with include from the same list"
+if output="$(WORKFLOWS_DIR="$REPO_ROOT/.github/workflows" python3 - <<'PYTHON' 2>&1
+import glob, os, re, sys, yaml
+problems, seen = [], 0
+for path in sorted(glob.glob(os.environ['WORKFLOWS_DIR'] + '/*.yml')):
+    workflow = yaml.safe_load(open(path, encoding='utf-8'))
+    for job_id, job in (workflow.get('jobs') or {}).items():
+        matrix = (job.get('strategy') or {}).get('matrix')
+        if not isinstance(matrix, dict) or 'include' not in matrix:
+            continue
+        seen += 1
+        where = f'{os.path.basename(path)} job {job_id}'
+        if '${{' in str(job.get('name', '')):
+            problems.append(f"{where}: name {job.get('name')!r} must be static")
+        include = str(matrix['include'])
+        expression = re.fullmatch(r'\$\{\{ (fromJSON\(.*\)) \}\}', include)
+        if not expression:
+            problems.append(f'{where}: include {include!r} is not a fromJSON list')
+        elif matrix.get('name') != '${{ ' + expression.group(1) + '.*.name }}':
+            problems.append(f"{where}: matrix name {matrix.get('name')!r} is not the names of the include list")
+        if next(iter(matrix)) != 'name':
+            problems.append(f'{where}: name must be the first matrix key')
+if seen < 10:
+    problems.append(f'expected at least 10 targets-matrix jobs, found {seen}')
+print('\n'.join(problems))
+sys.exit(1 if problems else 0)
+PYTHON
+)"; then
+    pass_case
+else
+    fail_case "$output"
+fi
 
 finish_suite

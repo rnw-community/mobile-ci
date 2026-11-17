@@ -16,7 +16,7 @@ for platform in ('ios', 'android'):
     steps = {step.get('name'): step for step in planner['jobs']['plan']['steps']}
     assert 'Resolve executing workflow refs' in steps
 
-    assert 'test-targets' in workflow['jobs']['test']['strategy']['matrix']['target']
+    assert 'test-targets' in workflow['jobs']['test']['strategy']['matrix']['include']
     assert "needs.test.result == 'success'" in workflow['jobs']['cache-pass']['if']
     assert 'cache-pass' in workflow['jobs']['status']['needs']
 PY

@@ -167,7 +167,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.18.0 # v4.18.0
         with:
             platform: android
             targets: >-
@@ -185,7 +185,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.18.0 # v4.18.0
         with:
             platform: ios
             targets: >-
@@ -208,11 +208,12 @@ jobs:
         runs-on: [self-hosted, macOS, ARM64]
         strategy:
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.native-targets) }}
         steps:
             - env:
-                  TARGET: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: echo "compile $TARGET for native key $NATIVE_KEY"
 ```
 

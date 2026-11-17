@@ -923,13 +923,13 @@ jobs:
             android-abi-key: ${{ steps.android-abis.outputs.key-segment }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
               with:
                   node-version: ${{ inputs.node-version }}
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.17.0 # v4.17.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.18.0 # v4.18.0
               id: affected
               with:
                   turbo-version: ${{ inputs.turbo-version }}
@@ -1062,7 +1062,7 @@ jobs:
                   } >> "$GITHUB_OUTPUT"
 
             - name: Validate the e2e call
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.18.0 # v4.18.0
               with:
                   mode: validate
                   platform: android
@@ -1170,7 +1170,7 @@ jobs:
             - name: Fetch the recorded flow timings
               id: flow-timings
               if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.18.0 # v4.18.0
               with:
                   mode: fetch
                   artifact-name: maestro-flow-timings-android${{ steps.targets.outputs.artifact-scope }}
@@ -1184,7 +1184,7 @@ jobs:
             contents: read
             packages: read
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/expo-base-plan.yml@v4.18.0 # v4.18.0
         with:
             control-runner-labels: ${{ inputs.control-runner-labels }}
             runs-on-cache-bypass: ${{ inputs.runs-on-cache-bypass }}
@@ -1233,7 +1233,7 @@ jobs:
             maestro-secrets-env: ${{ secrets.maestro-secrets-env }}
 
     build:
-        name: Build (${{ matrix.target.name }})
+        name: Build
         needs: [detect, plan]
         if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
@@ -1243,18 +1243,19 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android{2}-{3}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native') && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-android{2}-{3}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ matrix.target.appDir }}
+            APP_DIR: ${{ matrix.appDir }}
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1295,7 +1296,7 @@ jobs:
                   done <<< "$BUILD_ENV"
 
             - name: Apply build-secrets-env
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.build-secrets-env }}
                   label: build-secrets-env
@@ -1407,13 +1408,13 @@ jobs:
 
             - name: Restore package manager cache
               id: pm-cache
-              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/node-pm-cache@v4.18.0 # v4.18.0
               with:
                   package-manager: ${{ steps.package-manager.outputs.pm }}
 
             - name: Restore install cache
               id: install-cache
-              uses: rnw-community/mobile-ci/actions/install-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/install-cache@v4.18.0 # v4.18.0
               with:
                   paths: ${{ inputs.install-cache-paths }}
                   key: ${{ inputs.install-cache-key }}
@@ -1450,53 +1451,53 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: build-android-app
               id: build
-              uses: rnw-community/mobile-ci/actions/build-android-app@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/build-android-app@v4.18.0 # v4.18.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   gradle-task: ${{ inputs.gradle-task }}
                   gradle-args: ${{ inputs.gradle-args }}
                   android-abis: ${{ needs.detect.outputs.android-abis }}
                   android-sdk-cache-save: 'false'
-                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.name }}
+                  gradle-cache-key: gradle-${{ matrix.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.appDir), format('{0}/android/**/*.gradle*', matrix.appDir), format('{0}/android/gradle/*.versions.toml', matrix.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
-                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
+                      gradle-${{ matrix.name }}-${{ runner.os }}-
 
             - name: Upload the APK for the test jobs
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-cache/android-native-app/${{ matrix.name }}/app-release.apk
                   if-no-files-found: error
                   retention-days: 1
 
             - name: expo-base-binary (publish)
-              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
-              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.17.0 # v4.17.0
+              if: github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native'
+              uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.18.0 # v4.18.0
               with:
                   mode: publish
                   platform: android
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  path: .ci-cache/android-native-app/${{ matrix.name }}/app-release.apk
 
             - name: Report that this key is now warm
-              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
+              if: github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: |
                   echo "### Android ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Pull requests on this native surface now repack instead of running Gradle.' >> "$GITHUB_STEP_SUMMARY"
@@ -1511,7 +1512,7 @@ jobs:
                   key: ${{ steps.build.outputs.android-sdk-cache-key }}
 
     test:
-        name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
+        name: Maestro shard
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.android-driver == 'device-cloud' && (inputs.device-cloud-runner-labels != '' && inputs.device-cloud-runner-labels || inputs.repack-runner-labels) || (inputs.test-runner-labels != '' && inputs.test-runner-labels || inputs.runner-labels)) }}
@@ -1519,12 +1520,13 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.test-targets).*.name }}
                 shard-index: ${{ inputs.android-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
+                include: ${{ fromJSON(needs.plan.outputs.test-targets) }}
 
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Checkout repository
@@ -1534,8 +1536,8 @@ jobs:
 
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
 
             - name: Validate the test driver
               shell: bash
@@ -1610,7 +1612,7 @@ jobs:
 
             - name: Apply maestro-secrets-env
               id: maestro-secrets
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1620,23 +1622,23 @@ jobs:
             - name: Select the target's flow timings
               id: shard-timings
               if: inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.18.0 # v4.18.0
               with:
                   mode: select
                   timings: ${{ needs.detect.outputs.flow-timings }}
-                  target: ${{ matrix.target.name }}
+                  target: ${{ matrix.name }}
 
             - name: run-maestro-android-redroid
               id: run-maestro-android-redroid
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ matrix.tolerateTestFailures }}
               if: inputs.android-driver == 'redroid'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android-redroid@v4.18.0 # v4.18.0
               with:
                   image: ${{ inputs.redroid-image }}
                   container-name: redroid-e2e${{ needs.detect.outputs.artifact-scope }}-${{ strategy.job-index }}
-                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
+                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/app-release.apk
+                  app-id: ${{ matrix.appId }}
+                  flows-dir: ${{ matrix.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -1661,19 +1663,19 @@ jobs:
                   cpus: ${{ inputs.redroid-cpus }}
                   prewarm-manifest-path: ${{ inputs.redroid-prewarm-manifest-path }}
                   boot-timeout-seconds: ${{ inputs.redroid-boot-timeout-seconds }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
 
             - name: run-maestro-android
               id: run-maestro-android
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ matrix.tolerateTestFailures }}
               if: inputs.android-driver == 'avd'
-              uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-android@v4.18.0 # v4.18.0
               with:
-                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
+                  apk-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/app-release.apk
+                  app-id: ${{ matrix.appId }}
+                  flows-dir: ${{ matrix.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -1705,22 +1707,22 @@ jobs:
                   cores: ${{ inputs.emulator-cores }}
                   emulator-slots-dir: ${{ inputs.emulator-slots-dir }}
                   emulator-slot-timeout-minutes: ${{ inputs.emulator-slot-timeout-minutes }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
 
             - name: run-maestro-device-cloud
               id: run-maestro-device-cloud
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ matrix.tolerateTestFailures }}
               if: inputs.android-driver == 'device-cloud'
-              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.18.0 # v4.18.0
               with:
                   platform: android
-                  app-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
+                  app-path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/app-release.apk
                   api-key: ${{ secrets.device-cloud-api-key }}
                   cli-version: ${{ inputs.device-cloud-cli-version }}
                   node-version: ${{ inputs.node-version }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
+                  flows-dir: ${{ matrix.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -1733,9 +1735,9 @@ jobs:
                   android-api-level: ${{ inputs.device-cloud-android-api-level }}
                   android-device: ${{ inputs.device-cloud-android-device }}
                   junit-report: ${{ inputs.junit-report }}
-                  run-name: ${{ github.repository }}@${{ github.sha }} android ${{ matrix.target.name }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  run-name: ${{ github.repository }}@${{ github.sha }} android ${{ matrix.name }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
                   redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
 
@@ -1743,8 +1745,8 @@ jobs:
               if: always() && inputs.balance-shards && inputs.android-driver != 'device-cloud' && inputs.shard-manifest-dir == ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  path: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.target.name }}-${{ matrix.shard-index }}/flow-timings.tsv
+                  name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
+                  path: ${{ github.workspace }}/artifacts/maestro-android-${{ matrix.name }}-${{ matrix.shard-index }}/flow-timings.tsv
                   retention-days: 1
                   if-no-files-found: ignore
                   overwrite: true
@@ -1753,11 +1755,11 @@ jobs:
               if: steps.run-maestro-android-redroid.outcome == 'failure' || steps.run-maestro-android.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_NAME: ${{ matrix.name }}
               run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
 
     e2e:
-        name: E2E suite (${{ matrix.target.name }})
+        name: E2E suite
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'maestro' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         runs-on: ${{ fromJSON(inputs.e2e-runner-labels != '' && inputs.e2e-runner-labels || inputs.repack-runner-labels) }}
@@ -1765,10 +1767,11 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.test-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.test-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Record when the job started
@@ -1784,10 +1787,10 @@ jobs:
                   node-version: ${{ inputs.e2e-node-version }}
             - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
             - name: Apply maestro-secrets-env to the e2e suite
-              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.18.0 # v4.18.0
               with:
                   env: ${{ secrets.maestro-secrets-env }}
                   label: maestro-secrets-env
@@ -1795,16 +1798,16 @@ jobs:
             - name: Run the e2e suite
               id: run
               continue-on-error: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.18.0 # v4.18.0
               with:
                   mode: run
                   platform: android
                   e2e-dir: ${{ inputs.e2e-dir }}
                   install-command: ${{ inputs.e2e-install-command }}
                   command: ${{ inputs.e2e-command }}
-                  app-path: ${{ github.workspace }}/.ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/app-release.apk
-                  app-id: ${{ matrix.target.appId }}
-                  target: ${{ matrix.target.name }}
+                  app-path: ${{ github.workspace }}/.ci-artifacts/android-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/app-release.apk
+                  app-id: ${{ matrix.appId }}
+                  target: ${{ matrix.name }}
                   targets: ${{ needs.plan.outputs.test-targets }}
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
@@ -1812,14 +1815,14 @@ jobs:
                   full-capacity-wait-minutes: ${{ inputs.e2e-full-capacity-wait-minutes }}
                   job-timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
                   job-started-at: ${{ steps.job-start.outputs.epoch }}
-                  session: e2e-android-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  session: e2e-android-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-                  tolerated: ${{ matrix.target.tolerateTestFailures }}
+                  tolerated: ${{ matrix.tolerateTestFailures }}
                   simlock-url: ${{ inputs.simlock-url }}
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
               if: ${{ always() && steps.run.outcome != 'skipped' }}
-              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-suite@v4.18.0 # v4.18.0
               with:
                   mode: release
                   platform: android
@@ -1830,7 +1833,7 @@ jobs:
               if: ${{ always() && steps.run.outcome != 'skipped' }}
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: e2e-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: e2e-android${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   path: ${{ inputs.e2e-dir }}/.e2e
                   retention-days: ${{ inputs.artifact-retention-days }}
                   include-hidden-files: true
@@ -1844,7 +1847,7 @@ jobs:
         timeout-minutes: 10
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Download this run's shard artifacts
@@ -1853,7 +1856,7 @@ jobs:
                   pattern: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}-*-shard-*
                   path: ${{ runner.temp }}/maestro-shard-artifacts
             - name: Record the flow timings
-              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/maestro-flow-timings@v4.18.0 # v4.18.0
               with:
                   mode: record
                   timings: ${{ needs.detect.outputs.flow-timings }}
@@ -1862,7 +1865,7 @@ jobs:
                   artifact-name: maestro-flow-timings-android${{ needs.detect.outputs.artifact-scope }}
 
     cache-pass:
-        name: Record E2E pass (${{ matrix.target.name }})
+        name: Record E2E pass
         needs: [detect, plan, build, test, e2e]
         if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success')))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
@@ -1870,22 +1873,23 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.cache-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
-              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.18.0 # v4.18.0
               with:
                   enabled: ${{ inputs.runs-on-cache-bypass }}
             - name: Save the successful test contract
               continue-on-error: true
-              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.17.0 # v4.17.0
+              uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.18.0 # v4.18.0
               with:
                   mode: publish
                   platform: android
-                  key: ${{ matrix.target.e2eCacheKey }}
+                  key: ${{ matrix.e2eCacheKey }}
 
     status:
-        name: Android Maestro E2E result
+        name: ${{ inputs.test-framework == 'e2e' && 'Android E2E result' || 'Android Maestro E2E result' }}
         needs: [detect, plan, build, test, e2e, cache-pass]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}

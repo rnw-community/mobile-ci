@@ -179,7 +179,7 @@ import yaml
 
 workflow = yaml.safe_load(open(os.environ['PLAN_WORKFLOW'], encoding='utf-8'))
 steps = {step.get('name'): step for step in workflow['jobs']['plan']['steps']}
-effective = '(matrix.target.buildStrategy || inputs.build-strategy)'
+effective = '(matrix.buildStrategy || inputs.build-strategy)'
 problems = []
 if steps['expo-base-binary (fetch)'].get('if') != f"{effective} != 'native' && steps.e2e-cache.outputs.hit != 'true'":
     problems.append(f"the base lookup runs when {steps['expo-base-binary (fetch)'].get('if')!r}")
@@ -190,9 +190,9 @@ if steps["Record this target's plan"]['env'].get('BUILD_STRATEGY') != '${{ ' + e
 collect = {step.get('name'): step for step in workflow['jobs']['collect']['steps']}
 if collect['Collect the targets whose native key has no base']['env'].get('PLAN_PREFIX') != '${{ inputs.plan-artifact-prefix }}':
     problems.append('collect does not know which plan names are its own')
-if steps["Record this target's plan"]['env'].get('PLAN_ARTIFACT') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+if steps["Record this target's plan"]['env'].get('PLAN_ARTIFACT') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.name }}':
     problems.append('a plan does not record the artifact name it is uploaded under')
-if steps["Upload this target's plan"]['with'].get('name') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}':
+if steps["Upload this target's plan"]['with'].get('name') != '${{ inputs.plan-artifact-prefix }}-${{ matrix.name }}':
     problems.append('the plan is uploaded under another name than it records')
 print('; '.join(problems))
 PYTHON
@@ -264,10 +264,10 @@ for name in ('ios-maestro', 'android-maestro', 'store-screenshots', 'seed-native
         if concurrency.get('cancel-in-progress') is not False:
             problems.append(f'{where}: cancel-in-progress must be false, or a second build cancels the first')
         match = re.fullmatch(
-            r"\$\{\{ \((?P<cond>.+)\) && format\('expo-base-publish-\{0\}-(?P<platform>[a-z]+)-\{1\}-\{2\}', github\.repository, inputs\.base-flavor, matrix\.target\.nativeKey\)"
+            r"\$\{\{ \((?P<cond>.+)\) && format\('expo-base-publish-\{0\}-(?P<platform>[a-z]+)-\{1\}-\{2\}', github\.repository, inputs\.base-flavor, matrix\.nativeKey\)"
             r" \|\| format\('expo-base-build-\{0\}-\{1\}-(?P<job>[a-z]+)"
-            r"(?:-\{2\}', github\.run_id, github\.run_attempt, matrix\.target\.name"
-            r"|\{2\}-\{3\}', github\.run_id, github\.run_attempt, needs\.(?:detect|validate-manifest)\.outputs\.artifact-scope, matrix\.target\.name)\) \}\}",
+            r"(?:-\{2\}', github\.run_id, github\.run_attempt, matrix\.name"
+            r"|\{2\}-\{3\}', github\.run_id, github\.run_attempt, needs\.(?:detect|validate-manifest)\.outputs\.artifact-scope, matrix\.name)\) \}\}",
             group,
         )
         if not match:

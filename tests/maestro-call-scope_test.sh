@@ -153,14 +153,14 @@ for key in ('app-artifact-prefix', 'plan-artifact-prefix'):
         problems.append(f'plan {key} is {plan.get(key)!r}, not scoped')
 
 test = jobs['test']
-if test['strategy']['matrix']['target'] != '${{ fromJSON(needs.plan.outputs.test-targets) }}':
+if test['strategy']['matrix']['include'] != '${{ fromJSON(needs.plan.outputs.test-targets) }}':
     problems.append('the test matrix does not read the planner filtered resolved targets')
 
 build = jobs['build']
 group = str(build['concurrency']['group'])
-if 'needs.detect.outputs.build-strategy' in group or "matrix.target.buildStrategy != 'native'" not in group:
+if 'needs.detect.outputs.build-strategy' in group or "matrix.buildStrategy != 'native'" not in group:
     problems.append('the build concurrency group does not follow the target build strategy')
-if f"'expo-base-build-{{0}}-{{1}}-{platform}{{2}}-{{3}}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.target.name" not in group:
+if f"'expo-base-build-{{0}}-{{1}}-{platform}{{2}}-{{3}}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.name" not in group:
     problems.append('two calls in one run building a target of the same name share a build concurrency group')
 
 for job_id, job in jobs.items():
@@ -175,11 +175,11 @@ for job_id, job in jobs.items():
             if SCOPE not in str(given.get('name', given.get('pattern', ''))):
                 problems.append(f'{job_id} {name!r} artifact {given.get("name", given.get("pattern"))!r} is not scoped')
         if '/actions/run-maestro-' in uses:
-            if given.get('flows-dir') != '${{ matrix.target.flowsDir }}':
+            if given.get('flows-dir') != '${{ matrix.flowsDir }}':
                 problems.append(f'{name!r} flows-dir is {given.get("flows-dir")!r}')
             if SCOPE not in str(given.get('artifact-name', '')):
                 problems.append(f'{name!r} artifact-name is not scoped')
-            if step.get('continue-on-error') != '${{ matrix.target.tolerateTestFailures }}':
+            if step.get('continue-on-error') != '${{ matrix.tolerateTestFailures }}':
                 problems.append(f'{name!r} continue-on-error is {step.get("continue-on-error")!r}')
             if 'container-name' in given and SCOPE not in str(given['container-name']):
                 problems.append(f'{name!r} container-name is shared by every call on the host')
@@ -210,7 +210,7 @@ w = yaml.safe_load(open(os.environ['WORKFLOW']))
 prefix = w[True]['workflow_call'].get('outputs', {}).get('e2e-artifact-prefix', {}).get('value', '')
 uploads = [s['with']['name'] for job in w['jobs'].values() for s in job.get('steps', [])
            if 'upload-artifact' in s.get('uses', '') and str(s['with'].get('name', '')).startswith('e2e-')]
-want = prefix.replace('jobs.detect', 'needs.detect') + '${{ matrix.target.name }}'
+want = prefix.replace('jobs.detect', 'needs.detect') + '${{ matrix.name }}'
 if uploads != [want]:
     print(f'output {prefix!r} does not name the uploads {uploads!r}')
 PYTHON

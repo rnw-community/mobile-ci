@@ -26,7 +26,7 @@ jobs:
         outputs:
             affected: ${{ steps.affected.outputs.affected }}
         steps:
-            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.17.0 # v4.17.0
+            - uses: rnw-community/mobile-ci/actions/turbo-affected@v4.18.0 # v4.18.0
               id: affected
               with:
                   checkout: true
@@ -47,7 +47,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p ios"}]
@@ -65,7 +65,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/android-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"app","appDir":"apps/mobile","appId":"com.example.myapp","prebuildCommand":"npx expo prebuild -p android"}]

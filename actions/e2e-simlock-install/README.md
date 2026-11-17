@@ -29,7 +29,7 @@ run it for you. Add it to a pipeline of your own; for local runs,
 - name: Install the e2e project
   working-directory: e2e
   run: npm ci --no-audit --no-fund
-- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.17.0 # v4.17.0
+- uses: rnw-community/mobile-ci/actions/e2e-simlock-install@v4.18.0 # v4.18.0
   with:
       e2e-dir: e2e
 ```

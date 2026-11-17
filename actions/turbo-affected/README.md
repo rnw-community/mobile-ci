@@ -117,7 +117,7 @@ over `affected: false`.
 ## Example
 
 ```yaml
-- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.17.0 # v4.17.0
+- uses: rnw-community/mobile-ci/actions/turbo-affected@v4.18.0 # v4.18.0
   id: affected
   with:
       checkout: true
