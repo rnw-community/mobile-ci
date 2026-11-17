@@ -208,11 +208,12 @@ jobs:
         runs-on: [self-hosted, macOS, ARM64]
         strategy:
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.native-targets) }}
         steps:
             - env:
-                  TARGET: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: echo "compile $TARGET for native key $NATIVE_KEY"
 ```
 

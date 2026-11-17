@@ -57,7 +57,7 @@ unconditionally, since a prewarmed volume already having them off does not
 help the cold-start fallback path.
 
 `container-name` has no default: pass a value that distinguishes this matrix
-cell from its siblings (e.g. incorporating `matrix.target.name` and
+cell from its siblings (e.g. incorporating `matrix.name` and
 `matrix.shard-index`, or GitHub's own `strategy.job-index`). It only needs to
 be unique *within* the calling run — the action itself appends
 `GITHUB_RUN_ID`/`GITHUB_RUN_ATTEMPT` before using it, so two concurrent
