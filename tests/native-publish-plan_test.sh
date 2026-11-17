@@ -780,8 +780,8 @@ elif check == 'env-order':
         steps = {step.get('name'): step for step in jobs[job]['steps']}
         for name in (f'EAS build ({platform})', f'EAS submit ({platform})'):
             env = steps[name].get('env') or {}
-            for key in ('BUILD_PROFILE', 'SUBMIT_PROFILE'):
-                if key in env and 'matrix.' not in env[key]:
+            for key, field in (('BUILD_PROFILE', 'buildProfile'), ('SUBMIT_PROFILE', 'submitProfile')):
+                if key in env and env[key] != '${{ matrix.%s }}' % field:
                     sys.exit(f"{job} {name} reads {key} from {env[key]!r}, not the matrix target")
     before('android-lint-gate', 'Apply eas.json build profile env', 'Generate production Android project')
 elif check == 'gates':
