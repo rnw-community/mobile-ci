@@ -53,8 +53,8 @@ workflow on GitHub.
 
 Every third-party `uses:` (i.e. not `rnw-community/mobile-ci/...`) is pinned
 to a full commit SHA with a `# vX.Y.Z` trailing comment noting the tag that
-SHA corresponds to. Dependabot (`.github/dependabot.yml`) opens PRs to bump
-these pins; do not hand-edit a SHA without also updating its version comment.
+SHA corresponds to. Bump these pins by hand; never change a SHA without also
+updating its version comment.
 
 ## Self-references
 

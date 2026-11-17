@@ -83,8 +83,8 @@ the section that matches your task; skip the other.
   step/job, never silently report success or "unaffected"/"skip". See
   `turbo-affected` and `expo-repack` for the pattern.
 - Every third-party `uses:` (anything not `rnw-community/mobile-ci/...`) is
-  pinned to a full commit SHA with a trailing `# vX.Y.Z` comment. Dependabot
-  opens the bump PRs; never hand-edit a SHA without updating its comment.
+  pinned to a full commit SHA with a trailing `# vX.Y.Z` comment. Bump pins
+  by hand; never change a SHA without updating its comment.
 - Self-references (this repo's own actions/workflows calling each other) use
   the full `rnw-community/mobile-ci/actions/<name>@<ref>` /
   `rnw-community/mobile-ci/.github/workflows/<name>.yml@<ref>` form, never a
