@@ -70,8 +70,8 @@ for call in ('brand', 'brand-a', 'brand-b'):
 assert {resolve(n, '') for n in names} == {
     'store-screenshots-app-app', 'store-screenshots-apk-app',
     'store-screenshots-ios-plan-app', 'store-screenshots-android-plan-app',
-    'store-screenshots-app-${{ matrix.target.name }}',
-    'store-screenshots-apk-${{ matrix.target.name }}',
+    'store-screenshots-app-${{ matrix.name }}',
+    'store-screenshots-apk-${{ matrix.name }}',
     'store-screenshots-app-${{ fromJSON(needs.validate-manifest.outputs.ios-target).name }}',
     'store-screenshots-apk-${{ fromJSON(needs.validate-manifest.outputs.android-target).name }}',
     'raw-screenshots-ios-${{ steps.capture.outputs.device-slug }}',

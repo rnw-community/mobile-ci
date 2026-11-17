@@ -126,7 +126,7 @@ if jobs['ios-compile-caches'].get('permissions', {}).get('actions') != 'read':
 if 'control-runner-labels' not in str(jobs['ios-compile-caches'].get('runs-on')):
     problems.append('the lookup does not run on the control lane')
 restore = next(step for step in jobs['seed-ios']['steps'] if step.get('name') == 'native-app-cache (restore)')
-if '!matrix.target.forceNative' not in str(restore.get('if')):
+if '!matrix.forceNative' not in str(restore.get('if')):
     problems.append('a refill target restores the cached .app and skips the build that refills the caches')
 lookup = next(step for step in jobs['ios-compile-caches']['steps'] if step.get('name') == 'Mark the targets whose iOS compile caches are missing')['run']
 for step in jobs['seed-ios']['steps']:
@@ -135,7 +135,7 @@ for step in jobs['seed-ios']['steps']:
     if step.get('name') == 'build-ios-app':
         pods_key = step['with']['pods-cache-key']
 for key, looked_up in ((ccache_key, 'ccache-ios-${name}-macOS-xcode-${XCODE_VERSION}-'), (pods_key, 'pods-${name}-macOS-xcode-${XCODE_VERSION}-')):
-    prefix = key.replace('${{ matrix.target.name }}', '${name}').replace('${{ runner.os }}', 'macOS').replace('${{ inputs.xcode-version }}', '${XCODE_VERSION}')
+    prefix = key.replace('${{ matrix.name }}', '${name}').replace('${{ runner.os }}', 'macOS').replace('${{ inputs.xcode-version }}', '${XCODE_VERSION}')
     if not prefix.startswith(looked_up) or looked_up not in lookup:
         problems.append(f'the lookup checks {looked_up!r}, which is not a prefix of the key seed-ios saves ({key!r})')
 print('; '.join(problems))

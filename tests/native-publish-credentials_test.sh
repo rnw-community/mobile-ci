@@ -267,7 +267,7 @@ for job, key_step, flag, secret in (
     upload = step(job, 'Upload the submitted-target marker')
     if 'if' in upload:
         problems.append(f'{job}: the marker upload must run on every submit')
-    if str(upload.get('with', {}).get('name', '')) != '${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}':
+    if str(upload.get('with', {}).get('name', '')) != '${{ needs.plan.outputs.marker-prefix }}${{ matrix.name }}':
         problems.append(f'{job}: the marker artifact must be named <marker-prefix><target name>')
 for job in ('record', 'status'):
     download = step(job, 'Download the submitted-target markers')

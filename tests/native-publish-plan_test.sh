@@ -781,7 +781,7 @@ elif check == 'env-order':
         for name in (f'EAS build ({platform})', f'EAS submit ({platform})'):
             env = steps[name].get('env') or {}
             for key in ('BUILD_PROFILE', 'SUBMIT_PROFILE'):
-                if key in env and 'matrix.target' not in env[key]:
+                if key in env and 'matrix.' not in env[key]:
                     sys.exit(f"{job} {name} reads {key} from {env[key]!r}, not the matrix target")
     before('android-lint-gate', 'Apply eas.json build profile env', 'Generate production Android project')
 elif check == 'gates':
