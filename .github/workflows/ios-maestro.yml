@@ -1054,7 +1054,7 @@ jobs:
             maestro-secrets-env: ${{ secrets.maestro-secrets-env }}
 
     build:
-        name: Build (${{ matrix.target.name }})
+        name: Build
         needs: [detect, plan]
         if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.build-runner-labels != '' && inputs.build-runner-labels || inputs.runner-labels) }}
@@ -1064,16 +1064,17 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.target.name) }}
+            group: ${{ (github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native') && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-ios{2}-{3}', github.run_id, github.run_attempt, needs.detect.outputs.artifact-scope, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.native-targets) }}
         env:
-            APP_DIR: ${{ matrix.target.appDir }}
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
+            APP_DIR: ${{ matrix.appDir }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.name }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -1283,14 +1284,14 @@ jobs:
               id: rn-prebuilts
               uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.17.0 # v4.17.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
                   RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
                   RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
                   EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
@@ -1313,24 +1314,24 @@ jobs:
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-
 
             - name: build-ios-app
               id: build
               uses: rnw-community/mobile-ci/actions/build-ios-app@v4.17.0 # v4.17.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
-                  workspace: ${{ matrix.target.workspace }}
-                  scheme: ${{ matrix.target.scheme }}
+                  app-dir: ${{ matrix.appDir }}
+                  workspace: ${{ matrix.workspace }}
+                  scheme: ${{ matrix.scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.name }}
+                  pods-cache-key: pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
@@ -1351,13 +1352,13 @@ jobs:
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
 
             - name: Archive app for test jobs
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -1366,27 +1367,27 @@ jobs:
 
             - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}.tar.gz
                   retention-days: 1
 
             - name: expo-base-binary (publish)
-              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
+              if: github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.17.0 # v4.17.0
               with:
                   mode: publish
                   platform: ios
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}.tar.gz
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}.tar.gz
 
             - name: Report that this key is now warm
-              if: github.ref_name == github.event.repository.default_branch && matrix.target.buildStrategy != 'native'
+              if: github.ref_name == github.event.repository.default_branch && matrix.buildStrategy != 'native'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: |
                   echo "### iOS ${TARGET_NAME}: base binary published for native key ${NATIVE_KEY}" >> "$GITHUB_STEP_SUMMARY"
                   echo 'Pull requests on this native surface now repack instead of compiling.' >> "$GITHUB_STEP_SUMMARY"
@@ -1437,7 +1438,7 @@ jobs:
                   echo "::endgroup::"
 
     test:
-        name: Maestro shard ${{ matrix.shard-index }} (${{ matrix.target.name }})
+        name: Maestro shard
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'e2e' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         permissions:
@@ -1448,8 +1449,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.test-targets).*.name }}
                 shard-index: ${{ inputs.ios-driver == 'device-cloud' && fromJSON('[0]') || fromJSON(needs.detect.outputs.shard-indices) }}
+                include: ${{ fromJSON(needs.plan.outputs.test-targets) }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -1557,20 +1559,20 @@ jobs:
               continue-on-error: true
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
             - name: Download the app from GitHub when another runner class built it
               if: steps.app-local.outcome == 'failure'
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   github-token: ${{ github.token }}
 
             - name: Unpack app
               shell: bash
               env:
-                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
               run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
 
             - name: Apply maestro-secrets-env
@@ -1589,17 +1591,17 @@ jobs:
               with:
                   mode: select
                   timings: ${{ needs.detect.outputs.flow-timings }}
-                  target: ${{ matrix.target.name }}
+                  target: ${{ matrix.name }}
 
             - name: run-maestro-ios
               id: run-maestro-ios
               if: inputs.ios-driver == 'local'
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ matrix.tolerateTestFailures }}
               uses: rnw-community/mobile-ci/actions/run-maestro-ios@v4.17.0 # v4.17.0
               with:
-                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
-                  app-id: ${{ matrix.target.appId }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
+                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/Base.app
+                  app-id: ${{ matrix.appId }}
+                  flows-dir: ${{ matrix.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -1628,22 +1630,22 @@ jobs:
                   simulator-slim-profile: ${{ inputs.simulator-slim-profile }}
                   simulator-slim-repair: ${{ inputs.simulator-slim-repair }}
                   simulator-requires: ${{ inputs.simulator-requires }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
 
             - name: run-maestro-device-cloud
               id: run-maestro-device-cloud
               if: inputs.ios-driver == 'device-cloud'
-              continue-on-error: ${{ matrix.target.tolerateTestFailures }}
+              continue-on-error: ${{ matrix.tolerateTestFailures }}
               uses: rnw-community/mobile-ci/actions/run-maestro-device-cloud@v4.17.0 # v4.17.0
               with:
                   platform: ios
-                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
+                  app-path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/Base.app
                   api-key: ${{ secrets.device-cloud-api-key }}
                   cli-version: ${{ inputs.device-cloud-cli-version }}
                   node-version: ${{ inputs.node-version }}
-                  flows-dir: ${{ matrix.target.flowsDir }}
+                  flows-dir: ${{ matrix.flowsDir }}
                   flows-max-depth: ${{ inputs.flows-max-depth }}
                   flows-name-pattern: ${{ inputs.flows-name-pattern }}
                   flows-exclude-pattern: ${{ inputs.flows-exclude-pattern }}
@@ -1656,9 +1658,9 @@ jobs:
                   ios-device: ${{ inputs.device-cloud-ios-device }}
                   ios-version: ${{ inputs.device-cloud-ios-version }}
                   junit-report: ${{ inputs.junit-report }}
-                  run-name: ${{ github.repository }}@${{ github.sha }} ios ${{ matrix.target.name }}
-                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}
-                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
+                  run-name: ${{ github.repository }}@${{ github.sha }} ios ${{ matrix.name }}
+                  artifacts-dir: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.name }}-${{ matrix.shard-index }}
+                  artifact-name: maestro-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
                   retention-days: ${{ inputs.artifact-retention-days }}
                   redact-env-names: ${{ steps.maestro-secrets.outputs.names }}
 
@@ -1666,8 +1668,8 @@ jobs:
               if: always() && inputs.balance-shards && inputs.ios-driver == 'local' && inputs.shard-manifest-dir == ''
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: maestro-flow-timings-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}-shard-${{ matrix.shard-index }}
-                  path: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.target.name }}-${{ matrix.shard-index }}/flow-timings.tsv
+                  name: maestro-flow-timings-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}-shard-${{ matrix.shard-index }}
+                  path: ${{ github.workspace }}/artifacts/maestro-ios-${{ matrix.name }}-${{ matrix.shard-index }}/flow-timings.tsv
                   retention-days: 1
                   if-no-files-found: ignore
                   overwrite: true
@@ -1676,7 +1678,7 @@ jobs:
               if: steps.run-maestro-ios.outcome == 'failure' || steps.run-maestro-device-cloud.outcome == 'failure'
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_NAME: ${{ matrix.name }}
               run: echo "::warning::Maestro failed for target '${TARGET_NAME}' and tolerate-test-failures kept the job green; this failure is quarantined, not fixed."
 
             - name: Diagnose the runner's bundled Node after a failure
@@ -1725,7 +1727,7 @@ jobs:
                   echo "::endgroup::"
 
     e2e:
-        name: E2E suite (${{ matrix.target.name }})
+        name: E2E suite
         needs: [detect, plan, build]
         if: ${{ !cancelled() && inputs.test-framework != 'maestro' && needs.detect.outputs.affected == 'true' && needs.plan.result == 'success' && needs.plan.outputs.test-targets != '[]' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
         permissions:
@@ -1736,7 +1738,8 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.test-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.test-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.test-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
               uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
@@ -1758,19 +1761,19 @@ jobs:
               continue-on-error: true
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
             - name: Download the app from GitHub when another runner class built it
               if: steps.app-local.outcome == 'failure'
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
               with:
-                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
+                  path: .ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   github-token: ${{ github.token }}
             - name: Unpack app
               shell: bash
               env:
-                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  APP_ARTIFACT: ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
               run: tar -xzf ".ci-artifacts/${APP_ARTIFACT}/${APP_ARTIFACT}.tar.gz" -C ".ci-artifacts/${APP_ARTIFACT}"
             - name: Apply maestro-secrets-env to the e2e suite
               uses: rnw-community/mobile-ci/actions/apply-secret-env@v4.17.0 # v4.17.0
@@ -1788,9 +1791,9 @@ jobs:
                   e2e-dir: ${{ inputs.e2e-dir }}
                   install-command: ${{ inputs.e2e-install-command }}
                   command: ${{ inputs.e2e-command }}
-                  app-path: ${{ github.workspace }}/.ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}/Base.app
-                  app-id: ${{ matrix.target.appId }}
-                  target: ${{ matrix.target.name }}
+                  app-path: ${{ github.workspace }}/.ci-artifacts/ios-e2e-app${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}/Base.app
+                  app-id: ${{ matrix.appId }}
+                  target: ${{ matrix.name }}
                   targets: ${{ needs.plan.outputs.test-targets }}
                   workers: ${{ inputs.e2e-workers }}
                   retries: ${{ inputs.e2e-retries }}
@@ -1798,9 +1801,9 @@ jobs:
                   full-capacity-wait-minutes: ${{ inputs.e2e-full-capacity-wait-minutes }}
                   job-timeout-minutes: ${{ inputs.e2e-timeout-minutes }}
                   job-started-at: ${{ steps.job-start.outputs.epoch }}
-                  session: e2e-ios-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  session: e2e-ios-${{ github.run_id }}-${{ github.run_attempt }}${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   shadow: ${{ inputs.test-framework == 'both' && !inputs.e2e-required }}
-                  tolerated: ${{ matrix.target.tolerateTestFailures }}
+                  tolerated: ${{ matrix.tolerateTestFailures }}
                   simlock-url: ${{ inputs.simlock-url }}
                   simlock-token: ${{ secrets.simlock-token }}
             - name: Release the devices the suite left leased
@@ -1816,7 +1819,7 @@ jobs:
               if: ${{ always() && steps.run.outcome != 'skipped' }}
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: e2e-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.target.name }}
+                  name: e2e-ios${{ needs.detect.outputs.artifact-scope }}-${{ matrix.name }}
                   path: ${{ inputs.e2e-dir }}/.e2e
                   retention-days: ${{ inputs.artifact-retention-days }}
                   include-hidden-files: true
@@ -1848,7 +1851,7 @@ jobs:
                   artifact-name: maestro-flow-timings-ios${{ needs.detect.outputs.artifact-scope }}
 
     cache-pass:
-        name: Record E2E pass (${{ matrix.target.name }})
+        name: Record E2E pass
         needs: [detect, plan, build, test, e2e]
         if: ${{ !cancelled() && needs.plan.result == 'success' && ((inputs.test-framework == 'e2e' && needs.e2e.result == 'success') || (inputs.test-framework != 'e2e' && needs.test.result == 'success' && (inputs.test-framework != 'both' || (inputs.e2e-required && needs.e2e.result == 'success')))) && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.plan.outputs.cache-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}
@@ -1856,7 +1859,8 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.cache-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.cache-targets) }}
         steps:
             - name: Apply RunsOn cache bypass
               uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
@@ -1868,10 +1872,10 @@ jobs:
               with:
                   mode: publish
                   platform: ios
-                  key: ${{ matrix.target.e2eCacheKey }}
+                  key: ${{ matrix.e2eCacheKey }}
 
     status:
-        name: iOS Maestro E2E result
+        name: ${{ inputs.test-framework == 'e2e' && 'iOS E2E result' || 'iOS Maestro E2E result' }}
         needs: [detect, plan, build, test, e2e, cache-pass]
         if: always()
         runs-on: ${{ fromJSON(inputs.control-runner-labels) }}

@@ -100,13 +100,14 @@ permissions:
 
 jobs:
     key:
-        name: Native key (${{ matrix.target.name }})
+        name: Native key
         runs-on: ${{ fromJSON(inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.targets) }}
+                name: ${{ fromJSON(inputs.targets).*.name }}
+                include: ${{ fromJSON(inputs.targets) }}
         steps:
             - name: Apply RunsOn cache bypass
               uses: rnw-community/mobile-ci/actions/runs-on-cache-bypass@v4.17.0 # v4.17.0
@@ -158,11 +159,11 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: expo-native-key
@@ -170,17 +171,17 @@ jobs:
               uses: rnw-community/mobile-ci/actions/expo-native-key@v4.17.0 # v4.17.0
               with:
                   platform: ${{ inputs.platform }}
-                  working-directory: ${{ matrix.target.appDir }}
+                  working-directory: ${{ matrix.appDir }}
                   flavor: ${{ inputs.base-flavor }}
                   extra-env: ${{ inputs.fingerprint-env }}
-                  toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
+                  toolchain: ${{ inputs.toolchain }}${{ matrix.workspace && format('-{0}', matrix.workspace) || '' }}${{ matrix.scheme && format('-{0}', matrix.scheme) || '' }}
                   fingerprint-config: ${{ inputs.fingerprint-config }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
 
             - name: Record this target's key
               shell: bash
               env:
-                  TARGET: ${{ toJSON(matrix.target) }}
+                  TARGET: ${{ toJSON(matrix) }}
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
                   FINGERPRINT: ${{ steps.native-key.outputs.fingerprint }}
                   CONFIG_HASH: ${{ steps.native-key.outputs.config-hash }}
@@ -197,7 +198,7 @@ jobs:
             - name: Upload this target's key
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: distinct-keys-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}-${{ matrix.target.name }}
+                  name: distinct-keys-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.platform }}-${{ matrix.name }}
                   path: .ci-artifacts/key/key.json
                   if-no-files-found: error
                   retention-days: 1

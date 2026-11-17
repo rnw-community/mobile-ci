@@ -1044,13 +1044,14 @@ jobs:
                   } >> "$GITHUB_STEP_SUMMARY"
 
     ios-publish:
-        name: iOS build and publish (${{ matrix.target.name }})
+        name: iOS build and publish
         needs: [plan]
         if: needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-ios == 'true'
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.ios-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.ios-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.ios-targets) }}
         permissions:
             contents: read
         runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
@@ -1101,8 +1102,8 @@ jobs:
             - name: Apply eas.json build profile env
               shell: bash
               env:
-                  PROFILE_ENV: ${{ matrix.target.envLines }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PROFILE_ENV: ${{ matrix.envLines }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
                   PUBLISH_ENV: ${{ inputs.publish-env }}
               run: |
                   set -euo pipefail
@@ -1376,7 +1377,7 @@ jobs:
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
                   EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
                   EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -1395,7 +1396,7 @@ jobs:
             - name: Upload iOS build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ios-publish-build${{ matrix.target.artifactSuffix }}
+                  name: ios-publish-build${{ matrix.artifactSuffix }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 14
 
@@ -1405,7 +1406,7 @@ jobs:
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.submitProfile }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
                   EXPO_ASC_API_KEY_PATH: ${{ steps.asc-key.outputs.key-path }}
                   EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -1428,10 +1429,10 @@ jobs:
             - name: Record the submitted target
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  TARGET_PLATFORM: ${{ matrix.target.platform }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
-                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  TARGET_PLATFORM: ${{ matrix.platform }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.submitProfile }}
                   FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
                   RECORD: ${{ needs.plan.outputs.record }}
                   SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
@@ -1461,8 +1462,8 @@ jobs:
             - name: Upload the submitted-target marker
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
-                  path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.name }}
+                  path: ${{ runner.temp }}/store-submitted/${{ matrix.name }}.json
                   retention-days: 14
                   overwrite: true
                   if-no-files-found: error
@@ -1487,13 +1488,14 @@ jobs:
                   fi
 
     android-lint-gate:
-        name: Android release lint (Play policy gate, ${{ matrix.target.name }})
+        name: Android release lint (Play policy gate)
         needs: [plan]
         if: inputs.android-lint-gate && needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-android == 'true'
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.android-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.android-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.android-targets) }}
         permissions:
             contents: read
         runs-on: ${{ fromJSON(inputs.lint-runner-labels) }}
@@ -1514,8 +1516,8 @@ jobs:
             - name: Apply eas.json build profile env
               shell: bash
               env:
-                  PROFILE_ENV: ${{ matrix.target.envLines }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PROFILE_ENV: ${{ matrix.envLines }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
                   PUBLISH_ENV: ${{ inputs.publish-env }}
               run: |
                   set -euo pipefail
@@ -1742,7 +1744,7 @@ jobs:
               working-directory: ${{ inputs.app-dir }}
               shell: bash
               env:
-                  EAS_BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  EAS_BUILD_PROFILE: ${{ matrix.buildProfile }}
               run: npx --yes expo prebuild --platform android --no-install --clean
 
             - name: Restore Gradle User Home cache keyed on the generated build files
@@ -1805,7 +1807,7 @@ jobs:
               if: failure()
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-lint-gate-reports${{ matrix.target.artifactSuffix }}-attempt-${{ github.run_attempt }}
+                  name: android-lint-gate-reports${{ matrix.artifactSuffix }}-attempt-${{ github.run_attempt }}
                   path: |
                       ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.html
                       ${{ inputs.app-dir }}/android/**/build/reports/lint-results-*.xml
@@ -1813,13 +1815,14 @@ jobs:
                   if-no-files-found: ignore
 
     android-publish:
-        name: Android build and publish (${{ matrix.target.name }})
+        name: Android build and publish
         needs: [plan, android-lint-gate]
         if: "!cancelled() && needs.plan.result == 'success' && needs.plan.outputs.decision == 'native' && needs.plan.outputs.has-android == 'true' && (needs.android-lint-gate.result == 'success' || needs.android-lint-gate.result == 'skipped')"
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan.outputs.android-targets) }}
+                name: ${{ fromJSON(needs.plan.outputs.android-targets).*.name }}
+                include: ${{ fromJSON(needs.plan.outputs.android-targets) }}
         permissions:
             contents: read
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
@@ -1866,8 +1869,8 @@ jobs:
             - name: Apply eas.json build profile env
               shell: bash
               env:
-                  PROFILE_ENV: ${{ matrix.target.envLines }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  PROFILE_ENV: ${{ matrix.envLines }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
                   PUBLISH_ENV: ${{ inputs.publish-env }}
               run: |
                   set -euo pipefail
@@ -2263,7 +2266,7 @@ jobs:
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
               run: |
                   set -euo pipefail
                   output_path="$RUNNER_TEMP/android-publish/app.aab"
@@ -2295,7 +2298,7 @@ jobs:
             - name: Upload Android build artifact
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: android-publish-build${{ matrix.target.artifactSuffix }}
+                  name: android-publish-build${{ matrix.artifactSuffix }}
                   path: ${{ steps.build.outputs.artifact-path }}
                   retention-days: 14
 
@@ -2326,7 +2329,7 @@ jobs:
               shell: bash
               env:
                   EAS_CLI_VERSION: ${{ inputs.eas-cli-version }}
-                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.submitProfile }}
                   ARTIFACT_PATH: ${{ steps.build.outputs.artifact-path }}
                   # Exposed for eas.json submit profiles / fastlane hooks that read a service
                   # account key from disk; the exact eas.json wiring is consumer-owned.
@@ -2349,10 +2352,10 @@ jobs:
             - name: Record the submitted target
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
-                  TARGET_PLATFORM: ${{ matrix.target.platform }}
-                  BUILD_PROFILE: ${{ matrix.target.buildProfile }}
-                  SUBMIT_PROFILE: ${{ matrix.target.submitProfile }}
+                  TARGET_NAME: ${{ matrix.name }}
+                  TARGET_PLATFORM: ${{ matrix.platform }}
+                  BUILD_PROFILE: ${{ matrix.buildProfile }}
+                  SUBMIT_PROFILE: ${{ matrix.submitProfile }}
                   FINGERPRINTS: ${{ needs.plan.outputs.fingerprints }}
                   RECORD: ${{ needs.plan.outputs.record }}
                   SUBMISSION_URL: ${{ steps.submit.outputs.submission-url }}
@@ -2382,8 +2385,8 @@ jobs:
             - name: Upload the submitted-target marker
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.target.name }}
-                  path: ${{ runner.temp }}/store-submitted/${{ matrix.target.name }}.json
+                  name: ${{ needs.plan.outputs.marker-prefix }}${{ matrix.name }}
+                  path: ${{ runner.temp }}/store-submitted/${{ matrix.name }}.json
                   retention-days: 14
                   overwrite: true
                   if-no-files-found: error

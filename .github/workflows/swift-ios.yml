@@ -394,7 +394,7 @@ jobs:
                   working-directory: ${{ inputs.working-directory }}
 
     test:
-        name: Test (shard ${{ matrix.shard }})
+        name: Test shard
         if: inputs.enable-xcodebuild-test
         needs: build
         runs-on: ${{ fromJSON(inputs.runs-on-json) }}

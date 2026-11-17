@@ -558,7 +558,7 @@ jobs:
             build-secrets-env: ${{ secrets.build-secrets-env }}
 
     seed-ios:
-        name: Seed iOS native app (${{ matrix.target.name }})
+        name: Seed iOS native app
         needs: plan-ios
         if: ${{ !cancelled() && needs.plan-ios.result == 'success' && needs.plan-ios.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.ios-runner-labels) }}
@@ -568,15 +568,16 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (inputs.publish-base && github.ref_name == github.event.repository.default_branch) && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-ios-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            group: ${{ (inputs.publish-base && github.ref_name == github.event.repository.default_branch) && format('expo-base-publish-{0}-ios-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-ios-{2}', github.run_id, github.run_attempt, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan-ios.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan-ios.outputs.native-targets) }}
         env:
-            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.target.name }}
-            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.target.name }}
+            IOS_DERIVED_DATA: ${{ github.workspace }}/.ci-cache/DerivedData/${{ matrix.name }}
+            CCACHE_DIR: ${{ github.workspace }}/.ci-cache/ccache/ios-${{ matrix.name }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -786,14 +787,14 @@ jobs:
               id: rn-prebuilts
               uses: rnw-community/mobile-ci/actions/rn-prebuilt-cache@v4.17.0 # v4.17.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
                   RCT_USE_PREBUILT_RNCORE_ENABLED: ${{ inputs.rct-use-prebuilt-rncore }}
                   RCT_USE_RN_DEP_ENABLED: ${{ inputs.rct-use-rn-dep }}
                   EXPO_USE_PRECOMPILED_MODULES_ENABLED: ${{ inputs.expo-use-precompiled-modules }}
@@ -811,15 +812,15 @@ jobs:
 
             - name: native-app-cache (restore)
               id: native-app-cache
-              if: '!inputs.force-base && !matrix.target.forceNative'
+              if: '!inputs.force-base && !matrix.forceNative'
               uses: rnw-community/mobile-ci/actions/native-app-cache@v4.17.0 # v4.17.0
               with:
                   mode: restore
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
+                  path: .ci-cache/ios-native-app/${{ matrix.name }}
+                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.name }}
                   arch: ${{ inputs.ios-simulator-archs }}
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
+                  fingerprint: ${{ matrix.nativeKey }}
 
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true'
@@ -834,24 +835,24 @@ jobs:
                   ccache-dir: ${{ env.CCACHE_DIR }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
                   max-size: ${{ inputs.ccache-max-size }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   restore-keys: |
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      ccache-ios-${{ matrix.name }}-${{ runner.os }}-
 
             - name: build-ios-app
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/build-ios-app@v4.17.0 # v4.17.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
-                  workspace: ${{ matrix.target.workspace }}
-                  scheme: ${{ matrix.target.scheme }}
+                  app-dir: ${{ matrix.appDir }}
+                  workspace: ${{ matrix.workspace }}
+                  scheme: ${{ matrix.scheme }}
                   derived-data-dir: ${{ env.IOS_DERIVED_DATA }}
-                  output-dir: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  pods-cache-key: pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  output-dir: .ci-cache/ios-native-app/${{ matrix.name }}
+                  pods-cache-key: pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
                   pods-cache-restore-keys: |
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
-                      pods-${{ matrix.target.name }}-${{ runner.os }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-
+                      pods-${{ matrix.name }}-${{ runner.os }}-
                   rct-use-prebuilt-rncore: ${{ inputs.rct-use-prebuilt-rncore }}
                   rct-use-rn-dep: ${{ inputs.rct-use-rn-dep }}
                   expo-use-precompiled-modules: ${{ inputs.expo-use-precompiled-modules }}
@@ -873,24 +874,24 @@ jobs:
               with:
                   mode: save
                   ccache-dir: ${{ env.CCACHE_DIR }}
-                  key: ccache-ios-${{ matrix.target.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.target.appDir)) }}
+                  key: ccache-ios-${{ matrix.name }}-${{ runner.os }}-xcode-${{ inputs.xcode-version }}-${{ hashFiles('yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', format('{0}/ios/Podfile.lock', matrix.appDir)) }}
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
               uses: rnw-community/mobile-ci/actions/native-app-cache@v4.17.0 # v4.17.0
               with:
                   mode: save
-                  path: .ci-cache/ios-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.target.name }}
+                  path: .ci-cache/ios-native-app/${{ matrix.name }}
+                  profile: ${{ inputs.ios-cache-profile }}-${{ matrix.name }}
                   arch: ${{ inputs.ios-simulator-archs }}
                   toolchain: ${{ steps.xcode.outputs.toolchain-key }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
+                  fingerprint: ${{ matrix.nativeKey }}
 
             - name: Archive the base binary
               if: inputs.publish-base
               shell: bash
               env:
-                  TARGET_NAME: ${{ matrix.target.name }}
+                  TARGET_NAME: ${{ matrix.name }}
               run: |
                   set -euo pipefail
                   test -d ".ci-cache/ios-native-app/${TARGET_NAME}/Base.app"
@@ -904,22 +905,22 @@ jobs:
                   mode: publish
                   platform: ios
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
                   force: ${{ inputs.force-base }}
-                  path: .ci-artifacts/ios-base-app-${{ matrix.target.name }}.tar.gz
+                  path: .ci-artifacts/ios-base-app-${{ matrix.name }}.tar.gz
 
             - name: Explain why no base was published
               if: inputs.publish-base && github.ref_name != github.event.repository.default_branch
               shell: bash
               env:
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: |
                   set -euo pipefail
                   echo "::warning::This warm-up ran off the default branch, so the base binary for native key ${NATIVE_KEY} was built but not published. A base every pull request repacks onto is only trustworthy when the default branch produced it."
 
     seed-android:
-        name: Seed Android native app (${{ matrix.target.name }})
+        name: Seed Android native app
         needs: [android-abis, plan-android]
         if: ${{ !cancelled() && needs.plan-android.result == 'success' && needs.plan-android.outputs.native-targets != '[]' }}
         runs-on: ${{ fromJSON(inputs.android-runner-labels) }}
@@ -929,12 +930,13 @@ jobs:
             packages: write
             actions: read
         concurrency:
-            group: ${{ (inputs.publish-base && github.ref_name == github.event.repository.default_branch) && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.target.nativeKey) || format('expo-base-build-{0}-{1}-android-{2}', github.run_id, github.run_attempt, matrix.target.name) }}
+            group: ${{ (inputs.publish-base && github.ref_name == github.event.repository.default_branch) && format('expo-base-publish-{0}-android-{1}-{2}', github.repository, inputs.base-flavor, matrix.nativeKey) || format('expo-base-build-{0}-{1}-android-{2}', github.run_id, github.run_attempt, matrix.name) }}
             cancel-in-progress: false
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
+                name: ${{ fromJSON(needs.plan-android.outputs.native-targets).*.name }}
+                include: ${{ fromJSON(needs.plan-android.outputs.native-targets) }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -1134,11 +1136,11 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: native-app-cache (restore)
@@ -1147,11 +1149,11 @@ jobs:
               uses: rnw-community/mobile-ci/actions/native-app-cache@v4.17.0 # v4.17.0
               with:
                   mode: restore
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ matrix.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
+                  fingerprint: ${{ matrix.nativeKey }}
 
             - name: Report cache hit
               if: steps.native-app-cache.outputs.cache-hit == 'true'
@@ -1163,27 +1165,27 @@ jobs:
               if: steps.native-app-cache.outputs.cache-hit != 'true'
               uses: rnw-community/mobile-ci/actions/build-android-app@v4.17.0 # v4.17.0
               with:
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
                   cmdline-tools-version: ${{ inputs.cmdline-tools-version }}
                   gradle-task: ${{ inputs.gradle-task }}
                   gradle-args: ${{ inputs.gradle-args }}
                   android-abis: ${{ needs.android-abis.outputs.abis }}
                   android-sdk-cache-save: 'false'
-                  output-dir: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  gradle-cache-key: gradle-${{ matrix.target.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.target.appDir), format('{0}/android/**/*.gradle*', matrix.target.appDir), format('{0}/android/gradle/*.versions.toml', matrix.target.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
+                  output-dir: .ci-cache/android-native-app/${{ matrix.name }}
+                  gradle-cache-key: gradle-${{ matrix.name }}-${{ runner.os }}-${{ hashFiles(format('{0}/android/gradle/wrapper/gradle-wrapper.properties', matrix.appDir), format('{0}/android/**/*.gradle*', matrix.appDir), format('{0}/android/gradle/*.versions.toml', matrix.appDir), 'yarn.lock', 'pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json') }}
                   gradle-cache-restore-keys: |
-                      gradle-${{ matrix.target.name }}-${{ runner.os }}-
+                      gradle-${{ matrix.name }}-${{ runner.os }}-
 
             - name: native-app-cache (save)
               if: steps.native-app-cache.outputs.cache-hit != 'true' && !inputs.force-base
               uses: rnw-community/mobile-ci/actions/native-app-cache@v4.17.0 # v4.17.0
               with:
                   mode: save
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}
-                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.target.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
+                  path: .ci-cache/android-native-app/${{ matrix.name }}
+                  profile: ${{ inputs.android-cache-profile }}-${{ matrix.name }}-${{ inputs.gradle-task }}${{ inputs.gradle-args != '' && format('-{0}', inputs.gradle-args) || '' }}
                   arch: x86_64
                   toolchain: cmdline-${{ inputs.cmdline-tools-version }}
-                  fingerprint: ${{ matrix.target.nativeKey }}
+                  fingerprint: ${{ matrix.nativeKey }}
 
             - name: expo-base-binary (publish)
               if: inputs.publish-base && github.ref_name == github.event.repository.default_branch
@@ -1192,16 +1194,16 @@ jobs:
                   mode: publish
                   platform: android
                   flavor: ${{ inputs.base-flavor }}
-                  key: ${{ matrix.target.nativeKey }}
+                  key: ${{ matrix.nativeKey }}
                   backend: ${{ inputs.base-backend }}
                   force: ${{ inputs.force-base }}
-                  path: .ci-cache/android-native-app/${{ matrix.target.name }}/app-release.apk
+                  path: .ci-cache/android-native-app/${{ matrix.name }}/app-release.apk
 
             - name: Explain why no base was published
               if: inputs.publish-base && github.ref_name != github.event.repository.default_branch
               shell: bash
               env:
-                  NATIVE_KEY: ${{ matrix.target.nativeKey }}
+                  NATIVE_KEY: ${{ matrix.nativeKey }}
               run: |
                   set -euo pipefail
                   echo "::warning::This warm-up ran off the default branch, so the base binary for native key ${NATIVE_KEY} was built but not published. A base every pull request repacks onto is only trustworthy when the default branch produced it."

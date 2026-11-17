@@ -270,15 +270,16 @@ permissions:
 
 jobs:
     plan:
-        name: Plan (${{ matrix.target.name }})
+        name: Plan
         runs-on: ${{ fromJSON(inputs.runner-labels) }}
         timeout-minutes: ${{ inputs.timeout-minutes }}
         strategy:
             fail-fast: false
             matrix:
-                target: ${{ fromJSON(inputs.targets) }}
+                name: ${{ fromJSON(inputs.targets).*.name }}
+                include: ${{ fromJSON(inputs.targets) }}
         env:
-            APP_DIR: ${{ matrix.target.appDir }}
+            APP_DIR: ${{ matrix.appDir }}
 
         steps:
             - name: Apply RunsOn cache bypass
@@ -493,11 +494,11 @@ jobs:
               run: eval "$BUILD_COMMAND"
 
             - name: Generate native project
-              if: matrix.target.prebuildCommand != ''
-              working-directory: ${{ matrix.target.appDir }}
+              if: matrix.prebuildCommand != ''
+              working-directory: ${{ matrix.appDir }}
               shell: bash
               env:
-                  PREBUILD_COMMAND: ${{ matrix.target.prebuildCommand }}
+                  PREBUILD_COMMAND: ${{ matrix.prebuildCommand }}
               run: eval "$PREBUILD_COMMAND"
 
             - name: expo-native-key
@@ -505,10 +506,10 @@ jobs:
               uses: rnw-community/mobile-ci/actions/expo-native-key@v4.17.0 # v4.17.0
               with:
                   platform: ${{ inputs.platform }}
-                  working-directory: ${{ matrix.target.appDir }}
+                  working-directory: ${{ matrix.appDir }}
                   flavor: ${{ inputs.base-flavor }}
                   extra-env: ${{ inputs.fingerprint-env }}
-                  toolchain: ${{ inputs.toolchain }}${{ matrix.target.workspace && format('-{0}', matrix.target.workspace) || '' }}${{ matrix.target.scheme && format('-{0}', matrix.target.scheme) || '' }}
+                  toolchain: ${{ inputs.toolchain }}${{ matrix.workspace && format('-{0}', matrix.workspace) || '' }}${{ matrix.scheme && format('-{0}', matrix.scheme) || '' }}
                   fingerprint-config: ${{ inputs.fingerprint-config }}
                   fingerprint-version: ${{ inputs.expo-fingerprint-version }}
                   ios-simulator-archs: ${{ inputs.ios-simulator-archs }}
@@ -546,23 +547,23 @@ jobs:
 
             - name: Look up the content-addressed E2E verdict
               id: e2e-cache
-              if: inputs.e2e-cache && steps.e2e-secrets.outcome == 'success' && steps.e2e-workflows.outcome == 'success' && !matrix.target.tolerateTestFailures && (matrix.target.buildStrategy || inputs.build-strategy) != 'native'
+              if: inputs.e2e-cache && steps.e2e-secrets.outcome == 'success' && steps.e2e-workflows.outcome == 'success' && !matrix.tolerateTestFailures && (matrix.buildStrategy || inputs.build-strategy) != 'native'
               continue-on-error: true
               uses: rnw-community/mobile-ci/actions/e2e-result-cache@v4.17.0 # v4.17.0
               with:
                   platform: ${{ inputs.platform }}
-                  app-dir: ${{ matrix.target.appDir }}
+                  app-dir: ${{ matrix.appDir }}
                   native-key: ${{ steps.native-key.outputs.key }}
                   workflow-refs: ${{ steps.e2e-workflows.outputs.refs }}
                   lane-inputs: ${{ inputs.e2e-cache-inputs }}
-                  target: ${{ toJSON(matrix.target) }}
+                  target: ${{ toJSON(matrix) }}
                   repack-env: ${{ inputs.repack-env }}
                   secrets-digest: ${{ steps.e2e-secrets.outputs.digest }}
                   state-command: ${{ inputs.e2e-cache-state-command }}
                   export-command: ${{ inputs.e2e-cache-export-command }}
                   extra-paths: ${{ inputs.e2e-cache-extra-paths }}
                   test-paths: |
-                      ${{ inputs.e2e-cache-test-paths || matrix.target.flowsDir }}
+                      ${{ inputs.e2e-cache-test-paths || matrix.flowsDir }}
                       ${{ fromJSON(inputs.e2e-cache-inputs).maestro-config }}
                       ${{ fromJSON(inputs.e2e-cache-inputs).shard-manifest-dir }}
                       ${{ fromJSON(inputs.e2e-cache-inputs).pre-run-flow }}
@@ -570,7 +571,7 @@ jobs:
 
             - name: expo-base-binary (fetch)
               id: base
-              if: (matrix.target.buildStrategy || inputs.build-strategy) != 'native' && steps.e2e-cache.outputs.hit != 'true'
+              if: (matrix.buildStrategy || inputs.build-strategy) != 'native' && steps.e2e-cache.outputs.hit != 'true'
               uses: rnw-community/mobile-ci/actions/expo-base-binary@v4.17.0 # v4.17.0
               with:
                   mode: fetch
@@ -578,11 +579,11 @@ jobs:
                   flavor: ${{ inputs.base-flavor }}
                   key: ${{ steps.native-key.outputs.key }}
                   backend: ${{ inputs.base-backend }}
-                  path: .ci-cache/e2e-base/${{ matrix.target.name }}
+                  path: .ci-cache/e2e-base/${{ matrix.name }}
                   metadata-only: ${{ !inputs.repack }}
 
             - name: Refuse to compile native code under build-strategy repack
-              if: (matrix.target.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true' && steps.e2e-cache.outputs.hit != 'true'
+              if: (matrix.buildStrategy || inputs.build-strategy) == 'repack' && steps.base.outputs.found != 'true' && steps.e2e-cache.outputs.hit != 'true'
               shell: bash
               env:
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
@@ -774,15 +775,15 @@ jobs:
               with:
                   platform: ${{ inputs.platform }}
                   base-path: ${{ steps.base.outputs.path }}
-                  output-path: ${{ inputs.platform == 'ios' && format('.ci-artifacts/{0}-{1}/{0}-{1}.tar.gz', inputs.app-artifact-prefix, matrix.target.name) || format('.ci-artifacts/{0}-{1}/app-release.apk', inputs.app-artifact-prefix, matrix.target.name) }}
-                  app-dir: ${{ matrix.target.appDir }}
-                  app-id: ${{ matrix.target.appId }}
+                  output-path: ${{ inputs.platform == 'ios' && format('.ci-artifacts/{0}-{1}/{0}-{1}.tar.gz', inputs.app-artifact-prefix, matrix.name) || format('.ci-artifacts/{0}-{1}/app-release.apk', inputs.app-artifact-prefix, matrix.name) }}
+                  app-dir: ${{ matrix.appDir }}
+                  app-id: ${{ matrix.appId }}
                   repack-env: ${{ inputs.repack-env }}
                   expect-config: ${{ inputs.expect-config }}
                   repack-version: ${{ inputs.repack-app-version }}
                   android-build-tools-dir: ${{ inputs.android-build-tools-dir }}
                   android-build-tools-version: ${{ inputs.android-build-tools-version }}
-                  keystore-path: ${{ (inputs.platform == 'android' && inputs.android-keystore-path != '') && format('{0}/{1}', matrix.target.appDir, inputs.android-keystore-path) || '' }}
+                  keystore-path: ${{ (inputs.platform == 'android' && inputs.android-keystore-path != '') && format('{0}/{1}', matrix.appDir, inputs.android-keystore-path) || '' }}
                   keystore-password: ${{ inputs.android-keystore-password }}
                   keystore-key-alias: ${{ inputs.android-keystore-key-alias }}
                   keystore-key-password: ${{ inputs.android-keystore-key-password }}
@@ -791,8 +792,8 @@ jobs:
               if: inputs.repack && steps.base.outputs.found == 'true'
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ${{ inputs.app-artifact-prefix }}-${{ matrix.target.name }}
-                  path: .ci-artifacts/${{ inputs.app-artifact-prefix }}-${{ matrix.target.name }}/
+                  name: ${{ inputs.app-artifact-prefix }}-${{ matrix.name }}
+                  path: .ci-artifacts/${{ inputs.app-artifact-prefix }}-${{ matrix.name }}/
                   if-no-files-found: error
                   retention-days: 1
 
@@ -800,19 +801,19 @@ jobs:
               shell: bash
               env:
                   PLATFORM: ${{ inputs.platform }}
-                  TARGET: ${{ toJSON(matrix.target) }}
+                  TARGET: ${{ toJSON(matrix) }}
                   NATIVE_KEY: ${{ steps.native-key.outputs.key }}
                   FINGERPRINT: ${{ steps.native-key.outputs.fingerprint }}
                   CONFIG_HASH: ${{ steps.native-key.outputs.config-hash }}
                   BASE_FOUND: ${{ steps.base.outputs.found }}
                   BASE_SOURCE: ${{ steps.base.outputs.source }}
                   BASE_REFERENCE: ${{ steps.base.outputs.reference }}
-                  BUILD_STRATEGY: ${{ (matrix.target.buildStrategy || inputs.build-strategy) }}
+                  BUILD_STRATEGY: ${{ (matrix.buildStrategy || inputs.build-strategy) }}
                   REPACKED: ${{ inputs.repack }}
                   CACHE_HIT: ${{ steps.e2e-cache.outputs.hit }}
                   CACHE_KEY: ${{ steps.e2e-cache.outputs.key }}
                   CACHE_RUN_URL: ${{ steps.e2e-cache.outputs.run-url }}
-                  PLAN_ARTIFACT: ${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}
+                  PLAN_ARTIFACT: ${{ inputs.plan-artifact-prefix }}-${{ matrix.name }}
               run: |
                   set -euo pipefail
                   mkdir -p .ci-artifacts/plan
@@ -858,7 +859,7 @@ jobs:
             - name: Upload this target's plan
               uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
               with:
-                  name: ${{ inputs.plan-artifact-prefix }}-${{ matrix.target.name }}
+                  name: ${{ inputs.plan-artifact-prefix }}-${{ matrix.name }}
                   path: .ci-artifacts/plan/plan.json
                   if-no-files-found: error
                   retention-days: 1
