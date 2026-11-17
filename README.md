@@ -23,7 +23,7 @@ scoped to exactly the jobs that need them, and only for the platforms you
 enable.
 
 **Released.** Exact `vX.Y.Z` tags are published, plus a floating major tag
-per major (`v4` is current, at `v4.17.0`; `v3` stays frozen at `v3.3.2`,
+per major (`v4` is current, at `v4.18.0`; `v3` stays frozen at `v3.3.2`,
 `v2` at `v2.3.0` and `v1` at `v1.23.1`) that
 moves with the latest release of that major — pin to an exact tag or a full
 commit SHA for reproducibility, or `@v4` to float. See
@@ -73,7 +73,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
 ```
 
 A read-only token does **not** mean nothing works. A base that is already
@@ -109,7 +109,7 @@ jobs:
             contents: read
             packages: write
             actions: read
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -155,6 +155,15 @@ called workflow's jobs request — see the table in
 
 ## What changed in v4.x
 
+- **v4.18.0** — a skipped matrix job reads as its plain name (`Build`,
+  `Maestro shard`, `Record E2E pass`) instead of an unrendered
+  `Build (${{ matrix.target.name }})`: GitHub renders a job name's expressions
+  only when the job runs. Every matrix job now has a static name and keys its
+  matrix on the target's `name`, so a running job still reads `Build (e2e)`
+  or `Maestro shard (e2e, 1)`. With `test-framework: e2e` the result job is
+  `iOS E2E result` / `Android E2E result`. A consumer that requires one of
+  these checks by name must update the required check. This repository no
+  longer runs Dependabot; third-party pins are bumped by hand.
 - **v4.17.0** — an e2e suite with at least half its devices free no longer
   starts short at once. The suite leases every worker's device up front and
   keeps that pool for the whole run, so a run started with 1 of 2 workers ran
@@ -577,7 +586,7 @@ hardcoded before.
 ```yaml
 jobs:
     e2e:
-        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/ios-maestro.yml@v4.18.0 # v4.18.0
         with:
             targets: >-
                 [{"name":"bare","appDir":"apps/mobile","workspace":"MyApp.xcworkspace","scheme":"MyApp","appId":"com.example.app","prebuildCommand":""}]
@@ -650,7 +659,7 @@ jobs:
     cleanup:
         permissions:
             actions: write
-        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.17.0 # v4.17.0
+        uses: rnw-community/mobile-ci/.github/workflows/pr-closed-cleanup-reusable.yml@v4.18.0 # v4.18.0
 ```
 
 ## Scope
@@ -696,7 +705,7 @@ job reads.
 
 **Versioning note:** examples in this README, the per-action/per-workflow docs
 and [docs/examples/](docs/examples/README.md) pin the exact release they were
-checked against (`@v4.17.0 # v4.17.0`). A major tag such as `@v4` floats to the
+checked against (`@v4.18.0 # v4.18.0`). A major tag such as `@v4` floats to the
 latest release of that major and `@main` can change without a deprecation
 window — pin to an exact `vX.Y.Z` tag or a full commit SHA when you need
 reproducibility.
