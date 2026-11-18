@@ -36,7 +36,16 @@ describe('UPLOAD_CUT', () => {
 
 describe('FARM_DOWN', () => {
     it('matches farm-wide failures and not a device failure', () => {
-        for (const down of ['not connected to the gateway', 'No worker connected', 'Remote daemon is unavailable', 'connect ECONNREFUSED', 'ETIMEDOUT', 'fetch failed', 'error code: 522']) {
+        for (const down of [
+            'not connected to the gateway',
+            'No worker connected',
+            'refused by simlock: No worker in the fleet can currently serve this request',
+            'Remote daemon is unavailable',
+            'connect ECONNREFUSED',
+            'ETIMEDOUT',
+            'fetch failed',
+            'error code: 522'
+        ]) {
             assert.ok(FARM_DOWN.test(down), down);
         }
         for (const device of ['adb: failed to install app.apk', 'simctl install exited 1', 'error code: 404']) {
@@ -158,6 +167,22 @@ describe('allocateQueued', () => {
         assert.equal(calls, 2);
         assert.equal(pauses.length, 1);
         assert.match(logs[0]!, /^simlock: lease request not served \(Remote daemon is unavailable/);
+    });
+
+    it('waits out a fleet whose only worker is drained, then asks again', async () => {
+        let calls = 0;
+        const { q, pauses } = queue({
+            allocate: async () => {
+                calls += 1;
+                if (calls === 1) {
+                    throw new Error('refused by simlock: No worker in the fleet can currently serve this request');
+                }
+                return 'lease';
+            }
+        });
+        assert.equal(await allocateQueued(q), 'lease');
+        assert.equal(calls, 2);
+        assert.equal(pauses.length, 1);
     });
 
     it('a cut-off whose release fails still asks again', async () => {

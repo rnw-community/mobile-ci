@@ -11,9 +11,13 @@ export type Platform = 'ios' | 'android';
  */
 export const LEASE_ASK_AGAIN = /Invalid daemon response|error code: 524|socket hang up|other side closed|No Android device with serial/i;
 
-/** Errors that mean the farm, not one device, failed (simlock's gateway and agent-device wording): never worth a device swap. */
+/**
+ * Errors that mean the farm, not one device, failed (simlock's gateway and agent-device wording): never worth a device swap.
+ * "No worker in the fleet can currently serve" is the gateway's answer while every worker that could serve is drained,
+ * as during a farm upgrade: a lease request waits it out within the queue deadline.
+ */
 export const FARM_DOWN =
-    /not connected to the gateway|no worker connected|Remote daemon is unavailable|ECONNREFUSED|ETIMEDOUT|fetch failed|error code: 52\d/i;
+    /not connected to the gateway|no worker connected|no worker in the fleet can currently serve|Remote daemon is unavailable|ECONNREFUSED|ETIMEDOUT|fetch failed|error code: 52\d/i;
 
 /** The tunnel answering an upload in place of the farm (a 524 past its 100 s limit): no install was sent, so the upload can be sent again. */
 export const UPLOAD_CUT = /Invalid upload response: error code: 52\d/i;
