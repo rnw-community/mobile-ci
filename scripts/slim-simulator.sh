@@ -15,7 +15,7 @@ simslim_profile_path() {
         return 0
     fi
 
-    local ref="${SIMSLIM_PROFILE_REF:-v2}"
+    local ref="${SIMSLIM_PROFILE_REF:-v4.0.0}"
     local cached="${TMPDIR:-/tmp}/mobile-ci-simslim-${ref//\//-}-ci.json"
     if [ ! -s "$cached" ] && ! curl -fsSL \
         "https://raw.githubusercontent.com/rnw-community/mobile-ci/${ref}/profiles/ci.json" \
@@ -42,7 +42,13 @@ slim_simulator() {
         return 0
     fi
 
-    simslim on "$udid" --no-reboot --profile "$profile"
+    if ! simslim on "$udid" --no-reboot --profile "$profile"; then
+        return 1
+    fi
+    if ! simslim verify "$udid" --profile "$profile"; then
+        echo "slim-simulator: simulator '$udid' still does not match '$profile' after live repair. Live slimming cannot re-enable extra disabled services; run 'simslim on' with this profile before installing the app, then verify again." >&2
+        return 1
+    fi
 }
 
 booted_simulator_udids() {

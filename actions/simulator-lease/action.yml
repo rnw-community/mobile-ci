@@ -37,7 +37,8 @@ inputs:
     description: >-
       Exact name of an existing, shut-down device on this host to clone instead
       of creating a fresh one, for a device that carries something other than
-      slimming (installed apps, settings). A clone never inherits the
+      slimming (installed apps, settings). This action uses raw simctl clone,
+      which never inherits the
       template's simslim disable overrides - simslim keeps them on the host,
       keyed by UDID - so with slim-profile set the clone is slimmed before its
       first boot exactly like a created device. Empty (default) creates a
@@ -66,10 +67,10 @@ inputs:
     default: bundled
   slim-repair:
     description: >-
-      When 'true' (the default here, unlike run-maestro-ios) the lease is left
+      When 'true' (the default) the lease is left
       shut down by the acquire step and `simslim on --profile` writes its
       disable overrides offline and boots it once, already slim; it is then
-      verified, and a mismatch fails. The default differs because this action
+      verified, and a mismatch fails. Unlike reusing a host device, this action
       *creates* the device it leases, and a created or cloned device is always
       stock. 'false' boots the lease as it is and only verifies it, which
       fails for any device this action leases; it exists for hosts that slim
