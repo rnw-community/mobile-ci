@@ -84,7 +84,7 @@ jobs:
             contents: read
             pull-requests: read
         steps:
-            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.18.0 # v4.18.0
+            - uses: rnw-community/mobile-ci/actions/rerun-infra-failures@v4.18.1 # v4.18.1
               with:
                   run-id: ${{ github.event.workflow_run.id }}
 ```
